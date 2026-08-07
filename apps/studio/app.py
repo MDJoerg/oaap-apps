@@ -686,12 +686,13 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
 
     def cross_site_post(self):
-        """Reject cross-site form posts (CSRF defence, no dependencies).
+        """Reject cross-site form posts (CSRF defence in depth).
 
-        The gateway authenticates by session cookie, so a foreign page
-        could otherwise submit a form in the user's name. Browsers
-        announce the context in Sec-Fetch-Site; older ones at least send
-        Origin. Both absent (curl, tests) is treated as same-site.
+        The platform's session cookie is already SameSite=Lax, which
+        keeps browsers from sending it with a foreign form post. This
+        is the second layer, owned by the app itself: browsers announce
+        the context in Sec-Fetch-Site, older ones at least send Origin.
+        Both absent (curl, tests) is treated as same-site.
         """
         site = self.headers.get("Sec-Fetch-Site")
         if site and site not in ("same-origin", "same-site", "none"):

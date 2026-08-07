@@ -28,10 +28,11 @@ wie die Apps unserer Anwender (Dogfooding), und das Portal bleibt schlank.
 - **Nur Standardbibliothek.** Der Build läuft auf dem Zielknoten (auch
   arm64); ohne Abhängigkeiten gibt es nichts aufzulösen, nichts zu
   kompilieren und keine Lieferkette.
-- **Schutz gegen fremde Formulare (CSRF).** Da das Gateway per Sitzungs-Cookie
-  authentifiziert, könnte sonst eine fremde Seite im Namen des angemeldeten
-  Benutzers schreiben. Schreibende Anfragen aus fremdem Ursprung werden
-  abgelehnt (`Sec-Fetch-Site`/`Origin`).
+- **Zusätzlicher Schutz gegen fremde Formulare (CSRF).** Die Plattform
+  schützt bereits über das Sitzungs-Cookie (`SameSite=Lax`, `HttpOnly`);
+  die App lehnt schreibende Anfragen aus fremdem Ursprung zusätzlich selbst
+  ab (`Sec-Fetch-Site`/`Origin`) — doppelter Boden, falls die App einmal
+  anders betrieben wird.
 
 ## Rollen
 
@@ -54,10 +55,10 @@ sudo oaap store add-source https://raw.githubusercontent.com/MDJoerg/oaap-apps/m
 
 ## Konfiguration
 
-| Schlüssel              | Bedeutung                                            |
-| ---------------------- | ---------------------------------------------------- |
-| `STUDIO_CONTRACT_URL`  | Adresse des App Deployment Contract (steht im Briefing) |
-| `STUDIO_GIT_BASE`      | Basis-Adresse des eigenen Git-Hostings (z. B. Forgejo)  |
+| Schlüssel             | Bedeutung                                               |
+| --------------------- | ------------------------------------------------------- |
+| `STUDIO_CONTRACT_URL` | Adresse des App Deployment Contract (steht im Briefing) |
+| `STUDIO_GIT_BASE`     | Basis-Adresse des eigenen Git-Hostings (z. B. Forgejo)  |
 
 Daten liegen unter dem deklarierten Mount `/data` (SQLite) und werden
 damit von `oaap backup create` gesichert.
