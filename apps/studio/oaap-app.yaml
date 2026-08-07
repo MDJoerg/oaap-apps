@@ -1,0 +1,39 @@
+oaap_manifest: "0.1"
+
+app:
+  id: studio
+  name: OAAP Studio
+  version: 0.1.0
+  type: native
+  description: "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Studio ist Sache der Projektverantwortlichen (Design-Guidelines 5:
+  # „Studio — keyuser+"). Das Gateway erzwingt es, die App prüft zusätzlich.
+  - path: /
+    roles: [keyuser, admin]
+
+storage:
+  - name: data
+    mount: /data
+
+config:
+  # Verweis auf den verbindlichen App Deployment Contract; steht in jedem
+  # erzeugten Briefing. Eigene Kopie/Fork? Hier die eigene Adresse eintragen.
+  - key: STUDIO_CONTRACT_URL
+    label: "Adresse des App Deployment Contract"
+    default: "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md"
+  # Basis-Adresse des eigenen Git-Hostings (z. B. die Forgejo-App), damit
+  # Repo-Vorschläge dazu passen. Leer = keine Vorschläge.
+  - key: STUDIO_GIT_BASE
+    label: "Basis-Adresse des Git-Hostings"
+    default: ""
+
+health:
+  path: /healthz
+  startup_grace_seconds: 30

@@ -1,0 +1,19 @@
+{
+  "store": "0.1",
+  "name": "OAAP Plattform-Apps",
+  "description": "Von der Plattform selbst entwickelte Apps (Monorepo oaap-apps). Eigene Funktionen sind Apps wie alle anderen — Installation über den Store.",
+  "apps": [
+    {
+      "id": "studio",
+      "name": "OAAP Studio",
+      "description": "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen",
+      "type": "native",
+      "version": "0.1.0",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/studio"
+      },
+      "homepage": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio"
+    }
+  ]
+}
