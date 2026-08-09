@@ -1,0 +1,41 @@
+oaap_manifest: "0.2"
+
+app:
+  id: store-editor
+  name: OAAP Store Editor
+  version: 0.1.0
+  type: native
+  # Der Editor hat eine Oberfläche — das ist der Normalfall und stünde
+  # auch ohne diese Zeile so da. Sie steht trotzdem hier, weil eine App,
+  # die Listen auf genau dieses Feld prüft, es selbst führen sollte
+  # (Runtime-Spec 2.10, RFC-0012 §1.2).
+  class: frontend
+  description: "Store-Listen prüfen: gegen das Format und gegen die Manifeste, auf die sie zeigen"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Listen zu pflegen ist redaktionelle Arbeit (RFC-0013 Entscheidung 2):
+  # `user` schlägt vor, `keyuser` gibt frei. In diesem Bauschritt wird
+  # nichts geschrieben, also darf jeder von ihnen lesen; die Trennung
+  # bekommt ihre Wirkung in Bauschritt 3. Ausdrücklich NICHT
+  # server_admin — das wäre Serververwaltung, und der Administrator ist
+  # weder der richtige Richter über einen Beschreibungstext noch der
+  # Flaschenhals, durch den jede Textänderung soll.
+  - path: /
+    roles: [user, keyuser, admin]
+
+config:
+  # Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3. In diesem
+  # Bauschritt stehen sie hier, weil noch nichts geschrieben wird — eine
+  # eigene Ablage dafür wäre ein Konzept, das erst Bauschritt 2 braucht.
+  - key: STORE_EDITOR_LISTS
+    label: "Zu prüfende Listen (Adressen, durch Komma getrennt)"
+    default: "https://raw.githubusercontent.com/MDJoerg/oaap-store/main/oaap-store.json,https://raw.githubusercontent.com/MDJoerg/oaap-apps/main/oaap-store.json"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 30
