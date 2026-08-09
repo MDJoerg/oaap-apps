@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: store-editor
   name: OAAP Store Editor
-  version: 0.1.0
+  version: 0.2.0
   type: native
   # Der Editor hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da. Sie steht trotzdem hier, weil eine App,
@@ -19,14 +19,26 @@ services:
 
 routes:
   # Listen zu pflegen ist redaktionelle Arbeit (RFC-0013 Entscheidung 2):
-  # `user` schlägt vor, `keyuser` gibt frei. In diesem Bauschritt wird
-  # nichts geschrieben, also darf jeder von ihnen lesen; die Trennung
-  # bekommt ihre Wirkung in Bauschritt 3. Ausdrücklich NICHT
-  # server_admin — das wäre Serververwaltung, und der Administrator ist
-  # weder der richtige Richter über einen Beschreibungstext noch der
-  # Flaschenhals, durch den jede Textänderung soll.
+  # `user` schlägt vor, `keyuser` gibt frei. Bauschritt 2 schreibt nur
+  # in die Arbeitskopie dieser Instanz und veröffentlicht nichts — also
+  # darf jeder von ihnen daran arbeiten; die Trennung bekommt ihre
+  # Wirkung in Bauschritt 3, wo ein Vorschlag und eine Freigabe zwei
+  # verschiedene Dinge werden. Ausdrücklich NICHT server_admin — das
+  # wäre Serververwaltung, und der Administrator ist weder der richtige
+  # Richter über einen Beschreibungstext noch der Flaschenhals, durch
+  # den jede Textänderung soll.
   - path: /
     roles: [user, keyuser, admin]
+
+storage:
+  # Die Arbeitskopien der Listen: bearbeiteter Stand, veröffentlichter
+  # Stand als Vergleich, und die Markierungen der Übersteuerungen
+  # (RFC-0012 §1.3). Sie überleben damit Neustart, Redeploy und Update
+  # wie die Daten jeder anderen App und sind in `oaap backup create`
+  # enthalten. In die Liste selbst gehört diese Buchführung nicht: Eine
+  # Liste ist ein Dokument nach `oaap-store.schema.json`.
+  - name: entwuerfe
+    mount: /data
 
 config:
   # Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3. In diesem

@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Die Seiten des Store Editors — ohne Netz, ohne Docker, ohne Knoten.
+
+Warum es diesen Test gibt: Beim Bau der Launchpad-Regel im Portal hat
+ein Zeilenumbruch in einer Vorlage einen Satz zerrissen, den der
+Klicktest am echten Knoten suchte — gefunden hat es erst der Test, der
+die Seite lokal rendert. Dieselbe Vorsorge hier. Er prüft außerdem den
+ganzen Weg eines Formulars: Werte hinein, Arbeitskopie heraus.
+
+Abgerufen wird nichts: `fetch` wird ersetzt.
+
+    python3 test_pages.py
+"""
+import json
+import os
+import shutil
+import sys
+import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import app  # noqa: E402
+import editor as ed  # noqa: E402
+
+fails = 0
+
+
+def ok(label, cond, detail=""):
+    global fails
+    fails += not cond
+    print(f"{'PASS' if cond else 'FAIL'}  {label}")
+    if not cond and detail:
+        print(f"      {detail[:400]}")
+
+
+LIST_URL = "https://example.invalid/oaap-store.json"
+MANIFEST_URL = ("https://raw.githubusercontent.com/MDJoerg/oaap-store/"
+                "main/apps/ollama/oaap-app.yaml")
+
+PUBLISHED = {
+    "store": "0.2", "id": "oaap.test", "name": "Testliste",
+    "apps": [{
+        "id": "ollama", "name": "Ollama", "type": "wrapped", "version": "0.9.0",
+        "app_class": "frontend", "roles": ["admin", "keyuser"],
+        "summary": "Sprachmodelle lokal.", "maturity": "beta", "status": "active",
+        "categories": ["ai"], "links": [{"rel": "source", "url": "https://a"}],
+        "package": {"git": "https://github.com/MDJoerg/oaap-store",
+                    "path": "apps/ollama"},
+    }],
+}
+MANIFEST_YAML = """
+oaap_manifest: "0.2"
+app:
+  id: ollama
+  name: Ollama
+  version: 0.9.1
+  type: wrapped
+  class: service
+routes:
+  - path: /
+    roles: [keyuser, admin]
+"""
+
+
+def fake_fetch(url):
+    if url == LIST_URL:
+        return json.dumps(PUBLISHED)
+    if url == MANIFEST_URL:
+        return MANIFEST_YAML
+    raise OSError(f"im Test nicht erreichbar: {url}")
+
+
+class Fake(app.Handler):
+    """Die Seiten ohne Netzwerkverbindung — nur die Antwort wird gemerkt."""
+
+    def __init__(self):
+        self.body = ""
+        self.status = 200
+        self.location = ""
+        self.headers_sent = {}
+
+    def send_html(self, body, status=200):
+        self.body, self.status = body, status
+
+    def redirect(self, target):
+        self.location = target
+
+    def send_response(self, code, *a):
+        self.status = code
+
+    def send_header(self, key, value):
+        self.headers_sent[key] = value
+
+    def end_headers(self):
+        pass
+
+    @property
+    def wfile(self):
+        return self
+
+    def write(self, data):
+        self.body = data.decode("utf-8")
+
+
+TMP = tempfile.mkdtemp(prefix="store-editor-test-")
+app.fetch = fake_fetch
+app.LISTS = [LIST_URL]
+app.DATA_DIR = TMP
+
+try:
+    print("=== der veröffentlichte Stand, noch ohne Entwurf ===")
+    h = Fake()
+    body = h.list_page("0", "klicktest", "keyuser")
+    ok("die Liste wird angezeigt", "Testliste" in body)
+    ok("ihr einziger Eintrag steht in der Tabelle", ">Ollama<" in body)
+    ok("und der Prüfer meldet den Widerspruch zur Klasse",
+       "Befund" in body, "Liste: frontend, Manifest: service")
+    ok("ohne Entwurf steht das auch da",
+       "Es gibt noch keinen Entwurf" in body)
+
+    print("\n=== die Bearbeitungsseite ===")
+    body = h.entry_page("0", "ollama", "klicktest", "keyuser")
+    ok("die redaktionellen Felder sind da",
+       'name="summary"' in body and 'name="description"' in body
+       and 'name="maturity"' in body)
+    ok("die erzeugten Felder stehen verriegelt da",
+       'name="gen_version"' in body and "disabled" in body)
+    ok("und lassen sich ausdrücklich entriegeln",
+       'name="entriegelt" value="version"' in body)
+    # Die Formulierung muss zusammenhängen: Ein Zeilenumbruch mittendrin
+    # macht sie am echten Knoten unauffindbar — genau der Fehler, der im
+    # Portal schon einmal passiert ist.
+    ok("die Erklärung zum Entriegeln steht in einem Stück",
+       "abweichend pflegen" in body)
+    ok("das Manifest steht neben jedem erzeugten Feld",
+       "Das Manifest sagt:" in body)
+    ok("die Felder ohne Quelle sind frei bearbeitbar",
+       'name="released"' in body and 'name="icon"' in body
+       and "obwohl §1.3 sie" in body)
+    ok("ein bekannter Verweis hat sein eigenes Feld",
+       'name="link_source"' in body and 'value="https://a"' in body)
+
+    print("\n=== speichern legt einen Entwurf an ===")
+    h = Fake()
+    h.save_entry("0", LIST_URL, "ollama",
+                 {"tun": ["speichern"], "summary": ["Neu getextet."],
+                  "description": [""], "categories": ["ai", "automation"],
+                  "audience": ["operator"], "tags": ["ki, lokal"],
+                  "maturity": ["stable"], "status": ["active"], "license": [""],
+                  "link_source": ["https://a"], "links_rest": [""],
+                  "screenshots": [""], "released": ["2026-08-09"],
+                  "profiles": [""], "icon": [""],
+                  "pkg_git": ["https://github.com/MDJoerg/oaap-store"],
+                  "pkg_path": ["apps/ollama"], "pkg_ref": [""]},
+                 "klicktest", "keyuser")
+    work = app.load_work(LIST_URL)
+    entry = ed.entry_by_id(work["doc"], "ollama")
+    ok("der Entwurf liegt im Speicher", work is not None)
+    ok("der neue Text ist drin", entry["summary"] == "Neu getextet.")
+    ok("die Kategorien auch", entry["categories"] == ["ai", "automation"])
+    ok("Schlagwörter wurden zerlegt", entry["tags"] == ["ki", "lokal"])
+    ok("ein leeres Feld wurde weggelassen statt leer behauptet",
+       "description" not in entry and "license" not in entry, str(entry))
+    ok("der veröffentlichte Stand bleibt als Vergleich daneben stehen",
+       work["published"]["apps"][0]["summary"] == "Sprachmodelle lokal.")
+    ok("nichts wurde veröffentlicht — es ist eine Datei auf dieser Instanz",
+       os.path.isfile(app.work_path(LIST_URL)))
+
+    print("\n=== der Prüfer schaut ab jetzt auf den Entwurf ===")
+    doc, w, err = app.current(LIST_URL)
+    ok("nicht mehr auf die Veröffentlichung",
+       w is not None and doc["apps"][0]["summary"] == "Neu getextet.")
+
+    print("\n=== aus dem Manifest übernehmen ===")
+    h = Fake()
+    h.regenerate_all("0", LIST_URL)
+    entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
+    ok("die Version wird nachgezogen", entry["version"] == "0.9.1", str(entry))
+    ok("und der Widerspruch zur Klasse ist weg",
+       entry["app_class"] == "service", str(entry))
+    ok("die redaktionelle Änderung bleibt unberührt",
+       entry["summary"] == "Neu getextet.")
+
+    print("\n=== die markierte Übersteuerung ===")
+    h = Fake()
+    h.save_entry("0", LIST_URL, "ollama",
+                 {"tun": ["speichern"], "summary": ["Neu getextet."],
+                  "entriegelt": ["name"], "gen_name": ["Ollama (bei uns)"],
+                  "categories": ["ai", "automation"], "audience": ["operator"],
+                  "tags": ["ki, lokal"], "maturity": ["stable"],
+                  "status": ["active"], "link_source": ["https://a"],
+                  "released": ["2026-08-09"],
+                  "pkg_git": ["https://github.com/MDJoerg/oaap-store"],
+                  "pkg_path": ["apps/ollama"]},
+                 "klicktest", "keyuser")
+    work = app.load_work(LIST_URL)
+    ok("die Abweichung ist markiert", work["overrides"]["ollama"] == ["name"], str(work))
+    h = Fake()
+    h.regenerate_all("0", LIST_URL)
+    entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
+    ok("und überlebt die nächste Neuerzeugung",
+       entry["name"] == "Ollama (bei uns)",
+       "sonst nähme die Neuerzeugung eine bewusste Entscheidung "
+       "stillschweigend zurück (RFC-0012 §1.3)")
+    body = Fake().entry_page("0", "ollama", "klicktest", "keyuser")
+    ok("die Seite zeigt sie als übersteuert an", "übersteuert" in body)
+
+    print("\n=== die Übersicht der Änderungen ===")
+    body = Fake().changes_page("0", "klicktest", "keyuser")
+    ok("redaktionell und erzeugt werden getrennt gezählt",
+       "redaktionell" in body and "aus dem Manifest" in body)
+    ok("und die Trennung wird begründet",
+       "Mengenbremse" in body,
+       "RFC-0013 Frage 5: Neuerzeugung zählt für die Bremse nicht mit")
+    changes = ed.diff_documents(app.load_work(LIST_URL)["published"],
+                                app.load_work(LIST_URL)["doc"])
+    c = ed.count_kinds(changes)
+    ok("die Zählung stimmt mit den echten Änderungen überein",
+       c[ed.ERZEUGT] >= 1 and c[ed.REDAKTIONELL] >= 1 and c[ed.STRUKTUR] == 0, str(c))
+
+    print("\n=== einen Eintrag aufnehmen, bevor es sein Manifest gibt ===")
+    h = Fake()
+    h.add_entry("0", LIST_URL, {"id": ["bdt-hub"],
+                                "git": ["https://github.com/MDJoerg/bdt-hub"],
+                                "path": ["apps/hub"], "ref": [""]},
+                "klicktest", "keyuser")
+    doc = app.load_work(LIST_URL)["doc"]
+    ok("er steht in der Arbeitskopie", ed.entry_by_id(doc, "bdt-hub") is not None)
+    ok("und der Prüfer meldet ihn als ohne Beleg — statt ihn abzulehnen",
+       "Beleg" in Fake().list_page("0", "klicktest", "keyuser"),
+       "RFC-0013 Frage 4")
+    h = Fake()
+    h.add_entry("0", LIST_URL, {"id": ["bdt-hub"], "git": ["https://x/y"]},
+                "klicktest", "keyuser")
+    ok("dieselbe Kennung zweimal wird abgelehnt", "schon" in h.body)
+    h = Fake()
+    h.add_entry("0", LIST_URL, {"id": ["neu-x"], "git": ["http://unsicher/y"]},
+                "klicktest", "keyuser")
+    ok("und ein Paket ohne https ebenso", "https://" in h.body and "muss" in h.body)
+
+    print("\n=== die Datei ===")
+    h = Fake()
+    h.download("0", "klicktest", "keyuser")
+    ok("sie kommt als Anhang",
+       "attachment" in h.headers_sent.get("Content-Disposition", ""),
+       str(h.headers_sent))
+    ok("sie heißt nach der Kennung der Liste",
+       "oaap.test.json" in h.headers_sent.get("Content-Disposition", ""))
+    out = json.loads(h.body)
+    ok("sie enthält den Entwurf, nicht die Veröffentlichung",
+       out["apps"][0]["version"] == "0.9.1")
+    ok("und keine Buchführung des Editors",
+       "overrides" not in out and "published" not in out,
+       "eine Liste ist ein Dokument nach dem Schema — die Markierungen "
+       "gehören in den Editor, nicht auf fremde Knoten")
+
+    print("\n=== der Prüfer ist der Wächter, auch beim Herunterladen ===")
+    work = app.load_work(LIST_URL)
+    work["doc"]["apps"].append({"id": "kaputt", "name": "", "version": "keine",
+                                "package": {}})
+    app.save_work(LIST_URL, work)
+    h = Fake()
+    h.download("0", "klicktest", "keyuser")
+    ok("eine strukturell kaputte Liste gibt es nicht als Datei",
+       "nicht benutzbar" in h.body and "attachment" not in
+       h.headers_sent.get("Content-Disposition", ""), h.body[:200])
+
+    print("\n=== den Entwurf verwerfen ===")
+    app.drop_work(LIST_URL)
+    doc, w, err = app.current(LIST_URL)
+    ok("danach gilt wieder der veröffentlichte Stand",
+       w is None and doc["apps"][0]["version"] == "0.9.0")
+finally:
+    shutil.rmtree(TMP, ignore_errors=True)
+
+print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILURES'}")
+sys.exit(1 if fails else 0)

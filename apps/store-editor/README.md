@@ -1,12 +1,14 @@
 # OAAP Store Editor
 
 Prüft Store-Listen — gegen das Format **und gegen die Manifeste, auf die
-sie zeigen**. Bauschritt 1 aus
+sie zeigen** — und pflegt sie. Bauschritte 1 und 2 aus
 [RFC-0013](../../../oaap-spec/rfcs/RFC-0013-store-editor.md).
 
-**Dieser Stand schreibt nichts.** Kein Bearbeiten, kein Zurückschreiben,
-keine Zugangsdaten. Das ist Absicht: Der Prüfer ist der Kern des
-Werkzeugs, nicht das Formular.
+**Dieser Stand veröffentlicht nichts.** Kein Zurückschreiben ins
+Repository, keine Zugangsdaten. Bearbeitet wird eine Arbeitskopie auf
+der eigenen Instanz; das Ergebnis ist eine Datei zum Herunterladen.
+Der Prüfer ist der Kern des Werkzeugs, nicht das Formular — deshalb
+kam er zuerst.
 
 ## Warum es das gibt
 
@@ -22,10 +24,10 @@ hinter jedem Eintrag holt, findet es sofort.
 
 ## Drei Arten von Befund
 
-| Art | Bedeutung |
-|---------|--------------------------------------------------------------|
-| Fehler | So ist die Liste nicht benutzbar — ein Knoten würde daran scheitern oder etwas Falsches tun. |
-| Befund | Liste und Manifest sagen **beide** etwas, und es ist verschieden. |
+| Art     | Bedeutung                                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------ |
+| Fehler  | So ist die Liste nicht benutzbar — ein Knoten würde daran scheitern oder etwas Falsches tun.     |
+| Befund  | Liste und Manifest sagen **beide** etwas, und es ist verschieden.                                |
 | Hinweis | Auffällig, aber vielleicht Absicht — etwa eine Behauptung, die das Manifest (noch) nicht belegt. |
 
 Der Unterschied zwischen Befund und Hinweis ist an echten Daten
@@ -65,6 +67,48 @@ Punkt am Papier, kein Versäumnis des Werkzeugs, und er gehört bei der
 nächsten Fortschreibung von RFC-0012 entschieden: entweder wandern die
 Felder ins Manifest, oder §1.3 nennt sie redaktionell.
 
+Bauschritt 2 macht daraus eine sichtbare Konsequenz: `released`,
+`profiles`, `icon` und `package` stehen **frei bearbeitbar** in einem
+eigenen Abschnitt, der den offenen Punkt benennt. Sie als „erzeugt" zu
+verriegeln wäre eine Unwahrheit in der Oberfläche — es gäbe nichts,
+woraus sie je erzeugt würden.
+
+## Wie bearbeitet wird
+
+Die erste Änderung legt einen **Entwurf** an: eine Arbeitskopie im
+Speicher der Instanz. Der veröffentlichte Stand bleibt daneben stehen
+und dient als Vergleich; *Änderungen ansehen* zeigt jederzeit Eintrag
+für Eintrag, Feld für Feld, was sich unterscheidet. Solange ein Entwurf
+besteht, prüft der Prüfer **ihn** und nicht mehr die Veröffentlichung —
+sonst wäre der Wächter für genau das blind, was gerade entsteht.
+
+**Fünf Felder gehören dem Paket:** `name`, `type`, `version`,
+`app_class`, `roles`. Sie stehen verriegelt da und kommen aus dem
+Manifest. Wer eines abweichend pflegen will, hakt „abweichend pflegen"
+an — die Abweichung wird dann **markiert** und überlebt die nächste
+Neuerzeugung. Ohne diese Markierung nähme jede Neuerzeugung eine
+bewusste redaktionelle Entscheidung stillschweigend zurück; genau das
+verlangt RFC-0012 §1.3, und ohne sie wäre die 80-%-Regel nicht
+vertretbar.
+
+Die Markierungen liegen **im Editor, nicht in der Liste**. Eine Liste
+ist ein Dokument nach `oaap-store.schema.json`; die Buchführung des
+Editors gehört nicht hinein und schon gar nicht auf fremde Knoten.
+Dieselbe Begründung wie bei der Betriebsart in RFC-0013 §3. Der Preis
+ist ehrlich zu nennen: Wer dieselbe Liste in einem anderen Editor
+öffnet, sieht die Markierungen nicht.
+
+Die Änderungsübersicht trennt **strukturell**, **redaktionell** und
+**aus dem Manifest übernommen**. Das ist keine Kosmetik, sondern die
+Vorarbeit für die Mengenbremse in Bauschritt 3: Sie zählt nur die
+ersten beiden (RFC-0013, Frage 5).
+
+**Der Prüfer ist der Wächter, nicht der Mensch.** Was strukturell
+kaputt ist, gibt es nicht als Datei. Befunde und Hinweise halten
+dagegen nicht auf — ein Eintrag darf vor seinem Manifest entstehen
+(RFC-0013, Frage 4), und der Prüfer sagt bei jedem Lauf, dass er ohne
+Beleg dasteht.
+
 ## Woher das Manifest geholt wird
 
 Über die Rohdatei-Adresse, nicht per `git clone` — eine Liste mit acht
@@ -76,10 +120,14 @@ entweder 404 (harmlos) oder die falsche Datei (nicht harmlos).
 
 ## Konfiguration
 
-`STORE_EDITOR_LISTS` — zu prüfende Listen, durch Komma getrennt.
-Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3; dass sie hier in
-einer Umgebungsvariablen stehen, ist eine Eigenheit dieses Bauschritts
-(es wird ja nichts geschrieben).
+`STORE_EDITOR_LISTS` — die Listen, an denen gearbeitet wird, durch
+Komma getrennt. Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3.
+
+Der deklarierte Speicher `entwuerfe` (Mount `/data`) hält die
+Arbeitskopien. Er überlebt Neustart, Redeploy und Update wie die Daten
+jeder anderen App und ist in `oaap backup create` enthalten. Eine
+Instanz aus Version 0.1.0 kennt ihn noch nicht — ein erneutes Ausrollen
+legt ihn an; bis dahin sagt die Startseite, dass Bearbeiten nicht geht.
 
 Eine Liste, die noch nirgends veröffentlicht ist, lässt sich unter
 **Liste einfügen** trotzdem prüfen — der Inhalt wird nirgends
@@ -88,12 +136,21 @@ gespeichert.
 ## Prüfen
 
 ```bash
-python3 test_checker.py          # ohne Netz, ohne Docker, ohne Knoten
+python3 test_checker.py          # die Prüfregeln
+python3 test_editor.py           # die Bearbeitungsregeln
+python3 test_pages.py            # die Seiten und der Weg eines Formulars
 ```
 
-Die Prüfregeln liegen in `checker.py`, bewusst ohne Web und ohne Netz:
-Es sind Entscheidungen aus RFC-0012 und RFC-0013, und die soll man ohne
+Alle drei ohne Netz, ohne Docker, ohne Knoten. Die Regeln liegen in
+`checker.py` und `editor.py`, bewusst ohne Web und ohne Netz: Es sind
+Entscheidungen aus RFC-0012 und RFC-0013, und die soll man ohne
 laufenden Server lesen können. Das Abrufen wird hereingereicht.
+
+`test_pages.py` rendert die Seiten und schickt echte Formularwerte
+durch. Den gibt es, weil im Portal schon einmal ein Zeilenumbruch in
+einer Vorlage einen Satz zerrissen hat, den der Klicktest am echten
+Knoten suchte. Beim ersten Lauf hat er prompt denselben Fehler in
+diesem Formular gefunden.
 
 ## Abhängigkeit
 
@@ -104,10 +161,28 @@ missversteht, wäre genau die stille Falschaussage, gegen die dieses
 Werkzeug antritt. PyYAML braucht keinen Übersetzer (reines Python als
 Rückfallebene), der Build auf arm64 bleibt also abhängigkeitsarm.
 
+## Über RFC-0013 hinaus: Einträge aufnehmen und entfernen
+
+Bauschritt 2 ist im RFC als „die sechs redaktionellen Felder
+bearbeiten" beschrieben. Aufnehmen und Entfernen von Einträgen sind
+hier trotzdem dabei, und der Grund ist der Anwendungsfall, der den RFC
+begründet hat: Eine Liste, die uns nicht gehört — Jörgs BDT-Projekt —
+fängt bei null an. Ein Editor, der nur vorhandene Einträge umtexten
+kann, liefert ihrem Pfleger eine leere Datei. RFC-0013 Entscheidung 4
+setzt das Aufnehmen ohnehin voraus („ein Eintrag darf entstehen, bevor
+sein Manifest abrufbar ist"), und ohne Entfernen wäre ein Vertipper
+beim Aufnehmen nicht mehr zu beheben.
+
+Beides zählt in der Änderungsübersicht als **strukturell** — genau die
+Kategorie, die die Mengenbremse in Bauschritt 3 mitzählt.
+
 ## Was als Nächstes kommt
 
-- **Bauschritt 2:** die sechs redaktionellen Felder bearbeiten, Ergebnis
-  als Datei.
-- **Bauschritt 3:** zurückschreiben, mit den drei Betriebsarten aus
-  RFC-0013 §3 — allein gepflegt, Vier-Augen, Vorschlag einreichen. Erst
-  hier werden Zugangsdaten gebraucht.
+**Bauschritt 3:** zurückschreiben, mit den drei Betriebsarten aus
+RFC-0013 §3 — allein gepflegt, Vier-Augen, Vorschlag einreichen. Erst
+hier werden Zugangsdaten gebraucht, und erst hier bekommt die
+Rollentrennung aus Entscheidung 2 ihre Wirkung (`user` schlägt vor,
+`keyuser` gibt frei). Vorhanden ist schon: die Änderungsübersicht
+nach Art getrennt (die Mengenbremse), das Erkennen eines Pakets, das
+umzieht (die Repository-Rückfrage), und der Prüfer als Wächter vor der
+Ausgabe.
