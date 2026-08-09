@@ -178,9 +178,10 @@ ok("die fehlende Klasse steht drin", "app.class" in b and "class: service" in b)
 ok("und der YAML-Block hebt das Format an, weil `class` erst ab 0.2 gilt",
    'oaap_manifest: "0.2"' in b, b)
 # Der lange Text gehoert in den Katalog, der eine Satz ins Manifest.
+yaml_block = b.split("```yaml", 1)[1].split("```", 1)[0]
 ok("als app.description wird der EINE Satz vorgeschlagen, nicht der lange Text",
-   "description: Sprachmodelle lokal betreiben." in b
-   and "redaktionell gepflegter Text" not in b, b)
+   "description: Sprachmodelle lokal betreiben." in yaml_block
+   and "redaktionell gepflegter Text" not in yaml_block, yaml_block)
 ok("das Bild bekommt KEINEN Wert aus dem Katalog",
    "icon: icons/ollama.svg" not in b and "# icon:" in b,
    "im Katalog gilt der Pfad relativ zur Liste, im Manifest relativ zum "
@@ -191,6 +192,10 @@ ok("was das Format nicht kennt, steht getrennt und ohne Auftrag",
 ok("summary taucht nicht zweimal auf",
    b.count("| `summary` |") == 0,
    "es wurde schon als app.description verplant")
+# Ohne diese Zeile fiele ausgerechnet das laengste Stueck Text aus dem
+# Bericht heraus — das Manifest hat nur den EINEN Satz.
+ok("der lange Katalogtext wird als heimatlos ausgewiesen",
+   "| `description` |" in b, b)
 
 # Der wichtigste Fall: Sagen beide etwas und es ist verschieden, ist der
 # KATALOG schuld — ein Bericht, der einer fremden KI auftraegt, unsere

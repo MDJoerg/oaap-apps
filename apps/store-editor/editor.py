@@ -392,9 +392,14 @@ MANIFEST_CARRIES = (
 # Was der Katalog führt und das Manifest-Schema (noch) nicht kennt.
 # Ob diese Felder ins Manifest wandern sollen, ist eine offene
 # Entscheidung — sie steht in RFC-0014.
-MANIFEST_MISSING = ("summary", "categories", "audience", "tags", "maturity",
-                    "status", "license", "links", "screenshots", "profiles",
-                    "released")
+#
+# `description` steht hier, obwohl das Manifest ein Feld dieses Namens
+# hat: Das ist der EINE Satz an der Instanz, im Katalog steht der lange
+# Text. Für den gibt es im Manifest keinen Platz — und ohne diese Zeile
+# fiele ausgerechnet das längste Stück Text aus dem Bericht heraus.
+MANIFEST_MISSING = ("summary", "description", "categories", "audience", "tags",
+                    "maturity", "status", "license", "links", "screenshots",
+                    "profiles", "released")
 
 
 def yaml_value(value):
