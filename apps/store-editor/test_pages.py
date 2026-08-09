@@ -62,7 +62,7 @@ routes:
 """
 
 
-def fake_fetch(url):
+def fake_fetch(url, headers=None):
     if url == LIST_URL:
         return json.dumps(PUBLISHED)
     if url == MANIFEST_URL:
@@ -107,6 +107,9 @@ app.fetch = fake_fetch
 app.LISTS = [LIST_URL]
 app.DATA_DIR = TMP
 
+# Eine Quelle ohne Zugangsdaten — der oeffentliche Normalfall.
+SRC = {"url": LIST_URL, "name": "", "token": 0}
+
 try:
     print("=== der veröffentlichte Stand, noch ohne Entwurf ===")
     h = Fake()
@@ -125,14 +128,14 @@ try:
                                     "app_class": "service"}]}
     _echt = fake_fetch
 
-    def nur_ident(url):
-        return json.dumps(IDENT) if url == LIST_URL else _echt(url)
+    def nur_ident(url, headers=None):
+        return json.dumps(IDENT) if url == LIST_URL else _echt(url, headers)
 
     app.fetch = nur_ident
-    Fake().regenerate_all("0", LIST_URL)
+    Fake().regenerate_all("0", SRC)
     ok("nichts zu holen, also kein Entwurf", app.load_work(LIST_URL) is None,
        str(app.load_work(LIST_URL)))
-    Fake().sync_entry("0", LIST_URL, "ollama", "klicktest", "keyuser")
+    Fake().sync_entry("0", SRC, "ollama", "klicktest", "keyuser")
     ok("auch nicht beim Abgleich einer einzelnen App",
        app.load_work(LIST_URL) is None)
     app.fetch = _echt
@@ -161,7 +164,7 @@ try:
 
     print("\n=== speichern legt einen Entwurf an ===")
     h = Fake()
-    h.save_entry("0", LIST_URL, "ollama",
+    h.save_entry("0", SRC, "ollama",
                  {"tun": ["speichern"], "summary": ["Neu getextet."],
                   "description": [""], "categories": ["ai", "automation"],
                   "audience": ["operator"], "tags": ["ki, lokal"],
@@ -192,7 +195,7 @@ try:
 
     print("\n=== aus dem Manifest übernehmen ===")
     h = Fake()
-    h.regenerate_all("0", LIST_URL)
+    h.regenerate_all("0", SRC)
     entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
     ok("die Version wird nachgezogen", entry["version"] == "0.9.1", str(entry))
     ok("und der Widerspruch zur Klasse ist weg",
@@ -202,7 +205,7 @@ try:
 
     print("\n=== die markierte Übersteuerung ===")
     h = Fake()
-    h.save_entry("0", LIST_URL, "ollama",
+    h.save_entry("0", SRC, "ollama",
                  {"tun": ["speichern"], "summary": ["Neu getextet."],
                   "entriegelt": ["name"], "gen_name": ["Ollama (bei uns)"],
                   "categories": ["ai", "automation"], "audience": ["operator"],
@@ -215,7 +218,7 @@ try:
     work = app.load_work(LIST_URL)
     ok("die Abweichung ist markiert", work["overrides"]["ollama"] == ["name"], str(work))
     h = Fake()
-    h.regenerate_all("0", LIST_URL)
+    h.regenerate_all("0", SRC)
     entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
     ok("und überlebt die nächste Neuerzeugung",
        entry["name"] == "Ollama (bei uns)",
@@ -239,7 +242,7 @@ try:
 
     print("\n=== einen Eintrag aufnehmen, bevor es sein Manifest gibt ===")
     h = Fake()
-    h.add_entry("0", LIST_URL, {"id": ["bdt-hub"],
+    h.add_entry("0", SRC, {"id": ["bdt-hub"],
                                 "git": ["https://github.com/MDJoerg/bdt-hub"],
                                 "path": ["apps/hub"], "ref": [""]},
                 "klicktest", "keyuser")
@@ -249,11 +252,11 @@ try:
        "Beleg" in Fake().list_page("0", "klicktest", "keyuser"),
        "RFC-0013 Frage 4")
     h = Fake()
-    h.add_entry("0", LIST_URL, {"id": ["bdt-hub"], "git": ["https://x/y"]},
+    h.add_entry("0", SRC, {"id": ["bdt-hub"], "git": ["https://x/y"]},
                 "klicktest", "keyuser")
     ok("dieselbe Kennung zweimal wird abgelehnt", "schon" in h.body)
     h = Fake()
-    h.add_entry("0", LIST_URL, {"id": ["neu-x"], "git": ["http://unsicher/y"]},
+    h.add_entry("0", SRC, {"id": ["neu-x"], "git": ["http://unsicher/y"]},
                 "klicktest", "keyuser")
     ok("und ein Paket ohne https ebenso", "https://" in h.body and "muss" in h.body)
 
@@ -292,14 +295,14 @@ try:
     ed.entry_by_id(work["doc"], "ollama")["summary"] = "Bleibt stehen."
     app.save_work(LIST_URL, work)
     h = Fake()
-    h.sync_entry("0", LIST_URL, "ollama", "klicktest", "keyuser")
+    h.sync_entry("0", SRC, "ollama", "klicktest", "keyuser")
     entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
     ok("die Version wird nachgezogen", entry["version"] == "0.9.1", str(entry))
     ok("der redaktionelle Text bleibt unangetastet",
        entry["summary"] == "Bleibt stehen.",
        "sonst würde ein Abgleich aus der Zeile heraus Texte löschen")
     h = Fake()
-    h.sync_entry("0", LIST_URL, "bdt-hub", "klicktest", "keyuser")
+    h.sync_entry("0", SRC, "bdt-hub", "klicktest", "keyuser")
     ok("ohne abrufbares Manifest passiert nichts, und es steht dran",
        "kein_manifest" in h.location, h.location)
 
@@ -319,6 +322,71 @@ try:
        and "von 3 Einträgen" in h.body, h.body[:300])
     ok("der Eintrag ohne abrufbares Manifest steht als ohne Beleg drin",
        "ohne Beleg" in h.body)
+
+    print("\n=== Quellen: Listen aufnehmen und Zugangsdaten ===")
+
+    class Rolle(Fake):
+        def __init__(self, roles, form=None):
+            super().__init__()
+            self._roles, self._form = set(roles), form or {}
+
+        def role_set(self):
+            return self._roles
+
+        def form(self):
+            return self._form
+
+    app.save_sources([{"url": LIST_URL, "name": "Testliste", "token": 0}])
+    app.TOKENS = ["", "", ""]
+    body = Rolle({"keyuser"}).sources_page("klicktest", "keyuser")
+    ok("die Seite zeigt die eingetragene Liste", "Testliste" in body)
+    ok("ein keyuser darf aufnehmen", "Liste aufnehmen" in body)
+    ok("und sie sagt, wo die Schlüssel liegen und warum nicht hier",
+       "server_admin" in body and "keine eigene" in body)
+    nur_user = Rolle({"user"}).sources_page("klicktest", "user")
+    ok("ein user darf es nicht", "Liste aufnehmen" not in nur_user
+       and "Einrichtung" in nur_user)
+
+    h = Rolle({"user"}, {"url": ["https://x.invalid/l.json"]})
+    h.add_source("klicktest", "user")
+    ok("und wird abgewiesen, nicht stillschweigend ignoriert",
+       h.status == 403, str(h.status))
+    ok("die Quelle wurde nicht angelegt", len(app.load_sources()) == 1)
+
+    # Der Fall, fuer den es die Umschreibung gibt: Was im Browser in der
+    # Adresszeile steht, ist eine HTML-Seite und keine JSON-Datei.
+    h = Rolle({"keyuser"}, {
+        "url": ["https://github.com/MDJoerg/bdt/blob/main/oaap-store.json"],
+        "name": ["BDT"], "token": ["1"]})
+    h.add_source("klicktest", "keyuser")
+    neu = app.load_sources()[-1]
+    ok("eine Browser-Adresse wird beim Aufnehmen umgeschrieben",
+       neu["url"] == "https://raw.githubusercontent.com/MDJoerg/bdt/main/"
+                     "oaap-store.json", neu["url"])
+    ok("der Zugangsdaten-Platz wird gemerkt", neu["token"] == 1)
+    ok("und es steht dran, dass sie noch nicht abrufbar war",
+       "quelle_stumm" in h.location, h.location)
+    body = Rolle({"keyuser"}).sources_page("klicktest", "keyuser")
+    ok("ein Platz ohne hinterlegten Schlüssel wird als leer gezeigt",
+       "Platz 1 leer" in body, body[body.find("BDT"):][:400])
+
+    app.TOKENS = ["ghp_geheim", "", ""]
+    body = Rolle({"keyuser"}).sources_page("klicktest", "keyuser")
+    ok("mit Schlüssel meldet sie ihn als hinterlegt",
+       "Schlüssel ist hinterlegt" in body)
+    # Der Wert selbst darf NIE auf einer Seite auftauchen.
+    ok("der Schlüssel selbst steht nirgends auf der Seite",
+       "ghp_geheim" not in body,
+       "secret heißt: eintragbar, nie zurücklesbar — auch nicht hier")
+    ok("und der Editor gibt ihn für diese Quelle heraus",
+       app.token_of(app.load_sources()[-1]) == "ghp_geheim")
+    ok("für eine öffentliche Quelle nicht",
+       app.token_of(app.load_sources()[0]) == "")
+
+    h = Rolle({"keyuser"}, {"i": ["1"]})
+    h.remove_source("klicktest", "keyuser")
+    ok("entfernen geht", len(app.load_sources()) == 1)
+    app.TOKENS = ["", "", ""]
 
     print("\n=== den Entwurf verwerfen ===")
     app.drop_work(LIST_URL)

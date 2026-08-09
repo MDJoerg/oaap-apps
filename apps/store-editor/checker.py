@@ -21,7 +21,7 @@ werden müsste.
 """
 
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 # --- Vokabular aus RFC-0012 §1.2. Unbekannte Werte sind KEIN Fehler:
 # Ein Knoten toleriert sie (§8.1), also darf der Editor nicht so tun,
@@ -53,8 +53,34 @@ def finding(level, app_id, field, text, in_list="", in_manifest=""):
 
 # --------------------------------------------------------------- Manifest holen
 
-def raw_manifest_url(package):
-    """Wo liegt `oaap-app.yaml` zu diesem Paket? ('' + Grund, wenn unklar)
+GITHUB_HOSTS = ("github.com", "raw.githubusercontent.com", "api.github.com")
+
+
+def forge_of(url):
+    """Welcher Anbieter — damit ein Token nur dorthin geht, wofür er gilt.
+
+    GitHub tritt unter drei Namen auf (Web, Rohdateien, Schnittstelle);
+    für die Frage „gehört dieses Token hierher" sind das derselbe Ort.
+    """
+    host = urlparse(str(url or "")).netloc.lower()
+    if host in GITHUB_HOSTS or host.endswith(".github.com"):
+        return "github"
+    return host
+
+
+def repo_parts(git):
+    """(Anbieter, Eigentümer, Repository, Host) aus einer Repo-Adresse."""
+    u = urlparse(str(git or "").rstrip("/").removesuffix(".git"))
+    if not u.scheme.startswith("http"):
+        return "", "", "", ""
+    parts = [p for p in u.path.split("/") if p]
+    if len(parts) < 2:
+        return "", "", "", ""
+    return forge_of(git), parts[0], parts[1], u.netloc
+
+
+def file_ref(git, inner, ref="main", token=""):
+    """Adresse und Kopfzeilen, um EINE Datei aus einem Repo zu holen.
 
     Absichtlich kein `git clone`: Der Prüfer soll eine Liste mit acht
     Einträgen in Sekunden durchsehen können, nicht acht Repositories
@@ -63,25 +89,85 @@ def raw_manifest_url(package):
     Alles andere wird gemeldet, nicht geraten: Eine falsch geratene
     Adresse liefert entweder 404 (harmlos) oder die falsche Datei
     (nicht harmlos).
+
+    **Bei einem privaten GitHub-Repo hilft die Rohdatei-Adresse nicht.**
+    `raw.githubusercontent.com` nimmt kein Token entgegen — dafür gibt es
+    die Inhalts-Schnittstelle, die mit `Accept: …raw` denselben
+    Dateiinhalt liefert. Das ist kein Umweg, sondern der einzige Weg,
+    und er war der Grund, nach dem Anbieter zu fragen, bevor gebaut
+    wurde (Jörg, 2026-08-09).
+
+    Forgejo/Gitea nehmen das Token direkt auf dem Rohdatei-Pfad an.
     """
-    git = str((package or {}).get("git") or "").strip()
-    if not git:
-        return "", "kein Git-Repository angegeben"
-    ref = str((package or {}).get("ref") or "").strip() or "main"
-    path = str((package or {}).get("path") or "").strip().strip("/")
-    inner = (path + "/" if path else "") + "oaap-app.yaml"
-    u = urlparse(git.rstrip("/").removesuffix(".git"))
-    if not u.scheme.startswith("http"):
-        return "", f"mit dieser Adressform kann der Prüfer nichts anfangen: {git}"
-    parts = [p for p in u.path.split("/") if p]
-    if len(parts) < 2:
-        return "", f"aus der Adresse lässt sich kein Repository lesen: {git}"
-    owner, repo = parts[0], parts[1]
-    if u.netloc.endswith("github.com"):
-        return (f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{inner}", "")
+    forge, owner, repo, host = repo_parts(git)
+    if not forge:
+        return "", {}, (f"mit dieser Adressform kann der Prüfer nichts "
+                        f"anfangen: {git}")
+    inner = str(inner).strip("/")
+    ref = str(ref or "").strip() or "main"
+    if forge == "github":
+        if token:
+            return (f"https://api.github.com/repos/{owner}/{repo}/contents/"
+                    f"{quote(inner)}?ref={quote(ref)}",
+                    {"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github.raw",
+                     "X-GitHub-Api-Version": "2022-11-28"}, "")
+        return (f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{inner}",
+                {}, "")
     # Forgejo/Gitea liefern Rohdateien unter /raw/branch/<ref>/… — die
     # Form gilt auch für einen Tag, der Pfadname heißt nur so.
-    return (f"https://{u.netloc}/{owner}/{repo}/raw/branch/{ref}/{inner}", "")
+    head = {"Authorization": f"token {token}"} if token else {}
+    return (f"https://{host}/{owner}/{repo}/raw/branch/{ref}/{inner}", head, "")
+
+
+def manifest_ref(package, token=""):
+    """Wo liegt `oaap-app.yaml` zu diesem Paket? (Adresse, Kopfzeilen, Grund)"""
+    git = str((package or {}).get("git") or "").strip()
+    if not git:
+        return "", {}, "kein Git-Repository angegeben"
+    path = str((package or {}).get("path") or "").strip().strip("/")
+    inner = (path + "/" if path else "") + "oaap-app.yaml"
+    return file_ref(git, inner, (package or {}).get("ref") or "main", token)
+
+
+def raw_manifest_url(package):
+    """Nur die Adresse, ohne Zugangsdaten — der öffentliche Fall."""
+    url, _, why = manifest_ref(package)
+    return url, why
+
+
+RAW_GITHUB = re.compile(
+    r"^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)$")
+RAW_FORGEJO = re.compile(
+    r"^https://([^/]+)/([^/]+)/([^/]+)/raw/branch/([^/]+)/(.+)$")
+
+
+def document_ref(url, token=""):
+    """Adresse und Kopfzeilen, um die Liste selbst zu holen.
+
+    Ohne Zugangsschlüssel bleibt die Adresse, wie sie ist. Mit einem
+    muss sie umgeschrieben werden — bei GitHub nimmt der Rohdatei-Pfad
+    kein Token an, dort führt nur die Inhalts-Schnittstelle hin.
+
+    Eine Adressform, die hier niemand kennt, bekommt **kein** Token
+    angehängt: Ein blind gesetzter `Authorization`-Kopf verrät einen
+    Schlüssel an einen Server, von dem niemand weiß, ob er ihn haben
+    soll. Stattdessen ein Hinweis.
+    """
+    url = str(url or "")
+    if not token:
+        return url, {}, ""
+    m = RAW_GITHUB.match(url)
+    if m:
+        owner, repo, ref, path = m.groups()
+        return file_ref(f"https://github.com/{owner}/{repo}", path, ref, token)
+    m = RAW_FORGEJO.match(url)
+    if m:
+        host, owner, repo, ref, path = m.groups()
+        return file_ref(f"https://{host}/{owner}/{repo}", path, ref, token)
+    return url, {}, ("Für diese Adressform weiß der Editor nicht, wie ein "
+                     "Zugangsschlüssel mitzugeben wäre — er wird deshalb "
+                     "nicht mitgeschickt.")
 
 
 # ------------------------------------------------------- ableitbare Felder
@@ -281,12 +367,17 @@ def check_structure(doc):
 
 # ------------------------------------------------------------- ganze Prüfung
 
-def check_document(doc, fetch=None, load_yaml=None):
+def check_document(doc, fetch=None, load_yaml=None, token="", token_forge=""):
     """Struktur, dann jeder Eintrag gegen sein Manifest.
 
-    `fetch(url) -> str` und `load_yaml(text) -> dict` werden
+    `fetch(url, headers) -> str` und `load_yaml(text) -> dict` werden
     hereingereicht: So läuft die Prüfung im Test ohne Netz, und die App
     entscheidet, wie sie abruft.
+
+    `token` gilt **nur** für `token_forge`. Ein Zugangsschlüssel geht
+    an genau den Anbieter, für den er ausgestellt wurde, und an keinen
+    anderen — eine Liste darf nicht dadurch, dass sie auf ein fremdes
+    Repository zeigt, ein Token dorthin schicken lassen.
     """
     findings = check_structure(doc)
     checked = unreachable = 0
@@ -296,7 +387,10 @@ def check_document(doc, fetch=None, load_yaml=None):
             if not isinstance(e, dict):
                 continue
             app_id = str(e.get("id") or "?")
-            url, why = raw_manifest_url(e.get("package") or {})
+            pkg = e.get("package") or {}
+            mine = token if (token and token_forge
+                             and repo_parts(pkg.get("git"))[0] == token_forge) else ""
+            url, headers, why = manifest_ref(pkg, mine)
             if not url:
                 unreachable += 1
                 findings.append(finding(HINWEIS, app_id, "package",
@@ -304,7 +398,7 @@ def check_document(doc, fetch=None, load_yaml=None):
                                         "— dieser Eintrag bleibt ungeprüft."))
                 continue
             try:
-                text = fetch(url)
+                text = fetch(url, headers)
             except Exception as exc:                       # noqa: BLE001
                 unreachable += 1
                 findings.append(finding(

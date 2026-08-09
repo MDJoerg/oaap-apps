@@ -361,6 +361,57 @@ def count_kinds(changes):
             for k in (STRUKTUR, REDAKTIONELL, ERZEUGT)}
 
 
+# --- Quellen: welche Listen dieser Editor pflegt -----------------------
+#
+# Die Liste der Listen liegt in der Ablage des Editors, die
+# **Zugangsschlüssel** dagegen in der Instanz-Konfiguration (RFC-0013,
+# Entscheidung vom 09.08.2026, Form A). Eine Quelle nennt deshalb nur
+# die **Nummer eines Platzes**, nie einen Schlüssel — der Editor
+# bekommt den Wert vom Betriebssystem und schreibt ihn nirgends hin.
+#
+# Warum überhaupt Plätze statt beliebig vieler Schlüssel: Die Schlüssel
+# sind im Manifest deklariert und damit fest. Das ist eine echte
+# Obergrenze — sie ist hier **sichtbar** statt versteckt, und genau das
+# war die Begründung: Erscheint eine vierte private Liste, ist das der
+# Beleg für eine allgemeine Lösung, statt sie vorher zu erraten.
+
+TOKEN_SLOTS = 3
+
+
+def normalise_source(url):
+    """Was ein Mensch einfügt, in die Adresse, die abgerufen wird.
+
+    Ein Browser zeigt eine Datei unter `…/blob/main/…`; das ist eine
+    HTML-Seite, keine JSON-Datei. Wer sie aus der Adresszeile kopiert,
+    bekäme sonst 'das ist keine gültige JSON-Datei' und keinen Hinweis
+    darauf, was er falsch gemacht hat.
+    """
+    url = str(url or "").strip()
+    m = re.match(r"^https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$", url)
+    if m:
+        owner, repo, ref, path = m.groups()
+        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
+    m = re.match(r"^https://([^/]+)/([^/]+)/([^/]+)/src/branch/([^/]+)/(.+)$", url)
+    if m:
+        host, owner, repo, ref, path = m.groups()
+        return f"https://{host}/{owner}/{repo}/raw/branch/{ref}/{path}"
+    return url
+
+
+def check_new_source(sources, url):
+    """'' wenn die Adresse taugt, sonst der Grund im Klartext."""
+    if not url.startswith("https://"):
+        return "Die Adresse muss mit https:// beginnen."
+    if any(s.get("url") == url for s in sources or []):
+        return "Diese Liste ist schon eingetragen."
+    return ""
+
+
+def source_forge(url):
+    """Der Anbieter, für den ein Zugangsschlüssel dieser Quelle gilt."""
+    return ck.forge_of(url)
+
+
 # --- Nachpflege-Bericht ------------------------------------------------
 #
 # Ein Auftrag an die KI, die eine App betreut: „Dein Manifest schweigt

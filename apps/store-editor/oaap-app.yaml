@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: store-editor
   name: OAAP Store Editor
-  version: 0.2.3
+  version: 0.3.0
   type: native
   # Der Editor hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da. Sie steht trotzdem hier, weil eine App,
@@ -41,12 +41,36 @@ storage:
     mount: /data
 
 config:
-  # Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3. In diesem
-  # Bauschritt stehen sie hier, weil noch nichts geschrieben wird — eine
-  # eigene Ablage dafür wäre ein Konzept, das erst Bauschritt 2 braucht.
+  # Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3. Diese Angabe
+  # ist nur noch das Saatgut: Beim ersten Start wandern die Adressen in
+  # die Quellenverwaltung des Editors, wo ein `keyuser` sie pflegt.
   - key: STORE_EDITOR_LISTS
-    label: "Zu prüfende Listen (Adressen, durch Komma getrennt)"
+    label: "Listen zum Start (Adressen, durch Komma getrennt)"
     default: "https://raw.githubusercontent.com/MDJoerg/oaap-store/main/oaap-store.json,https://raw.githubusercontent.com/MDJoerg/oaap-apps/main/oaap-store.json"
+
+  # Zugangsschlüssel für private Listen — RFC-0013, Entscheidung Jörgs
+  # vom 09.08.2026 (Form A). Sie stehen hier und nicht in der Ablage des
+  # Editors: `secret: true` heißt eintragbar, nie zurücklesbar, und die
+  # Plattform hält Geheimnisse ohnehin schon. Eine App, die sich dafür
+  # etwas Eigenes ausdenkt, baut denselben Mechanismus schwächer nach.
+  #
+  # Drei feste Plätze sind eine echte Obergrenze, und sie ist ABSICHT:
+  # sichtbar statt versteckt. Braucht es einen vierten, ist genau das
+  # der Beleg dafür, dass die Plattform zur Laufzeit hinzufügbare
+  # Geheimnisse bekommen sollte — statt sie vorher zu erraten.
+  #
+  # Heute nur LESEN. Ein Schreibtoken kommt als eigenes Feld mit
+  # Bauschritt 3: Ein Lesetoken ist kein Schreibrecht, und beides in
+  # einem Feld gewährt mehr als nötig.
+  - key: STORE_EDITOR_TOKEN_1
+    label: "Lesetoken, Platz 1 (nur bei einem privaten Repository nötig)"
+    secret: true
+  - key: STORE_EDITOR_TOKEN_2
+    label: "Lesetoken, Platz 2"
+    secret: true
+  - key: STORE_EDITOR_TOKEN_3
+    label: "Lesetoken, Platz 3"
+    secret: true
 
 health:
   path: /healthz

@@ -115,6 +115,61 @@ ok("eine Adressform, die der Prüfer nicht kennt, wird gemeldet statt geraten",
 u, why = c.raw_manifest_url({})
 ok("kein Paket, keine Adresse", not u and "kein Git-Repository" in why)
 
+print("\n=== ein privates Repository (Jörgs BDT-Fall) ===")
+# Bei GitHub nimmt die Rohdatei-Adresse KEIN Token entgegen. Wer das
+# uebersieht, baut etwas, das gegen ein oeffentliches Repo funktioniert
+# und gegen ein privates schweigend 404 liefert.
+u, h, _ = c.manifest_ref({"git": "https://github.com/MDJoerg/bdt",
+                          "path": "apps/hub"}, token="ghp_geheim")
+ok("privates GitHub geht über die Inhalts-Schnittstelle, nicht über raw",
+   u.startswith("https://api.github.com/repos/MDJoerg/bdt/contents/")
+   and "raw.githubusercontent" not in u, u)
+ok("und fordert den Dateiinhalt statt der JSON-Beschreibung an",
+   h.get("Accept") == "application/vnd.github.raw", str(h))
+ok("das Token reist als Bearer", h.get("Authorization") == "Bearer ghp_geheim")
+u, h, _ = c.manifest_ref({"git": "https://github.com/MDJoerg/bdt"})
+ok("ohne Token bleibt es beim schnellen Rohdatei-Weg",
+   "raw.githubusercontent.com" in u and not h, f"{u} {h}")
+
+u, h, _ = c.manifest_ref({"git": "https://git.joomp.de/kuk/crm"}, token="tok")
+ok("Forgejo nimmt das Token direkt auf dem Rohdatei-Pfad",
+   "/raw/branch/main/" in u and h.get("Authorization") == "token tok", f"{u} {h}")
+
+print("\n=== das Dokument selbst ===")
+u, h, _ = c.document_ref(
+    "https://raw.githubusercontent.com/MDJoerg/bdt/main/oaap-store.json", "ghp_x")
+ok("eine private Liste wird auf die Schnittstelle umgeschrieben",
+   u == "https://api.github.com/repos/MDJoerg/bdt/contents/oaap-store.json?ref=main",
+   u)
+u, h, _ = c.document_ref("https://beispiel.invalid/liste.json", "")
+ok("ohne Token bleibt jede Adresse, wie sie ist", u == "https://beispiel.invalid/liste.json")
+u, h, why = c.document_ref("https://beispiel.invalid/liste.json", "geheim")
+ok("bei einer unbekannten Adressform wird das Token NICHT mitgeschickt",
+   not h and why,
+   "ein blind gesetzter Authorization-Kopf verrät einen Schlüssel an einen "
+   "Server, von dem niemand weiß, ob er ihn haben soll")
+
+print("\n=== ein Token geht nur an seinen eigenen Anbieter ===")
+GEMISCHT = {"store": "0.2", "name": "x", "apps": [
+    {**ENTRY, "id": "eigen", "package": {"git": "https://github.com/me/eigen"}},
+    {**ENTRY, "id": "fremd", "package": {"git": "https://git.fremd.invalid/a/b"}},
+]}
+gesehen = {}
+
+
+def spitzel(url, headers=None):
+    gesehen[url] = dict(headers or {})
+    raise OSError("Schluss")
+
+
+c.check_document(GEMISCHT, fetch=spitzel, load_yaml=lambda t: None,
+                 token="ghp_geheim", token_forge="github")
+mit = [u for u, h in gesehen.items() if "Authorization" in h]
+ohne = [u for u, h in gesehen.items() if "Authorization" not in h]
+ok("der eigene Anbieter bekommt es", any("api.github.com" in u for u in mit), str(mit))
+ok("der fremde nicht", any("git.fremd.invalid" in u for u in ohne)
+   and not any("fremd" in u for u in mit), str(gesehen))
+
 print("\n=== Struktur: die Regeln des Schemas ===")
 GUT = {"store": "0.2", "name": "Test", "apps": [ENTRY]}
 ok("eine saubere Liste ergibt keine Strukturmeldung", not c.check_structure(GUT),
@@ -163,7 +218,7 @@ print("\n=== die ganze Prüfung, mit hereingereichtem Abruf ===")
 import json  # noqa: E402
 
 
-def fake_fetch(url):
+def fake_fetch(url, headers=None):
     if "oaap-store/main/apps/ollama" in url:
         return "yaml:ollama"
     raise OSError("nicht erreichbar")

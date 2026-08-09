@@ -51,15 +51,30 @@ import yaml
 import checker as ck
 import editor as ed
 
-VERSION = "0.2.3"
+VERSION = "0.3.0"
 PORT = 8000
 FETCH_TIMEOUT = 15
 
 # Deklarierte Konfiguration (Manifest `config`). Mehrere Listen je
-# Instanz ist RFC-0013 Entscheidung 3.
+# Instanz ist RFC-0013 Entscheidung 3. Diese Angabe ist nur noch das
+# **Saatgut**: Beim ersten Start wandern die Adressen in die
+# Quellenverwaltung des Editors, wo sie ein `keyuser` selbst pflegt.
 LISTS = [u.strip() for u in
          os.environ.get("STORE_EDITOR_LISTS", "").replace(chr(10), ",").split(",")
          if u.strip()]
+
+# Zugangsschlüssel für private Listen: **feste, deklarierte Plätze** in
+# der Instanz-Konfiguration (RFC-0013, Entscheidung Jörgs vom
+# 09.08.2026, Form A). Sie stehen dort als `secret: true` — eintragbar,
+# nie zurücklesbar — und liegen damit dort, wo die Plattform ohnehin
+# Geheimnisse hält, statt dass diese App sich eigenes Geheimnis-
+# Handling ausdenkt.
+#
+# Die Obergrenze ist Absicht und sichtbar: Erscheint eine vierte
+# private Liste, ist genau das der Beleg für eine allgemeine Lösung,
+# statt sie vorher zu erraten.
+TOKENS = [os.environ.get(f"STORE_EDITOR_TOKEN_{i}", "").strip()
+          for i in range(1, ed.TOKEN_SLOTS + 1)]
 
 # Deklarierter Speicher (Manifest `storage`, Mount /data). Die
 # Umgebungsvariable ist bewusst NICHT im Manifest deklariert: Sie ist
@@ -99,6 +114,14 @@ MESSAGES = {
                           "nicht abrufbar ist, meldet der Prüfer das bei jedem "
                           "Lauf — so ist es entschieden (RFC-0013, Frage 4)."),
     "entfernt": ("ok", "Der Eintrag ist aus der Arbeitskopie entfernt."),
+    "quelle_aufgenommen": ("ok", "Die Liste ist aufgenommen und war auf Anhieb "
+                                 "abrufbar."),
+    "quelle_stumm": ("muted", "Die Liste ist aufgenommen, aber noch nicht "
+                              "abrufbar. Bei einem privaten Repository fehlt "
+                              "dann meist der Schlüssel — er wird im Portal "
+                              "eingetragen, nicht hier."),
+    "quelle_entfernt": ("ok", "Die Liste ist aus dem Editor genommen. Im "
+                              "Repository ändert das nichts."),
     "kein_manifest": ("muted", "Das Manifest dieser App war nicht abrufbar — "
                                "es gibt nichts abzugleichen. Der Eintrag bleibt "
                                "unverändert."),
@@ -239,6 +262,7 @@ def page(title, body, user, roles, active="", flash=""):
   </a>
   <nav class="main">
     <a href="/" class="{'active' if active == 'lists' else ''}">Listen</a>
+    <a href="/quellen" class="{'active' if active == 'sources' else ''}">Listen und Zugang</a>
     <a href="/pruefen" class="{'active' if active == 'paste' else ''}">Liste einfügen</a>
     <a href="/hilfe" class="{'active' if active == 'help' else ''}">Hilfe</a>
   </nav>
@@ -316,6 +340,65 @@ def start_work(url, published):
             "begonnen": time.strftime("%Y-%m-%d %H:%M")}
 
 
+# ------------------------------------------------------------- Quellen
+#
+# Welche Listen dieser Editor pflegt. Liegt in seiner eigenen Ablage,
+# weil ein `keyuser` das ändern können soll — die **Schlüssel** dagegen
+# stehen in der Instanz-Konfiguration und werden hier nur über ihre
+# Platznummer angesprochen. Der Editor sieht den Wert, schreibt ihn
+# aber nirgends hin und zeigt ihn nie.
+
+def sources_path():
+    return os.path.join(DATA_DIR, "quellen.json")
+
+
+def load_sources():
+    """Die eingetragenen Listen. Beim ersten Mal aus der Konfiguration."""
+    try:
+        with open(sources_path(), encoding="utf-8") as fh:
+            data = json.load(fh)
+        items = data.get("quellen")
+        if isinstance(items, list):
+            return [s for s in items if isinstance(s, dict) and s.get("url")]
+    except (OSError, ValueError):
+        pass
+    return [{"url": u, "name": "", "token": 0} for u in LISTS]
+
+
+def save_sources(items):
+    path = sources_path()
+    tmp = path + ".neu"
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"quellen": items}, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def token_of(src):
+    """Der Schlüssel für diese Quelle — '' wenn keiner eingetragen ist."""
+    if not isinstance(src, dict):
+        return ""
+    slot = src.get("token") or 0
+    try:
+        slot = int(slot)
+    except (TypeError, ValueError):
+        return ""
+    return TOKENS[slot - 1] if 1 <= slot <= len(TOKENS) else ""
+
+
+def may_configure(roles):
+    """Wer Quellen eintragen darf.
+
+    Eine Liste aufzunehmen ist Einrichtung, nicht Redaktion — also
+    `keyuser` und `admin`, nicht jeder `user` (RFC-0013 Entscheidung 2
+    trennt vorschlagen von freigeben). Ausdrücklich weiterhin **nicht**
+    `server_admin`: Der trägt nur die Schlüssel ein, im Portal, weil
+    die Instanz-Konfiguration sein Bereich ist. Beides zusammen ist die
+    Arbeitsteilung, die aus Jörgs Entscheidung folgt.
+    """
+    return bool({"keyuser", "admin"} & set(roles or []))
+
+
 def overrides_of(work, app_id):
     return set((work.get("overrides") or {}).get(app_id) or [])
 
@@ -330,50 +413,78 @@ def set_overrides(work, app_id, fields):
 
 # ------------------------------------------------------------------ Abrufen
 
-def fetch(url):
+def fetch(url, headers=None):
     """Eine Datei holen. Bewusst ohne Umleitung auf andere Hosts."""
-    req = urllib.request.Request(url, headers={"User-Agent": f"oaap-store-editor/{VERSION}"})
+    head = {"User-Agent": f"oaap-store-editor/{VERSION}"}
+    head.update(headers or {})
+    req = urllib.request.Request(url, headers=head)
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
         return r.read().decode("utf-8", "replace")
 
 
-def fetch_published(url):
+def http_reason(exc):
+    """Warum es nicht ging — ohne je einen Schlüssel zu zeigen."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (401, 403):
+            return (f"Der Server antwortete mit {exc.code}. Bei einem privaten "
+                    "Repository heißt das fast immer: kein oder ein "
+                    "unzureichender Zugangsschlüssel.")
+        if exc.code == 404:
+            return ("Der Server antwortete mit 404. Entweder gibt es die Datei "
+                    "nicht — oder das Repository ist privat und der Schlüssel "
+                    "fehlt; GitHub antwortet in beiden Fällen gleich, damit "
+                    "man private Repositories nicht erraten kann.")
+        return f"Der Server antwortete mit {exc.code}."
+    if isinstance(exc, (urllib.error.URLError, OSError)):
+        return f"Nicht erreichbar: {getattr(exc, 'reason', exc)}"
+    return f"Das ist keine gültige JSON-Datei: {exc}"
+
+
+def fetch_published(url, token=""):
     """Die veröffentlichte Liste holen. Gibt (Dokument, Fehlertext)."""
+    target, headers, why = ck.document_ref(url, token)
     try:
-        return json.loads(fetch(url)), ""
-    except urllib.error.HTTPError as e:
-        return None, f"Der Server antwortete mit {e.code}."
-    except (urllib.error.URLError, OSError) as e:
-        return None, f"Nicht erreichbar: {getattr(e, 'reason', e)}"
-    except ValueError as e:
-        return None, f"Das ist keine gültige JSON-Datei: {e}"
+        doc = json.loads(fetch(target, headers))
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError,
+            ValueError) as e:
+        return None, http_reason(e) + (f" {why}" if why else "")
+    return doc, ""
 
 
-def fetch_manifest(entry):
-    """Das Manifest eines Eintrags. Gibt (Manifest, Adresse, Grund)."""
-    url, why = ck.raw_manifest_url((entry or {}).get("package") or {})
+def fetch_manifest(entry, token="", forge=""):
+    """Das Manifest eines Eintrags. Gibt (Manifest, Adresse, Grund).
+
+    Der Schlüssel geht **nur** an den Anbieter, für den er eingetragen
+    wurde. Sonst könnte eine Liste allein dadurch, dass sie auf ein
+    fremdes Repository zeigt, ein Token dorthin schicken lassen.
+    """
+    pkg = (entry or {}).get("package") or {}
+    mine = token if (token and forge
+                     and ck.repo_parts(pkg.get("git"))[0] == forge) else ""
+    url, headers, why = ck.manifest_ref(pkg, mine)
     if not url:
         return None, "", why
     try:
-        manifest = yaml.safe_load(fetch(url))
+        manifest = yaml.safe_load(fetch(url, headers))
     except Exception as exc:                                   # noqa: BLE001
-        return None, url, f"nicht abrufbar oder nicht lesbar ({type(exc).__name__})"
+        return None, url, http_reason(exc)
     if not isinstance(manifest, dict):
         return None, url, "unter dieser Adresse liegt kein Manifest"
     return manifest, url, ""
 
 
-def current(url):
+def current(src):
     """Der Stand, mit dem gearbeitet wird: Entwurf, sonst Veröffentlichung.
 
     Sobald ein Entwurf besteht, prüft der Prüfer **ihn** — nicht mehr
     die Veröffentlichung. Sonst wäre der Wächter blind für genau das,
     was gerade entsteht (RFC-0013: der Prüfer ist der Wächter).
     """
+    url = src["url"] if isinstance(src, dict) else src
     work = load_work(url)
     if work:
         return work["doc"], work, ""
-    doc, err = fetch_published(url)
+    doc, err = fetch_published(url, token_of(src))
     return doc, None, err
 
 
@@ -456,9 +567,11 @@ class Handler(BaseHTTPRequestHandler):
     # Contract verlangt genau das). Die App macht keine eigene.
     def who(self):
         user = self.headers.get("X-OAAP-User", "")
-        roles = {r.strip() for r in (self.headers.get("X-OAAP-Roles", "") or "").split(",")
-                 if r.strip()}
-        return user, ", ".join(sorted(roles))
+        return user, ", ".join(sorted(self.role_set()))
+
+    def role_set(self):
+        return {r.strip() for r in (self.headers.get("X-OAAP-Roles", "") or "").split(",")
+                if r.strip()}
 
     def send_html(self, body, status=200):
         data = body.encode("utf-8")
@@ -502,6 +615,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(page("Liste einfügen", PASTE_BODY, user, roles, "paste"))
         elif path == "/hilfe":
             self.send_html(page("Hilfe", HELP_BODY, user, roles, "help"))
+        elif path == "/quellen":
+            self.send_html(self.sources_page(user, roles, flash))
         elif parts[:1] == ["liste"] and len(parts) == 2:
             self.send_html(self.list_page(parts[1], user, roles, flash))
         elif parts[:1] == ["liste"] and parts[2:3] == ["aenderungen"]:
@@ -532,6 +647,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/pruefen":
             self.paste_result(user, roles)
             return
+        if path == "/quellen/aufnehmen":
+            with _LOCK:
+                self.add_source(user, roles)
+            return
+        if path == "/quellen/entfernen":
+            with _LOCK:
+                self.remove_source(user, roles)
+            return
         if parts[:1] != ["liste"] or len(parts) < 3:
             self.send_html(page("Nicht gefunden",
                                 '<div class="card"><p class="err">Diese Seite gibt es '
@@ -539,12 +662,13 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         idx, action = parts[1], parts[2]
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             self.send_html(page("Nicht gefunden",
                                 '<div class="card"><p class="err">Diese Liste ist nicht '
                                 'eingetragen.</p></div>', user, roles), 404)
             return
+        url = src["url"]
         form = self.form()
 
         # Alles unter diesem Schloss: Zwei Browser auf derselben
@@ -555,16 +679,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.redirect(f"/liste/{quote(idx)}?m=verworfen")
                 return
             if action == "uebernehmen":
-                self.regenerate_all(idx, url)
+                self.regenerate_all(idx, src)
                 return
             if action == "abgleich":
-                self.sync_entry(idx, url, one(form, "id"), user, roles)
+                self.sync_entry(idx, src, one(form, "id"), user, roles)
                 return
             if action == "neu":
-                self.add_entry(idx, url, form, user, roles)
+                self.add_entry(idx, src, form, user, roles)
                 return
             if action == "eintrag" and len(parts) >= 4:
-                self.save_entry(idx, url, unquote(parts[3]), form, user, roles)
+                self.save_entry(idx, src, unquote(parts[3]), form, user, roles)
                 return
         self.send_html(page("Nicht gefunden",
                             '<div class="card"><p class="err">Unbekannte '
@@ -572,11 +696,21 @@ class Handler(BaseHTTPRequestHandler):
 
     # -------------------------------------------------------------- Helfer
 
-    def list_url(self, idx):
+    def source_at(self, idx):
         try:
-            return LISTS[int(idx)]
+            return load_sources()[int(idx)]
         except (ValueError, IndexError):
-            return ""
+            return None
+
+    def manifest_for(self, src, entry):
+        """Das Manifest eines Eintrags — mit dem Schluessel dieser Quelle."""
+        return fetch_manifest(entry, token_of(src), ed.source_forge(src["url"]))
+
+    def checked(self, src, doc):
+        """Ein Dokument pruefen — mit dem Schluessel dieser Quelle."""
+        return ck.check_document(doc, fetch=fetch, load_yaml=yaml.safe_load,
+                                 token=token_of(src),
+                                 token_forge=ed.source_forge(src["url"]))
 
     def not_found(self, user, roles, text):
         return page("Nicht gefunden",
@@ -596,12 +730,14 @@ class Handler(BaseHTTPRequestHandler):
                     'Manifest deklariert (<code>storage</code>). Eine Instanz aus '
                     'Version 0.1.0 kennt ihn noch nicht: Ein erneutes Ausrollen '
                     'über das Portal legt ihn an.</p></div>')
-        if not LISTS:
+        sources = load_sources()
+        if not sources:
             return page("Listen", f'<h1>Listen</h1>{warn}{LISTS_EMPTY}',
                         user, roles, "lists", flash)
         rows = []
-        for i, url in enumerate(LISTS):
-            doc, work, err = current(url)
+        for i, src in enumerate(sources):
+            url = src["url"]
+            doc, work, err = current(src)
             draft = ('<span class="badge test">Entwurf</span> ' if work else "")
             if err:
                 rows.append(f'<tr><td>{draft}<a class="rowaction" href="/liste/{i}">'
@@ -609,7 +745,7 @@ class Handler(BaseHTTPRequestHandler):
                             f'<td colspan="2"><span class="err">{esc(err)}</span></td>'
                             f'<td><a class="rowaction" href="/liste/{i}">Ansehen</a></td></tr>')
                 continue
-            rep = ck.check_document(doc, fetch=fetch, load_yaml=yaml.safe_load)
+            rep = self.checked(src, doc)
             name = str((doc or {}).get("name") or url)
             rows.append(
                 f'<tr class="rowlink"><td>{draft}<a class="rowaction" href="/liste/{i}">'
@@ -633,16 +769,17 @@ class Handler(BaseHTTPRequestHandler):
         return page("Listen", body, user, roles, "lists", flash)
 
     def list_page(self, idx, user, roles, flash=""):
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             return self.not_found(user, roles, "Diese Liste ist nicht eingetragen.")
-        doc, work, err = current(url)
+        url = src["url"]
+        doc, work, err = current(src)
         if err:
             return page(url, f'<a class="back" href="/">← Zurück</a>'
                              f'<div class="card danger"><p class="err">{esc(err)}</p>'
                              f'<p class="muted">Adresse: <code>{esc(url)}</code></p></div>',
                         user, roles, "lists", flash)
-        rep = ck.check_document(doc, fetch=fetch, load_yaml=yaml.safe_load)
+        rep = self.checked(src, doc)
         title = str(doc.get("name") or url)
         per_app = {}
         for f in rep["findings"]:
@@ -777,10 +914,11 @@ class Handler(BaseHTTPRequestHandler):
 </div>'''
 
     def entry_page(self, idx, app_id, user, roles, flash="", remove=False, error=""):
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             return self.not_found(user, roles, "Diese Liste ist nicht eingetragen.")
-        doc, work, err = current(url)
+        url = src["url"]
+        doc, work, err = current(src)
         if err:
             return self.not_found(user, roles, err)
         entry = ed.entry_by_id(doc, app_id)
@@ -788,7 +926,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.not_found(user, roles, "Diesen Eintrag gibt es in der "
                                                "Liste nicht.")
         marks = overrides_of(work, app_id) if work else set()
-        manifest, murl, mwhy = fetch_manifest(entry)
+        manifest, murl, mwhy = self.manifest_for(src, entry)
         derived = ck.derive(manifest) if manifest else {}
         back = f'/liste/{esc(idx)}'
 
@@ -955,9 +1093,10 @@ class Handler(BaseHTTPRequestHandler):
         return page(entry.get("name") or app_id, body, user, roles, "lists", flash)
 
     def changes_page(self, idx, user, roles):
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             return self.not_found(user, roles, "Diese Liste ist nicht eingetragen.")
+        url = src["url"]
         work = load_work(url)
         if not work:
             return self.not_found(user, roles, "Zu dieser Liste gibt es keinen Entwurf.")
@@ -999,12 +1138,13 @@ class Handler(BaseHTTPRequestHandler):
         return page("Änderungen", body, user, roles, "lists")
 
     def download(self, idx, user, roles):
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             self.send_html(self.not_found(user, roles, "Diese Liste ist nicht "
                                                        "eingetragen."), 404)
             return
-        doc, work, err = current(url)
+        url = src["url"]
+        doc, work, err = current(src)
         if err:
             self.send_html(self.not_found(user, roles, err), 404)
             return
@@ -1038,19 +1178,21 @@ class Handler(BaseHTTPRequestHandler):
 
     # -------------------------------------------------------------- Aktionen
 
-    def ensure_work(self, url):
+    def ensure_work(self, src):
         """Arbeitskopie holen oder anlegen. ('' oder Fehlertext)"""
+        url = src["url"]
         work = load_work(url)
         if work:
             return work, ""
-        published, err = fetch_published(url)
+        published, err = fetch_published(url, token_of(src))
         if err:
             return None, ("Der veröffentlichte Stand ist nicht abrufbar, also "
                           f"gibt es keinen Vergleich: {err}")
         return start_work(url, published), ""
 
-    def save_entry(self, idx, url, app_id, form, user, roles):
-        work, err = self.ensure_work(url)
+    def save_entry(self, idx, src, app_id, form, user, roles):
+        url = src["url"]
+        work, err = self.ensure_work(src)
         if err:
             self.send_html(self.not_found(user, roles, err))
             return
@@ -1098,7 +1240,7 @@ class Handler(BaseHTTPRequestHandler):
         # sofern sie wirklich vom Manifest abweicht.
         unlocked = set(form.get("entriegelt") or [])
         marks = overrides_of(work, app_id)
-        manifest, _, _ = fetch_manifest(entry)
+        manifest, _, _ = self.manifest_for(src, entry)
         derived = ck.derive(manifest) if manifest else {}
         for field in ed.REGENERABLE:
             if field not in unlocked:
@@ -1131,7 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
         self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
                       f"?m={'uebernommen' if action == 'uebernehmen' else 'gespeichert'}")
 
-    def sync_entry(self, idx, url, app_id, user, roles):
+    def sync_entry(self, idx, src, app_id, user, roles):
         """Eine einzelne App gegen ihr Manifest abgleichen.
 
         Bewusst ein eigener Weg und nicht der Speichern-Knopf des
@@ -1141,7 +1283,8 @@ class Handler(BaseHTTPRequestHandler):
         Abgleich von der Listenseite aus würde die redaktionellen Texte
         mitnehmen.
         """
-        work, err = self.ensure_work(url)
+        url = src["url"]
+        work, err = self.ensure_work(src)
         if err:
             self.send_html(self.not_found(user, roles, err))
             return
@@ -1150,7 +1293,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(self.not_found(user, roles, "Diesen Eintrag gibt es "
                                                        "in der Liste nicht."), 404)
             return
-        manifest, _, _ = fetch_manifest(entry)
+        manifest, _, _ = self.manifest_for(src, entry)
         if not manifest:
             self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
                           f"?m=kein_manifest")
@@ -1165,14 +1308,153 @@ class Handler(BaseHTTPRequestHandler):
         self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
                       f"?m={'uebernommen' if touched else 'nichts'}")
 
+    def sources_page(self, user, roles, flash="", error="", values=None):
+        """Welche Listen dieser Editor pflegt — und welcher Platz gilt."""
+        darf = may_configure(self.role_set())
+        v = values or {}
+        rows = []
+        for i, src in enumerate(load_sources()):
+            slot = int(src.get("token") or 0)
+            if not slot:
+                zugang = '<span class="muted">öffentlich</span>'
+            elif token_of(src):
+                zugang = (f'<span class="badge ok">Platz {slot}</span><br>'
+                          f'<span class="muted">Schlüssel ist hinterlegt</span>')
+            else:
+                zugang = (f'<span class="badge err">Platz {slot} leer</span><br>'
+                          f'<span class="muted">im Portal eintragen</span>')
+            entfernen = ("" if not darf else
+                         f'<form method="post" action="/quellen/entfernen" '
+                         f'style="margin:0" onsubmit="return confirm('
+                         f'\'Diese Liste aus dem Editor nehmen? Ein Entwurf dazu '
+                         f'geht verloren.\')">'
+                         f'<input type="hidden" name="i" value="{i}">'
+                         f'<button class="linkish" style="color:var(--err)">'
+                         f'Entfernen</button></form>')
+            rows.append(
+                f'<tr><td><a class="rowaction" href="/liste/{i}">'
+                f'{esc(src.get("name") or src["url"])}</a><br>'
+                f'<span class="muted">{esc(src["url"])}</span></td>'
+                f'<td>{zugang}</td><td>{entfernen}</td></tr>')
+
+        slots = "".join(
+            f'<option value="{n}"{" selected" if str(v.get("token")) == str(n) else ""}>'
+            f'Platz {n} — {"Schlüssel hinterlegt" if TOKENS[n - 1] else "noch leer"}'
+            f'</option>' for n in range(1, len(TOKENS) + 1))
+        form = "" if not darf else f'''<div class="card">
+  <h2>Liste aufnehmen</h2>
+  {f'<p class="err">{esc(error)}</p>' if error else ""}
+  <form method="post" action="/quellen/aufnehmen">
+    <label>Adresse der Liste
+      <input name="url" value="{esc(v.get("url"))}" required
+             placeholder="https://raw.githubusercontent.com/…/oaap-store.json"></label>
+    <p class="hint">Eine Adresse aus der Adresszeile des Browsers
+       (<code>…/blob/main/…</code>) wird beim Aufnehmen umgeschrieben — sonst
+       käme eine HTML-Seite statt der Datei an.</p>
+    <label>Name (optional, sonst nimmt der Editor den aus der Liste)
+      <input name="name" value="{esc(v.get("name"))}"></label>
+    <label>Zugangsdaten
+      <select name="token">
+        <option value="0">keine — das Repository ist öffentlich</option>
+        {slots}
+      </select></label>
+    <div class="actions"><button>Aufnehmen</button></div>
+  </form>
+</div>'''
+
+        hinweis = "" if darf else (
+            '<div class="card"><p class="muted">Listen aufzunehmen oder zu '
+            'entfernen ist Einrichtung und braucht die Rolle <code>keyuser</code> '
+            'oder <code>admin</code>. Bearbeiten darf jeder, der hierher '
+            'kommt.</p></div>')
+
+        body = f'''<h1>Listen und Zugangsdaten</h1>
+<div class="card" style="overflow-x:auto">
+  <table>
+    <tr><th>Liste</th><th>Zugang</th><th></th></tr>
+    {"".join(rows) or '<tr><td colspan="3" class="muted">Noch keine Liste eingetragen.</td></tr>'}
+  </table>
+</div>
+{form}{hinweis}
+<div class="card">
+  <h2>Wo die Schlüssel liegen — und warum nicht hier</h2>
+  <p>Ein privates Repository verlangt einen Zugangsschlüssel schon zum
+     <strong>Lesen</strong>. Der Editor kennt drei <strong>Plätze</strong>; die
+     Schlüssel selbst trägt ein <code>server_admin</code> im Portal ein, in der
+     Konfiguration dieser Instanz, als <code>STORE_EDITOR_TOKEN_1</code> bis
+     <code>_3</code>. Sie sind dort <em>geheim</em>: eintragbar, nie
+     zurücklesbar — auch nicht von dieser Seite.</p>
+  <p class="muted">Diese App legt bewusst <strong>keine eigene</strong> Ablage
+     für Geheimnisse an. Sie würde damit nachbauen, was die Plattform schon hat,
+     und zwar schwächer geschützt. Die feste Zahl an Plätzen ist der Preis
+     dafür — sichtbar statt versteckt: Braucht es einen vierten, ist genau das
+     der Beleg, dass die Plattform eine allgemeine Lösung bekommen sollte
+     (RFC-0013).</p>
+  <p class="muted">Ein Schlüssel geht <strong>nur an den Anbieter, für den er
+     eingetragen ist</strong>. Eine Liste kann nicht dadurch, dass sie auf ein
+     fremdes Repository zeigt, dorthin ein Token schicken lassen.</p>
+</div>'''
+        return page("Listen und Zugangsdaten", body, user, roles, "sources", flash)
+
+    def add_source(self, user, roles):
+        form = self.form()
+        url = ed.normalise_source(one(form, "url"))
+        values = {"url": one(form, "url"), "name": one(form, "name"),
+                  "token": one(form, "token")}
+        if not may_configure(self.role_set()):
+            self.send_html(self.sources_page(
+                user, roles, error="Dafür fehlt die Rolle keyuser oder admin."),
+                403)
+            return
+        sources = load_sources()
+        problem = ed.check_new_source(sources, url)
+        try:
+            slot = int(one(form, "token") or 0)
+        except ValueError:
+            slot = 0
+        if not problem and not 0 <= slot <= len(TOKENS):
+            problem = "Diesen Zugangsdaten-Platz gibt es nicht."
+        if problem:
+            self.send_html(self.sources_page(user, roles, error=problem,
+                                             values=values))
+            return
+        sources.append({"url": url, "name": one(form, "name"), "token": slot})
+        save_sources(sources)
+        # Sofort nachsehen, ob sie überhaupt erreichbar ist — eine Liste,
+        # die man einträgt und erst beim nächsten Klick als unerreichbar
+        # erlebt, lässt einen im Unklaren, ob die Adresse oder der
+        # Schlüssel schuld ist.
+        doc, err = fetch_published(url, token_of(sources[-1]))
+        self.redirect("/quellen?m=" + ("quelle_aufgenommen" if not err
+                                       else "quelle_stumm"))
+
+    def remove_source(self, user, roles):
+        if not may_configure(self.role_set()):
+            self.send_html(self.sources_page(
+                user, roles, error="Dafür fehlt die Rolle keyuser oder admin."),
+                403)
+            return
+        form = self.form()
+        sources = load_sources()
+        try:
+            i = int(one(form, "i"))
+            gone = sources.pop(i)
+        except (ValueError, IndexError):
+            self.redirect("/quellen")
+            return
+        save_sources(sources)
+        drop_work(gone["url"])
+        self.redirect("/quellen?m=quelle_entfernt")
+
     def report(self, idx, app_id, user, roles):
         """Der Nachpflege-Bericht als Datei — Auftrag an die KI der App."""
-        url = self.list_url(idx)
-        if not url:
+        src = self.source_at(idx)
+        if not src:
             self.send_html(self.not_found(user, roles, "Diese Liste ist nicht "
                                                        "eingetragen."), 404)
             return
-        doc, work, err = current(url)
+        url = src["url"]
+        doc, work, err = current(src)
         if err:
             self.send_html(self.not_found(user, roles, err), 404)
             return
@@ -1188,7 +1470,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
         reports = []
         for e in entries:
-            manifest, murl, why = fetch_manifest(e)
+            manifest, murl, why = self.manifest_for(src, e)
             reports.append((str(e.get("id") or "?"), ed.pflegebericht(
                 e, manifest, murl, why, list_name,
                 overrides_of(work, str(e.get("id") or "")) if work else (),
@@ -1209,8 +1491,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def regenerate_all(self, idx, url):
-        work, err = self.ensure_work(url)
+    def regenerate_all(self, idx, src):
+        url = src["url"]
+        work, err = self.ensure_work(src)
         if err:
             self.redirect(f"/liste/{quote(idx)}")
             return
@@ -1218,7 +1501,7 @@ class Handler(BaseHTTPRequestHandler):
         for entry in work["doc"].get("apps") or []:
             if not isinstance(entry, dict):
                 continue
-            manifest, _, _ = fetch_manifest(entry)
+            manifest, _, _ = self.manifest_for(src, entry)
             if not manifest:
                 continue
             marks = overrides_of(work, str(entry.get("id") or ""))
@@ -1229,8 +1512,9 @@ class Handler(BaseHTTPRequestHandler):
             save_work(url, work)
         self.redirect(f"/liste/{quote(idx)}?m={'uebernommen' if touched else 'nichts'}")
 
-    def add_entry(self, idx, url, form, user, roles):
-        work, err = self.ensure_work(url)
+    def add_entry(self, idx, src, form, user, roles):
+        url = src["url"]
+        work, err = self.ensure_work(src)
         if err:
             self.send_html(self.not_found(user, roles, err))
             return
@@ -1263,7 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
                                 f'<p class="err">Das ist keine gültige JSON-Datei: '
                                 f'{esc(e)}</p></div>{PASTE_BODY}', user, roles, "paste"))
             return
-        rep = ck.check_document(doc, fetch=fetch, load_yaml=yaml.safe_load)
+        rep = self.checked(src, doc)
         title = str((doc or {}).get("name") or "Eingefügte Liste")
         body = (f'<a class="back" href="/pruefen">← Zurück</a>'
                 f'<div class="pagehead"><h1>{esc(title)}</h1>'
@@ -1285,10 +1569,9 @@ def one(form, key, default=""):
 
 LISTS_EMPTY = '''<div class="card">
   <h2>Noch keine Liste eingetragen</h2>
-  <p class="muted">Der Editor arbeitet an den Listen, die in der Konfiguration
-     dieser Instanz stehen — <code>STORE_EDITOR_LISTS</code>, mehrere durch
-     Komma getrennt. Die Konfiguration ändert ein <code>server_admin</code>
-     im Portal auf der Instanzseite.</p>
+  <p class="muted">Unter <a href="/quellen">Listen und Zugang</a> nimmst Du
+     eine auf — auch eine aus einem privaten Repository. Die Voreinstellung
+     kommt aus der Instanz-Konfiguration (<code>STORE_EDITOR_LISTS</code>).</p>
   <p class="muted">Eine Liste, die noch nirgends veröffentlicht ist, lässt
      sich unter <a href="/pruefen">Liste einfügen</a> trotzdem prüfen.</p>
 </div>'''
@@ -1392,7 +1675,8 @@ HELP_BODY = f'''<h1>Hilfe</h1>
 
 def main():
     print(f"OAAP Store Editor {VERSION} auf Port {PORT}; "
-          f"{len(LISTS)} Liste(n) konfiguriert; Speicher {DATA_DIR} "
+          f"{len(load_sources())} Liste(n); {sum(1 for t in TOKENS if t)} von "
+          f"{len(TOKENS)} Zugangsdaten-Plätzen belegt; Speicher {DATA_DIR} "
           f"{'beschreibbar' if storage_ready() else 'NICHT beschreibbar'}", flush=True)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
