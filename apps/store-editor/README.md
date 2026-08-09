@@ -165,10 +165,63 @@ eigene Forgejo-App). Eine Adressform, die der Prüfer nicht kennt, wird
 **gemeldet statt geraten**: Eine falsch geratene Adresse liefert
 entweder 404 (harmlos) oder die falsche Datei (nicht harmlos).
 
+## Listen aufnehmen — und private Repositories
+
+Unter **Listen und Zugang** wird eingetragen, welche Listen dieser
+Editor pflegt. Aufnehmen und Entfernen brauchen `keyuser` oder `admin`:
+Das ist Einrichtung, nicht Redaktion. Bearbeiten darf jeder, der auf die
+App kommt.
+
+Eine Adresse aus der Adresszeile des Browsers (`…/blob/main/…`) wird
+beim Aufnehmen **umgeschrieben** — dort liegt eine HTML-Seite, nicht die
+Datei. Ohne das käme „das ist keine gültige JSON-Datei" und kein Hinweis
+darauf, was falsch war.
+
+### Wo die Zugangsschlüssel liegen — und warum nicht hier
+
+Ein privates Repository verlangt einen Schlüssel schon zum **Lesen**.
+Der Editor kennt drei **Plätze**; die Schlüssel selbst trägt ein
+`server_admin` im Portal ein, als `STORE_EDITOR_TOKEN_1` bis `_3`, dort
+`secret: true` — eintragbar, nie zurücklesbar, auch nicht im Editor.
+
+Diese App legt bewusst **keine eigene** Geheimnis-Ablage an. Sie würde
+nachbauen, was die Plattform schon hat, und zwar schwächer geschützt.
+Die feste Zahl an Plätzen ist der Preis, und sie ist **sichtbar statt
+versteckt**: Braucht es einen vierten, ist genau das der Beleg dafür,
+dass die Plattform zur Laufzeit hinzufügbare Geheimnisse bekommen
+sollte (RFC-0013, Entscheidung Jörgs vom 09.08.2026).
+
+**Heute nur Lesen.** Ein Schreibtoken kommt als eigenes Feld mit
+Bauschritt 3 — ein Lesetoken ist kein Schreibrecht, und beides in einem
+Feld gewährt mehr als nötig.
+
+### Zwei Dinge, die beim Bauen herauskamen
+
+**Ein privates GitHub-Repo lässt sich über `raw.githubusercontent.com`
+gar nicht lesen.** Dieser Host nimmt kein Token an; es führt nur die
+Inhalts-Schnittstelle hin (`api.github.com/repos/…/contents/…` mit
+`Accept: application/vnd.github.raw`). Code, der gegen ein öffentliches
+Repository funktioniert, liefert gegen ein privates **404** — dieselbe
+Antwort wie für eine wirklich fehlende Datei, damit private
+Repositories nicht erratbar sind. Forgejo/Gitea nehmen das Token
+dagegen direkt auf dem Rohdatei-Pfad an.
+
+**Ein Schlüssel geht nur an den Anbieter, für den er eingetragen ist.**
+Sonst könnte eine Liste allein dadurch, dass ein Eintrag auf ein
+fremdes Repository zeigt, ein Token dorthin schicken lassen. Bei einer
+unbekannten Adressform wird er **gar nicht** mitgeschickt statt blind
+gesetzt: Ein geratener `Authorization`-Kopf übergibt ein Geheimnis an
+einen Server, den niemand geprüft hat.
+
 ## Konfiguration
 
-`STORE_EDITOR_LISTS` — die Listen, an denen gearbeitet wird, durch
-Komma getrennt. Mehrere Listen je Instanz ist RFC-0013 Entscheidung 3.
+`STORE_EDITOR_LISTS` — die Listen zum Start, durch Komma getrennt. Nur
+noch **Saatgut**: Beim ersten Start wandern die Adressen in die
+Quellenverwaltung, wo ein `keyuser` sie pflegt. Mehrere Listen je
+Instanz ist RFC-0013 Entscheidung 3.
+
+`STORE_EDITOR_TOKEN_1` bis `_3` — Lesetoken für private Listen, `secret`
+(siehe oben).
 
 Der deklarierte Speicher `entwuerfe` (Mount `/data`) hält die
 Arbeitskopien. Er überlebt Neustart, Redeploy und Update wie die Daten
@@ -190,6 +243,10 @@ python3 test_pages.py            # die Seiten und der Weg eines Formulars
 # am laufenden Knoten, mit Portal-Anmeldung:
 python3 klicktest.py ../../../oaap-reference/test/.env http://10.10.10.75 8106
 ```
+
+Der private Abrufweg ist in `test_checker.py` festgehalten und nicht am
+echten Fall geprüft — dafür braucht es ein privates Repository und
+einen Schlüssel, und beides gehört nicht in ein Testskript.
 
 Die ersten drei ohne Netz, ohne Docker, ohne Knoten. Die Regeln liegen in
 `checker.py` und `editor.py`, bewusst ohne Web und ohne Netz: Es sind

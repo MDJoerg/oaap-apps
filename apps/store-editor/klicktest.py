@@ -40,6 +40,15 @@ with open(ENV_FILE, encoding="utf-8") as f:
             k, v = line.split("=", 1)
             env[k.strip()] = v.strip().strip('"').strip("'")
 
+# Die erwartete Version wird aus dem Manifest gelesen und nicht hier
+# eingetragen: Eine fest verdrahtete Zahl macht den Test bei jeder
+# Versionsanhebung rot, ohne dass etwas kaputt wäre.
+with urllib.request.urlopen(
+        "https://raw.githubusercontent.com/MDJoerg/oaap-apps/main/"
+        "apps/store-editor/oaap-app.yaml", timeout=30) as _r:
+    manifest_version = re.search(r"^\s*version:\s*(\S+)",
+                                 _r.read().decode("utf-8"), re.M).group(1)
+
 jar = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 fails = []
@@ -225,14 +234,6 @@ st, datei2, _, _ = get(f"{BASE}/liste/{idx}/datei")
 entry = [e for e in json.loads(datei2)["apps"] if e["id"] == "store-editor"][0]
 ok("die redaktionelle Änderung blieb unberührt", entry["summary"] == PROBE,
    str(entry.get("summary")))
-# Die erwartete Version wird aus dem Manifest gelesen und nicht
-# hier eingetragen: Eine fest verdrahtete Zahl macht den Test bei
-# jeder Versionsanhebung rot, ohne dass etwas kaputt wäre.
-with urllib.request.urlopen(
-        "https://raw.githubusercontent.com/MDJoerg/oaap-apps/main/"
-        "apps/store-editor/oaap-app.yaml", timeout=30) as r:
-    manifest_version = re.search(r"^\s*version:\s*(\S+)",
-                                 r.read().decode("utf-8"), re.M).group(1)
 ok("die Version stimmt mit dem Manifest überein",
    entry["version"] == manifest_version,
    f'Liste {entry.get("version")!r}, Manifest {manifest_version!r}')
@@ -241,7 +242,9 @@ print("\n=== eine einzelne App abgleichen ===")
 st, _, _ = post(f"{BASE}/liste/{idx}/abgleich", [("id", "store-editor")])
 st, datei3, _, _ = get(f"{BASE}/liste/{idx}/datei")
 entry = [e for e in json.loads(datei3)["apps"] if e["id"] == "store-editor"][0]
-ok("er lief für genau diesen Eintrag", entry["version"] == "0.2.1", str(entry))
+ok("er lief für genau diesen Eintrag",
+   entry["version"] == manifest_version,
+   f'Liste {entry.get("version")!r}, Manifest {manifest_version!r}')
 ok("und hat den redaktionellen Text nicht mitgenommen",
    entry["summary"] == PROBE,
    "ein Abgleich aus der Zeile heraus darf keine Texte löschen")
@@ -262,6 +265,25 @@ ok("es gibt ihn auch für die ganze Liste",
 # Feld nicht'. Ein Bericht, der kaum etwas einfordern kann, IST der Befund.
 ok("und er belegt, was RFC-0014 behauptet",
    "kennt es noch nicht" in sammel, sammel[:400])
+
+print("\n=== Listen und Zugangsdaten ===")
+st, quellen, _, _ = get(f"{BASE}/quellen")
+ok("die Seite kommt", st == 200)
+ok("die eingetragenen Listen stehen da", quellen.count('href="/liste/') >= 2)
+ok("sie sagt, wo die Schlüssel liegen — im Portal, nicht hier",
+   "server_admin" in quellen and "STORE_EDITOR_TOKEN_1" in quellen)
+ok("und warum diese App keine eigene Geheimnis-Ablage hat",
+   "keine eigene" in quellen)
+ok("ein Schlüssel geht nur an seinen eigenen Anbieter — das steht dran",
+   "fremdes Repository" in quellen)
+# Die veroeffentlichten Listen sind oeffentlich; kein Platz belegt.
+ok("öffentliche Listen brauchen keinen Platz", "öffentlich" in quellen)
+rollen = re.search(r'class="who">[^<]*<br><small>([^<]*)</small>', quellen)
+darf = rollen and ("keyuser" in rollen.group(1) or "admin" in rollen.group(1))
+ok(f"das Aufnehmen-Formular passt zur Rolle ({rollen.group(1) if rollen else '?'})",
+   ("Liste aufnehmen" in quellen) == bool(darf),
+   "Einrichtung braucht keyuser oder admin; ein user sieht die Seite, "
+   "aber kein Formular")
 
 print("\n=== Hilfe und Gesundheit ===")
 st, hilfe, _, _ = get(f"{BASE}/hilfe")
