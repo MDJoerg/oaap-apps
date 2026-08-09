@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: store-editor
   name: OAAP Store Editor
-  version: 0.2.1
+  version: 0.2.2
   type: native
   # Der Editor hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da. Sie steht trotzdem hier, weil eine App,

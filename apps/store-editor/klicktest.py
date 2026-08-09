@@ -225,8 +225,43 @@ st, datei2, _, _ = get(f"{BASE}/liste/{idx}/datei")
 entry = [e for e in json.loads(datei2)["apps"] if e["id"] == "store-editor"][0]
 ok("die redaktionelle Änderung blieb unberührt", entry["summary"] == PROBE,
    str(entry.get("summary")))
-ok("die Version stimmt mit dem Manifest überein", entry["version"] == "0.2.0",
-   str(entry.get("version")))
+# Die erwartete Version wird aus dem Manifest gelesen und nicht
+# hier eingetragen: Eine fest verdrahtete Zahl macht den Test bei
+# jeder Versionsanhebung rot, ohne dass etwas kaputt wäre.
+with urllib.request.urlopen(
+        "https://raw.githubusercontent.com/MDJoerg/oaap-apps/main/"
+        "apps/store-editor/oaap-app.yaml", timeout=30) as r:
+    manifest_version = re.search(r"^\s*version:\s*(\S+)",
+                                 r.read().decode("utf-8"), re.M).group(1)
+ok("die Version stimmt mit dem Manifest überein",
+   entry["version"] == manifest_version,
+   f'Liste {entry.get("version")!r}, Manifest {manifest_version!r}')
+
+print("\n=== eine einzelne App abgleichen ===")
+st, _, _ = post(f"{BASE}/liste/{idx}/abgleich", [("id", "store-editor")])
+st, datei3, _, _ = get(f"{BASE}/liste/{idx}/datei")
+entry = [e for e in json.loads(datei3)["apps"] if e["id"] == "store-editor"][0]
+ok("er lief für genau diesen Eintrag", entry["version"] == "0.2.1", str(entry))
+ok("und hat den redaktionellen Text nicht mitgenommen",
+   entry["summary"] == PROBE,
+   "ein Abgleich aus der Zeile heraus darf keine Texte löschen")
+
+print("\n=== der Nachpflege-Bericht ===")
+st, bericht, _, headers = get(f"{BASE}/liste/{idx}/eintrag/store-editor/bericht")
+ok("er kommt als Markdown-Datei",
+   "markdown" in (headers.get("Content-Type") or "")
+   and "nachpflege-store-editor.md" in (headers.get("Content-Disposition") or ""),
+   str(headers.get("Content-Disposition")))
+ok("er nennt den Auftrag zuerst", "**Auftrag:**" in bericht)
+ok("und für die eigene App gibt es tatsächlich etwas zu tun",
+   "app." in bericht, bericht[:300])
+st, sammel, _, headers = get(f"{BASE}/liste/{idx}/bericht")
+ok("es gibt ihn auch für die ganze Liste",
+   "Manifest-Nachpflege für" in sammel and "Einträgen haben etwas offen" in sammel)
+# Der Beleg fuer RFC-0014: Fast jede Zeile sagt 'das Format kennt das
+# Feld nicht'. Ein Bericht, der kaum etwas einfordern kann, IST der Befund.
+ok("und er belegt, was RFC-0014 behauptet",
+   "kennt es noch nicht" in sammel, sammel[:400])
 
 print("\n=== Hilfe und Gesundheit ===")
 st, hilfe, _, _ = get(f"{BASE}/hilfe")

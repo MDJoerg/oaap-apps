@@ -34,7 +34,7 @@
       "id": "store-editor",
       "name": "OAAP Store Editor",
       "type": "native",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "released": "2026-08-09",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

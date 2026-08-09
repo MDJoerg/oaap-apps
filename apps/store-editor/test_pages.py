@@ -118,6 +118,25 @@ try:
     ok("ohne Entwurf steht das auch da",
        "Es gibt noch keinen Entwurf" in body)
 
+    print("\n=== ein Abgleich ohne Fund legt keinen Entwurf an ===")
+    # Sonst steht nach einem blossen „wie ist der Stand?" ein Entwurf mit
+    # null Aenderungen da, und das Wort verliert seine Bedeutung.
+    IDENT = {**PUBLISHED, "apps": [{**PUBLISHED["apps"][0], "version": "0.9.1",
+                                    "app_class": "service"}]}
+    _echt = fake_fetch
+
+    def nur_ident(url):
+        return json.dumps(IDENT) if url == LIST_URL else _echt(url)
+
+    app.fetch = nur_ident
+    Fake().regenerate_all("0", LIST_URL)
+    ok("nichts zu holen, also kein Entwurf", app.load_work(LIST_URL) is None,
+       str(app.load_work(LIST_URL)))
+    Fake().sync_entry("0", LIST_URL, "ollama", "klicktest", "keyuser")
+    ok("auch nicht beim Abgleich einer einzelnen App",
+       app.load_work(LIST_URL) is None)
+    app.fetch = _echt
+
     print("\n=== die Bearbeitungsseite ===")
     body = h.entry_page("0", "ollama", "klicktest", "keyuser")
     ok("die redaktionellen Felder sind da",

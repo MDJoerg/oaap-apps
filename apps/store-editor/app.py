@@ -51,7 +51,7 @@ import yaml
 import checker as ck
 import editor as ed
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 PORT = 8000
 FETCH_TIMEOUT = 15
 
@@ -1156,8 +1156,12 @@ class Handler(BaseHTTPRequestHandler):
                           f"?m=kein_manifest")
             return
         changes = ed.regenerate_entry(entry, manifest, overrides_of(work, app_id))
-        save_work(url, work)
         touched = sum(1 for c in changes if not c["held"])
+        # Ein Abgleich, der nichts findet, darf keinen Entwurf anlegen:
+        # Sonst steht nach einem Blick „wie ist der Stand?" ein Entwurf
+        # mit null Änderungen da, und das Wort verliert seine Bedeutung.
+        if touched or load_work(url):
+            save_work(url, work)
         self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
                       f"?m={'uebernommen' if touched else 'nichts'}")
 
@@ -1220,7 +1224,9 @@ class Handler(BaseHTTPRequestHandler):
             marks = overrides_of(work, str(entry.get("id") or ""))
             changes = ed.regenerate_entry(entry, manifest, marks)
             touched += sum(1 for c in changes if not c["held"])
-        save_work(url, work)
+        # Siehe sync_entry: ein Abgleich ohne Fund legt keinen Entwurf an.
+        if touched or load_work(url):
+            save_work(url, work)
         self.redirect(f"/liste/{quote(idx)}?m={'uebernommen' if touched else 'nichts'}")
 
     def add_entry(self, idx, url, form, user, roles):
