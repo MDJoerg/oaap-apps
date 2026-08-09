@@ -51,7 +51,7 @@ import yaml
 import checker as ck
 import editor as ed
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PORT = 8000
 FETCH_TIMEOUT = 15
 
@@ -99,6 +99,9 @@ MESSAGES = {
                           "nicht abrufbar ist, meldet der Prüfer das bei jedem "
                           "Lauf — so ist es entschieden (RFC-0013, Frage 4)."),
     "entfernt": ("ok", "Der Eintrag ist aus der Arbeitskopie entfernt."),
+    "kein_manifest": ("muted", "Das Manifest dieser App war nicht abrufbar — "
+                               "es gibt nichts abzugleichen. Der Eintrag bleibt "
+                               "unverändert."),
 }
 
 
@@ -160,6 +163,9 @@ STYLE = """<style>
        border:1px solid var(--oaap-blue-600)}
   a.btn.ghost:hover,button.ghost:hover{background:var(--oaap-blue-100)}
   button.danger{background:var(--err)} button.danger:hover{background:#991b1b}
+  button.linkish{background:none;color:var(--oaap-blue-600);padding:0;
+       min-height:auto;font-size:.95rem;text-align:left}
+  button.linkish:hover{background:none;text-decoration:underline}
   label{display:block;font-size:.85rem;color:var(--oaap-muted);margin-top:.9rem}
   input,select,textarea{width:100%;padding:.55rem;margin:.25rem 0 .2rem;
        border:1px solid var(--oaap-border);border-radius:.4rem;font-size:.95rem;
@@ -502,6 +508,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(self.changes_page(parts[1], user, roles))
         elif parts[:1] == ["liste"] and parts[2:3] == ["datei"]:
             self.download(parts[1], user, roles)
+        elif parts[:1] == ["liste"] and parts[2:3] == ["bericht"]:
+            self.report(parts[1], "", user, roles)
+        elif (parts[:1] == ["liste"] and parts[2:3] == ["eintrag"]
+              and parts[4:5] == ["bericht"]):
+            self.report(parts[1], unquote(parts[3]), user, roles)
         elif parts[:1] == ["liste"] and parts[2:3] == ["eintrag"] and len(parts) == 4:
             self.send_html(self.entry_page(parts[1], unquote(parts[3]), user, roles, flash,
                                            remove=(q.get("entfernen") or [""])[0] == "1"))
@@ -545,6 +556,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if action == "uebernehmen":
                 self.regenerate_all(idx, url)
+                return
+            if action == "abgleich":
+                self.sync_entry(idx, url, one(form, "id"), user, roles)
                 return
             if action == "neu":
                 self.add_entry(idx, url, form, user, roles)
@@ -657,7 +671,13 @@ class Handler(BaseHTTPRequestHandler):
                 f'{esc(e.get("status") or "—")}</span></td>'
                 f'<td>{badges}</td>'
                 f'<td><a class="rowaction" href="/liste/{esc(idx)}/eintrag/'
-                f'{quote(app_id)}">Bearbeiten</a></td></tr>')
+                f'{quote(app_id)}">Bearbeiten</a><br>'
+                f'<form method="post" action="/liste/{esc(idx)}/abgleich" '
+                f'style="margin:0;display:inline">'
+                f'<input type="hidden" name="id" value="{esc(app_id)}">'
+                f'<button class="linkish">Abgleichen</button></form><br>'
+                f'<a class="rowaction" href="/liste/{esc(idx)}/eintrag/'
+                f'{quote(app_id)}/bericht">Bericht</a></td></tr>')
 
         changes = ed.diff_documents(work["published"], doc) if work else []
         draft_card = ""
@@ -684,13 +704,28 @@ class Handler(BaseHTTPRequestHandler):
                           'stehen und dient als Vergleich.</p></div>')
 
         take = f'''<div class="card">
-  <h2>Aus den Manifesten übernehmen</h2>
+  <h2>Mit den Manifesten abgleichen</h2>
   <p class="muted">Holt für jeden Eintrag Name, Verpackungsart, Version, Art der
      App und Rollen aus dem Manifest — das ist die 80-%-Regel aus RFC-0012 §1.3.
      <strong>Übersteuerte Felder bleiben unberührt</strong>, sonst nähme jede
-     Neuerzeugung eine bewusste Entscheidung stillschweigend zurück.</p>
+     Neuerzeugung eine bewusste Entscheidung stillschweigend zurück.
+     Für eine einzelne App steht <em>Abgleichen</em> in ihrer Zeile.</p>
   <form method="post" action="/liste/{esc(idx)}/uebernehmen" style="margin:0">
-    <button class="ghost">Für alle Einträge übernehmen</button></form>
+    <button class="ghost">Alle Einträge abgleichen</button></form>
+</div>
+<div class="card">
+  <h2>Nachpflege-Bericht</h2>
+  <p class="muted">Der umgekehrte Weg: Statt die Liste ans Manifest anzupassen,
+     sagt der Bericht, <strong>was dem Manifest fehlt</strong> — als Auftrag zum
+     Weiterreichen an die KI, die die App betreut, mit einem einsetzbaren
+     YAML-Block. Denn das Manifest gehört dem, der die App gebaut hat; der
+     Katalog ist nur ein Verzeichnis.</p>
+  <p class="muted">Was der Katalog führt und das Manifest-Format noch nicht
+     kennt, steht getrennt und <strong>ohne Auftrag</strong> — das ist ein
+     offener Punkt an der Spezifikation und kein Versäumnis der App.</p>
+  <div class="actions">
+    <a class="btn ghost" href="/liste/{esc(idx)}/bericht">Bericht für die ganze
+       Liste</a></div>
 </div>'''
 
         body = f'''<a class="back" href="/">← Zu den Listen</a>
@@ -879,10 +914,15 @@ class Handler(BaseHTTPRequestHandler):
 <div class="card">
   <h2>Von Hand, obwohl §1.3 sie „erzeugt" nennt</h2>
   <p class="hint">RFC-0012 §1.3 führt diese Felder unter „aus dem Manifest
-     erzeugt". Das kann das Manifest heute nicht einlösen — es kennt weder
-     <code>profiles</code> noch <code>icon</code>, und das Freigabedatum wäre
-     das eines Git-Tags. Sie hier verriegelt darzustellen wäre eine Unwahrheit:
-     Es gäbe nichts, woraus sie je erzeugt würden. Offener Punkt am Papier.</p>
+     erzeugt". Eine Neuerzeugung kann das heute nicht einlösen:
+     <code>profiles</code> kennt das Manifest-Schema nicht, das Freigabedatum
+     wäre das eines Git-Tags, und beim Bild liegt es anders — <code>app.icon</code>
+     gibt es sehr wohl, aber im Katalog gilt ein Bildpfad relativ zur Liste und
+     im Manifest relativ zum Paket; eine Neuerzeugung müsste die Datei
+     kopieren. Sie hier verriegelt darzustellen wäre eine Unwahrheit: Es gäbe
+     nichts, woraus sie je erzeugt würden. Offener Punkt am Papier —
+     der <a href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>
+     hält ihn fest, statt ihn zu verschweigen.</p>
   <div class="grid2">
     <label>Freigegeben am (JJJJ-MM-TT)
       <input name="released" value="{esc(entry.get("released"))}" placeholder="2026-08-09"></label>
@@ -905,7 +945,8 @@ class Handler(BaseHTTPRequestHandler):
 
 <div class="actions">
   <button name="tun" value="speichern">Speichern</button>
-  <button name="tun" value="uebernehmen" class="ghost">Aus dem Manifest übernehmen</button>
+  <button name="tun" value="uebernehmen" class="ghost">Speichern und mit dem Manifest abgleichen</button>
+  <a class="btn ghost" href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>
   <a class="btn ghost" href="{back}">Abbrechen</a>
   <a class="btn ghost" href="{back}/eintrag/{quote(app_id)}?entfernen=1"
      style="margin-left:auto;color:var(--err);border-color:var(--err)">Eintrag entfernen</a>
@@ -1090,6 +1131,80 @@ class Handler(BaseHTTPRequestHandler):
         self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
                       f"?m={'uebernommen' if action == 'uebernehmen' else 'gespeichert'}")
 
+    def sync_entry(self, idx, url, app_id, user, roles):
+        """Eine einzelne App gegen ihr Manifest abgleichen.
+
+        Bewusst ein eigener Weg und nicht der Speichern-Knopf des
+        Formulars: Dieser hier fasst **nur** die erzeugten Felder an.
+        Über das Formular liefe ein Abgleich als vollständiges
+        Absenden — ein leeres Feld hieße dort „weglassen", und ein
+        Abgleich von der Listenseite aus würde die redaktionellen Texte
+        mitnehmen.
+        """
+        work, err = self.ensure_work(url)
+        if err:
+            self.send_html(self.not_found(user, roles, err))
+            return
+        entry = ed.entry_by_id(work["doc"], app_id)
+        if entry is None:
+            self.send_html(self.not_found(user, roles, "Diesen Eintrag gibt es "
+                                                       "in der Liste nicht."), 404)
+            return
+        manifest, _, _ = fetch_manifest(entry)
+        if not manifest:
+            self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
+                          f"?m=kein_manifest")
+            return
+        changes = ed.regenerate_entry(entry, manifest, overrides_of(work, app_id))
+        save_work(url, work)
+        touched = sum(1 for c in changes if not c["held"])
+        self.redirect(f"/liste/{quote(idx)}/eintrag/{quote(app_id)}"
+                      f"?m={'uebernommen' if touched else 'nichts'}")
+
+    def report(self, idx, app_id, user, roles):
+        """Der Nachpflege-Bericht als Datei — Auftrag an die KI der App."""
+        url = self.list_url(idx)
+        if not url:
+            self.send_html(self.not_found(user, roles, "Diese Liste ist nicht "
+                                                       "eingetragen."), 404)
+            return
+        doc, work, err = current(url)
+        if err:
+            self.send_html(self.not_found(user, roles, err), 404)
+            return
+        stand = time.strftime("%Y-%m-%d")
+        list_name = str(doc.get("name") or url)
+        entries = [e for e in (doc.get("apps") or []) if isinstance(e, dict)]
+        if app_id:
+            entries = [e for e in entries if str(e.get("id") or "") == app_id]
+            if not entries:
+                self.send_html(self.not_found(user, roles, "Diesen Eintrag gibt "
+                                                           "es in der Liste "
+                                                           "nicht."), 404)
+                return
+        reports = []
+        for e in entries:
+            manifest, murl, why = fetch_manifest(e)
+            reports.append((str(e.get("id") or "?"), ed.pflegebericht(
+                e, manifest, murl, why, list_name,
+                overrides_of(work, str(e.get("id") or "")) if work else (),
+                stand)))
+        if app_id:
+            text = reports[0][1]
+            name = f"nachpflege-{app_id}.md"
+        else:
+            text = ed.sammelbericht(reports, list_name, stand)
+            base = str(doc.get("id") or "liste").lower()
+            name = "nachpflege-" + "".join(
+                c if c.isalnum() or c in "-." else "-" for c in base) + ".md"
+        data = text.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/markdown; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def regenerate_all(self, idx, url):
         work, err = self.ensure_work(url)
         if err:
@@ -1236,11 +1351,26 @@ HELP_BODY = f'''<h1>Hilfe</h1>
   <p class="muted"><strong>Nicht</strong> verglichen werden
      <code>description</code> (in der Liste steht absichtlich der längere,
      redaktionelle Text), <code>icon</code>, <code>released</code> und
-     <code>profiles</code> — die kennt das Manifest-Schema heute gar nicht.
-     RFC-0012 §1.3 führt sie als „erzeugt", was das Manifest nicht
-     einlösen kann; das ist ein offener Punkt am Papier, kein Versäumnis
-     dieses Werkzeugs. Deshalb sind sie hier frei bearbeitbar statt
-     verriegelt.</p>
+     <code>profiles</code>. RFC-0012 §1.3 führt sie als „erzeugt", was eine
+     Neuerzeugung nicht einlösen kann: <code>released</code> und
+     <code>profiles</code> kennt das Manifest-Schema gar nicht, und beim Bild
+     gilt im Katalog ein Pfad relativ zur Liste, im Manifest einer relativ zum
+     Paket. Das ist ein offener Punkt am Papier, kein Versäumnis dieses
+     Werkzeugs — deshalb sind sie hier frei bearbeitbar statt verriegelt.</p>
+</div>
+<div class="card">
+  <h2>Der Nachpflege-Bericht</h2>
+  <p>Der Abgleich geht in eine Richtung: Liste folgt Manifest. Der Bericht
+     geht in die andere — er sagt, <strong>was dem Manifest fehlt</strong>,
+     und ist zum Weiterreichen an die KI gedacht, die die App betreut. Mit
+     einem YAML-Block, den man einsetzen kann.</p>
+  <p class="muted">Drei Dinge tut er bewusst <em>nicht</em>. Er verlangt nichts
+     nachzupflegen, wo Liste und Manifest sich <strong>widersprechen</strong> —
+     dort ist der Katalog schuld, und eine fremde KI anzuweisen, unsere
+     veraltete Version zu übernehmen, wäre schlimmer als gar kein Bericht. Er
+     schlägt für das Bild <strong>keinen Pfad</strong> vor, weil der im Katalog
+     einen anderen Bezugspunkt hat. Und was das Manifest-Format noch nicht
+     kennt, führt er getrennt und <strong>ohne Auftrag</strong>.</p>
 </div>
 <div class="card">
   <h2>Was dieser Stand nicht kann</h2>

@@ -57,7 +57,13 @@ einlösen:
   beschreibt Knotenprofile, nicht App-Profile).
 - **`released`** steht nirgends — es wäre das Datum des Git-Tags, das
   ein Rohabruf der Datei nicht liefert.
-- **`icon`** führt heute kein einziges unserer Manifeste.
+- **`icon`** liegt anders, und das war zunächst falsch beschrieben:
+  `app.icon` **kennt** das Manifest-Schema. Das Hindernis sind die
+  Bezugspunkte — in der Liste gilt ein Bildpfad relativ zur Liste
+  (RFC-0012 §1.1, damit kein Knoten beim Öffnen der Store-Seite einen
+  fremden Server anruft), im Manifest relativ zum Paket. Eine
+  Neuerzeugung müsste die Datei kopieren; das kann erst ein
+  Bauschritt, der schreibt.
 - **`description`** ist in der Liste absichtlich der längere,
   redaktionelle Text; das Manifest hat nur einen kurzen. Ein Vergleich
   wäre bei allen acht Apps eine Falschmeldung.
@@ -108,6 +114,47 @@ kaputt ist, gibt es nicht als Datei. Befunde und Hinweise halten
 dagegen nicht auf — ein Eintrag darf vor seinem Manifest entstehen
 (RFC-0013, Frage 4), und der Prüfer sagt bei jedem Lauf, dass er ohne
 Beleg dasteht.
+
+## Abgleichen — für eine App oder für alle
+
+*Abgleichen* holt die fünf erzeugten Felder aus dem Manifest. In der
+Zeile einer App gilt es nur für sie, oberhalb der Tabelle für die ganze
+Liste; übersteuerte Felder bleiben in beiden Fällen unberührt.
+
+Der Abgleich einer einzelnen App ist bewusst ein **eigener Weg** und
+nicht der Speichern-Knopf des Formulars: Über das Formular liefe er als
+vollständiges Absenden, und ein leeres Feld bedeutet dort „weglassen" —
+ein Abgleich aus der Zeile heraus würde die redaktionellen Texte
+mitnehmen.
+
+## Der Nachpflege-Bericht
+
+Der Abgleich geht in eine Richtung: Die Liste folgt dem Manifest. Der
+Bericht geht in die andere — er sagt, **was dem Manifest fehlt**, als
+Auftrag zum Weiterreichen an die KI, die die App betreut, mit einem
+einsetzbaren YAML-Block. Es gibt ihn je App und für eine ganze Liste;
+im Sammelbericht bleibt jeder Abschnitt für sich lesbar.
+
+Drei Dinge tut er bewusst **nicht**:
+
+- Er verlangt keine Nachpflege, wo Liste und Manifest sich
+  **widersprechen**. Dort ist der Katalog schuld, und eine fremde KI
+  anzuweisen, unsere veraltete Version zu übernehmen, wäre schlimmer
+  als gar kein Bericht.
+- Er schlägt für `icon` **keinen Pfad** vor — der hat im Katalog einen
+  anderen Bezugspunkt (siehe oben).
+- Was das Manifest-Format noch nicht kennt, führt er getrennt und
+  **ohne Auftrag**: Das ist ein offener Punkt an der Spezifikation,
+  kein Versäumnis der App.
+
+Als `app.description` schlägt er den **einen Satz** aus dem Katalog
+vor (`summary`), nicht den langen Text — das Manifest trägt die kurze
+Fassung, sie steht später an der Instanz.
+
+**Der Bericht ist zugleich der Beleg für RFC-0014.** Gegen unsere acht
+Apps gehalten sagt fast jede Zeile „das Format kennt dieses Feld
+nicht". Ein Bericht, der nur zwei Felder überhaupt einfordern kann, ist
+selbst der Befund.
 
 ## Woher das Manifest geholt wird
 

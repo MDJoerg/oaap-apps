@@ -265,6 +265,42 @@ try:
        "nicht benutzbar" in h.body and "attachment" not in
        h.headers_sent.get("Content-Disposition", ""), h.body[:200])
 
+    print("\n=== eine einzelne App abgleichen ===")
+    # Eigener Weg, nicht der Speichern-Knopf: Ein Abgleich von der
+    # Listenseite aus darf die redaktionellen Texte nicht mitnehmen.
+    work = app.load_work(LIST_URL)
+    ed.entry_by_id(work["doc"], "ollama")["version"] = "0.0.1"
+    ed.entry_by_id(work["doc"], "ollama")["summary"] = "Bleibt stehen."
+    app.save_work(LIST_URL, work)
+    h = Fake()
+    h.sync_entry("0", LIST_URL, "ollama", "klicktest", "keyuser")
+    entry = ed.entry_by_id(app.load_work(LIST_URL)["doc"], "ollama")
+    ok("die Version wird nachgezogen", entry["version"] == "0.9.1", str(entry))
+    ok("der redaktionelle Text bleibt unangetastet",
+       entry["summary"] == "Bleibt stehen.",
+       "sonst würde ein Abgleich aus der Zeile heraus Texte löschen")
+    h = Fake()
+    h.sync_entry("0", LIST_URL, "bdt-hub", "klicktest", "keyuser")
+    ok("ohne abrufbares Manifest passiert nichts, und es steht dran",
+       "kein_manifest" in h.location, h.location)
+
+    print("\n=== der Nachpflege-Bericht ===")
+    h = Fake()
+    h.report("0", "ollama", "klicktest", "keyuser")
+    ok("er kommt als Markdown-Datei",
+       "markdown" in h.headers_sent.get("Content-Type", "")
+       and "nachpflege-ollama.md" in h.headers_sent.get("Content-Disposition", ""),
+       str(h.headers_sent))
+    ok("er nennt die App und den Auftrag",
+       "Manifest-Nachpflege: Ollama" in h.body and "**Auftrag:**" in h.body)
+    h = Fake()
+    h.report("0", "", "klicktest", "keyuser")
+    ok("und es gibt ihn für die ganze Liste",
+       "nachpflege-oaap.test.md" in h.headers_sent.get("Content-Disposition", "")
+       and "von 3 Einträgen" in h.body, h.body[:300])
+    ok("der Eintrag ohne abrufbares Manifest steht als ohne Beleg drin",
+       "ohne Beleg" in h.body)
+
     print("\n=== den Entwurf verwerfen ===")
     app.drop_work(LIST_URL)
     doc, w, err = app.current(LIST_URL)

@@ -49,8 +49,19 @@ REGENERABLE = ("name", "type", "version", "app_class", "roles")
 EDITORIAL = ("summary", "description", "categories", "audience", "tags",
              "maturity", "status", "license", "links", "screenshots")
 
-# Was §1.3 „erzeugt" nennt, ohne dass es eine Quelle dafür gäbe.
+# Was §1.3 „erzeugt" nennt, ohne dass eine Neuerzeugung es liefern
+# könnte. Bei dreien fehlt dem Manifest-Schema das Feld; bei `icon`
+# liegt es anders — siehe ICON_HINDERNIS.
 UNGENERATED = ("released", "profiles", "icon", "package")
+
+ICON_HINDERNIS = (
+    "Das Manifest kennt `app.icon` sehr wohl. Das Hindernis sind die "
+    "Bezugspunkte: In der Liste gilt ein Bildpfad relativ zur Liste "
+    "(RFC-0012 §1.1, damit kein Knoten beim Öffnen der Store-Seite einen "
+    "fremden Server anruft), im Manifest relativ zum Paket. Eine "
+    "Neuerzeugung müsste die Datei also aus dem App-Repository in das "
+    "Listen-Repository kopieren — das kann erst ein Bauschritt, der "
+    "schreibt.")
 
 LIST_FIELDS = {"categories", "audience", "tags", "roles", "profiles",
                "links", "screenshots"}
@@ -348,3 +359,214 @@ def diff_documents(published, working):
 def count_kinds(changes):
     return {k: sum(1 for c in changes if c["kind"] == k)
             for k in (STRUKTUR, REDAKTIONELL, ERZEUGT)}
+
+
+# --- Nachpflege-Bericht ------------------------------------------------
+#
+# Ein Auftrag an die KI, die eine App betreut: „Dein Manifest schweigt
+# zu Dingen, die der Katalog über Dich behauptet — trag sie nach."
+#
+# Warum das die richtige Richtung ist: Das Manifest gehört dem, der die
+# App gebaut hat; die Liste ist nur der Katalog. Wo beide etwas sagen,
+# gewinnt das Manifest. Ein Katalog, der Behauptungen ohne Deckung
+# führt, ist genau der Zustand, gegen den dieses Werkzeug antritt.
+
+# Was das Manifest im Format 0.2 heute tragen kann:
+# (Schlüssel unter `app:`, Feld im Katalog als Quelle, Hinweis).
+# Die Liste ist kurz, und genau das ist der Befund.
+MANIFEST_CARRIES = (
+    ("name", "name", ""),
+    ("version", "version", ""),
+    ("type", "type", ""),
+    ("class", "app_class", ""),
+    # Der EINE Satz, nicht der lange Text: Das Manifest trägt die kurze
+    # Fassung (sie steht später an der Instanz), der Katalog den langen
+    # redaktionellen Text. Die Quelle ist deshalb `summary`.
+    ("description", "summary", "Die kurze Fassung — der lange Text bleibt "
+                               "im Katalog."),
+    # Ohne Wert: Im Katalog gilt ein Bildpfad relativ zur LISTE, im
+    # Manifest relativ zum PAKET. Den Pfad kann nur die App nennen.
+    ("icon", "", "Pfad relativ zum Paket."),
+)
+
+# Was der Katalog führt und das Manifest-Schema (noch) nicht kennt.
+# Ob diese Felder ins Manifest wandern sollen, ist eine offene
+# Entscheidung — sie steht in RFC-0014.
+MANIFEST_MISSING = ("summary", "categories", "audience", "tags", "maturity",
+                    "status", "license", "links", "screenshots", "profiles",
+                    "released")
+
+
+def yaml_value(value):
+    """Ein Wert als YAML — konservativ in Anführungszeichen."""
+    if isinstance(value, list):
+        return "[" + ", ".join(yaml_value(v) for v in value) + "]"
+    text = str(value)
+    if (not text or text.strip() != text
+            or text[0] in "&*!|>%@`-?:{}[]#,\"'"
+            or any(c in text for c in ':#\n"')):
+        return '"' + text.replace("\\", "\\\\").replace('"', '\\"'
+                                                        ).replace("\n", " ") + '"'
+    return text
+
+
+def _rows(pairs):
+    if not pairs:
+        return ""
+    out = ["| Feld | Was der Katalog sagt |", "| --- | --- |"]
+    out += [f"| `{f}` | {v} |" for f, v in pairs]
+    return "\n".join(out) + "\n"
+
+
+def pflegebericht(entry, manifest, manifest_url="", why="", list_name="",
+                  marks=(), erzeugt_am=""):
+    """Ein Bericht in Markdown: Was dem Manifest dieser App fehlt.
+
+    Gedacht zum Weiterreichen an die KI, die die App betreut. Deshalb
+    steht der Auftrag oben, die Begründung darunter und ein
+    einsetzbarer YAML-Block dabei — nicht nur eine Mängelliste.
+    """
+    app_id = str(entry.get("id") or "?")
+    name = str(entry.get("name") or app_id)
+    fmt = str((manifest or {}).get("oaap_manifest") or "")
+    app_block = (manifest or {}).get("app") or {}
+
+    # Nachzupflegen ist nur, wozu das Manifest **schweigt**. Sagen
+    # beide etwas und es ist verschieden, dann ist der Katalog schuld
+    # und nicht die App — das meldet der Prüfer, und geflickt wird es
+    # hier, nicht dort. Ein Bericht, der einer fremden KI aufträgt,
+    # eine veraltete Version aus unserem Katalog zu übernehmen, wäre
+    # schlimmer als gar keiner.
+    tragbar, abweichend = [], []
+    for key, quelle, hinweis in MANIFEST_CARRIES:
+        katalog = entry.get(quelle) if quelle else entry.get("icon")
+        if katalog in (None, "", [], {}):
+            continue
+        says = app_block.get(key)
+        if quelle and quelle in marks:
+            abweichend.append((quelle, as_text(katalog), as_text(says)))
+        elif not says:
+            tragbar.append({"key": key, "quelle": quelle, "hinweis": hinweis,
+                            "wert": entry.get(quelle) if quelle else None})
+
+    # Was Abschnitt 1 schon verbraucht hat, darf in Abschnitt 2 nicht
+    # noch einmal auftauchen — `summary` wandert als `app.description`
+    # ins Manifest und fehlt dort dann nicht mehr.
+    verbraucht = {t["quelle"] for t in tragbar if t["quelle"]}
+    verbraucht |= {q for q, _, _ in abweichend}
+    fehlend = [(f, as_text(entry.get(f))) for f in MANIFEST_MISSING
+               if f not in verbraucht and entry.get(f) not in (None, "", [], {})]
+
+    lines = [f"# Manifest-Nachpflege: {name} (`{app_id}`)", ""]
+    if not tragbar and not fehlend:
+        lines += ["Nichts zu tun: Das Manifest deckt alles, was der Katalog "
+                  "über diese App behauptet.", ""]
+    else:
+        lines += [
+            "**Auftrag:** Ergänze das Manifest `oaap-app.yaml` dieser App um "
+            "die unten genannten Angaben, soweit das Format sie kennt, und "
+            "prüfe die übrigen.", "",
+            "**Warum:** Das Manifest gehört dem, der die App gebaut hat — der "
+            "Katalog ist nur ein Verzeichnis. Wo beide etwas sagen, gilt das "
+            "Manifest. Steht eine Angabe **nur** im Katalog, behauptet dieser "
+            "mehr, als das Paket belegt; das ist genau der Zustand, den dieser "
+            "Bericht beenden soll.", ""]
+
+    lines += ["## Woher dieser Bericht kommt", "",
+              f"- App-Kennung: `{app_id}`"]
+    if list_name:
+        lines.append(f"- Katalog: {list_name}")
+    if manifest_url:
+        lines.append(f"- Manifest: {manifest_url}")
+    lines.append(f"- Manifest-Format: {fmt or 'unbekannt'}")
+    if erzeugt_am:
+        lines.append(f"- Erzeugt am {erzeugt_am} vom OAAP Store Editor")
+    lines.append("")
+
+    if not manifest:
+        lines += ["## Das Manifest war nicht abrufbar", "",
+                  f"Grund: {why or 'unbekannt'}", "",
+                  "Solange das so bleibt, steht **jede** Angabe dieses "
+                  "Eintrags ohne Beleg da. Das ist zulässig — ein Eintrag "
+                  "darf entstehen, bevor sein Manifest erreichbar ist —, "
+                  "aber es bleibt eine Behauptung.", ""]
+
+    if tragbar:
+        lines += ["## 1. Das kann das Manifest heute tragen — bitte ergänzen",
+                  "",
+                  "| Im Manifest | Woher | Wert | Hinweis |",
+                  "| --- | --- | --- | --- |"]
+        for t in tragbar:
+            lines.append(
+                f"| `app.{t['key']}` | "
+                f"{'`' + t['quelle'] + '` im Katalog' if t['quelle'] else '—'} | "
+                f"{as_text(t['wert']) or '(bitte selbst eintragen)'} | "
+                f"{t['hinweis'] or ''} |")
+        block = ["", "```yaml"]
+        if fmt == "0.1" and any(t["key"] == "class" for t in tragbar):
+            block += ['# `class` gibt es erst ab Manifest 0.2 — deshalb zuerst '
+                      'die Formatangabe anheben.', 'oaap_manifest: "0.2"']
+        block.append("app:")
+        for t in tragbar:
+            if t["wert"] in (None, "", [], {}):
+                block.append(f"  # {t['key']}: …   # {t['hinweis']}")
+            else:
+                block.append(f"  {t['key']}: {yaml_value(t['wert'])}")
+        block.append("```")
+        lines += block + [""]
+        lines += ["Ein höheres MINOR ist gefahrlos: Ein Knoten, der ein Feld "
+                  "nicht kennt, ignoriert es und lehnt die App nicht ab "
+                  "(RFC-0012 §8.2 — strenges Schema, toleranter Betrieb).", ""]
+        if any(t["key"] == "icon" for t in tragbar):
+            lines += ["Zum Bild: " + ICON_HINDERNIS + " Der Katalog führt "
+                      f"heute `{as_text(entry.get('icon'))}` — dieser Pfad "
+                      "gilt dort relativ zur Liste und passt so **nicht** ins "
+                      "Manifest.", ""]
+
+    if fehlend:
+        lines += ["## 2. Das führt der Katalog, das Manifest-Format kennt es "
+                  "noch nicht", ""]
+        lines.append(_rows(fehlend))
+        lines += ["**Hier ist nichts zu tun** — das ist ein offener Punkt an "
+                  "der Spezifikation, kein Versäumnis dieser App. RFC-0012 "
+                  "§1.3 führt einen Teil davon als aus dem Manifest erzeugt, "
+                  "ohne dass das Manifest-Schema die Felder hätte. Ob sie "
+                  "dorthin wandern, entscheidet RFC-0014; bis dahin bleiben "
+                  "sie redaktionell im Katalog.", ""]
+
+    if abweichend:
+        lines += ["## 3. Bewusst abweichend — bitte NICHT angleichen", "",
+                  "| Feld | Im Katalog | Im Manifest |", "| --- | --- | --- |"]
+        lines += [f"| `{f}` | {have} | {says or '—'} |"
+                  for f, have, says in abweichend]
+        lines += ["",
+                  "Diese Felder hat der Katalogpfleger ausdrücklich "
+                  "entriegelt. Die Abweichung ist gewollt und überlebt jede "
+                  "Neuerzeugung (RFC-0012 §1.3).", ""]
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+NICHTS_ZU_TUN = "Nichts zu tun:"
+
+
+def sammelbericht(reports, list_name, erzeugt_am=""):
+    """Die Berichte einer ganzen Liste in einer Datei.
+
+    Jeder Abschnitt bleibt für sich lesbar: Wer eine einzelne App
+    betreut, soll seinen Teil herausschneiden können, ohne den Rest zu
+    brauchen.
+    """
+    offen = [t for _, t in reports if NICHTS_ZU_TUN not in t]
+    head = ["# Manifest-Nachpflege für " + str(list_name), ""]
+    if erzeugt_am:
+        head += [f"Erzeugt am {erzeugt_am} vom OAAP Store Editor.", ""]
+    head += [f"{len(offen)} von {len(reports)} Einträgen haben etwas offen.",
+             "",
+             "Jeder Abschnitt ist für sich lesbar und kann einzeln an die KI "
+             "gegeben werden, die die betreffende App betreut.", "", "---", ""]
+    body = []
+    for _, text in reports:
+        body.append("#" + text if text.startswith("# ") else text)
+        body.append("---\n")
+    return "\n".join(head) + "\n".join(body)

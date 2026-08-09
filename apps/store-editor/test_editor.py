@@ -164,6 +164,65 @@ ok("eine schon vergebene ebenso",
    "schon" in ed.check_new_id(PUB, "ollama"))
 ok("eine saubere neue Kennung geht durch", not ed.check_new_id(PUB, "uptime-kuma"))
 
+print("\n=== der Nachpflege-Bericht ===")
+STUMM = {"oaap_manifest": "0.1",
+         "app": {"id": "ollama", "name": "Ollama", "version": "0.9.1",
+                 "type": "wrapped"}}
+VOLL = {**ENTRY, "summary": "Sprachmodelle lokal betreiben.",
+        "categories": ["ai"], "maturity": "beta", "icon": "icons/ollama.svg",
+        "description": "Ein langer, redaktionell gepflegter Text."}
+b = ed.pflegebericht(VOLL, STUMM, "https://raw/oaap-app.yaml",
+                     list_name="Testliste", erzeugt_am="2026-08-09")
+ok("er sagt zuerst, was zu tun ist", b.index("**Auftrag:**") < b.index("Woher"))
+ok("die fehlende Klasse steht drin", "app.class" in b and "class: service" in b)
+ok("und der YAML-Block hebt das Format an, weil `class` erst ab 0.2 gilt",
+   'oaap_manifest: "0.2"' in b, b)
+# Der lange Text gehoert in den Katalog, der eine Satz ins Manifest.
+ok("als app.description wird der EINE Satz vorgeschlagen, nicht der lange Text",
+   "description: Sprachmodelle lokal betreiben." in b
+   and "redaktionell gepflegter Text" not in b, b)
+ok("das Bild bekommt KEINEN Wert aus dem Katalog",
+   "icon: icons/ollama.svg" not in b and "# icon:" in b,
+   "im Katalog gilt der Pfad relativ zur Liste, im Manifest relativ zum "
+   "Paket — ein übernommener Pfad wäre schlicht falsch")
+ok("und der Grund steht dabei", "Bezugspunkte" in b)
+ok("was das Format nicht kennt, steht getrennt und ohne Auftrag",
+   "kennt es noch nicht" in b and "Hier ist nichts zu tun" in b)
+ok("summary taucht nicht zweimal auf",
+   b.count("| `summary` |") == 0,
+   "es wurde schon als app.description verplant")
+
+# Der wichtigste Fall: Sagen beide etwas und es ist verschieden, ist der
+# KATALOG schuld — ein Bericht, der einer fremden KI auftraegt, unsere
+# veraltete Version zu uebernehmen, waere schlimmer als gar keiner.
+ALT = {**VOLL, "version": "0.8.0"}
+NEU = {"oaap_manifest": "0.2",
+       "app": {"id": "ollama", "name": "Ollama", "version": "0.9.1",
+               "type": "wrapped", "class": "service",
+               "description": "kurz"}}
+b2 = ed.pflegebericht(ALT, NEU, "https://raw/oaap-app.yaml")
+ok("ein Widerspruch wird NICHT als Nachpflege verlangt",
+   "version: 0.8.0" not in b2 and "0.8.0" not in b2, b2)
+ok("und wenn das Manifest alles trägt, gibt es nichts zu tun",
+   ed.NICHTS_ZU_TUN in ed.pflegebericht(
+       {"id": "x", "name": "X", "version": "1.0.0", "type": "native"}, NEU))
+
+b3 = ed.pflegebericht(VOLL, None, "", why="nicht erreichbar")
+ok("ohne Manifest sagt der Bericht, dass alles ohne Beleg dasteht",
+   "nicht abrufbar" in b3 and "ohne Beleg" in b3)
+
+MARKIERT = ed.pflegebericht(VOLL, NEU, "", marks=("app_class",))
+ok("eine bewusste Abweichung wird als 'bitte NICHT angleichen' geführt",
+   "NICHT angleichen" in MARKIERT, MARKIERT)
+
+sammel = ed.sammelbericht([("ollama", b), ("x", ed.pflegebericht(
+    {"id": "x", "name": "X", "version": "1.0.0", "type": "native"}, NEU))],
+    "Testliste", "2026-08-09")
+ok("der Sammelbericht zählt, wie viele etwas offen haben",
+   "1 von 2" in sammel, sammel[:300])
+ok("und jeder Abschnitt bleibt für sich lesbar",
+   sammel.count("## Manifest-Nachpflege:") == 2, sammel[:200])
+
 print("\n=== Werte lesbar machen ===")
 ok("Listen werden aufgezählt", ed.as_text(["a", "b"]) == "a, b")
 ok("Objekte werden nicht als JSON hingeworfen",
