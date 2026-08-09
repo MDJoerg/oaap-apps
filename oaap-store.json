@@ -1,19 +1,34 @@
 {
-  "store": "0.1",
+  "store": "0.2",
+  "id": "oaap.platform",
   "name": "OAAP Plattform-Apps",
   "description": "Von der Plattform selbst entwickelte Apps (Monorepo oaap-apps). Eigene Funktionen sind Apps wie alle anderen — Installation über den Store.",
+  "publisher": "MDJoerg",
   "apps": [
     {
       "id": "studio",
       "name": "OAAP Studio",
-      "description": "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen",
       "type": "native",
       "version": "0.1.0",
+      "released": "2026-08-07",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
       },
-      "homepage": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio"
+      "profiles": ["dev"],
+      "roles": ["keyuser", "admin"],
+      "categories": ["development"],
+      "app_class": "frontend",
+      "audience": ["operator", "developer"],
+      "maturity": "beta",
+      "status": "active",
+      "tags": ["briefing", "ki", "vorhaben", "entwicklung"],
+      "summary": "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen.",
+      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil; es kennt keine Deploy-Token, sondern verweist auf das Portal, wo der Server sie erzeugt. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
+      "links": [
+        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio" },
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md", "label": "App Deployment Contract" }
+      ]
     }
   ]
 }
