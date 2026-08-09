@@ -139,9 +139,12 @@ gespeichert.
 python3 test_checker.py          # die Prüfregeln
 python3 test_editor.py           # die Bearbeitungsregeln
 python3 test_pages.py            # die Seiten und der Weg eines Formulars
+
+# am laufenden Knoten, mit Portal-Anmeldung:
+python3 klicktest.py ../../../oaap-reference/test/.env http://10.10.10.75 8106
 ```
 
-Alle drei ohne Netz, ohne Docker, ohne Knoten. Die Regeln liegen in
+Die ersten drei ohne Netz, ohne Docker, ohne Knoten. Die Regeln liegen in
 `checker.py` und `editor.py`, bewusst ohne Web und ohne Netz: Es sind
 Entscheidungen aus RFC-0012 und RFC-0013, und die soll man ohne
 laufenden Server lesen können. Das Abrufen wird hereingereicht.
@@ -151,6 +154,14 @@ durch. Den gibt es, weil im Portal schon einmal ein Zeilenumbruch in
 einer Vorlage einen Satz zerrissen hat, den der Klicktest am echten
 Knoten suchte. Beim ersten Lauf hat er prompt denselben Fehler in
 diesem Formular gefunden.
+
+`klicktest.py` prüft, was kein Modultest kann: dass die Anmeldung als
+Gateway-Kopfzeile ankommt, dass der deklarierte Speicher wirklich
+beschreibbar ist — und dass ein Formular, das der Browser abschickt,
+dieselben Werte zurückbringt, die es angezeigt hat. Er liest das
+Formular so aus, wie ein Browser es senden würde (keine abgeschalteten
+Felder, keine nicht angehakten Kästchen), ändert genau einen Wert und
+verwirft den Entwurf am Ende wieder.
 
 ## Abhängigkeit
 
