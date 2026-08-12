@@ -1,0 +1,62 @@
+oaap_manifest: "0.2"
+
+app:
+  id: livekit
+  name: LiveKit (Echtzeit-Medien)
+  version: 0.1.0
+  type: wrapped
+  # Kein Startfeld-Kachel: LiveKit hat keine Menschenoberfläche, sondern ist
+  # ein Medienserver, zu dem sich eine andere App (das Meeting-Frontend)
+  # verbindet. `service` hält ihn aus dem Startfeld heraus (Runtime 2.10).
+  class: service
+  description: "WebRTC-Medienserver (SFU) für Echtzeit-Audio/-Video. Referenz-Implementierung der Echtzeit-Medien-Capability (RFC-0017): Signaling über das Gateway, Medien über einen festen UDP/TCP-Port am Gateway vorbei."
+
+# Mehr-Container (RFC-0016): der Server und sein Zustandsspeicher. Beide
+# liegen auf dem privaten Instanznetz und finden sich über den Dienstnamen —
+# `redis` bekommt KEINE Route und KEINEN Endpunkt, ist also von außen und von
+# anderen Apps nie erreichbar.
+services:
+  livekit:
+    build: .
+    port: 7880
+  redis:
+    image: redis:7-alpine
+    port: 6379
+
+# Signaling (Steuerkanal + WebSocket) läuft als gewöhnliche Route über das
+# Gateway und bekommt dort TLS/WSS. `public`, weil LiveKit jede Anfrage selbst
+# per signiertem Token prüft — die Gateway-Anmeldung wäre die falsche Schranke;
+# die Mengenbremse (RFC-0010) greift weiterhin.
+routes:
+  - path: /
+    roles: [public]
+    service: livekit
+
+# Der Medienpfad: EIN Port, UDP-Medien + TCP-Rückfallebene auf derselben
+# Nummer (`both`). FEST (RFC-0017 §5.1), weil ein Medienserver genau diesen
+# Port bei seinen Clients bewirbt (ICE-Kandidaten tragen die Nummer) — ein
+# still umvergebener Port bräche die Verbindung. Veröffentlicht wird er erst
+# auf Freigabe durch server_admin auf einem `exposed`-Knoten.
+endpoints:
+  - name: media
+    protocol: both
+    container_port: 8280
+    fixed: true
+    service: livekit
+    reason: "WebRTC-Medien (Audio/Video), Einzelport-ICE — der Server bewirbt diesen Port selbst bei den Clients; er muss unverändert erreichbar sein."
+
+config:
+  # Schlüssel und Geheimnis, mit denen die Meeting-App ihre Client-Tokens
+  # signiert (LiveKit prüft sie gegen dieses Paar). Beide werden auch von der
+  # Meeting-App gebraucht — der Betreiber trägt dasselbe Paar dort ein.
+  - key: LIVEKIT_API_KEY
+    label: "API-Schlüssel (Kennung; auch in der Meeting-App eintragen)"
+    default: "oaap"
+  - key: LIVEKIT_API_SECRET
+    label: "API-Geheimnis (mindestens 32 Zeichen; die Meeting-App signiert damit ihre Tokens)"
+    secret: true
+
+health:
+  path: /
+  service: livekit
+  startup_grace_seconds: 30

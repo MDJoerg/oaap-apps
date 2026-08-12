@@ -53,6 +53,31 @@
         { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/store-editor" },
         { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0013-store-editor.md", "label": "RFC-0013 — Der Store Editor" }
       ]
+    },
+    {
+      "id": "livekit",
+      "name": "LiveKit (Echtzeit-Medien)",
+      "type": "wrapped",
+      "version": "0.1.0",
+      "released": "2026-08-12",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/livekit"
+      },
+      "profiles": ["exposed"],
+      "roles": ["public"],
+      "categories": ["infrastructure"],
+      "app_class": "service",
+      "audience": ["operator", "developer"],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": ["webrtc", "sfu", "medien", "audio", "video", "meeting", "livekit"],
+      "summary": "WebRTC-Medienserver (SFU) für Echtzeit-Audio und -Video — die Referenz der Echtzeit-Medien-Capability.",
+      "description": "Ein SFU-Medienserver: Clients verbinden sich zu ihm, statt untereinander ein Netz aufzuspannen — damit ist NAT per Konstruktion gelöst und die Last wächst linear statt quadratisch. Signaling läuft als WSS über das Gateway; der Medienpfad ist EIN fester UDP/TCP-Port am Gateway vorbei (RFC-0015/RFC-0017), den ein server_admin auf einem Knoten mit Profil `exposed` freigibt und auf dem Router weiterleitet. Mehr-Container-App (LiveKit + Redis); die Meeting-App signiert ihre Client-Tokens mit dem hier hinterlegten Schlüsselpaar. Referenz-Implementierung — die Fähigkeit gehört der Plattform, LiveKit ist austauschbar.",
+      "links": [
+        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/livekit" },
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0017-realtime-media-livekit-reference.md", "label": "RFC-0017 — Echtzeit-Medien / LiveKit" }
+      ]
     }
   ]
 }
