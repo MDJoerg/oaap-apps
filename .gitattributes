@@ -1,0 +1,5 @@
+# Shell scripts must keep LF line endings — they run inside Linux
+# containers, where a CRLF shebang (`/bin/sh\r`) fails with
+# "bad interpreter". This holds regardless of a checkout's autocrlf.
+*.sh text eol=lf
+entrypoint.sh text eol=lf
