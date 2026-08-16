@@ -24,7 +24,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 
 | App                    | Was es tut                                            | Version |
 | ---------------------- | ----------------------------------------------------- | ------- |
-| [Studio](apps/studio/) | Entwicklungsvorhaben verwalten, KI-Briefings erzeugen | 0.1.0   |
+| [Studio](apps/studio/) | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen   | 0.2.0   |
 
 ## Installation
 

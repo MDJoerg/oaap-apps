@@ -1,11 +1,14 @@
-oaap_manifest: "0.1"
+oaap_manifest: "0.2"
 
 app:
   id: studio
   name: OAAP Studio
-  version: 0.1.0
+  version: 0.2.0
   type: native
-  description: "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen"
+  # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
+  # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
+  class: frontend
+  description: "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, Pakete prüfen und ausrollen"
 
 services:
   web:
@@ -15,6 +18,12 @@ services:
 routes:
   # Studio ist Sache der Projektverantwortlichen (Design-Guidelines 5:
   # „Studio — keyuser+"). Das Gateway erzwingt es, die App prüft zusätzlich.
+  #
+  # Ausdrücklich NICHT server_admin, obwohl hier Pakete ausgerollt werden:
+  # Das Recht dazu ist der Deploy-Token, den der Anwender im Augenblick
+  # der Handlung eingibt (RFC-0019, Abschnitt „Studio"). Eine Rolle, die
+  # das Studio zur Serververwaltung machte, würde genau die Trennung
+  # aufheben, um die es dort geht.
   - path: /
     roles: [keyuser, admin]
 
@@ -32,6 +41,22 @@ config:
   # Repo-Vorschläge dazu passen. Leer = keine Vorschläge.
   - key: STUDIO_GIT_BASE
     label: "Basis-Adresse des Git-Hostings"
+    default: ""
+  # Obergrenze für ein hochgeladenes Paket. Der Knoten nimmt bis 256 MB
+  # an; das Studio bleibt bewusst darunter, weil es die Datei
+  # zwischenlagert. Höher setzen, wenn die Pakete wirklich größer sind.
+  - key: STUDIO_MAX_PACKAGE_MB
+    label: "Größtes Paket (MB)"
+    default: "64"
+  # Wie lange auf den Knoten gewartet wird. Ein Bau auf dem Gerät dauert;
+  # antwortet der Hook mit 202, ist das kein Fehler, sondern „läuft noch".
+  - key: STUDIO_DEPLOY_TIMEOUT_SECONDS
+    label: "Geduld beim Deployment (Sekunden)"
+    default: "180"
+  # Adresse des Portals — nur für Verweise („Instanz im Portal öffnen").
+  # Leer = das Studio leitet sie aus dem eigenen Hostnamen ab.
+  - key: STUDIO_PORTAL_URL
+    label: "Adresse des Portals (für Verweise)"
     default: ""
 
 health:

@@ -9,8 +9,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.1.0",
-      "released": "2026-08-07",
+      "version": "0.2.0",
+      "released": "2026-08-16",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -22,12 +22,13 @@
       "audience": ["operator", "developer"],
       "maturity": "beta",
       "status": "active",
-      "tags": ["briefing", "ki", "vorhaben", "entwicklung"],
-      "summary": "Entwicklungsvorhaben verwalten und daraus fertige KI-Briefings erzeugen.",
-      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil; es kennt keine Deploy-Token, sondern verweist auf das Portal, wo der Server sie erzeugt. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
+      "tags": ["briefing", "ki", "vorhaben", "entwicklung", "paket", "deployment"],
+      "summary": "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, gelieferte Pakete prüfen und ausrollen.",
+      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
       "links": [
         { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md", "label": "App Deployment Contract" }
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md", "label": "App Deployment Contract" },
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0019-artifact-deployment-private-sources.md", "label": "RFC-0019 — Deployment aus einem Paket" }
       ]
     },
     {
