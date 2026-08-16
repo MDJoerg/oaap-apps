@@ -41,6 +41,18 @@ wie die Apps unserer Anwender (Dogfooding), und das Portal bleibt schlank.
   tun ist.
 - **Deployment-Zettel** — das Blatt für die Projekt-KI: Adressen, Ablauf
   als Befehle, alle Ablehnungsgründe, Grenzen. Als Datei zum Herunterladen.
+- **Erste Instanz anlegen** (seit 0.2.1) — gibt es die Instanz noch nicht,
+  gibt es auch keinen Deploy-Token. Dann stellt ein `server_admin` im
+  Portal eine **Anlege-Erlaubnis** für genau diesen Namen aus (einmal
+  verwendbar, 30 Minuten, Test-Kanal, widerrufbar) und der Anwender trägt
+  sie statt des Tokens ein. Für das Studio ändert sich dabei **nichts**:
+  derselbe Drei-Phasen-Weg, dieselben Prüfungen. Danach entsteht die
+  Instanz, die Erlaubnis ist verbraucht, und jede weitere Fassung läuft
+  über ein normales Deploy-Token.
+- **„Ausgang unklar" statt falscher Ablehnung** — bleibt eine Antwort aus
+  (ein kleiner Knoten baut länger, als das Studio wartet), sagt das Studio
+  das, statt „abgelehnt" zu behaupten: Der Knoten rollt derweil weiter aus,
+  und sein Protokoll ist das verbindliche.
 
 ## Bewusste Entscheidungen
 
@@ -85,18 +97,24 @@ zusätzlich.
 
 Ausdrücklich **nicht** `server_admin`: Das Recht zum Ausrollen ist der
 Deploy-Token, den der Anwender im Augenblick der Handlung eingibt — nicht
-eine Rolle, die das Studio zur Serververwaltung machte.
+eine Rolle, die das Studio zur Serververwaltung machte. Dasselbe gilt für
+die Anlege-Erlaubnis: Sie wird **gegeben**, nicht gehalten. Einheitliche
+Regel: **Das Studio hält nie ein Recht — alles Privilegierte gibt der
+Anwender im Augenblick der Handlung.**
 
 ## Voraussetzungen fürs Ausrollen
 
 - Eine **Test-Instanz** mit Deploy-Token (Portal → Instanzen →
-  Instanzseite). Produktiv-Instanzen haben bewusst kein Token.
+  Instanzseite) — oder, wenn es sie noch nicht gibt, eine
+  **Anlege-Erlaubnis** aus derselben Liste. Produktiv-Instanzen haben
+  bewusst kein Token.
 - Der Knoten muss die **Hook-Adresse** erreichen können, die im Vorhaben
   steht — das Studio ruft sie aus dem Container heraus auf. Bei einem
   öffentlichen Namen heißt das: Der Router muss die eigene öffentliche
   Adresse zurück ins Netz führen (NAT-Loopback).
 - Für ZIP-Deployments ohne bestehende Instanz: Knotenprofil `dev`
-  (RFC-0011) und das Anlegen im Portal.
+  (RFC-0011). Das Anlegen geht dann entweder im Portal oder aus dem
+  Studio heraus mit einer Anlege-Erlaubnis.
 
 ## Installation
 

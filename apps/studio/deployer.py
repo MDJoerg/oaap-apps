@@ -143,10 +143,12 @@ REFUSAL_HELP = {
 def explain(status_code, data):
     """Eine Ablehnung in einem Satz, den ein Mensch versteht."""
     if status_code == 403:
-        return ("Der Deploy-Token wurde nicht angenommen. Er gehört zu genau "
-                "einer Instanz und nur zum Test-Kanal; nach einem Widerruf "
-                "ist er ungültig. Die Plattform sagt bewusst nicht, ob es die "
-                "Instanz gibt.")
+        return ("Der Token wurde nicht angenommen. Ein Deploy-Token gehört zu "
+                "genau einer bestehenden Instanz und nur zum Test-Kanal; nach "
+                "einem Widerruf ist er ungültig. Eine Anlege-Erlaubnis gilt "
+                "nur für einen Namen, den es noch NICHT gibt, einmal und für "
+                "eine halbe Stunde. Die Plattform sagt bewusst nicht, ob es "
+                "die Instanz gibt.")
     if status_code == 429:
         return ("Zu viele Versuche in kurzer Zeit — der Hook drosselt. Eine "
                 "Minute warten.")

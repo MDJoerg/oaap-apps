@@ -30,6 +30,7 @@ os.environ["STUDIO_DATA_DIR"] = DATA
 os.environ["STUDIO_TMP_DIR"] = DATA
 
 import urllib.error  # noqa: E402
+import urllib.parse  # noqa: E402
 import urllib.request  # noqa: E402
 
 import app  # noqa: E402
@@ -319,7 +320,38 @@ data, ct = multipart_body({"action": "deployen", "token": "falscher-token"},
                           "x.zip", package("0.305.4"))
 st, b, _ = call("POST", f"/vorhaben/{PID}/paket", USER, data, ct)
 ok("403 wird erklärt, ohne über die Instanz zu plaudern",
-   "Deploy-Token wurde nicht angenommen" in b)
+   "Token wurde nicht angenommen" in b and "sagt bewusst nicht" in b,
+   b[-600:])
+
+print("\n=== Der Knoten antwortet gar nicht ===")
+# Auf einem kleinen Knoten kann der erste Bau eines Images laenger
+# dauern, als das Studio wartet — der Knoten rollt derweil weiter aus.
+# Keine Antwort ist deshalb KEINE Ablehnung; alles andere waere eine
+# Falschaussage ueber eine Instanz, die es hinterher gibt.
+STUMM = "http://127.0.0.1:9/deploy/app-test"      # discard-Port: nimmt an, sagt nichts
+
+
+def set_hook(url):
+    data, ct = form({"name": "BDT App", "instance": "", "hook_url": url,
+                     "app_type": "native", "status": "entwicklung",
+                     "deploy_way": "artifact"})
+    call_noredirect("POST", f"/vorhaben/{PID}", USER, data, ct)
+
+
+set_hook(STUMM)
+data, ct = multipart_body({"action": "deployen", "token": "richtiger-token"},
+                          "stumm.zip", package("0.305.9"))
+st, b, h = call_noredirect("POST", f"/vorhaben/{PID}/paket", USER, data, ct)
+ok("das Studio meldet den Ausfall, statt eine Ablehnung zu erfinden",
+   st == 303 and "nicht erreichbar"
+   in urllib.parse.unquote(h.get("Location", "")), str(h))
+st, b, _ = call("GET", f"/vorhaben/{PID}/paket", USER)
+ok("im Verzeichnis steht „Ausgang unklar“, nicht „abgelehnt“",
+   "Ausgang unklar" in b, b[b.find("Vom Studio ausgerollt"):][:700])
+ok("und der Hinweis, wo das verbindliche Protokoll steht",
+   "im Portal unter der Instanz nachsehen" in b
+   or "Portal unter der Instanz" in b, b[-800:])
+set_hook(HOOK)
 
 print("\n=== Deployment-Zettel ===")
 st, b, _ = call("GET", f"/vorhaben/{PID}/zettel", USER)

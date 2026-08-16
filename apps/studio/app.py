@@ -188,6 +188,10 @@ def db():
             by         TEXT NOT NULL,
             version    TEXT NOT NULL DEFAULT '',
             sha256     TEXT NOT NULL DEFAULT '',
+            -- 1 = angenommen, 0 = abgelehnt, 2 = Ausgang unklar
+            -- (keine Antwort bekommen). Absichtlich eine Zahl statt NULL:
+            -- die Spalte gibt es auf Knoten schon, und ein NOT NULL
+            -- laesst sich in SQLite nicht nachtraeglich aufweichen.
             ok         INTEGER NOT NULL DEFAULT 0,
             phase      TEXT NOT NULL DEFAULT '',
             message    TEXT NOT NULL DEFAULT ''
@@ -292,6 +296,8 @@ STYLE = """<style>
   .badge.test{background:#fef3c7;color:#92400e}
   .badge.off{background:#f3f4f6;color:#6b7280}
   .badge.ok{background:#dcfce7;color:#166534}
+  .badge.err{background:#fee2e2;color:#991b1b}
+  .badge.warn{background:#fef3c7;color:#92400e}
   a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
        background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
        cursor:pointer;min-height:44px}
@@ -377,7 +383,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -721,13 +727,23 @@ def report_card(rep):
 {envelope}"""
 
 
+UNKLAR = 2  # Ergebnis eines Versuchs ohne Antwort (siehe record_deploy)
+
+DEPLOY_VERDICT = {
+    1: '<span class="badge ok">angenommen</span>',
+    0: '<span class="badge err">abgelehnt</span>',
+    # Ohne Antwort weiß das Studio es nicht — und behauptet es nicht.
+    UNKLAR: '<span class="badge warn">Ausgang unklar</span>',
+}
+
+
 def deployments_card(rows):
     if not rows:
         return ""
     items = "".join(
         f"<tr><td>{esc(r['at'])}</td><td>{esc(r['version']) or '—'}</td>"
         f"<td><code>{esc((r['sha256'] or '')[:12])}</code></td>"
-        f"<td>{'<span class=\"badge ok\">angenommen</span>' if r['ok'] else '<span class=\"badge err\">abgelehnt</span>'}</td>"
+        f"<td>{DEPLOY_VERDICT.get(r['ok'], DEPLOY_VERDICT[0])}</td>"
         f"<td>{esc(r['message'])}</td><td>{esc(r['by'])}</td></tr>"
         for r in rows)
     return f"""<div class="card" style="overflow-x:auto">
@@ -792,7 +808,7 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", portal=""):
   <p class="hint">Das Studio läuft damit genau den Weg, den auch die KI geht
   (RFC-0019 §2): anmelden, Freigabe abholen, hochladen. Es bekommt dafür
   <b>kein Sonderrecht</b> — der Token ist das Recht, und der gehört Dir.</p>
-  <label>Deploy-Token
+  <label>Deploy-Token oder Anlege-Erlaubnis
     <input type="password" name="token" autocomplete="off" autocapitalize="off"
            spellcheck="false" placeholder="wird nicht gespeichert">
   </label>
@@ -800,6 +816,11 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", portal=""):
   vergessen: nicht in der Datenbank, nicht im Backup, nicht in einer URL.
   Erzeugt wird er im Portal auf der Instanzseite; verwahre ihn im
   Passwortmanager. Produktiv-Instanzen haben bewusst kein Token.</p>
+  <p class="hint"><b>Gibt es die Instanz noch nicht?</b> Dann lass Dir im Portal
+  unter „Instanzen“ eine <b>Anlege-Erlaubnis</b> für genau diesen Namen
+  ausstellen und trage sie hier ein. Sie gilt einmal und eine halbe Stunde;
+  danach entsteht die Test-Instanz aus diesem Paket. Für alles Weitere erzeugst
+  Du auf der Instanzseite ein normales Deploy-Token (RFC-0019).</p>
   <div class="actions">
     <button type="submit" name="action" value="deployen">Prüfen und ausrollen</button>
   </div>
@@ -1128,6 +1149,11 @@ def deployment_sheet(p, token=""):
         "**Läuft ohne Rückfrage durch:** alles andere — neue",
         "Konfigurationsschlüssel mit Vorgabewert, geänderte Texte, interne",
         "Umbauten. Das ist der Normalfall.",
+        "",
+        "**Beim allerersten Paket** gibt es nichts zu erweitern: Die Instanz",
+        "entsteht erst, und was das Manifest verlangt, ist der Rahmen, dem",
+        "der Mensch mit der Anlege-Erlaubnis zugestimmt hat. Ab dem zweiten",
+        "Paket gelten die Regeln oben.",
         "",
         "## Wenn etwas abgelehnt wird",
         "",
@@ -1629,7 +1655,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.redirect("paket?fehler=" + quote(
                     "Zum Ausrollen fehlt der Deploy-Token. Er wird im Portal "
                     "auf der Instanzseite erzeugt und hier bei jedem Upload "
-                    "einzeln eingegeben."))
+                    "einzeln eingegeben. Gibt es die Instanz noch nicht, "
+                    "gehört hier die Anlege-Erlaubnis aus dem Portal hinein."))
             if not result["deployable"]:
                 return self.redirect("paket?fehler=" + quote(
                     "Nicht ausgerollt: Das Paket hat Fehler, an denen der "
@@ -1641,9 +1668,21 @@ class Handler(BaseHTTPRequestHandler):
                     result["sha256"], upload["path"], s["version"],
                     DEPLOY_TIMEOUT)
             except deployer.DeployError as e:
+                # Keine Antwort ist KEINE Ablehnung. Auf einem kleinen
+                # Knoten kann der erste Bau eines Images länger dauern,
+                # als ein Browser oder dieses Studio wartet — der Knoten
+                # baut derweil weiter und rollt aus. Das als „abgelehnt"
+                # zu führen wäre eine Falschaussage über eine Instanz,
+                # die es hinterher gibt (am 16.08. auf oaap-test genau
+                # so passiert: Knoten fertig, Studio im Zeitfehler).
+                unklar = (
+                    f"{e} — der Knoten baut möglicherweise weiter. "
+                    "Das verbindliche Protokoll führt der Knoten: im "
+                    "Portal unter der Instanz nachsehen, bevor Du es "
+                    "erneut versuchst.")
                 self.record_deploy(con, p, s["version"], result["sha256"],
-                                   False, "", str(e), user)
-                return self.redirect(f"paket?fehler={quote(str(e))}")
+                                   None, "", unklar, user)
+                return self.redirect(f"paket?fehler={quote(unklar)}")
             last = outcome["steps"][-1]
             self.record_deploy(con, p, s["version"], result["sha256"],
                                outcome["ok"], last["phase"],
@@ -1660,14 +1699,18 @@ class Handler(BaseHTTPRequestHandler):
             multipart.cleanup(files)
 
     def record_deploy(self, con, p, version, sha, ok, phase, message, user):
+        """Ein Versuch im Verzeichnis. `ok=None` heißt „Ausgang unklar" —
+        das Studio hat keine Antwort bekommen und weiß es nicht."""
         con.execute(
             "INSERT INTO deployments (project_id, at, by, version, sha256,"
             " ok, phase, message) VALUES (?,?,?,?,?,?,?,?)",
-            (p["id"], now(), user, version, sha, 1 if ok else 0, phase,
+            (p["id"], now(), user, version, sha,
+             UNKLAR if ok is None else (1 if ok else 0), phase,
              (message or "")[:500]))
         con.commit()
         print(f"deployment: {p['id']} version={version} sha={sha[:12]} "
-              f"ok={bool(ok)} phase={phase} by {user}", flush=True)
+              f"ok={'unklar' if ok is None else bool(ok)} phase={phase} "
+              f"by {user}", flush=True)
 
     # -- write operations -------------------------------------------------
     def values(self, form):
