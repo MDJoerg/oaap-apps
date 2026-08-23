@@ -201,9 +201,33 @@ def node_rows(nodes, state, now=None, interval=60):
             "inst_total": len(insts),
             "inst_ok": sum(1 for i in insts if i.get("state") == "ok"),
             "attention": list((doc or {}).get("attention") or []),
+            # Schema 0.2 (oaap.fleet.status): veröffentlichte Namen mit
+            # den DNS-Urteilen des Knotens + seine öffentliche Adresse.
+            # Ältere Knoten (0.1) liefern beides nicht — leer ist leer.
+            "names": list((doc or {}).get("names") or []),
+            "public_ip": (doc or {}).get("public_ip", ""),
         }
         rows.append(row)
     return rows
+
+
+def duplicate_instances(rows):
+    """Instanznamen, die auf mehreren Knoten existieren.
+
+    Der eine Ort, der das sehen KANN, ist die Flotten-Sicht (Treiber:
+    das doppelte bdt-hub-test vom 23.08.). Bewusst eine **Hinweis**-
+    Liste und kein attention-Alarm: dieselbe App auf mehreren Knoten
+    kann gewollt sein (Monitoring je Knoten) — benannt gehört es
+    trotzdem.
+    """
+    where = {}
+    for row in rows:
+        for inst in row.get("instances") or []:
+            name = inst.get("instance", "")
+            if name:
+                where.setdefault(name, []).append(row["name"])
+    return [{"instance": n, "nodes": nodes}
+            for n, nodes in sorted(where.items()) if len(nodes) > 1]
 
 
 def fleet_attention(rows):

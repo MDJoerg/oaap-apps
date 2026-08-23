@@ -136,6 +136,39 @@ check("Versions-Abweichung wird benannt",
 check("gleiche Versionen: kein Hinweis",
       fleet.version_note([v_rows[0], v_rows[0]]) == "")
 
+print("\n-- Schema 0.2: Namen, öffentliche IP, Doppel-Instanzen")
+doc02 = doc()
+doc02["names"] = [{"name": "hub.beispiel.de", "kind": "instance",
+                   "instance": "bdt-hub", "state": "ok",
+                   "resolved": "203.0.113.7"}]
+doc02["public_ip"] = "203.0.113.7"
+rows02 = fleet.node_rows(nodes2[:1], {
+    "oaapx01": {"url": "x", "doc": doc02, "error": "",
+                "fetched": "2026-08-23T12:00:00Z"}}, now=NOW, interval=60)
+check("Namen und IP kommen durch",
+      rows02[0]["names"][0]["name"] == "hub.beispiel.de"
+      and rows02[0]["public_ip"] == "203.0.113.7")
+check("0.1-Knoten ohne names bleibt leer statt kaputt",
+      rows3[0]["names"] == [] or isinstance(rows3[0]["names"], list))
+
+d_a = doc(instances=[{"instance": "bdt-hub-test", "state": "ok"},
+                     {"instance": "nur-hier", "state": "ok"}])
+d_b = doc(instances=[{"instance": "bdt-hub-test", "state": "ok"},
+                     {"instance": "uptime-kuma", "state": "ok"}])
+d_c = doc(instances=[{"instance": "uptime-kuma", "state": "ok"}])
+rows_dup = fleet.node_rows(
+    fleet.parse_nodes("a=https://a.x;b=https://b.x;c=https://c.x")[0],
+    {"a": {"url": "", "doc": d_a, "error": "", "fetched": "2026-08-23T12:00:00Z"},
+     "b": {"url": "", "doc": d_b, "error": "", "fetched": "2026-08-23T12:00:00Z"},
+     "c": {"url": "", "doc": d_c, "error": "", "fetched": "2026-08-23T12:00:00Z"}},
+    now=NOW, interval=60)
+dups = fleet.duplicate_instances(rows_dup)
+check("Doppel-Instanzen über Knoten benannt",
+      {"instance": "bdt-hub-test", "nodes": ["a", "b"]} in dups
+      and {"instance": "uptime-kuma", "nodes": ["b", "c"]} in dups)
+check("Einzelgänger tauchen nicht auf",
+      not any(d["instance"] == "nur-hier" for d in dups))
+
 print("\n-- Dokument-Prüfung in fetch_status (ohne Netz simuliert)")
 check("fremdes JSON wird abgelehnt",
       not str({"schema": "anders/1"}).startswith(fleet.SCHEMA_PREFIX))

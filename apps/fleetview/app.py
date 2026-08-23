@@ -41,7 +41,7 @@ from urllib.parse import unquote
 
 import fleet
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("FLEETVIEW_DATA_DIR", "/data")
@@ -249,6 +249,19 @@ def overview(user, roles):
     if note:
         body.append(f'<p class="hint">{esc(note)} — während eines '
                     "Flotten-Updates normal.</p>")
+    dups = fleet.duplicate_instances(rows)
+    if dups:
+        # Hinweis, kein Alarm: mehrere Knoten mit derselben Instanz
+        # können gewollt sein — benannt gehört es trotzdem (der
+        # bdt-hub-test-Fall vom 23.08. war genau so eine Doppelung).
+        lis = "".join(
+            f'<li><strong>{esc(d["instance"])}</strong> auf: '
+            f'{esc(", ".join(d["nodes"]))}</li>' for d in dups)
+        body.append('<div class="card"><h2>Mehrfach vorhandene '
+                    f'Instanznamen ({len(dups)})</h2><ul class="attn">{lis}</ul>'
+                    '<p class="hint">Kann gewollt sein (z. B. Monitoring je '
+                    "Knoten) — nach einem Umzug ist es oft ein Rest, der "
+                    "aufgeräumt gehört.</p></div>")
 
     if not NODES:
         body.append('<div class="card"><h2>Noch keine Knoten</h2>'
@@ -305,12 +318,42 @@ def node_page(name, user, roles):
         ("Plattformversion", esc(r["version"])),
         ("Profile", esc(", ".join(r["profiles"])) if r["profiles"] else "(keine)"),
         ("Knoten meldet sich als", esc(r["node_says"] or "—")),
+        ("Öffentliche IP", esc(r["public_ip"]) if r["public_ip"] else "—"),
         ("Zuletzt gesehen", fmt_age(r)),
     ]
     if r["error"]:
         facts.append(("Letzte Abfrage", f'<span class="err">{esc(r["error"])}</span>'))
     dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in facts)
     body.append(f'<div class="card"><h2>Überblick</h2><dl class="facts">{dl}</dl></div>')
+
+    if r["names"]:
+        # Schema 0.2: die DNS-Sicht des Knotens selbst — welcher
+        # veröffentlichte Name zeigt (noch) hierher?
+        KIND = {"node": "Knoten", "instance": "Instanz", "alias": "Alias"}
+        trs = []
+        for n in r["names"]:
+            who = KIND.get(n.get("kind", ""), n.get("kind", "?"))
+            if n.get("instance"):
+                who += f' {n["instance"]}'
+            trs.append(
+                "<tr>"
+                f'<td>{esc(n.get("name", "?"))}</td>'
+                f"<td class=\"muted\">{esc(who)}</td>"
+                f'<td>{badge(n.get("state", "unknown"))}</td>'
+                f'<td class="muted">{esc(n.get("resolved", "—"))}</td>'
+                "</tr>")
+        body.append('<div class="card"><h2>Veröffentlichte Namen (DNS)</h2>'
+                    "<table><tr><th>Name</th><th>Gehört zu</th>"
+                    "<th>Urteil des Knotens</th><th>Löst auf</th></tr>"
+                    + "".join(trs) + "</table>"
+                    '<p class="hint">Das Urteil stammt vom Knoten selbst '
+                    "(halbstündliche Prüfung). Hinter einem Edge-Knoten "
+                    "kann er nur bestätigen, dass ein Name überhaupt "
+                    "auflöst.</p></div>")
+    elif r["has_doc"]:
+        body.append('<div class="card"><h2>Veröffentlichte Namen (DNS)</h2>'
+                    "<p>Dieser Knoten veröffentlicht keine Namen — oder er "
+                    "meldet sie noch nicht (Plattform älter als 0.1.43).</p></div>")
 
     if r["instances"]:
         trs = []
