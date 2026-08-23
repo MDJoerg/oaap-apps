@@ -1,0 +1,54 @@
+oaap_manifest: "0.2"
+
+app:
+  id: fleetview
+  name: OAAP FleetView
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # RFC-0021 Entscheidung 3: sichtbar für server_admin und partner.
+  # `server_admin` wird nie an Apps durchgereicht (RFC-0008) und jeder
+  # server_admin trägt in der Praxis auch `admin` — deshalb steht hier
+  # admin. `partner` ist die Rolle der Dienstleister, die die Landschaft
+  # lesend betreuen (dieselbe Kombination wie die Gesundheitsseite).
+  - path: /
+    roles: [admin, partner]
+
+storage:
+  # Nur der letzte bekannte Stand je Knoten (fleet-state.json) — damit
+  # ein nicht erreichbarer Knoten als "veraltet seit ..." erscheint
+  # statt leer. KEINE Schlüssel: die leben ausschließlich in der
+  # geheimen Konfiguration und landen nie auf diesem Mount.
+  - name: data
+    mount: /data
+
+config:
+  # Welche Knoten beobachtet werden. Eine Angabe je Zeile oder mit ';'
+  # getrennt: name=https://adresse (z. B. oaapx01=https://oaap.joomp.de).
+  - key: FLEETVIEW_NODES
+    label: "Knotenliste (name=https://adresse, ';' oder Zeilenumbruch trennt)"
+    default: ""
+  # Je Knoten ein Flotten-Schlüssel (auf dem Knoten ausgestellt mit
+  # 'sudo oaap fleet key issue <label>'): name=schlüssel, ';' trennt.
+  # Geheim — wird nie zurückgezeigt, nie gespeichert außer als env der
+  # Instanz, nie gerendert.
+  - key: FLEETVIEW_KEYS
+    label: "Flotten-Schlüssel (name=schlüssel, ';' trennt)"
+    secret: true
+  # Abfragetakt. RFC-0021 Entscheidung 2: Minutenbereich — Alarmierung
+  # bleibt Sache des Monitorings (Uptime Kuma).
+  - key: FLEETVIEW_POLL_SECONDS
+    label: "Abfragetakt in Sekunden (30–3600)"
+    default: "60"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 30

@@ -6,6 +6,31 @@
   "publisher": "MDJoerg",
   "apps": [
     {
+      "id": "fleetview",
+      "name": "OAAP FleetView",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-08-23",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/fleetview"
+      },
+      "roles": ["admin", "partner"],
+      "categories": ["operations"],
+      "app_class": "frontend",
+      "audience": ["operator"],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": ["flotte", "monitoring", "knoten", "landschaft", "fleet"],
+      "summary": "Die OAAP-Flotte auf einen Blick: Knoten, Versionen, Instanzen und Auffälligkeiten — strikt lesend.",
+      "description": "Erste Ausbaustufe der Flotten-Übersicht (RFC-0021): Der Betreiber hinterlegt die Knotenliste und je Knoten einen Flotten-Schlüssel (geheimer Konfigurationswert, auf dem Knoten ausgestellt mit 'sudo oaap fleet key issue'); FleetView pollt die Knoten im Minutentakt über deren lesende Status-Auskunft /fleet/status und zeigt Ampeln, Plattformversionen, Instanzen und alle Auffälligkeiten der Landschaft oben auf der Seite. Nicht erreichbar ist ein Zustand, keine Fehlerseite: der letzte bekannte Stand bleibt sichtbar und wird als veraltet markiert. Kein Schreibweg und keine Fernsteuerung — gehandelt wird im Portal des jeweiligen Knotens, jede Zeile verlinkt dorthin; Alarmierung bleibt Sache des Monitorings (Uptime Kuma). Schlüssel werden nie angezeigt und nie gespeichert.",
+      "links": [
+        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/fleetview" },
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0021-fleet-status-api-and-overview.md", "label": "RFC-0021 — Fleet Status API und Flotten-Übersicht" },
+        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.fleet.status.md", "label": "Spec oaap.fleet.status 0.1" }
+      ]
+    },
+    {
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
