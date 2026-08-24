@@ -489,7 +489,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1312,6 +1312,13 @@ HELP_BODY = f"""
   öffentliche Routen, neue Speicher, neue Ports am Gateway vorbei —, braucht
   die Bestätigung eines <code>server_admin</code> im Portal. Alles andere
   läuft durch; das ist der Normalfall.</p>
+  <p><b>Nach einer Bestätigung wird die Version <i>nicht</i> hochgezählt.</b>
+  Die Bestätigung gilt für genau das Manifest, das abgelehnt wurde. Die KI
+  meldet danach dasselbe Paket unverändert erneut an — zählt sie hoch, ist es
+  ein anderes Manifest, die Bestätigung deckt es nicht, und beide drehen sich
+  im Kreis (am 24.08.2026 real passiert). Die Regel „unveränderte Version wird
+  abgelehnt" vergleicht mit dem, was <i>installiert</i> ist — das abgelehnte
+  Paket ist es nicht.</p>
 </div>
 <div class="card">
   <h2>Der Zielknoten — wenn die Instanz woanders läuft</h2>
@@ -1549,7 +1556,9 @@ def deployment_sheet(p, token=""):
         "- Prüfsumme oder Größe stimmen nicht",
         "- **unveränderte `app.version`** — ohne Commit-Hash ist die Version",
         "  das Einzige, was „was läuft da?\" beantwortet. Also: vor jedem",
-        "  Deployment die Version hochzählen.",
+        "  Deployment die Version hochzählen. **Eine Ausnahme:** nach einer",
+        "  Bestätigung (siehe unten) meldest du dasselbe Paket unverändert",
+        "  erneut an — dort wäre ein Hochzählen genau falsch.",
         "",
         "**Abgelehnt, bis ein Mensch bestätigt** (`server_admin` im Portal,",
         "auf der Instanzseite):",
@@ -1563,6 +1572,24 @@ def deployment_sheet(p, token=""):
         "**Läuft ohne Rückfrage durch:** alles andere — neue",
         "Konfigurationsschlüssel mit Vorgabewert, geänderte Texte, interne",
         "Umbauten. Das ist der Normalfall.",
+        "",
+        "### Wenn eine Bestätigung nötig war: NICHT hochzählen",
+        "",
+        "Die Bestätigung gilt für **genau das Manifest**, das abgelehnt",
+        "wurde — nicht für „das nächste Deployment\". Der Ablauf ist deshalb:",
+        "",
+        "1. Du meldest an, die Antwort sagt „braucht eine Bestätigung\".",
+        "2. Ein Mensch bestätigt im Portal.",
+        "3. Du meldest **dasselbe Paket** an, Byte für Byte unverändert —",
+        "   gleiche Version, gleiches Manifest — und lädst hoch.",
+        "",
+        "Zählst du in Schritt 3 die Version hoch, ist es ein anderes",
+        "Manifest, die Bestätigung deckt es nicht, und du landest wieder",
+        "bei Schritt 1. Genau so ist am 24.08.2026 eine Endlosschleife",
+        "entstanden. Und keine Sorge wegen der Regel „unveränderte Version",
+        "wird abgelehnt\": Die vergleicht mit dem, was **installiert** ist —",
+        "das abgelehnte Paket ist nicht installiert, seine Version ist also",
+        "frei.",
         "",
         "**Beim allerersten Paket** gibt es nichts zu erweitern: Die Instanz",
         "entsteht erst, und was das Manifest verlangt, ist der Rahmen, dem",
@@ -1659,6 +1686,14 @@ def briefing(p):
     if test_url:
         deploy += ["", f"Testen kannst du danach unter: {test_url}"]
     deploy += [
+        "",
+        "**Wenn der Knoten eine Bestätigung verlangt** („would widen what",
+        "the instance may reach\"), gilt eine Ausnahme von der Regel",
+        "„Version vor jedem Deployment hochzählen\": Die Bestätigung eines",
+        "Menschen gilt für genau das Manifest, das abgelehnt wurde. Melde",
+        "danach **dasselbe Paket unverändert** erneut an — zählst du hoch,",
+        "deckt die Bestätigung es nicht mehr und du drehst dich im Kreis.",
+        "Ausführlich steht das im Deployment-Zettel.",
         "",
         "Das Token bekommst du separat (nie im Repository ablegen, nie in",
         "einen Brief schreiben, nicht in Commits committen).",

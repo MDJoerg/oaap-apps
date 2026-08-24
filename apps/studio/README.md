@@ -111,6 +111,25 @@ einen Knoten, auf dem die Instanz nicht liegt.
   vorbehalten, in dem der Knoten wirklich nichts hat. Dasselbe Prinzip
   wie „Ausgang unklar": nichts behaupten, was man nicht weiß.
 
+### Die Bestätigungs-Schleife, die wir selbst gebaut hatten (0.3.3)
+
+Am 24.08.2026 drehte sich ein Deployment auf oaapx01 dreimal im Kreis:
+abgelehnt („würde erweitern, wer die Instanz erreichen darf") → Mensch
+bestätigt im Portal → wieder abgelehnt. Ursache waren zwei richtige
+Regeln, die zusammen eine Falle ergeben: Eine Bestätigung gilt für
+**genau das angemeldete Manifest** (RFC-0019), und eine unveränderte
+`app.version` wird hart abgelehnt. Die KI zählte also nach jeder
+Bestätigung pflichtschuldig hoch — womit die Bestätigung nicht mehr
+passte.
+
+Pflichtschuldig deshalb, weil **dieser Zettel es ihr so gesagt hat**.
+Er sagt es jetzt genauer: Nach einer Bestätigung wird dasselbe Paket
+Byte für Byte erneut angemeldet, und die Regel gegen unveränderte
+Versionen greift dort nicht — sie vergleicht mit dem, was
+*installiert* ist, und das bestätigte Paket ist es nicht. Briefing,
+Zettel und Hilfeseite tragen den Hinweis; der Knoten sagt es seit
+Referenz 0.1.47 zusätzlich in der Ablehnung selbst.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt
