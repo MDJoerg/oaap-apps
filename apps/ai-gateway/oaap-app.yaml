@@ -1,0 +1,75 @@
+oaap_manifest: "0.2"
+
+app:
+  id: ai-gateway
+  name: OAAP KI-Gateway
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Zwei Wege in dieselbe App. Der längere Pfad gewinnt (die Plattform
+  # sortiert Routen nach Länge), also ist /v1 der Maschinen-Endpunkt und
+  # alles andere die Betreiber-Sicht.
+  #
+  # /v1 ist `public`: Die Plattform authentifiziert hier NICHTS, entfernt
+  # gefälschte Identitäts-Kopfzeilen und bremst je Client-Adresse
+  # (RFC-0010 — einmal je Anfrage, ein Strom bleibt also unbelastet).
+  # Geprüft wird im Dienst selbst: Der API-Schlüssel IST die Identität
+  # (Spec §2). Das ist derselbe Bau wie Deploy-Hook und Flotten-Auskunft
+  # und berührt die Vertragsregel „eine App baut nie einen Login" nicht —
+  # die gilt für Oberflächen-Apps, und dies ist keine.
+  - path: /v1
+    roles: [public]
+  # Die Betreiber-Sicht: Aliasse, Bezugsquellen, Schlüssel, Verbrauch.
+  # Ausdrücklich `admin`: Wer Schlüssel ausstellt, vergibt Geld.
+  - path: /
+    roles: [admin]
+
+storage:
+  # Schlüssel (nur als SHA-256), Messzeilen und Prüfspur. KEINE Inhalte:
+  # Es gibt keine Spalte, in die ein Prompt passen würde (Spec §6).
+  - name: data
+    mount: /data
+
+config:
+  # Bezugsquellen, eine je Zeile: `name=<adresse> [class=internal|eu|external]`
+  # Beispiel:
+  #   ollama=http://ollama:11434/v1 class=internal
+  #   tsystems=https://<ai-business-hub>/v1 class=eu
+  #   groq=https://api.groq.com/openai/v1 class=external
+  # Ohne Klassenangabe gilt `external` — unbekannte Herkunft ist nicht souverän.
+  - key: AIGW_SUPPLIERS
+    label: "Bezugsquellen (name=adresse [class=...]), eine je Zeile"
+    default: ""
+  # Zugangsdaten je Bezugsquelle: `name=<schlüssel>`, eine je Zeile.
+  # Geheim: wird nie zurückgezeigt und erscheint in keiner Antwort, keiner
+  # Fehlermeldung und keiner Messzeile.
+  - key: AIGW_SUPPLIER_KEYS
+    label: "Zugangsdaten je Bezugsquelle (name=schlüssel), eine je Zeile"
+    secret: true
+  # Aliasse nach ZWECK, eine je Zeile:
+  #   chat-default = tsystems:llama-3.3-70b, groq:llama-3.3-70b-versatile
+  #   embedding-default = ollama:nomic-embed-text
+  # Die Liste ist die erklärte Ausweich-Gruppe; gewechselt wird nur
+  # innerhalb. Vorzug hat `internal` vor `eu` vor `external` — wer die
+  # aufgeführte Reihenfolge will, hängt `order=listed` an.
+  - key: AIGW_ALIASES
+    label: "Aliasse (zweck=quelle:modell, ...), eine je Zeile"
+    default: ""
+  # Wie lange auf ein Modell gewartet wird. Große Modelle mit langem
+  # Kontext brauchen Minuten; zu kurz erzeugt Abbrüche, die wie ein
+  # Fehler der Quelle aussehen, aber unsere Ungeduld sind.
+  - key: AIGW_TIMEOUT_SECONDS
+    label: "Geduld gegenüber der Bezugsquelle in Sekunden (10–3600)"
+    default: "600"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15
