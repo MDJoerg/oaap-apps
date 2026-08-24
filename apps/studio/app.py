@@ -1,4 +1,4 @@
-"""OAAP Studio 0.2 — Entwicklungsvorhaben, Briefings und Pakete.
+"""OAAP Studio 0.3 — Entwicklungsvorhaben, Briefings und Pakete.
 
 Zweite Ausbaustufe (siehe program/studio/ideas.md). 0.1 verwaltete
 Vorhaben und erzeugte daraus **Briefings**; 0.2 nimmt die andere Seite
@@ -10,6 +10,23 @@ dazu — das **fertige Paket**, das aus so einem Briefing entsteht:
   **Test**-Instanz ausrollen,
 - und den **Deployment-Zettel** erzeugen, mit dem die Projekt-KI
   denselben Weg selbst geht.
+
+0.3 zieht nach, was die Praxis erzwungen hat: Ein Vorhaben lebt nicht
+zwangsläufig auf dem Knoten, auf dem das Studio läuft. Am 23.08. hat
+Jörg aus dem Studio auf oaap-demo heraus eine Test-Instanz auf oaapx01
+angelegt und sie dort produktiv gesetzt — über eine Knotengrenze
+hinweg. Das Studio wusste davon nichts: Es leitete Portal-Verweise aus
+seinem **eigenen** Hostnamen ab und zeigte damit ins Leere. Deshalb:
+
+- der **Zielknoten** als benannter Begriff — abgeleitet aus dem
+  Deploy-Hook (dorthin gehen die Pakete tatsächlich), notfalls aus
+  einem eigenen Feld, notfalls der eigene Knoten;
+- die **Produktiv-Instanz** neben der Test-Instanz, beide mit Verweis
+  auf ihre Seite im Portal **des Zielknotens**;
+- eine **Zustandsanzeige beider Instanzen**, gelesen über die
+  Flotten-Auskunft des Zielknotens (`oaap.fleet.status`, RFC-0021) —
+  optional, mit einem Schlüssel, der ausschließlich lesen kann
+  (Begründung in fleet.py).
 
 Die Regel, die das alles zusammenhält (RFC-0019, Abschnitt „Studio"):
 **Das Studio hält nie ein Recht.** Alles Privilegierte gibt der Anwender
@@ -49,6 +66,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 import deployer
+import fleet
 import multipart
 import pkg
 
@@ -92,6 +110,13 @@ DEPLOY_TIMEOUT = _int_env("STUDIO_DEPLOY_TIMEOUT_SECONDS", 180, 10, 900)
 # Leer = das Studio leitet sie aus dem eigenen Hostnamen ab.
 PORTAL_URL = os.environ.get("STUDIO_PORTAL_URL", "").rstrip("/")
 
+# Flotten-Schlüssel je Zielknoten (`knoten=schlüssel`, geheim). Damit
+# liest das Studio den Zustand der beiden Instanzen eines Vorhabens —
+# und ausschließlich das; die Begründung, warum das die Regel „Das
+# Studio hält nie ein Recht" nicht bricht, steht in fleet.py. Ohne
+# Eintrag läuft alles Übrige unverändert.
+FLEET_KEYS = fleet.parse_keys(os.environ.get("STUDIO_FLEET_KEYS", ""))
+
 APP_TYPES = {
     "native": "native (Quellcode, Build auf der Plattform)",
     "image": "image (fertiges Container-Image)",
@@ -112,7 +137,12 @@ STATUS_BADGE = {"idee": "off", "briefing": "", "entwicklung": "",
 
 FIELDS = ("name", "context", "owner", "target_users", "goal", "scope",
           "app_type", "status", "agent", "repo_url", "instance",
-          "hook_url", "test_url", "deploy_way", "notes")
+          "hook_url", "test_url", "deploy_way", "notes",
+          # 0.3: wo das Vorhaben läuft. `instance` ist und bleibt die
+          # TEST-Instanz — der Spaltenname stammt aus 0.1, als es keine
+          # zweite gab; umbenennen hieße eine Datenbank wandern lassen,
+          # ohne dass ein einziger Anwender etwas davon hätte.
+          "node_url", "prod_instance")
 
 # Wie dieses Vorhaben auf die Test-Instanz kommt (RFC-0019 Entscheidung 1:
 # der ZIP-Weg tritt NEBEN den Git-Weg, nie an seine Stelle).
@@ -141,6 +171,12 @@ LATER_COLUMNS = {
     # vergliche und „Version unverändert" meldete (im Lauf gegen
     # oaap-test aufgefallen, 2026-08-16).
     "dep_summary": "TEXT NOT NULL DEFAULT ''",
+    # 0.3: Zielknoten (Adresse) und Produktiv-Instanz. Leer bedeutet in
+    # beiden Fällen etwas Vernünftiges — dieser Knoten, noch nicht
+    # produktiv —, deshalb genügt der leere Default und kein Vorhaben
+    # aus 0.2 muss angefasst werden.
+    "node_url": "TEXT NOT NULL DEFAULT ''",
+    "prod_instance": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -247,6 +283,76 @@ def portal_base(host):
     if len(parts) >= 3:
         return "https://" + ".".join(parts[1:])
     return f"https://{hostname}"
+
+
+NODE_SOURCES = {
+    "hook": "laut Deploy-Hook",
+    "feld": "laut Eintrag im Vorhaben",
+    "eigener": "angenommen: der Knoten, auf dem dieses Studio läuft",
+}
+
+
+def target_node(p, own_base):
+    """Der **Zielknoten** eines Vorhabens: wo seine Instanzen leben.
+
+    Drei Quellen, in dieser Reihenfolge:
+
+    1. der **Deploy-Hook** — er ist keine Absichtserklärung, sondern die
+       Adresse, an die Pakete tatsächlich gehen. Was dort steht, gilt.
+    2. das **Feld „Zielknoten"** — für die Zeit, bevor es einen Hook
+       gibt (der entsteht erst mit dem ersten Token im Portal).
+    3. der **eigene Knoten** — die Vermutung, die bis 0.2 stillschweigend
+       für alle galt. Sie steht jetzt als Vermutung da, statt sich als
+       Tatsache auszugeben.
+
+    Widersprechen sich 1 und 2, gewinnt der Hook — und der Widerspruch
+    wird benannt. Eine der beiden Angaben stillschweigend zu verwerfen
+    hieße, den Anwender auf eine Seite schauen zu lassen, die einen
+    anderen Knoten meint als sein Paket.
+    """
+    hook_base = fleet.node_base(p["hook_url"])
+    field_base = fleet.node_base(p["node_url"])
+    conflict = ""
+    if hook_base and field_base and \
+            fleet.host_of(hook_base) != fleet.host_of(field_base):
+        conflict = (
+            f"Der Deploy-Hook zeigt auf {fleet.host_of(hook_base)}, im Feld "
+            f"„Zielknoten\" steht {fleet.host_of(field_base)}. Es gilt der "
+            "Hook — dorthin gehen die Pakete. Bitte das Feld korrigieren.")
+    base = hook_base or field_base or own_base
+    source = "hook" if hook_base else ("feld" if field_base else "eigener")
+    return {
+        "base": base,
+        "host": fleet.host_of(base),
+        "source": source,
+        "source_label": NODE_SOURCES[source],
+        "conflict": conflict,
+        # „Anderer Knoten" ist nur dann eine Aussage, wenn wir den
+        # eigenen kennen — sonst wäre jeder Knoten „anders".
+        "remote": bool(base and own_base
+                       and fleet.host_of(base) != fleet.host_of(own_base)),
+    }
+
+
+def instance_url(node, name):
+    """Verweis auf die Instanzseite im Portal des Zielknotens."""
+    if not (node["base"] and name):
+        return ""
+    return f"{node['base']}/instances/{quote(name, safe='')}"
+
+
+def prod_proposal(p):
+    """Vorschlag für den Namen der Produktiv-Instanz.
+
+    RFC-0020 setzt `<app>-test` nach `<app>` produktiv; das ist der Weg,
+    den Jörg gegangen ist. Ein Vorschlag, kein Automatismus — den Namen
+    vergibt der Mensch, der übernimmt.
+    """
+    inst = (p["instance"] or "").strip()
+    app_id = (p["app_id"] or "").strip() if "app_id" in p.keys() else ""
+    if inst.endswith("-test"):
+        return inst[:-5]
+    return app_id or ""
 
 
 # ------------------------------------------------------------ presentation
@@ -383,7 +489,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -439,16 +545,34 @@ def project_form(p, submit_label):
               "Plattform hält dann keinen fremden Schlüssel (RFC-0019).")}
   {field("Repository (Git-URL)", "repo_url", p["repo_url"],
          hint="Das Projekt-Repo, z. B. auf dem eigenen Forgejo. Default-Branch: main.")}
+</div>
+<div class="card">
+  <h2>Zielknoten und Instanzen</h2>
+  <p class="hint">Der <b>Zielknoten</b> ist die Plattform, auf der die Instanzen
+  dieses Vorhabens laufen — nicht zwangsläufig die, auf der dieses Studio
+  läuft. Test und Produktiv liegen auf demselben Knoten: Die Übernahme nach
+  Produktiv (RFC-0020) findet dort statt und reicht dieselben Bytes weiter.</p>
+  {field("Zielknoten (Adresse)", "node_url", p["node_url"],
+         hint="z. B. https://oaap.joomp.de. Leer = dieser Knoten. Sobald ein "
+              "Deploy-Hook eingetragen ist, gilt dessen Knoten — das Feld "
+              "hilft in der Zeit davor.")}
   <div class="grid2">
-    {field("Instanzname auf der Plattform", "instance", p["instance"],
-           hint="Name der Test-Instanz, z. B. reklamationen-test.")}
-    {field("Test-Adresse", "test_url", p["test_url"],
-           hint="Wo die Test-Instanz erreichbar ist.")}
+    {field("Test-Instanz (Name)", "instance", p["instance"],
+           hint="Name der Test-Instanz auf dem Zielknoten, z. B. reklamationen-test.")}
+    {field("Produktiv-Instanz (Name)", "prod_instance", p["prod_instance"],
+           hint="Entsteht bei der Übernahme im Portal des Zielknotens — "
+                "üblich ist derselbe Name ohne „-test“. Leer = noch nicht "
+                "produktiv.")}
   </div>
+  {field("Test-Adresse", "test_url", p["test_url"],
+         hint="Wo die Test-Instanz erreichbar ist.")}
   {field("Deploy-Hook (URL)", "hook_url", p["hook_url"],
          hint="Nur die Adresse — das Token gehört NICHT ins Studio. "
               "Es wird im Portal erzeugt, gehört Dir und wird bei jedem "
               "Upload einzeln eingegeben.")}
+</div>
+<div class="card">
+  <h2>Notizen</h2>
   {field("Notizen / nächste Schritte", "notes", p["notes"], rows=4)}
 </div>
 <div class="actions"><button type="submit">{esc(submit_label)}</button></div>
@@ -483,6 +607,167 @@ def list_page(rows, user, roles, msg=""):
     return page("Vorhaben", body, user, roles, "projects")
 
 
+def _instance_row(kanal, name, node, st, hint=""):
+    """Eine Zeile der Instanz-Tabelle — Kanal, Name, Zustand, Adresse.
+
+    Sie entsteht auch **ohne** Auskunft vom Knoten: Name und Verweis
+    ins Portal weiß das Studio selbst. Was es nicht weiß, steht als
+    „—" da und nicht als Vermutung.
+    """
+    if not name:
+        return (f'<tr><td>{esc(kanal)}</td><td colspan="4" class="muted">'
+                f'{esc(hint)}</td></tr>')
+    link = instance_url(node, name)
+    label = (f'<a class="rowaction" href="{esc(link)}" target="_blank" '
+             f'rel="noopener">{esc(name)}</a>' if link else esc(name))
+    row = fleet.instance(st.get("doc"), name)
+    if row:
+        state = row.get("state", "unknown")
+        zustand = (f'<span class="badge {fleet.STATE_BADGE.get(state, "off")}">'
+                   f'{esc(fleet.STATE_LABELS.get(state, state))}</span>')
+        version = esc(row.get("version") or "—")
+        addr = row.get("address") or ""
+        adresse = (f'<a class="rowaction" href="https://{esc(addr)}" '
+                   f'target="_blank" rel="noopener">{esc(addr)}</a>'
+                   if addr else '<span class="muted">—</span>')
+        kanal_doc = fleet.CHANNEL_LABELS.get(row.get("channel"), row.get("channel"))
+        # Sagt der Knoten einen anderen Kanal, als hier erwartet wird,
+        # ist das eine Nachricht — z. B. eine Test-Instanz, die in
+        # Wahrheit produktiv läuft.
+        if kanal_doc and kanal_doc != kanal:
+            kanal = f'{esc(kanal)} <span class="badge warn">Knoten sagt: {esc(kanal_doc)}</span>'
+        else:
+            kanal = esc(kanal)
+    elif st.get("doc") is not None:
+        zustand = ('<span class="badge off">auf dem Knoten nicht vorhanden</span>')
+        version, adresse, kanal = "—", '<span class="muted">—</span>', esc(kanal)
+    else:
+        zustand = '<span class="muted">—</span>'
+        version, adresse, kanal = "—", '<span class="muted">—</span>', esc(kanal)
+    return (f"<tr><td>{kanal}</td><td>{label}</td><td>{version}</td>"
+            f"<td>{zustand}</td><td>{adresse}</td></tr>")
+
+
+def _names_note(st, names):
+    """Veröffentlichte Namen der Instanzen mit dem DNS-Urteil des Knotens.
+
+    Hier steht die Adresse, die in ausgelieferten Clients steckt
+    (RFC-0009). Dass sie stumm verschwinden kann, hat die Flotte am
+    23.08. teuer gelernt — im Vorhaben ist sie deshalb sichtbar.
+    """
+    rows = []
+    for name in names:
+        for n in fleet.names_for(st.get("doc"), name):
+            state = n.get("state", "unknown")
+            rows.append(
+                f'<li><code>{esc(n.get("name"))}</code> '
+                f'<span class="badge {fleet.STATE_BADGE.get(state, "off")}">'
+                f'{esc(fleet.STATE_LABELS.get(state, state))}</span> '
+                f'<span class="muted">({esc(n.get("kind"))}, {esc(name)})</span></li>')
+    if not rows:
+        return ""
+    return (f'<p class="muted" style="margin:1rem 0 .3rem">Veröffentlichte '
+            f'Namen laut Knoten (DNS-Urteil):</p>'
+            f'<ul style="list-style:none;padding:0;margin:0;line-height:1.9">'
+            f'{"".join(rows)}</ul>')
+
+
+def node_card(p, node, st):
+    """Zielknoten, beide Instanzen und ihr Zustand — die Objektseite.
+
+    Der Zustand ist ein Blick, kein Wächter: Das Studio fragt beim
+    Aufschlagen der Seite nach und hebt nichts auf. Wer die Landschaft
+    über die Zeit beobachten will, nimmt FleetView (RFC-0021 §3).
+    """
+    st = st or {}
+    test_name = (p["instance"] or "").strip()
+    prod_name = (p["prod_instance"] or "").strip()
+    proposal = prod_proposal(p)
+
+    if node["base"]:
+        node_dd = (f'<code>{esc(node["host"])}</code> '
+                   + ('<span class="badge test">anderer Knoten</span> '
+                      if node["remote"] else "")
+                   + f'<span class="muted">— {esc(node["source_label"])}</span>')
+        portal_dd = (f'<a href="{esc(node["base"])}/instances" target="_blank" '
+                     f'rel="noopener">{esc(node["base"])}/instances</a>')
+    else:
+        node_dd = ('<span class="muted">nicht bekannt — Adresse eintragen '
+                   'oder Deploy-Hook hinterlegen</span>')
+        portal_dd = '<span class="muted">—</span>'
+
+    conflict = (f'<p class="err">{esc(node["conflict"])}</p>'
+                if node["conflict"] else "")
+
+    prod_hint = ("Noch nicht produktiv. Die Übernahme geschieht im Portal des "
+                 "Zielknotens auf der Seite der Test-Instanz (RFC-0020)"
+                 + (f" — üblicher Name wäre „{proposal}“." if proposal else "."))
+    table = f"""<table style="margin-top:1rem">
+  <tr><th>Kanal</th><th>Instanz</th><th>Version</th><th>Zustand</th><th>Adresse</th></tr>
+  {_instance_row("Test", test_name, node, st,
+                 "Noch keine Test-Instanz benannt. Sie entsteht mit dem ersten "
+                 "Paket (Anlege-Erlaubnis) oder im Portal des Zielknotens.")}
+  {_instance_row("Produktiv", prod_name, node, st, prod_hint)}
+</table>"""
+
+    # Auffälligkeiten des Knotens, die genau diese Instanzen betreffen.
+    att = fleet.attention_for(st.get("doc"), [test_name, prod_name])
+    att_html = ""
+    if att:
+        items = "".join(
+            f'<li><span class="badge warn">{esc(a["label"])}</span> '
+            f'{esc(a["instance"])} <span class="muted">{esc(a["detail"])}</span></li>'
+            for a in att)
+        att_html = (f'<p style="margin:1rem 0 .3rem"><b>Der Knoten meldet '
+                    f'Handlungsbedarf:</b></p><ul style="list-style:none;'
+                    f'padding:0;margin:0;line-height:1.9">{items}</ul>')
+
+    if not st.get("configured"):
+        label = esc(node["host"] or "diesen Knoten")
+        foot = f"""<p class="muted" style="margin-top:1rem">Der Zustand der
+    Instanzen ist nicht eingerichtet: Für <code>{label}</code> ist kein
+    Flotten-Schlüssel hinterlegt. Ausgestellt wird er <b>auf dem
+    Zielknoten</b> (an der Maschine, denn er ist ein Schlüssel), eingetragen
+    wird er in der Konfiguration <b>dieser</b> Studio-Instanz:</p>
+    <pre class="briefing"># auf {label} (dem Zielknoten), an der Maschine:
+sudo oaap fleet key issue studio@&lt;dein-studio-knoten&gt;
+
+# auf dem Knoten, auf dem dieses Studio läuft:
+sudo oaap app config set &lt;studio-instanz&gt; STUDIO_FLEET_KEYS \\
+  --append '{label}=&lt;schlüssel&gt;'</pre>
+    <p class="muted">Der Schlüssel kann <b>ausschließlich</b> diese eine
+    Auskunft lesen — keine Sitzung, keine Rollen, kein Schreibweg
+    (<code>oaap.fleet.status</code> §2). Ohne ihn funktioniert alles Übrige
+    unverändert; es fehlt nur die Ampel.</p>"""
+    elif st.get("error"):
+        foot = f"""<p class="muted" style="margin-top:1rem">
+    <span class="badge err">keine Auskunft</span> {esc(st['error'])} —
+    <a href="?frisch=1">noch einmal versuchen</a>. Das Studio hebt keinen
+    letzten bekannten Stand auf; dafür ist FleetView da.</p>"""
+    else:
+        doc = st.get("doc") or {}
+        age = st.get("age")
+        alter = "gerade eben" if not age else f"vor {age} s"
+        foot = f"""<p class="muted" style="margin-top:1rem">Knoten meldet sich
+    als <code>{esc(doc.get('node') or '—')}</code>, Plattform
+    <b>{esc(doc.get('platform_version') or '—')}</b> — abgefragt {esc(alter)}
+    · <a href="?frisch=1">neu abfragen</a></p>"""
+
+    return f"""
+<div class="card">
+  <h2>Zielknoten und Instanzen</h2>
+  {conflict}
+  <dl class="facts">
+    <dt>Zielknoten</dt><dd>{node_dd}</dd>
+    <dt>Instanzen im Portal</dt><dd>{portal_dd}</dd>
+  </dl>
+  {table}
+  {att_html}
+  {_names_note(st, [test_name, prod_name])}
+  {foot}
+</div>"""
+
+
 def package_card(p):
     """Was zuletzt geprüft wurde — auf der Objektseite, kurz gehalten."""
     if not p["pkg_sha256"]:
@@ -508,7 +793,8 @@ def package_card(p):
 </div>"""
 
 
-def object_page(p, user, roles, msg="", error="", is_admin=False):
+def object_page(p, user, roles, msg="", error="", is_admin=False,
+                node=None, st=None):
     danger = ""
     if is_admin:
         danger = f"""
@@ -536,6 +822,7 @@ def object_page(p, user, roles, msg="", error="", is_admin=False):
     <dt>Zuletzt geändert</dt><dd>{esc(p['updated_at'])} von {esc(p['updated_by'])}</dd>
   </dl>
 </div>
+{node_card(p, node, st) if node is not None else ""}
 {package_card(p)}
 <form method="post" action="./{esc(p['id'])}">
 {project_form(p, "Speichern")}
@@ -756,9 +1043,11 @@ def deployments_card(rows):
 </div>"""
 
 
-def package_page(p, rep, deploys, user, roles, msg="", error="", portal=""):
+def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
     hook = (p["hook_url"] or "").strip()
     inst = (p["instance"] or "").strip()
+    node = node or {"base": "", "host": "", "remote": False,
+                    "source_label": "", "conflict": ""}
     if hook:
         try:
             urls = deployer.hook_urls(hook)
@@ -773,10 +1062,21 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", portal=""):
                      'Hook-Adresse hinterlegt. Sie entsteht im Portal auf der '
                      'Instanzseite, wenn dort ein Deploy-Token erzeugt wird — '
                      'danach hier im Vorhaben eintragen.</p>')
-    portal_link = (f'<p class="muted">Instanz im Portal: '
-                   f'<a href="{esc(portal)}/instances/{esc(inst)}">'
-                   f'{esc(portal)}/instances/{esc(inst)}</a></p>'
-                   if portal and inst else "")
+    # Der Verweis geht auf das Portal des **Zielknotens** — bis 0.2 wurde
+    # er aus dem eigenen Hostnamen abgeleitet und zeigte bei einer
+    # Instanz auf einem anderen Knoten ins Leere.
+    target = instance_url(node, inst)
+    portal_link = (f'<p class="muted">Instanz im Portal des Zielknotens: '
+                   f'<a href="{esc(target)}" target="_blank" rel="noopener">'
+                   f'{esc(target)}</a>'
+                   + (' <span class="badge test">anderer Knoten</span>'
+                      if node["remote"] else "")
+                   + '</p>') if target else ""
+    node_line = (f'<p class="hint">Zielknoten: <code>{esc(node["host"])}</code>'
+                 f' — {esc(node["source_label"])}.</p>'
+                 if node["host"] else "")
+    conflict = (f'<p class="err">{esc(node["conflict"])}</p>'
+                if node["conflict"] else "")
     msg_html = f'<p class="ok">{esc(msg)}</p>' if msg else ""
     err_html = f'<p class="err">{esc(error)}</p>' if error else ""
     body = f"""
@@ -803,6 +1103,8 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", portal=""):
 </div>
 <div class="card">
   <h2>Auf die Test-Instanz ausrollen</h2>
+  {conflict}
+  {node_line}
   {hook_html}
   {portal_link}
   <p class="hint">Das Studio läuft damit genau den Weg, den auch die KI geht
@@ -973,6 +1275,44 @@ HELP_BODY = f"""
   läuft durch; das ist der Normalfall.</p>
 </div>
 <div class="card">
+  <h2>Der Zielknoten — wenn die Instanz woanders läuft</h2>
+  <p>Das Studio muss <b>nicht</b> auf demselben Server laufen wie die App,
+  um die es sich kümmert. Der <b>Zielknoten</b> eines Vorhabens ist die
+  Plattform, auf der seine Instanzen leben; das Studio erkennt ihn am
+  Deploy-Hook (dorthin gehen die Pakete tatsächlich) und zeigt ihn auf der
+  Seite des Vorhabens an. Bevor es einen Hook gibt, kann man ihn im Feld
+  „Zielknoten“ eintragen.</p>
+  <p><b>Test und Produktiv liegen auf demselben Knoten.</b> Die Übernahme
+  nach Produktiv (RFC-0020) reicht <i>dieselben Bytes</i> weiter, die getestet
+  wurden — das geht nur dort, wo sie liegen. Ein Vorhaben hat deshalb einen
+  Zielknoten und zwei Instanzen darauf, und beide verlinkt das Studio auf
+  ihre Seite im Portal <i>dieses</i> Knotens.</p>
+  <p>Über die Knotengrenze reisen dagegen die <b>Pakete</b>: Eine
+  Anlege-Erlaubnis oder ein Deploy-Token aus dem Portal des Zielknotens
+  gilt hier genauso — das Studio ist für den Knoten ein Client wie jeder
+  andere, egal wo es steht.</p>
+</div>
+<div class="card">
+  <h2>Zustand der Instanzen (optional)</h2>
+  <p>Ist für den Zielknoten ein <b>Flotten-Schlüssel</b> hinterlegt, zeigt
+  die Seite des Vorhabens, was der Knoten über beide Instanzen sagt:
+  Version, Kanal, Ampel, veröffentlichte Adressen samt DNS-Urteil und
+  offene Punkte, die einen Menschen brauchen. Ohne Schlüssel fehlt genau
+  diese Anzeige und sonst nichts.</p>
+  <p>Der Schlüssel wird <b>auf dem Zielknoten</b> ausgestellt
+  (<code>sudo oaap fleet key issue studio@&lt;knoten&gt;</code>) und in der
+  Konfiguration dieser Studio-Instanz eingetragen
+  (<code>STUDIO_FLEET_KEYS</code>, geheim). Er kann <b>ausschließlich</b>
+  diese eine Auskunft lesen: keine Sitzung, keine Rollen, kein Schreibweg
+  — und die Auskunft selbst enthält Fakten, nie Geheimnisse (Spec
+  <code>oaap.fleet.status</code>). Das Recht zu <i>handeln</i> bleibt beim
+  Anwender: Der Deploy-Token wird weiterhin bei jedem Upload eingegeben.</p>
+  <p class="muted">Das Studio ist damit kein zweites FleetView: Es fragt
+  beim Aufschlagen der Seite nach, hebt nichts auf und alarmiert nicht.
+  Wer die ganze Landschaft über die Zeit beobachten will, nimmt
+  FleetView.</p>
+</div>
+<div class="card">
   <h2>Wichtig zum Deploy-Token</h2>
   <p>Das Token ist ein Schlüssel: Es erlaubt, die <b>Test</b>-Instanz neu
   auszurollen. Es wird im <b>Portal</b> auf der Instanzseite erzeugt,
@@ -1047,17 +1387,52 @@ def deployment_sheet(p, token=""):
     test_url = (p["test_url"] or "").strip()
     artifact_way = (p["deploy_way"] or "git") == "artifact"
     tok = token or TOKEN_PLACEHOLDER
+    # Der Zielknoten aus der Sicht dieses Blattes: Es wird auf einem
+    # fremden Rechner gelesen, deshalb hilft „der eigene Knoten" hier
+    # nicht — nur eine echte Adresse. Gibt es keine, steht das da.
+    node = fleet.node_base(p["hook_url"]) or fleet.node_base(p["node_url"])
+    prod = (p["prod_instance"] or "").strip()
 
     lines = [
         f"# Deployment-Zettel: {p['name']}",
         "",
         f"Erzeugt vom OAAP Studio am {now()} — Vorhaben `{p['id']}`,",
-        f"Instanz `{instance}`.",
+        f"Test-Instanz `{instance}`"
+        + (f" auf `{fleet.host_of(node)}`." if node else "."),
         "",
         "Dieses Blatt beantwortet eine Frage: **Wie kommt ein getesteter",
         "Stand auf die Test-Instanz?** Es gehört neben das Briefing ins",
         "Projektverzeichnis.",
         "",
+        "## Zielknoten",
+        "",
+    ]
+    if node:
+        lines += [
+            f"Alle Adressen unten liegen auf **{fleet.host_of(node)}** — das",
+            "ist der Knoten dieses Vorhabens. Dort liegt die Test-Instanz,",
+            "und dort entsteht später auch die Produktiv-Instanz"
+            + (f" (`{prod}`)." if prod else "."),
+            "",
+            f"- **Portal des Knotens:** {node}",
+            f"- **Seite der Test-Instanz:** {node}/instances/{instance}",
+        ]
+        if prod:
+            lines += [f"- **Seite der Produktiv-Instanz:** {node}/instances/{prod}"]
+        lines += [
+            "",
+            "Das Studio, das dieses Blatt erzeugt hat, kann auf einem",
+            "**anderen** Knoten laufen — für dich ändert das nichts: Du",
+            "sprichst mit den Adressen hier und mit keinen anderen.",
+            "",
+        ]
+    else:
+        lines += [
+            "_Noch nicht bekannt_ — er ergibt sich aus dem Deploy-Hook,",
+            "sobald der eingerichtet ist.",
+            "",
+        ]
+    lines += [
         "## Adressen",
         "",
     ]
@@ -1171,7 +1546,10 @@ def deployment_sheet(p, token=""):
         "  Knoten entpackt so nicht.",
         "- Das Einmal-Token gilt 15 Minuten und genau einmal.",
         "- **Produktiv gibt es keinen Token.** Die Produktivsetzung bleibt",
-        "  eine menschliche Handlung mit Versions-Sprung.",
+        "  eine menschliche Handlung mit Versions-Sprung — im Portal des",
+        "  Zielknotens, auf der Seite der Test-Instanz (RFC-0020). Sie",
+        "  reicht dieselben Bytes weiter, die du getestet hast; du baust",
+        "  dafür nichts neu und lädst nichts erneut hoch.",
         "",
     ]
     return "\n".join(lines) + "\n"
@@ -1199,6 +1577,7 @@ def briefing(p):
     test_url = (p["test_url"] or "").strip()
 
     artifact_way = (p["deploy_way"] or "git") == "artifact"
+    node = fleet.node_base(p["hook_url"]) or fleet.node_base(p["node_url"])
     deploy = [
         "## 6. Test-Deployment (Deploy-Hook)",
         "",
@@ -1207,6 +1586,14 @@ def briefing(p):
         "Versions-Sprung.",
         "",
     ]
+    if node:
+        deploy += [
+            f"Deine Instanz `{instance}` liegt auf dem Knoten",
+            f"**{fleet.host_of(node)}** ({node}). Alle Adressen unten gehören",
+            "dorthin; ein Studio auf einem anderen Knoten ändert daran",
+            "nichts.",
+            "",
+        ]
     if not hook:
         deploy += [
             "Der Hook ist für dieses Vorhaben noch nicht eingerichtet.",
@@ -1488,15 +1875,22 @@ class Handler(BaseHTTPRequestHandler):
                         p, rep, deploys, user, roles_label,
                         (query.get("msg") or [""])[0],
                         (query.get("fehler") or [""])[0],
-                        portal_base(self.headers.get("Host", ""))))
+                        target_node(p, portal_base(self.headers.get("Host", "")))))
                 if sub == "/loeschen":
                     if "admin" not in roles:
                         return self.send_html("<p>Löschen ist Administratoren vorbehalten.</p>",
                                               status=403)
                     return self.send_html(delete_page(p, user, roles_label))
+                # Der Zielknoten wird gefragt, wenn ein Schlüssel für ihn
+                # hinterlegt ist — sonst gar nicht. `?frisch=1` umgeht die
+                # kurz vorgehaltene Antwort.
+                node = target_node(p, portal_base(self.headers.get("Host", "")))
+                st = fleet.status(node["base"], FLEET_KEYS,
+                                  fresh=bool(query.get("frisch")))
                 return self.send_html(object_page(p, user, roles_label,
                                                   (query.get("msg") or [""])[0],
-                                                  is_admin="admin" in roles))
+                                                  is_admin="admin" in roles,
+                                                  node=node, st=st))
             self.send_html("<p>Seite nicht gefunden.</p>", status=404)
         finally:
             con.close()
@@ -1694,6 +2088,9 @@ class Handler(BaseHTTPRequestHandler):
                 con.execute("UPDATE projects SET dep_summary = ? WHERE id = ?",
                             (json.dumps(s, ensure_ascii=False), p["id"]))
                 con.commit()
+                # Auf dem Zielknoten hat sich gerade nachweislich etwas
+                # geändert — die vorgehaltene Auskunft ist damit alt.
+                fleet.forget(fleet.node_base(p["hook_url"]))
             return self.send_html(deploy_result_page(p, outcome, user, roles_label))
         finally:
             multipart.cleanup(files)

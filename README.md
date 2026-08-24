@@ -22,9 +22,12 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 
 ## Apps
 
-| App                    | Was es tut                                            | Version |
-| ---------------------- | ----------------------------------------------------- | ------- |
-| [Studio](apps/studio/) | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen   | 0.2.1   |
+| App                                | Was es tut                                                 | Version |
+| ---------------------------------- | ---------------------------------------------------------- | ------- |
+| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.3.0   |
+| [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.2.0   |
+| [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.0   |
+| [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.0   |
 
 ## Installation
 

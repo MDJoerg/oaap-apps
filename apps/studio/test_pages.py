@@ -48,7 +48,37 @@ def ok(label, cond, detail=""):
 
 # ------------------------------------------------------------ Papierknoten
 
-NODE = {"announced": None, "grant": None, "uploads": [], "refuse": None}
+NODE = {"announced": None, "grant": None, "uploads": [], "refuse": None,
+        # Die lesende Flotten-Auskunft desselben Knotens (RFC-0021).
+        # `None` = der Knoten antwortet darauf nicht.
+        "fleet": None}
+
+# Der Flotten-Schlüssel des Papierknotens. Er darf in keiner Seite und
+# in keiner Datei auftauchen — das wird unten geprüft.
+FLEET_KEY = "flotten-schluessel-nur-fuer-den-test"
+
+FLEET_DOC = {
+    "schema": "oaap.fleet.status/0.2",
+    "node": "papierknoten.example",
+    "platform_version": "0.1.45",
+    "core": [{"name": "gateway", "state": "ok"}],
+    "instances": [
+        {"instance": "bdt-app-test", "app": "bdt-app", "version": "0.305.0",
+         "channel": "test", "state": "ok", "origin": "artifact",
+         "address": "bdt-app-test.papierknoten.example"},
+        {"instance": "bdt-app", "app": "bdt-app", "version": "0.304.0",
+         "channel": "production", "state": "warn", "origin": "promoted",
+         "address": "bdt-app.papierknoten.example"},
+    ],
+    "names": [
+        {"name": "hub.bdt.papierknoten.example", "kind": "alias",
+         "instance": "bdt-app", "state": "warn"},
+    ],
+    "attention": [
+        {"kind": "instance_unhealthy", "instance": "bdt-app"},
+        {"kind": "confirmation_pending", "instance": "ganz-andere-app"},
+    ],
+}
 
 
 class NodeHandler(BaseHTTPRequestHandler):
@@ -56,6 +86,16 @@ class NodeHandler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+    def do_GET(self):
+        """Nur die Flotten-Auskunft — und nur mit ihrem Schlüssel."""
+        if urlparse(self.path).path != "/fleet/status":
+            return self._json(404, {"error": "unknown"})
+        if self.headers.get("Authorization") != f"Bearer {FLEET_KEY}":
+            return self._json(403, {})
+        if NODE["fleet"] is None:
+            return self._json(404, {"error": "no such route"})
+        self._json(200, NODE["fleet"])
 
     def _json(self, status, obj):
         raw = json.dumps(obj).encode()
@@ -94,6 +134,12 @@ class NodeHandler(BaseHTTPRequestHandler):
 node = ThreadingHTTPServer(("127.0.0.1", 0), NodeHandler)
 threading.Thread(target=node.serve_forever, daemon=True).start()
 HOOK = f"http://127.0.0.1:{node.server_port}/deploy/app-test"
+NODE_HOST = f"127.0.0.1:{node.server_port}"
+NODE_BASE = f"http://{NODE_HOST}"
+
+# Der Schlüssel kommt im Betrieb als geheimer Konfigurationswert und
+# wird beim Start gelesen; hier ist der Port erst jetzt bekannt.
+app.FLEET_KEYS = app.fleet.parse_keys(f"{NODE_HOST}={FLEET_KEY}")
 
 # ------------------------------------------------------------ Studio starten
 
@@ -353,6 +399,94 @@ ok("und der Hinweis, wo das verbindliche Protokoll steht",
    or "Portal unter der Instanz" in b, b[-800:])
 set_hook(HOOK)
 
+print("\n=== Zielknoten: wo das Vorhaben wirklich läuft (0.3) ===")
+
+
+def save_project(**over):
+    """Das Vorhaben speichern — mit allen Feldern, wie das Formular es tut."""
+    fields = {"name": "BDT App", "app_type": "native", "status": "entwicklung",
+              "deploy_way": "artifact", "hook_url": HOOK,
+              "instance": "bdt-app-test", "prod_instance": "bdt-app",
+              "node_url": ""}
+    fields.update(over)
+    data, ct = form(fields)
+    return call_noredirect("POST", f"/vorhaben/{PID}", USER, data, ct)
+
+
+save_project()
+st, b, _ = call("GET", f"/vorhaben/{PID}", USER)
+ok("die Objektseite benennt den Zielknoten",
+   "Zielknoten und Instanzen" in b and NODE_HOST in b)
+ok("und sagt, woher sie ihn weiß", "laut Deploy-Hook" in b)
+ok("beide Instanzen stehen da, auch ohne Auskunft vom Knoten",
+   f"{NODE_BASE}/instances/bdt-app-test" in b
+   and f"{NODE_BASE}/instances/bdt-app" in b)
+ok("antwortet der Knoten nicht, steht der Grund da statt einer Vermutung",
+   "keine Auskunft" in b, b[b.find("Zielknoten und Instanzen"):][:900])
+
+print("\n=== Zustand beider Instanzen über die Flotten-Auskunft ===")
+NODE["fleet"] = FLEET_DOC
+st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
+karte = b[b.find("Zielknoten und Instanzen"):]
+karte = karte[:karte.find("Paket und Deployment")]
+ok("die Test-Instanz mit Version und Ampel",
+   "0.305.0" in karte and "Gesund" in karte, karte[:900])
+ok("die Produktiv-Instanz mit ihrer eigenen Version und Ampel",
+   "0.304.0" in karte and "Auffällig" in karte, karte[:900])
+ok("die Plattformversion des Zielknotens", "0.1.45" in karte)
+ok("Auffälligkeiten der eigenen Instanzen kommen mit",
+   "Instanz ungesund" in karte)
+ok("die einer fremden Instanz nicht", "Bestätigung offen" not in karte)
+ok("die veröffentlichte Adresse mit dem DNS-Urteil des Knotens",
+   "hub.bdt.papierknoten.example" in karte)
+ok("der Flotten-Schlüssel steht auf keiner Seite", FLEET_KEY not in b)
+
+save_project(prod_instance="gibt-es-nicht")
+st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
+ok("eine Instanz, die der Knoten nicht kennt, wird benannt",
+   "auf dem Knoten nicht vorhanden" in b)
+
+save_project(prod_instance="")
+st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
+ok("ohne Produktiv-Instanz erklärt die Seite den Weg dorthin",
+   "Portal des" in b and "RFC-0020" in b and "üblicher Name wäre" in b)
+
+save_project(node_url="https://ganz-anderer-knoten.example")
+st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
+ok("Widerspruch zwischen Feld und Hook wird benannt, nicht verschluckt",
+   "Es gilt der Hook" in b and "ganz-anderer-knoten.example" in b)
+
+print("\n=== Ohne Flotten-Schlüssel läuft alles Übrige weiter ===")
+merken, app.FLEET_KEYS = app.FLEET_KEYS, {}
+save_project()
+st, b, _ = call("GET", f"/vorhaben/{PID}", USER)
+ok("die Seite steht", st == 200)
+ok("und sagt, wie man die Anzeige einrichtet",
+   "oaap fleet key issue" in b and "STUDIO_FLEET_KEYS" in b)
+ok("mit der Begründung, warum das kein Recht ist",
+   "kein Schreibweg" in b)
+ok("die Instanzen und ihre Verweise stehen trotzdem da",
+   f"{NODE_BASE}/instances/bdt-app-test" in b)
+app.FLEET_KEYS = merken
+
+print("\n=== Ohne Hook und ohne Feld: der eigene Knoten ist eine Vermutung ===")
+save_project(hook_url="", node_url="")
+st, b, _ = call("GET", f"/vorhaben/{PID}", USER)
+ok("sie steht als Vermutung da, nicht als Tatsache", "angenommen" in b)
+save_project()
+
+print("\n=== Der Zielknoten in Paketseite, Zettel und Briefing ===")
+st, b, _ = call("GET", f"/vorhaben/{PID}/paket", USER)
+ok("die Paketseite verweist auf das Portal des ZIELKNOTENS",
+   f"{NODE_BASE}/instances/bdt-app-test" in b and "Zielknoten" in b)
+st, b, _ = call("GET", f"/vorhaben/{PID}/zettel.md", USER)
+ok("der Zettel für die Projekt-KI nennt den Zielknoten",
+   "## Zielknoten" in b and f"{NODE_BASE}/instances/bdt-app-test" in b)
+ok("und wo die Produktivsetzung stattfindet",
+   "Portal des" in b and "RFC-0020" in b)
+st, b, _ = call("GET", f"/vorhaben/{PID}/briefing.md", USER)
+ok("das Briefing nennt den Knoten der Instanz", NODE_HOST in b)
+
 print("\n=== Deployment-Zettel ===")
 st, b, _ = call("GET", f"/vorhaben/{PID}/zettel", USER)
 ok("das Blatt steht ohne Token da",
@@ -386,8 +520,10 @@ st, b, _ = call("POST", "/vorhaben", dict(USER, **{"Sec-Fetch-Site": "cross-site
 ok("ein Formular von fremder Seite wird abgewiesen", st == 403)
 
 print("\n=== Was in den Protokollen landen darf ===")
-ok("kein Token in der Datenbank",
-   b"richtiger-token" not in open(os.path.join(DATA, "studio.db"), "rb").read())
+roh = open(os.path.join(DATA, "studio.db"), "rb").read()
+ok("kein Token in der Datenbank", b"richtiger-token" not in roh)
+ok("und kein Flotten-Schlüssel — das Studio schreibt ihn nie",
+   FLEET_KEY.encode() not in roh)
 
 node.shutdown()
 studio.shutdown()

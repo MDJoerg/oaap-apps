@@ -34,8 +34,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.2.1",
-      "released": "2026-08-16",
+      "version": "0.3.0",
+      "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -47,9 +47,9 @@
       "audience": ["operator", "developer"],
       "maturity": "beta",
       "status": "active",
-      "tags": ["briefing", "ki", "vorhaben", "entwicklung", "paket", "deployment"],
+      "tags": ["briefing", "ki", "vorhaben", "entwicklung", "paket", "deployment", "zielknoten"],
       "summary": "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, gelieferte Pakete prüfen und ausrollen.",
-      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Gibt es die Instanz noch nicht, tut es dasselbe mit einer einmaligen Anlege-Erlaubnis aus dem Portal. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
+      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Gibt es die Instanz noch nicht, tut es dasselbe mit einer einmaligen Anlege-Erlaubnis aus dem Portal. Seit 0.3 muss die Instanz nicht auf demselben Knoten liegen wie das Studio: Jedes Vorhaben hat einen benannten Zielknoten (erkannt am Deploy-Hook) und darauf zwei Instanzen — Test und Produktiv —, beide verlinkt auf ihre Seite im Portal dieses Knotens; fehlt die produktive noch, sagt die Karte, wo sie entsteht. Ist für den Zielknoten ein Flotten-Schlüssel hinterlegt (geheime Konfiguration, ausgestellt auf dem Knoten), zeigt die Seite des Vorhabens zusätzlich, was der Knoten über beide Instanzen sagt: Version, Kanal, Ampel, veröffentlichte Adressen mit DNS-Urteil und die offenen Punkte, die sie betreffen — ein Schlüssel, der ausschließlich lesen kann; das Recht zu handeln bleibt der Deploy-Token, den der Anwender eingibt. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
       "links": [
         { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio" },
         { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md", "label": "App Deployment Contract" },

@@ -18,7 +18,11 @@ RUN pip install --no-cache-dir "PyYAML==6.*"
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin studio
 
 WORKDIR /srv
-COPY app.py pkg.py deployer.py multipart.py /srv/
+# Einzeln aufgezählt statt `COPY . /srv/`: So landet nichts im Image, was
+# dort nicht hingehört (Tests, __pycache__, README). Der Preis ist, dass
+# ein neues Modul hier eingetragen werden MUSS — vergisst man es, startet
+# der Container nicht (bei fleet.py in 0.3 fast passiert).
+COPY app.py pkg.py deployer.py multipart.py fleet.py /srv/
 
 USER 10001
 EXPOSE 8000

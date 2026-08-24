@@ -54,6 +54,41 @@ wie die Apps unserer Anwender (Dogfooding), und das Portal bleibt schlank.
   das, statt „abgelehnt" zu behaupten: Der Knoten rollt derweil weiter aus,
   und sein Protokoll ist das verbindliche.
 
+### Verteilte Test-Instanzen (seit 0.3.0)
+
+Anlass war ein echter Durchlauf: Am 23.08.2026 hat Jörg aus dem Studio auf
+`oaap-demo` heraus eine Test-Instanz auf `oaapx01` angelegt und sie dort
+produktiv gesetzt — über eine Knotengrenze hinweg, nur mit Portal und
+Studio. Funktioniert hat das (die Anlege-Erlaubnis und das Paket reisen
+ohnehin), aber das Studio wusste nichts davon: Es leitete seine
+Portal-Verweise aus dem **eigenen** Hostnamen ab und zeigte damit auf
+einen Knoten, auf dem die Instanz nicht liegt.
+
+- **Der Zielknoten ist ein Begriff.** Er steht auf der Seite des
+  Vorhabens, mit der Quelle dazu: aus dem **Deploy-Hook** (dorthin gehen
+  die Pakete tatsächlich — was dort steht, gilt), aus dem Feld
+  **„Zielknoten"** (für die Zeit, bevor es einen Hook gibt) oder als
+  ausgewiesene **Vermutung** „der Knoten, auf dem dieses Studio läuft".
+  Widersprechen sich Hook und Feld, gewinnt der Hook — und der
+  Widerspruch wird benannt statt stillschweigend aufgelöst.
+- **Zwei Instanzen je Vorhaben.** Neben der Test-Instanz steht jetzt die
+  **Produktiv-Instanz**; beide verlinken auf ihre Seite im Portal *des
+  Zielknotens*. Fehlt die produktive noch, sagt die Karte, wo sie
+  entsteht (Portal des Zielknotens, Seite der Test-Instanz, RFC-0020) und
+  wie sie üblicherweise heißt.
+- **Zustand beider Instanzen** — optional, über die lesende
+  Flotten-Auskunft des Zielknotens (`oaap.fleet.status`, RFC-0021):
+  Version, Kanal, Ampel, veröffentlichte Adressen samt DNS-Urteil des
+  Knotens und die `attention`-Einträge, die genau diese Instanzen
+  betreffen. Sagt der Knoten einen anderen Kanal als erwartet, steht das
+  daneben. Eine Instanz, die der Knoten **nicht kennt**, wird als solche
+  ausgewiesen — nach einem Umzug oder bei einem Tippfehler ist das genau
+  die Auskunft, die man braucht.
+- **Zielknoten in Zettel und Briefing.** Beide Blätter werden auf einem
+  fremden Rechner gelesen; sie nennen deshalb die Adresse des Knotens,
+  die Seiten beider Instanzen und den Satz, dass ein Studio auf einem
+  anderen Knoten daran nichts ändert.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt
@@ -70,6 +105,28 @@ wie die Apps unserer Anwender (Dogfooding), und das Portal bleibt schlank.
   Plattform kann es von jedem anderen Client nicht unterscheiden, und alle
   Prüfungen greifen unverändert. Es ist damit **keine zweite
   Steuerungsebene**.
+- **Der Flotten-Schlüssel ist kein Bruch dieser Regel — aber er braucht
+  eine Begründung.** Seit 0.3 kann das Studio einen Schlüssel *halten*:
+  je Zielknoten einen Flotten-Schlüssel, um den Zustand der beiden
+  Instanzen zu lesen. Die Regel oben meint das Recht, etwas zu
+  **verändern**, und genau das bleibt beim Anwender — der Deploy-Token
+  wird weiterhin bei jeder Handlung eingegeben. Ein Flotten-Schlüssel
+  kann laut `oaap.fleet.status` §2 **ausschließlich** `GET /fleet/status`
+  lesen: keine Sitzung, keine Rollen, kein anderer Weg, kein Schreibweg;
+  und was er liest, sind laut §3.1 Fakten, nie Geheimnisse (keine Tokens,
+  keine Konfigurationswerte, keine Quell-URLs). Er ist damit nicht mehr
+  wert als ein Blick auf die Gesundheitsseite. Ihn **nicht** zu
+  hinterlegen ist eine gültige Betriebsart: Dann fehlt genau diese
+  Anzeige und sonst nichts.
+- **Das Studio ist kein zweites FleetView.** Es pollt nicht im Takt und
+  hebt keinen letzten bekannten Stand auf: Es fragt beim Aufschlagen der
+  Seite nach, hält die Antwort ~30 s vor (damit ein Seitenaufbau nicht
+  jedes Mal an einem fernen Knoten hängt) und sagt ehrlich, wenn es keine
+  bekam. Wer die Landschaft über die Zeit beobachten will, nimmt
+  FleetView (RFC-0021 §3). Der Preis dafür ist bewusste Doppelung: Beide
+  Apps haben ihr eigenes `fleet.py`, weil jede App ihr eigener
+  Bau-Kontext ist — eine gemeinsame Bibliothek ist notiert, aber sie
+  wäre heute die vierte Baustelle für zwei Leser.
 - **Prüfen heißt Vorschau, nicht Freigabe.** Verbindlich prüft der Knoten,
   noch einmal und vollständig. Die Oberfläche sagt das an jeder Stelle —
   ein Werkzeug, das „geprüft" sagt und dann doch abgelehnt wird, wäre
@@ -137,19 +194,42 @@ sudo oaap store add-source https://raw.githubusercontent.com/MDJoerg/oaap-apps/m
 | `STUDIO_GIT_BASE`               | Basis-Adresse des eigenen Git-Hostings (z. B. Forgejo)       |
 | `STUDIO_MAX_PACKAGE_MB`         | Größtes Paket, Vorgabe 64 (der Knoten nimmt bis 256 MB)      |
 | `STUDIO_DEPLOY_TIMEOUT_SECONDS` | Geduld beim Deployment, Vorgabe 180                          |
-| `STUDIO_PORTAL_URL`             | Adresse des Portals für Verweise; leer = wird abgeleitet     |
+| `STUDIO_PORTAL_URL`             | Adresse des eigenen Portals; leer = wird abgeleitet          |
+| `STUDIO_FLEET_KEYS`             | geheim, optional: Flotten-Schlüssel je Zielknoten            |
+
+`STUDIO_FLEET_KEYS` nimmt `knoten=schlüssel`-Einträge, getrennt durch `;`
+oder Zeilenumbruch (`oaap.joomp.de=…`). Der Schlüssel wird **auf dem
+Zielknoten** ausgestellt und hier eingetragen:
+
+```sh
+# auf dem Zielknoten, an der Maschine:
+sudo oaap fleet key issue studio@oaap-demo
+
+# auf dem Knoten, auf dem das Studio läuft:
+sudo oaap app config set studio STUDIO_FLEET_KEYS \
+  --append 'oaap.joomp.de=<schlüssel>'
+```
+
+`--append` (Runtime-Spec 0.2.15) hängt einen Knoten an, ohne die
+bestehende geheime Liste neu eintippen zu müssen. Zurückgezeigt wird der
+Wert nie; die Oberfläche weiß nur, für welche Knoten etwas hinterlegt
+ist.
 
 Daten liegen unter dem deklarierten Mount `/data` (SQLite) und werden
-damit von `oaap backup create` gesichert. Eine Datenbank aus 0.1 wird beim
-Start um die neuen Spalten ergänzt; es geht nichts verloren.
+damit von `oaap backup create` gesichert. Eine Datenbank aus 0.1 oder 0.2
+wird beim Start um die neuen Spalten ergänzt; es geht nichts verloren.
+`instance` heißt in der Datenbank weiter so und meint die **Test**-Instanz
+— der Name stammt aus 0.1, als es keine zweite gab; ihn umzubenennen hieße
+eine Datenbank wandern lassen, ohne dass ein Anwender etwas davon hätte.
 
 ## Prüfungen
 
-Drei Dateien, alle ohne Docker, ohne Knoten und ohne Netz:
+Vier Dateien, alle ohne Docker, ohne Knoten und ohne Netz:
 
 ```sh
 python3 test_pkg.py     # Pakete lesen, Manifest prüfen, Rahmen-Vorschau
 python3 test_deploy.py  # Upload-Leser und Drei-Phasen-Weg
+python3 test_fleet.py   # Zielknoten, Flotten-Schlüssel, Vorhalten
 python3 test_pages.py   # das Studio am Stück, gegen einen Papierknoten
 ```
 

@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: studio
   name: OAAP Studio
-  version: 0.2.1
+  version: 0.3.0
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
@@ -54,10 +54,28 @@ config:
     label: "Geduld beim Deployment (Sekunden)"
     default: "180"
   # Adresse des Portals — nur für Verweise („Instanz im Portal öffnen").
-  # Leer = das Studio leitet sie aus dem eigenen Hostnamen ab.
+  # Leer = das Studio leitet sie aus dem eigenen Hostnamen ab. Gilt für
+  # den EIGENEN Knoten; der Zielknoten eines Vorhabens ergibt sich aus
+  # dessen Deploy-Hook (seit 0.3).
   - key: STUDIO_PORTAL_URL
     label: "Adresse des Portals (für Verweise)"
     default: ""
+  # Je Zielknoten ein Flotten-Schlüssel (auf dem betreffenden Knoten
+  # ausgestellt mit 'sudo oaap fleet key issue <label>'):
+  # knoten=schlüssel, ';' oder Zeilenumbruch trennt. Damit zeigt die
+  # Seite eines Vorhabens den Zustand seiner Test- und Produktiv-Instanz.
+  #
+  # Das ist kein Bruch der Regel „Das Studio hält nie ein Recht": Ein
+  # Flotten-Schlüssel kann ausschließlich GET /fleet/status lesen —
+  # keine Sitzung, keine Rollen, kein Schreibweg (Spec
+  # oaap.fleet.status §2) —, und dieses Dokument enthält Fakten, nie
+  # Geheimnisse (§3.1). Das Recht zu HANDELN bleibt unverändert beim
+  # Anwender: der Deploy-Token wird bei jedem Upload eingegeben.
+  # Leer lassen ist eine gültige Betriebsart — dann fehlt genau diese
+  # Anzeige und sonst nichts.
+  - key: STUDIO_FLEET_KEYS
+    label: "Flotten-Schlüssel je Zielknoten (knoten=schlüssel, ';' trennt)"
+    secret: true
 
 health:
   path: /healthz
