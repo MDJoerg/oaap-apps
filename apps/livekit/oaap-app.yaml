@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: livekit
   name: LiveKit (Echtzeit-Medien)
-  version: 0.1.0
+  version: 0.1.1
   type: wrapped
   # Kein Startfeld-Kachel: LiveKit hat keine Menschenoberfläche, sondern ist
   # ein Medienserver, zu dem sich eine andere App (das Meeting-Frontend)
@@ -57,6 +57,8 @@ config:
     secret: true
 
 health:
+  # Kein `service`: Die Gesundheitspruefung haengt am PRIMAEREN Dienst
+  # (Runtime 2.12 — der, der `/` bedient), hier also ohnehin `livekit`.
+  # Das Feld war ueberfluessig und im Manifest-Schema nicht vorgesehen.
   path: /
-  service: livekit
   startup_grace_seconds: 30

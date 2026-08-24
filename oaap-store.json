@@ -9,7 +9,7 @@
       "id": "fleetview",
       "name": "OAAP FleetView",
       "type": "native",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -58,7 +58,7 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -160,8 +160,8 @@
       "id": "livekit",
       "name": "LiveKit (Echtzeit-Medien)",
       "type": "wrapped",
-      "version": "0.1.0",
-      "released": "2026-08-12",
+      "version": "0.1.1",
+      "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/livekit"
@@ -209,7 +209,7 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

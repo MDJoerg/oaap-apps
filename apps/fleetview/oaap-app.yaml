@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: fleetview
   name: OAAP FleetView
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"
@@ -35,6 +35,7 @@ config:
   # getrennt: name=https://adresse (z. B. oaapx01=https://oaap.joomp.de).
   - key: FLEETVIEW_NODES
     label: "Knotenliste (name=https://adresse, ';' oder Zeilenumbruch trennt)"
+    multiline: true
     default: ""
   # Je Knoten ein Flotten-Schlüssel (auf dem Knoten ausgestellt mit
   # 'sudo oaap fleet key issue <label>'): name=schlüssel, ';' trennt.
@@ -42,6 +43,7 @@ config:
   # Instanz, nie gerendert.
   - key: FLEETVIEW_KEYS
     label: "Flotten-Schlüssel (name=schlüssel, ';' trennt)"
+    multiline: true
     secret: true
   # Abfragetakt. RFC-0021 Entscheidung 2: Minutenbereich — Alarmierung
   # bleibt Sache des Monitorings (Uptime Kuma).

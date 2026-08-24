@@ -489,7 +489,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):

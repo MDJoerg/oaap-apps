@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.2.0
+  version: 0.2.1
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -52,12 +52,14 @@ config:
   # erreichbar (RFC-0016): `sudo oaap app link add <diese-instanz> <ollama>`.
   - key: AIGW_SUPPLIERS
     label: "Bezugsquellen (name=adresse [light=...]), eine je Zeile"
+    multiline: true
     default: ""
   # Zugangsdaten je Bezugsquelle: `name=<schlüssel>`, eine je Zeile.
   # Geheim: wird nie zurückgezeigt und erscheint in keiner Antwort, keiner
   # Fehlermeldung und keiner Messzeile.
   - key: AIGW_SUPPLIER_KEYS
     label: "Zugangsdaten je Bezugsquelle (name=schlüssel), eine je Zeile"
+    multiline: true
     secret: true
   # Aliasse nach ZWECK, eine je Zeile:
   #   chat-default = tsystems:llama-3.3-70b, groq:llama-3.3-70b-versatile
@@ -69,6 +71,7 @@ config:
   # ist nicht grün.
   - key: AIGW_ALIASES
     label: "Aliasse (zweck=quelle:modell, ...), eine je Zeile"
+    multiline: true
     default: ""
   # Wie lange auf ein Modell gewartet wird. Große Modelle mit langem
   # Kontext brauchen Minuten; zu kurz erzeugt Abbrüche, die wie ein

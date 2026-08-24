@@ -39,7 +39,7 @@ import relay
 import store
 import supply
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")

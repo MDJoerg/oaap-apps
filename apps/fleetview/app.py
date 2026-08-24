@@ -41,7 +41,7 @@ from urllib.parse import unquote
 
 import fleet
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("FLEETVIEW_DATA_DIR", "/data")
