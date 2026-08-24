@@ -58,17 +58,23 @@ NODE = {"announced": None, "grant": None, "uploads": [], "refuse": None,
 FLEET_KEY = "flotten-schluessel-nur-fuer-den-test"
 
 FLEET_DOC = {
-    "schema": "oaap.fleet.status/0.2",
+    "schema": "oaap.fleet.status/0.3",
     "node": "papierknoten.example",
     "platform_version": "0.1.45",
     "core": [{"name": "gateway", "state": "ok"}],
     "instances": [
+        # Ohne eigene Adresse (RFC-0009) — so sieht der Normalfall aus:
+        # Es gibt nur den automatischen Namen (Schema 0.3).
         {"instance": "bdt-app-test", "app": "bdt-app", "version": "0.305.0",
          "channel": "test", "state": "ok", "origin": "artifact",
-         "address": "bdt-app-test.papierknoten.example"},
+         "auto_address": "bdt-app-test.papierknoten.example",
+         "auto_state": "ok"},
+        # Mit eigener Adresse: die gewinnt in der Anzeige.
         {"instance": "bdt-app", "app": "bdt-app", "version": "0.304.0",
          "channel": "production", "state": "warn", "origin": "promoted",
-         "address": "bdt-app.papierknoten.example"},
+         "address": "hub.bdt.papierknoten.example",
+         "auto_address": "bdt-app.papierknoten.example",
+         "auto_state": "warn"},
     ],
     "names": [
         {"name": "hub.bdt.papierknoten.example", "kind": "alias",
@@ -440,6 +446,17 @@ ok("die einer fremden Instanz nicht", "Bestätigung offen" not in karte)
 ok("die veröffentlichte Adresse mit dem DNS-Urteil des Knotens",
    "hub.bdt.papierknoten.example" in karte)
 ok("der Flotten-Schlüssel steht auf keiner Seite", FLEET_KEY not in b)
+
+# Schema 0.3: Ohne eigene Adresse ist der automatische Name der einzige
+# Weg zur Instanz selbst — bis dahin konnte das Studio nur aufs Portal
+# verweisen. Sein Urteil beantwortet eine ANDERE Frage als ein
+# DNS-Urteil und bekommt deshalb eigene Worte.
+ok("ohne eigene Adresse steht der automatische Name da",
+   "bdt-app-test.papierknoten.example" in karte)
+ok("mit dem Urteil des Knotens dazu", "erreichbar" in karte)
+ok("eine eigene Adresse gewinnt gegen den automatischen Namen",
+   "hub.bdt.papierknoten.example" in karte
+   and "bdt-app.papierknoten.example" not in karte)
 
 save_project(prod_instance="gibt-es-nicht")
 st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)

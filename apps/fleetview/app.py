@@ -41,7 +41,7 @@ from urllib.parse import unquote
 
 import fleet
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("FLEETVIEW_DATA_DIR", "/data")
@@ -361,6 +361,21 @@ def node_page(name, user, roles):
             addr = i.get("address", "")
             addr_html = (f'<a href="https://{esc(addr)}/">{esc(addr)}</a>'
                          if addr else "")
+            # Schema 0.3: der automatische Name <instanz>.<knoten> mit dem
+            # Urteil des Knotens. Er steht bewusst NICHT in der DNS-Sicht
+            # oben — ein Wildcard antwortet für jeden Namen darunter, auch
+            # für nie installierte. Geprüft wird deshalb, was schiefgehen
+            # KANN: ob die Instanz unter diesem Namen auf diesem Knoten
+            # erreichbar ist. Ältere Knoten (0.2) liefern das Feld nicht.
+            auto = i.get("auto_address", "")
+            if auto:
+                auto_html = (f'<a href="https://{esc(auto)}/">{esc(auto)}</a> '
+                             + badge(i.get("auto_state", "unknown")))
+                if not addr_html:
+                    addr_html = f'<span class="muted">—</span>'
+            else:
+                auto_html = '<span class="muted">—</span>'
+                addr_html = addr_html or '<span class="muted">—</span>'
             test = i.get("channel") == "test"
             trs.append(
                 "<tr>"
@@ -372,11 +387,22 @@ def node_page(name, user, roles):
                 f'<td>{badge(i.get("state", "unknown"))}</td>'
                 f'<td class="muted">{esc(i.get("origin", ""))}</td>'
                 f"<td>{addr_html}</td>"
+                f"<td>{auto_html}</td>"
                 "</tr>")
-        body.append('<div class="card"><h2>Instanzen</h2><table>'
+        body.append('<div class="card" style="overflow-x:auto">'
+                    "<h2>Instanzen</h2><table>"
                     "<tr><th>Instanz</th><th>App</th><th>Version</th><th>Kanal</th>"
-                    "<th>Zustand</th><th>Herkunft</th><th>Adresse</th></tr>"
-                    + "".join(trs) + "</table></div>")
+                    "<th>Zustand</th><th>Herkunft</th><th>Eigene Adresse</th>"
+                    "<th>Automatischer Name</th></tr>"
+                    + "".join(trs) + "</table>"
+                    '<p class="hint">Der <b>automatische Name</b> entsteht aus '
+                    "Instanz und Knoten und steht nicht in DNS-Einträgen — "
+                    "dort antwortet ein Wildcard für jeden Namen, auch für "
+                    "erfundene. Das Urteil daneben sagt deshalb etwas anderes "
+                    "als oben: <b>ob die Instanz unter diesem Namen auf diesem "
+                    "Knoten erreichbar ist</b> (Route vorhanden, App antwortet) "
+                    "— nicht, ob TLS steht oder ob jemand von außen "
+                    "hineinkommt.</p></div>")
     elif r["has_doc"]:
         body.append('<div class="card"><h2>Instanzen</h2>'
                     "<p>Dieser Knoten meldet keine App-Instanzen.</p></div>")

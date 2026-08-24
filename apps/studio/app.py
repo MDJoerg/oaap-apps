@@ -489,7 +489,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -633,10 +633,24 @@ def _instance_row(kanal, name, node, st, hint="", found_only=False):
         zustand = (f'<span class="badge {fleet.STATE_BADGE.get(state, "off")}">'
                    f'{esc(fleet.STATE_LABELS.get(state, state))}</span>')
         version = esc(row.get("version") or "—")
+        # Eigene Adresse (RFC-0009), sonst der automatische Name aus
+        # Schema 0.3 — der ist der Weg zur Instanz selbst, den das Studio
+        # bis dahin nicht kannte (es konnte nur aufs Portal verweisen).
+        # Sein Urteil sagt etwas anderes als ein DNS-Urteil: ob die
+        # Instanz unter diesem Namen auf ihrem Knoten erreichbar ist.
         addr = row.get("address") or ""
-        adresse = (f'<a class="rowaction" href="https://{esc(addr)}" '
-                   f'target="_blank" rel="noopener">{esc(addr)}</a>'
-                   if addr else '<span class="muted">—</span>')
+        auto = row.get("auto_address") or ""
+        if addr:
+            adresse = (f'<a class="rowaction" href="https://{esc(addr)}" '
+                       f'target="_blank" rel="noopener">{esc(addr)}</a>')
+        elif auto:
+            a_state = row.get("auto_state", "unknown")
+            adresse = (f'<a class="rowaction" href="https://{esc(auto)}" '
+                       f'target="_blank" rel="noopener">{esc(auto)}</a>'
+                       f' <span class="badge {fleet.STATE_BADGE.get(a_state, "off")}">'
+                       f'{esc(fleet.AUTO_LABELS.get(a_state, a_state))}</span>')
+        else:
+            adresse = '<span class="muted">—</span>' 
         kanal_doc = fleet.CHANNEL_LABELS.get(row.get("channel"), row.get("channel"))
         # Sagt der Knoten einen anderen Kanal, als hier erwartet wird,
         # ist das eine Nachricht — z. B. eine Test-Instanz, die in

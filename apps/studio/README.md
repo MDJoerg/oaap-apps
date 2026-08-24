@@ -88,6 +88,19 @@ einen Knoten, auf dem die Instanz nicht liegt.
   fremden Rechner gelesen; sie nennen deshalb die Adresse des Knotens,
   die Seiten beider Instanzen und den Satz, dass ein Studio auf einem
   anderen Knoten daran nichts ändert.
+- **Der Weg zur Instanz selbst (0.3.2).** Bis dahin konnte das Studio
+  nur auf die *Portalseite* einer Instanz verweisen — die Instanz selbst
+  hatte keine Adresse, die es kannte, solange niemand eine eigene
+  registriert hatte. Seit Schema `oaap.fleet.status` 0.3 nennt der
+  Knoten je Instanz ihren **automatischen Namen**
+  `<instanz>.<knoten>`, und das Studio verlinkt ihn. Das Urteil daneben
+  beantwortet bewusst eine andere Frage als ein DNS-Urteil — nämlich
+  *ob die Instanz unter diesem Namen auf ihrem Knoten erreichbar ist*
+  (Route vorhanden, App antwortet) — und sagt ausdrücklich **nichts**
+  über TLS oder Zugang von außen. Eine eigene registrierte Adresse
+  (RFC-0009) gewinnt in der Anzeige, weil sie die ist, die in Clients
+  steckt.
+
 - **Keine Behauptung über Produktiv (0.3.1).** Beim ersten Rollout stand
   „Noch nicht produktiv" neben einem Knoten, der die Instanz sehr wohl
   als produktiv meldete — im Vorhaben war bloß kein Name eingetragen.

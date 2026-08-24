@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: fleetview
   name: OAAP FleetView
-  version: 0.2.0
+  version: 0.3.0
   type: native
   class: frontend
   description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"

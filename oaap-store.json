@@ -9,8 +9,8 @@
       "id": "fleetview",
       "name": "OAAP FleetView",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-08-23",
+      "version": "0.3.0",
+      "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/fleetview"
@@ -23,7 +23,7 @@
       "status": "active",
       "tags": ["flotte", "monitoring", "knoten", "landschaft", "fleet"],
       "summary": "Die OAAP-Flotte auf einen Blick: Knoten, Versionen, Instanzen und Auffälligkeiten — strikt lesend.",
-      "description": "Flotten-Übersicht (RFC-0021): Der Betreiber hinterlegt die Knotenliste und je Knoten einen Flotten-Schlüssel (geheimer Konfigurationswert, auf dem Knoten ausgestellt mit 'sudo oaap fleet key issue'); FleetView pollt die Knoten im Minutentakt über deren lesende Status-Auskunft /fleet/status und zeigt Ampeln, Plattformversionen, Instanzen und alle Auffälligkeiten der Landschaft oben auf der Seite. Seit 0.2 zusätzlich: die DNS-Sicht je Knoten (veröffentlichte Namen mit dem Urteil des Knotens, öffentliche IP — Schema oaap.fleet.status/0.2, braucht Plattform 0.1.43) und die Liste mehrfach vorhandener Instanznamen über Knoten hinweg (Umzugs-Reste fallen auf). Nicht erreichbar ist ein Zustand, keine Fehlerseite: der letzte bekannte Stand bleibt sichtbar und wird als veraltet markiert. Kein Schreibweg und keine Fernsteuerung — gehandelt wird im Portal des jeweiligen Knotens, jede Zeile verlinkt dorthin; Alarmierung bleibt Sache des Monitorings (Uptime Kuma). Schlüssel werden nie angezeigt und nie gespeichert.",
+      "description": "Flotten-Übersicht (RFC-0021): Der Betreiber hinterlegt die Knotenliste und je Knoten einen Flotten-Schlüssel (geheimer Konfigurationswert, auf dem Knoten ausgestellt mit 'sudo oaap fleet key issue'); FleetView pollt die Knoten im Minutentakt über deren lesende Status-Auskunft /fleet/status und zeigt Ampeln, Plattformversionen, Instanzen und alle Auffälligkeiten der Landschaft oben auf der Seite. Seit 0.2 zusätzlich: die DNS-Sicht je Knoten (veröffentlichte Namen mit dem Urteil des Knotens, öffentliche IP — Schema oaap.fleet.status/0.2, braucht Plattform 0.1.43) und die Liste mehrfach vorhandener Instanznamen über Knoten hinweg (Umzugs-Reste fallen auf). Seit 0.3 zusätzlich je Instanz ihr automatischer Name <instanz>.<knoten> mit einem eigenen Urteil (Schema oaap.fleet.status/0.3, braucht Plattform 0.1.46): Automatische Namen stehen bewusst nicht in DNS-Einträgen — dort antwortet ein Wildcard für jeden Namen, auch für erfundene —, geprüft wird deshalb, ob die Instanz unter diesem Namen auf ihrem Knoten erreichbar ist (Route vorhanden, App antwortet); keine Aussage über TLS oder Zugang von außen. Nicht erreichbar ist ein Zustand, keine Fehlerseite: der letzte bekannte Stand bleibt sichtbar und wird als veraltet markiert. Kein Schreibweg und keine Fernsteuerung — gehandelt wird im Portal des jeweiligen Knotens, jede Zeile verlinkt dorthin; Alarmierung bleibt Sache des Monitorings (Uptime Kuma). Schlüssel werden nie angezeigt und nie gespeichert.",
       "links": [
         { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/fleetview" },
         { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0021-fleet-status-api-and-overview.md", "label": "RFC-0021 — Fleet Status API und Flotten-Übersicht" },
@@ -34,7 +34,7 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "released": "2026-08-24",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

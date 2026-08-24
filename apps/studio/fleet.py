@@ -69,6 +69,20 @@ ATTENTION_LABELS = {
 
 CHANNEL_LABELS = {"test": "Test", "production": "Produktiv"}
 
+# Urteil über den AUTOMATISCHEN Namen einer Instanz (Schema 0.3). Es
+# beantwortet eine andere Frage als STATE_LABELS oben und braucht
+# deshalb eigene Worte: nicht „ist die App gesund", sondern „ist sie
+# unter diesem Namen auf ihrem Knoten erreichbar". Ausdrücklich KEINE
+# Aussage über TLS oder über Erreichbarkeit von außen — das steht so in
+# der Spec, damit es keine Oberfläche als „aus dem Internet erreichbar"
+# ausgibt.
+AUTO_LABELS = {
+    "ok": "erreichbar",
+    "warn": "erreichbar, App ungesund",
+    "error": "keine Route auf dem Knoten",
+    "unknown": "Knoten sagt nichts dazu",
+}
+
 # Wie lange eine Antwort vorgehalten wird. Kurz genug, dass „Neu
 # abfragen" nach dem Ausrollen etwas Neues zeigt, lang genug, dass das
 # Blättern über mehrere Seiten den Knoten nicht befragt.
