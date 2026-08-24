@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: studio
   name: OAAP Studio
-  version: 0.3.0
+  version: 0.3.1
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).

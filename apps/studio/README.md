@@ -88,6 +88,15 @@ einen Knoten, auf dem die Instanz nicht liegt.
   fremden Rechner gelesen; sie nennen deshalb die Adresse des Knotens,
   die Seiten beider Instanzen und den Satz, dass ein Studio auf einem
   anderen Knoten daran nichts ändert.
+- **Keine Behauptung über Produktiv (0.3.1).** Beim ersten Rollout stand
+  „Noch nicht produktiv" neben einem Knoten, der die Instanz sehr wohl
+  als produktiv meldete — im Vorhaben war bloß kein Name eingetragen.
+  Jetzt fragt das Studio erst den Knoten: Findet es dort eine produktive
+  Instanz unter dem üblichen Namen, zeigt es sie **als Fund
+  gekennzeichnet** („der Knoten hat sie, das Vorhaben nennt sie nicht")
+  und bittet um den Eintrag. „Noch nicht produktiv" bleibt dem Fall
+  vorbehalten, in dem der Knoten wirklich nichts hat. Dasselbe Prinzip
+  wie „Ausgang unklar": nichts behaupten, was man nicht weiß.
 
 ## Bewusste Entscheidungen
 

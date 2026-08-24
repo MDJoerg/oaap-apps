@@ -446,10 +446,30 @@ st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
 ok("eine Instanz, die der Knoten nicht kennt, wird benannt",
    "auf dem Knoten nicht vorhanden" in b)
 
+# Beim Rollout am 24.08. auf oaap-demo aufgefallen: „Noch nicht
+# produktiv" stand neben einem Knoten, der `bdt-app` sehr wohl als
+# produktiv meldete — der Name war bloß im Vorhaben nicht eingetragen.
+# Eine Behauptung, die das Studio nicht belegen kann, ist genau der
+# Fehler, den „Ausgang unklar" an anderer Stelle vermeidet.
 save_project(prod_instance="")
 st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
-ok("ohne Produktiv-Instanz erklärt die Seite den Weg dorthin",
-   "Portal des" in b and "RFC-0020" in b and "üblicher Name wäre" in b)
+ok("kein „noch nicht produktiv“, wenn der Knoten eine produktive hat",
+   "Noch nicht produktiv" not in b, b[b.find("Zielknoten und Instanzen"):][:1200])
+ok("der Fund wird als Fund gekennzeichnet, nicht als gepflegte Angabe",
+   "der Knoten hat sie, das Vorhaben nennt sie nicht" in b
+   and "im Vorhaben steht kein Name" in b)
+ok("und trägt die Angaben des Knotens", "0.304.0" in b)
+
+# Kennt der Knoten wirklich keine produktive Instanz, gilt der Satz.
+ohne = {k: v for k, v in FLEET_DOC.items()}
+ohne["instances"] = [i for i in FLEET_DOC["instances"]
+                     if i["channel"] != "production"]
+NODE["fleet"] = ohne
+st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
+ok("dann erklärt die Seite den Weg dorthin",
+   "Noch nicht produktiv" in b and "RFC-0020" in b
+   and "üblicher Name wäre" in b)
+NODE["fleet"] = FLEET_DOC
 
 save_project(node_url="https://ganz-anderer-knoten.example")
 st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)

@@ -489,7 +489,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -607,12 +607,16 @@ def list_page(rows, user, roles, msg=""):
     return page("Vorhaben", body, user, roles, "projects")
 
 
-def _instance_row(kanal, name, node, st, hint=""):
+def _instance_row(kanal, name, node, st, hint="", found_only=False):
     """Eine Zeile der Instanz-Tabelle — Kanal, Name, Zustand, Adresse.
 
     Sie entsteht auch **ohne** Auskunft vom Knoten: Name und Verweis
     ins Portal weiß das Studio selbst. Was es nicht weiß, steht als
     „—" da und nicht als Vermutung.
+
+    `found_only` heißt: Diesen Namen hat nicht der Anwender eingetragen,
+    sondern der Knoten gemeldet. Das wird gesagt, statt den Fund als
+    gepflegte Angabe auszugeben.
     """
     if not name:
         return (f'<tr><td>{esc(kanal)}</td><td colspan="4" class="muted">'
@@ -620,6 +624,9 @@ def _instance_row(kanal, name, node, st, hint=""):
     link = instance_url(node, name)
     label = (f'<a class="rowaction" href="{esc(link)}" target="_blank" '
              f'rel="noopener">{esc(name)}</a>' if link else esc(name))
+    if found_only:
+        label += (' <span class="badge warn">der Knoten hat sie, das '
+                  'Vorhaben nennt sie nicht</span>')
     row = fleet.instance(st.get("doc"), name)
     if row:
         state = row.get("state", "unknown")
@@ -699,6 +706,18 @@ def node_card(p, node, st):
     conflict = (f'<p class="err">{esc(node["conflict"])}</p>'
                 if node["conflict"] else "")
 
+    # Ist im Vorhaben keine Produktiv-Instanz benannt, heißt das NICHT,
+    # dass es keine gibt — auf oaap-demo stand am 24.08. „noch nicht
+    # produktiv" neben einem Knoten, der `bdt-app` sehr wohl als
+    # produktiv meldete. Also erst den Knoten fragen und den Fund als
+    # Fund kennzeichnen; „noch nicht produktiv" bleibt dem Fall
+    # vorbehalten, in dem der Knoten wirklich nichts hat.
+    found_prod = ""
+    if not prod_name and proposal:
+        row = fleet.instance(st.get("doc"), proposal)
+        if row and row.get("channel") == "production":
+            found_prod = proposal
+
     prod_hint = ("Noch nicht produktiv. Die Übernahme geschieht im Portal des "
                  "Zielknotens auf der Seite der Test-Instanz (RFC-0020)"
                  + (f" — üblicher Name wäre „{proposal}“." if proposal else "."))
@@ -707,11 +726,17 @@ def node_card(p, node, st):
   {_instance_row("Test", test_name, node, st,
                  "Noch keine Test-Instanz benannt. Sie entsteht mit dem ersten "
                  "Paket (Anlege-Erlaubnis) oder im Portal des Zielknotens.")}
-  {_instance_row("Produktiv", prod_name, node, st, prod_hint)}
+  {_instance_row("Produktiv", prod_name or found_prod, node, st, prod_hint,
+                 found_only=bool(found_prod))}
 </table>"""
+    if found_prod:
+        table += (f'<p class="muted" style="margin:.6rem 0 0">Der Zielknoten '
+                  f'führt <code>{esc(found_prod)}</code> im Kanal produktiv, '
+                  f'im Vorhaben steht kein Name. Trag ihn unten ein, dann '
+                  f'gehört die Zeile dem Vorhaben und nicht einem Fund.</p>')
 
     # Auffälligkeiten des Knotens, die genau diese Instanzen betreffen.
-    att = fleet.attention_for(st.get("doc"), [test_name, prod_name])
+    att = fleet.attention_for(st.get("doc"), [test_name, prod_name or found_prod])
     att_html = ""
     if att:
         items = "".join(
@@ -763,7 +788,7 @@ sudo oaap app config set &lt;studio-instanz&gt; STUDIO_FLEET_KEYS \\
   </dl>
   {table}
   {att_html}
-  {_names_note(st, [test_name, prod_name])}
+  {_names_note(st, [test_name, prod_name or found_prod])}
   {foot}
 </div>"""
 
