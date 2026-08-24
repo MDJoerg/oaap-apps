@@ -7,7 +7,7 @@ fragt nach einem **Zweck** (`chat-default`, `code`,
 `embedding-default`) und nie nach einem Hersteller.
 
 Umsetzung der Capability [`oaap.ai.gateway`
-0.1](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023).
+0.2](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -39,9 +39,9 @@ Alles über deklarierte Variablen (Portal → Instanz → Konfiguration).
 
 ```text
 AIGW_SUPPLIERS          eine Zeile je Bezugsquelle
-  ollama=http://ollama:11434/v1 class=internal
-  tsystems=https://<ai-business-hub>/v1 class=eu
-  groq=https://api.groq.com/openai/v1 class=external
+  ollama=http://oaap-app-<ollama-instanz>:11434/v1 light=green
+  tsystems=https://<ai-business-hub>/v1 light=yellow
+  groq=https://api.groq.com/openai/v1 light=red
 
 AIGW_SUPPLIER_KEYS      geheim — eine Zeile je Quelle, die eine braucht
   groq=<schlüssel>
@@ -53,11 +53,11 @@ AIGW_ALIASES            eine Zeile je Zweck
   code = tsystems:<modell> order=listed
 ```
 
-**Ohne Klassenangabe gilt `external`** — unbekannte Herkunft ist nicht
-souverän, und der sichere Zustand ist der Standardzustand.
+**Ohne Angabe gilt `red`** — unbekannte Herkunft ist nicht souverän,
+und der sichere Zustand ist der Standardzustand.
 
 **Ausgewichen wird nur innerhalb der Gruppe einer Zeile**, und dabei
-gilt `internal` vor `eu` vor `external`. Wer die aufgeführte
+gilt grün vor gelb vor rot. Wer die aufgeführte
 Reihenfolge will, hängt `order=listed` an. LLMs sind nicht
 austauschbar wie Webserver hinter einem Lastverteiler; stilles
 Ersetzen ändert das Verhalten, manchmal so leise, dass es wochenlang
@@ -75,7 +75,7 @@ Maschine:
 
 ```bash
 sudo docker exec oaap-app-<instanz> python3 /srv/app.py \
-  key issue laptop@joerg --classes internal,eu --aliases chat-default
+  key issue laptop@joerg --ceiling yellow --aliases chat-default
 sudo docker exec oaap-app-<instanz> python3 /srv/app.py key list
 sudo docker exec oaap-app-<instanz> python3 /srv/app.py key revoke laptop@joerg
 ```
@@ -84,14 +84,49 @@ Der Wert erscheint **genau einmal**; gespeichert wird nur sein
 SHA-256. Wer ihn verliert, bekommt einen neuen — nachlesen lässt er
 sich nirgends (dieselbe Hygiene wie beim Deploy-Token, RFC-0019).
 
-Voreingestellt darf ein Schlüssel `internal` und `eu`. **`external`
-ist eine bewusste Zusatzerlaubnis** — Souveränität soll das sein, was
-passiert, wenn niemand etwas einstellt.
+Voreingestellt reicht ein Schlüssel bis **gelb**. **Rot ist eine
+bewusste Zusatzerlaubnis** — Souveränität soll das sein, was passiert,
+wenn niemand etwas einstellt.
 
 Dazu je Schlüssel: Etikett, Verantwortliche(r), Kostenstelle, Projekt,
 Aliass-Beschränkung, **Token-Budget** und **Anfragen je Minute**. Die
 beiden letzten sind harte Grenzen — sie schützen vor einer
 davonlaufenden Rechnung, was eine Rechnung hinterher nicht tut.
+
+## Die Ampel
+
+Jede Bezugsquelle trägt eine Farbe. Sie beschreibt nicht Güte, Tempo
+oder Preis, sondern **was mit den Daten geschehen kann**:
+
+| Farbe | Bedeutung                                                    | Was gesendet werden darf                                    |
+| ----- | ------------------------------------------------------------ | ----------------------------------------------------------- |
+| grün  | die Daten verlassen das Unternehmen nicht (eigene Hardware)   | alles Übrige; personenbezogene Daten **mit Freigabe**       |
+| gelb  | sie verlassen es vielleicht, aber unter verbindlicher Zusage  | Unternehmensinformationen; personenbezogene **mit Freigabe** |
+| rot   | externer Anbieter, Daten können abfließen                     | **keine** Unternehmensinformationen, **keine** personenbezogenen |
+
+Wo ein Rechner steht, ist der **Grund** für eine Farbe, nie ihre
+**Bedeutung** — deshalb eine Ampel und keine Landkarte.
+
+**Durchgesetzt wird an Erklärungen, nie am Inhalt.** Das Gateway darf
+nicht in die Anfrage sehen und kann personenbezogene Daten deshalb
+nicht erkennen. Es prüft, was beim Ausstellen gesagt wurde — die
+Obergrenze des Schlüssels und die Freigabe für personenbezogene Daten
+— und hält daraus die eine Regel, die es halten kann: **ein für
+personenbezogene Daten freigegebener Schlüssel benutzt nie rot.**
+Alles Weitere bleibt bei dem, der den Prompt abschickt; die App ist
+ehrlich über den Unterschied zwischen dem, was sie durchsetzt, und
+dem, was sie dokumentiert.
+
+**Die Farbe eines Alias ist die schlechteste seiner erreichbaren
+Ziele.** Ein Alias, der von einem grünen Modell auf einen roten
+Anbieter ausweichen kann, ist nicht grün — und `GET /v1/models` meldet
+genau die Farbe, die *dieser Schlüssel* wirklich bekäme. Sonst wäre die
+Ampel eine Beruhigung statt einer Auskunft.
+
+Noch nicht gebaut (RFC-0023 Stufe 3): Wenn eine Bezugsquelle selbst ein
+OAAP-Gateway ist, soll ihre gemeldete Farbe die konfigurierte **nach
+oben begrenzen** — eine erklärte Farbe ist eine Obergrenze, nie eine
+Untergrenze. Ohne diese Regel wird ein Gateway zur Wäscherei.
 
 ## Als Ersatz für LM Studio
 

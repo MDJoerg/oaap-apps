@@ -31,7 +31,12 @@ CREATE TABLE IF NOT EXISTS keys (
   created       TEXT NOT NULL,
   revoked       TEXT NOT NULL DEFAULT '',
   aliases       TEXT NOT NULL DEFAULT '',
-  classes       TEXT NOT NULL DEFAULT '',
+  -- Die schlechteste Ampelfarbe, die dieser Schlüssel benutzen darf,
+  -- und die Freigabe für personenbezogene Daten. Beides sind
+  -- **Erklärungen** — das Gateway darf nicht in die Anfrage sehen und
+  -- kann deshalb nur prüfen, was vorher gesagt wurde.
+  ceiling       TEXT NOT NULL DEFAULT 'yellow',
+  personal_data INTEGER NOT NULL DEFAULT 0,
   budget_tokens INTEGER NOT NULL DEFAULT 0,
   rate_per_min  INTEGER NOT NULL DEFAULT 0,
   owner         TEXT NOT NULL DEFAULT '',
@@ -87,8 +92,8 @@ def connect(path):
     return db
 
 
-def issue(db, label, actor, aliases=(), classes=(), budget_tokens=0,
-          rate_per_min=0, owner="", cost_center="", project="",
+def issue(db, label, actor, aliases=(), ceiling="yellow", personal_data=False,
+          budget_tokens=0, rate_per_min=0, owner="", cost_center="", project="",
           account="default", tenant="default"):
     """Stellt einen Schlüssel aus und gibt ihn **einmalig** zurück.
 
@@ -104,14 +109,16 @@ def issue(db, label, actor, aliases=(), classes=(), budget_tokens=0,
     value = KEY_PREFIX + secrets.token_urlsafe(32)
     key_id = secrets.token_hex(6)
     db.execute(
-        "INSERT INTO keys (id,label,digest,created,aliases,classes,budget_tokens,"
-        "rate_per_min,owner,cost_center,project,account,tenant) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (key_id, label, digest(value), now(), ",".join(aliases), ",".join(classes),
+        "INSERT INTO keys (id,label,digest,created,aliases,ceiling,personal_data,"
+        "budget_tokens,rate_per_min,owner,cost_center,project,account,tenant) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (key_id, label, digest(value), now(), ",".join(aliases), ceiling or "yellow",
+         1 if personal_data else 0,
          int(budget_tokens or 0), int(rate_per_min or 0), owner, cost_center,
          project, account or "default", tenant or "default"))
     log(db, actor, "key.issue", label,
-        f"aliases={','.join(aliases) or 'alle'} classes={','.join(classes)}")
+        f"aliases={','.join(aliases) or 'alle'} bis={ceiling or 'yellow'} "
+        f"pbd={'freigegeben' if personal_data else 'nein'}")
     db.commit()
     return value, key_id
 

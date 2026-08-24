@@ -3,16 +3,17 @@
 Eine Bezugsquelle ist **ein OpenAI-kompatibler HTTP-Endpunkt plus
 Zugangsdaten**, mehr nicht. Lokales Modell, externer Anbieter, ein
 Kunden-Endpunkt oder ein anderes Gateway sind dieselbe Sorte Sache und
-unterscheiden sich in Adresse, Zugangsdaten und Klasse — nicht in Code.
+unterscheiden sich in Adresse, Zugangsdaten und **Ampelfarbe** — nicht
+in Code.
 Einen Adapter-Baukasten gibt es bewusst nicht (RFC-0023 A5): Eine
 Steckerleiste, die vor ihrem zweiten echten Fall gebaut wird, ist eine
 Vermutung im Kostüm einer Schnittstelle.
 
 Ein **Alias** benennt einen Zweck (`chat-default`, `code`,
 `embedding-default`) und zeigt auf eine oder mehrere Bezugsquellen.
-Innerhalb dieser Gruppe gilt `internal` vor `eu` vor `external` —
-Souveränität ist damit das, was passiert, wenn niemand etwas einstellt.
-Wer es anders will, hängt `order=listed` an die Zeile.
+Innerhalb dieser Gruppe gilt grün vor gelb vor rot — Souveränität ist
+damit das, was passiert, wenn niemand etwas einstellt. Wer es anders
+will, hängt `order=listed` an die Zeile.
 
 Konfigurationsfehler sind hier **nie tödlich**: Sie werden gesammelt
 und auf der Betreiber-Seite angezeigt. Eine App, die wegen eines
@@ -21,21 +22,43 @@ was sie nicht verstanden hat (dasselbe Muster wie FleetViews
 Knotenliste).
 """
 
-# Rangfolge der Klassen. Der Zahlenwert ist die Vorzugsreihenfolge:
-# je kleiner, desto lieber. Das ist die einzige Stelle, an der
-# Souveränität als Vorrang codiert ist.
-CLASS_RANK = {"internal": 0, "eu": 1, "external": 2}
+# Die Ampel: Was kann mit den Daten geschehen, die hier hineingehen?
+# Der Zahlenwert ist die Vorzugsreihenfolge (je kleiner, desto lieber)
+# UND die Schwere (je größer, desto gefährlicher). Beides fällt
+# zusammen, und genau deshalb ist es eine Ampel und keine Landkarte:
+# Wo ein Rechner steht, ist der Grund für eine Farbe, nie ihre Bedeutung.
+LIGHT_RANK = {"green": 0, "yellow": 1, "red": 2}
 
-CLASS_LABELS = {
-    "internal": "eigene Hardware",
-    "eu": "souverän, EU-Rechenzentrum",
-    "external": "extern",
+LIGHT_LABELS = {
+    "green": "grün — Daten verlassen das Unternehmen nicht",
+    "yellow": "gelb — verlassen es vielleicht, aber unter Zusage",
+    "red": "rot — externer Anbieter, Daten können abfließen",
 }
 
-# Voreinstellung für einen frisch ausgestellten Schlüssel. Bewusst OHNE
-# `external`: Der sichere Zustand ist der Standardzustand, und wer eine
-# Quelle außerhalb der EU nutzen will, sagt es beim Ausstellen.
-DEFAULT_CLASSES = ("internal", "eu")
+LIGHT_RULES = {
+    "green": "Personenbezogene Daten nur mit Freigabe.",
+    "yellow": "Unternehmensinformationen erlaubt; personenbezogene Daten nur mit Freigabe.",
+    "red": "Keine Unternehmensinformationen, keine personenbezogenen Daten.",
+}
+
+# Voreinstellung für eine Bezugsquelle ohne Angabe: das Schlechteste.
+# Unbekannte Herkunft ist nicht souverän, und der sichere Zustand ist
+# der Standardzustand.
+DEFAULT_LIGHT = "red"
+
+# Voreinstellung für einen frisch ausgestellten Schlüssel: bis gelb.
+# Rot ist eine bewusste Zusatzerlaubnis.
+DEFAULT_CEILING = "yellow"
+
+
+def worse(a, b):
+    """Die schlechtere zweier Farben — die Regel, die Ketten ehrlich hält."""
+    return a if LIGHT_RANK.get(a, 9) >= LIGHT_RANK.get(b, 9) else b
+
+
+def allows(ceiling, light):
+    """Darf ein Schlüssel mit dieser Obergrenze diese Farbe benutzen?"""
+    return LIGHT_RANK.get(light, 9) <= LIGHT_RANK.get(ceiling, -1)
 
 
 def _split_lines(raw):
@@ -49,7 +72,7 @@ def _split_lines(raw):
 
 
 def parse_suppliers(raw, secrets_raw=""):
-    """`name=<url> [class=internal|eu|external]` je Zeile.
+    """`name=<url> [light=green|yellow|red]` je Zeile.
 
     Die Zugangsdaten kommen aus einer **zweiten, geheimen** Variablen
     (`name=<schlüssel>`), damit die sichtbare Konfiguration im Portal
@@ -76,16 +99,16 @@ def parse_suppliers(raw, secrets_raw=""):
         if not url.startswith(("http://", "https://")):
             errors.append(f"Bezugsquelle {name}: Adresse muss mit http:// oder https:// beginnen")
             continue
-        cls = "external"
+        light = DEFAULT_LIGHT
         bad = False
         for extra in parts[1:]:
             key, sep2, value = extra.partition("=")
-            if key == "class" and sep2:
-                if value in CLASS_RANK:
-                    cls = value
+            if key == "light" and sep2:
+                if value in LIGHT_RANK:
+                    light = value
                 else:
-                    errors.append(f"Bezugsquelle {name}: unbekannte Klasse {value!r} "
-                                  f"(erlaubt: {', '.join(CLASS_RANK)})")
+                    errors.append(f"Bezugsquelle {name}: unbekannte Ampelfarbe {value!r} "
+                                  f"(erlaubt: {', '.join(LIGHT_RANK)})")
                     bad = True
             else:
                 errors.append(f"Bezugsquelle {name}: unverstandene Angabe {extra!r}")
@@ -98,7 +121,7 @@ def parse_suppliers(raw, secrets_raw=""):
         suppliers[name] = {
             "name": name,
             "url": url.rstrip("/"),
-            "class": cls,
+            "light": light,
             "credential": creds.get(name, ""),
         }
     for name in creds:
@@ -154,35 +177,69 @@ def parse_aliases(raw, suppliers):
     return aliases, errors
 
 
-def candidates(alias, suppliers, allowed_classes):
+def candidates(alias, suppliers, ceiling, personal_data=False):
     """Die erlaubten Ziele eines Alias, in der Reihenfolge des Versuchs.
 
-    Voreingestellt nach Klasse (`internal` vor `eu` vor `external`),
-    bei `order=listed` in der Reihenfolge der Konfiguration. Stabil
-    sortiert, damit gleiche Klassen ihre erklärte Reihenfolge behalten.
+    Voreingestellt nach Ampel (grün vor gelb vor rot), bei
+    `order=listed` in der Reihenfolge der Konfiguration. Stabil
+    sortiert, damit gleiche Farben ihre erklärte Reihenfolge behalten.
+
+    `personal_data` ist die **Freigabe** des Schlüssels für
+    personenbezogene Daten — und schließt rot aus. Nicht, weil rot
+    grundsätzlich verboten wäre, sondern weil das Gateway nicht
+    hineinsehen darf und deshalb eine Anfrage nicht von der anderen
+    unterscheiden kann. Eine Regel, die davon abhinge, dass wir
+    personenbezogene Daten erkennen, wäre ein Versprechen, das wir
+    nicht halten können.
     """
-    allowed = set(allowed_classes)
     rows = []
     for target in alias["targets"]:
         src = suppliers.get(target["supplier"])
-        if src and src["class"] in allowed:
-            rows.append({"supplier": src, "model": target["model"]})
+        if not src or not allows(ceiling, src["light"]):
+            continue
+        if personal_data and src["light"] == "red":
+            continue
+        rows.append({"supplier": src, "model": target["model"]})
     if alias["order_listed"]:
         return rows
-    return sorted(rows, key=lambda r: CLASS_RANK.get(r["supplier"]["class"], 9))
+    return sorted(rows, key=lambda r: LIGHT_RANK.get(r["supplier"]["light"], 9))
 
 
-def blocked_classes(alias, suppliers, allowed_classes):
-    """Klassen, an denen dieser Alias für diesen Schlüssel scheitert.
+def alias_light(alias, suppliers, ceiling, personal_data=False):
+    """Die Farbe, die dieser Schlüssel bei diesem Alias **wirklich** bekäme.
 
-    Wird für die Fehlermeldung gebraucht: „nicht erreichbar" und „du
-    darfst diese Klasse nicht" sind zwei verschiedene Auskünfte, und
-    nur die zweite kann der Anwender selbst beheben.
+    Die schlechteste unter den erreichbaren Zielen — ein Alias, der von
+    einem grünen Modell auf einen roten Anbieter ausweichen kann, ist
+    nicht grün. Ohne diese Rechnung wäre die Ampel eine Beruhigung
+    statt einer Auskunft.
     """
-    allowed = set(allowed_classes)
+    rows = candidates(alias, suppliers, ceiling, personal_data)
+    if not rows:
+        return ""
+    light = "green"
+    for row in rows:
+        light = worse(light, row["supplier"]["light"])
+    return light
+
+
+def blocked_reasons(alias, suppliers, ceiling, personal_data=False):
+    """Warum ein Alias für diesen Schlüssel leer ausgeht.
+
+    „nicht erreichbar“ und „du darfst diese Farbe nicht“ sind zwei
+    verschiedene Auskünfte, und nur die zweite kann jemand beheben.
+    """
     out = []
     for target in alias["targets"]:
         src = suppliers.get(target["supplier"])
-        if src and src["class"] not in allowed and src["class"] not in out:
-            out.append(src["class"])
+        if not src:
+            continue
+        if personal_data and src["light"] == "red":
+            reason = ("rot ist für einen Schlüssel mit Freigabe für "
+                      "personenbezogene Daten nie erlaubt")
+        elif not allows(ceiling, src["light"]):
+            reason = f"{src['light']} liegt über der Obergrenze {ceiling}"
+        else:
+            continue
+        if reason not in out:
+            out.append(reason)
     return out

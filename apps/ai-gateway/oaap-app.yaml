@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -39,14 +39,19 @@ storage:
     mount: /data
 
 config:
-  # Bezugsquellen, eine je Zeile: `name=<adresse> [class=internal|eu|external]`
-  # Beispiel:
-  #   ollama=http://ollama:11434/v1 class=internal
-  #   tsystems=https://<ai-business-hub>/v1 class=eu
-  #   groq=https://api.groq.com/openai/v1 class=external
-  # Ohne Klassenangabe gilt `external` — unbekannte Herkunft ist nicht souverän.
+  # Bezugsquellen, eine je Zeile: `name=<adresse> [light=green|yellow|red]`
+  # Die Ampel sagt, was mit den Daten geschehen kann — nicht, wo ein
+  # Rechner steht: grün = verlassen das Unternehmen nicht; gelb = vielleicht,
+  # aber unter verbindlicher Zusage; rot = externer Anbieter, Daten können
+  # abfließen. Beispiel:
+  #   ollama=http://oaap-app-<ollama-instanz>:11434/v1 light=green
+  #   tsystems=https://<ai-business-hub>/v1 light=yellow
+  #   groq=https://api.groq.com/openai/v1 light=red
+  # Ohne Angabe gilt `red` — unbekannte Herkunft ist nicht souverän.
+  # Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
+  # erreichbar (RFC-0016): `sudo oaap app link add <diese-instanz> <ollama>`.
   - key: AIGW_SUPPLIERS
-    label: "Bezugsquellen (name=adresse [class=...]), eine je Zeile"
+    label: "Bezugsquellen (name=adresse [light=...]), eine je Zeile"
     default: ""
   # Zugangsdaten je Bezugsquelle: `name=<schlüssel>`, eine je Zeile.
   # Geheim: wird nie zurückgezeigt und erscheint in keiner Antwort, keiner
@@ -58,8 +63,10 @@ config:
   #   chat-default = tsystems:llama-3.3-70b, groq:llama-3.3-70b-versatile
   #   embedding-default = ollama:nomic-embed-text
   # Die Liste ist die erklärte Ausweich-Gruppe; gewechselt wird nur
-  # innerhalb. Vorzug hat `internal` vor `eu` vor `external` — wer die
-  # aufgeführte Reihenfolge will, hängt `order=listed` an.
+  # innerhalb. Vorzug hat grün vor gelb vor rot — wer die aufgeführte
+  # Reihenfolge will, hängt `order=listed` an. Die Ampel eines Alias ist
+  # die SCHLECHTESTE seiner Ziele: Wer von grün nach rot ausweichen kann,
+  # ist nicht grün.
   - key: AIGW_ALIASES
     label: "Aliasse (zweck=quelle:modell, ...), eine je Zeile"
     default: ""

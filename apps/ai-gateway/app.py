@@ -1,6 +1,6 @@
 """OAAP KI-Gateway 0.1 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
-Umsetzung der Capability `oaap.ai.gateway` 0.1 (RFC-0023). Das Gateway
+Umsetzung der Capability `oaap.ai.gateway` 0.2 (RFC-0023). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
 einer oder mehreren Bezugsquellen: lokales Modell, externer Anbieter,
 Kunden-Endpunkt oder ein anderes Gateway. Der Verbraucher fragt nach
@@ -39,7 +39,7 @@ import relay
 import store
 import supply
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -97,9 +97,20 @@ def failing_hard(addr):
         return len(hits) >= FAIL_LIMIT
 
 
-def allowed_classes(row):
-    raw = [c for c in (row["classes"] or "").split(",") if c]
-    return raw or list(supply.DEFAULT_CLASSES)
+def ceiling_of(row):
+    """Die schlechteste Ampelfarbe, die dieser Schlüssel benutzen darf."""
+    return row["ceiling"] or supply.DEFAULT_CEILING
+
+
+def pbd_of(row):
+    """Freigabe für personenbezogene Daten — eine Erklärung, kein Befund.
+
+    Das Gateway darf nicht in die Anfrage sehen (Spec §6) und kann
+    deshalb personenbezogene Daten nicht erkennen. Es kann nur prüfen,
+    was beim Ausstellen des Schlüssels gesagt wurde — und daraus die eine
+    Regel halten, die es halten kann: freigegeben heißt **nie rot**.
+    """
+    return bool(row["personal_data"])
 
 
 def allowed_aliases(row):
@@ -141,9 +152,10 @@ STYLE = """<style>
   .card.secretbox{border-color:#86efac;background:#f0fdf4}
   .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
        background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.internal{background:#dcfce7;color:#166534}
-  .badge.eu{background:#dbeafe;color:#1e3a8a}
-  .badge.external{background:#fef3c7;color:#92400e}
+  .badge.green{background:#dcfce7;color:#166534}
+  .badge.yellow{background:#fef3c7;color:#92400e}
+  .badge.red{background:#fee2e2;color:#991b1b}
+  .badge.pbd{background:#ede9fe;color:#5b21b6}
   .badge.off{background:#f3f4f6;color:#6b7280}
   .badge.err{background:#fee2e2;color:#991b1b}
   a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
@@ -209,9 +221,12 @@ def page(title, body, user, roles):
 </html>"""
 
 
-def class_badge(cls):
-    return (f'<span class="badge {esc(cls)}">{esc(cls)} · '
-            f'{esc(supply.CLASS_LABELS.get(cls, cls))}</span>')
+def light_badge(light, short=False):
+    if not light:
+        return '<span class="badge off">keine erreichbare Quelle</span>'
+    text = light if short else supply.LIGHT_LABELS.get(light, light)
+    rule = supply.LIGHT_RULES.get(light, "")
+    return f'<span class="badge {esc(light)}" title="{esc(rule)}">{esc(text)}</span>' 
 
 
 def fmt_tokens(value):
@@ -255,18 +270,23 @@ def admin_page(user, roles, host, notice="", secret=None):
             targets = []
             for target in alias["targets"]:
                 src = SUPPLIERS[target["supplier"]]
-                targets.append(f'{class_badge(src["class"])} <code>{esc(src["name"])}'
-                               f' · {esc(target["model"])}</code>')
-            order = ("wie aufgeführt" if alias["order_listed"]
-                     else "internal vor eu vor external")
+                targets.append(f'{light_badge(src["light"], short=True)} '
+                               f'<code>{esc(src["name"])} · {esc(target["model"])}</code>')
+            # Die Farbe eines Alias ist die schlechteste seiner Ziele — einer,
+            # der auf einen roten Anbieter ausweichen kann, ist nicht grün,
+            # auch wenn sein erstes Ziel es ist.
+            worst = supply.alias_light(alias, SUPPLIERS, "red")
+            order = ("wie aufgeführt" if alias["order_listed"] else "grün vor gelb vor rot")
             rows.append(f'<tr><td><code>{esc(name)}</code></td>'
+                        f'<td>{light_badge(worst)}</td>'
                         f'<td>{"<br>".join(targets)}</td>'
                         f'<td class="muted">{esc(order)}</td></tr>')
         parts.append(f"""<div class="card">
   <h2>Aliasse</h2>
   <p class="hint">Ein Verbraucher fragt nach dem Zweck, nie nach dem Modell.
-    Ausgewichen wird nur innerhalb der hier erklärten Gruppe.</p>
-  <table><tr><th>Alias</th><th>Bezugsquellen</th><th>Reihenfolge</th></tr>
+    Ausgewichen wird nur innerhalb der hier erklärten Gruppe — und die Ampel
+    eines Alias ist die <b>schlechteste</b> seiner Ziele.</p>
+  <table><tr><th>Alias</th><th>Ampel</th><th>Bezugsquellen</th><th>Reihenfolge</th></tr>
   {"".join(rows)}</table>
 </div>""")
     else:
@@ -284,7 +304,8 @@ def admin_page(user, roles, host, notice="", secret=None):
             cred = ("hinterlegt" if src["credential"]
                     else '<span class="muted">keine (z. B. lokal)</span>')
             rows.append(f'<tr><td><code>{esc(name)}</code></td>'
-                        f'<td>{class_badge(src["class"])}</td>'
+                        f'<td>{light_badge(src["light"])}<br>'
+                        f'<span class="muted">{esc(supply.LIGHT_RULES[src["light"]])}</span></td>'
                         f'<td><code>{esc(src["url"])}</code></td>'
                         f'<td>{cred}</td></tr>')
         parts.append(f"""<div class="card">
@@ -292,7 +313,7 @@ def admin_page(user, roles, host, notice="", secret=None):
   <p class="hint">Zugangsdaten stehen ausschließlich in der geheimen
     Konfiguration und erscheinen weder hier noch in einer Messzeile oder
     Fehlermeldung.</p>
-  <table><tr><th>Name</th><th>Klasse</th><th>Adresse</th><th>Zugangsdaten</th></tr>
+  <table><tr><th>Name</th><th>Ampel</th><th>Adresse</th><th>Zugangsdaten</th></tr>
   {"".join(rows)}</table>
 </div>""")
 
@@ -305,7 +326,9 @@ def admin_page(user, roles, host, notice="", secret=None):
         budget = (f'{fmt_tokens(used)} / {fmt_tokens(row["budget_tokens"])}'
                   if row["budget_tokens"] else f'{fmt_tokens(used)} <span class="muted">/ frei</span>')
         aliases = esc(row["aliases"]) if row["aliases"] else "alle"
-        classes = " ".join(class_badge(c) for c in allowed_classes(row))
+        light = light_badge(ceiling_of(row), short=True) + " und besser"
+        if pbd_of(row):
+            light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>' 
         if row["revoked"]:
             state = '<span class="badge err">widerrufen</span>'
             action = ""
@@ -319,7 +342,7 @@ def admin_page(user, roles, host, notice="", secret=None):
             f'<span class="muted">{esc(row["owner"] or "ohne Verantwortlichen")}'
             f'{(" · " + esc(row["cost_center"])) if row["cost_center"] else ""}'
             f'{(" · " + esc(row["project"])) if row["project"] else ""}</span></td>'
-            f'<td>{state}</td><td><code>{aliases}</code></td><td>{classes}</td>'
+            f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
             f'<td>{budget}</td>'
             f'<td>{t["calls"] if t else 0}<br><span class="muted">'
             f'{esc(t["last"]) if t else "noch nie"}</span></td>'
@@ -329,7 +352,7 @@ def admin_page(user, roles, host, notice="", secret=None):
   <p class="hint">Wer ein Gateway betreibt, gibt die Erlaubnis — ein Recht wird
     gegeben, nicht gehalten. Jedes Ausstellen und jedes Widerrufen steht in der
     Prüfspur; einzelne Anfragen stehen dort nicht.</p>
-  <table><tr><th>Etikett</th><th>Zustand</th><th>Aliasse</th><th>Klassen</th>
+  <table><tr><th>Etikett</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
     <th>Token</th><th>Aufrufe</th><th></th></tr>{"".join(rows) or
     '<tr><td colspan="7" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table>
 </div>""")
@@ -352,16 +375,22 @@ def admin_page(user, roles, host, notice="", secret=None):
       <input id="budget" name="budget" type="number" min="0" value="0"></div>
     <div><label for="rate">Anfragen je Minute (0 = Standard {DEFAULT_RATE})</label>
       <input id="rate" name="rate" type="number" min="0" value="0"></div>
-    <div><fieldset><legend>Erlaubte Klassen</legend>
-      <label><input type="checkbox" name="classes" value="internal" checked> internal</label>
-      <label><input type="checkbox" name="classes" value="eu" checked> eu</label>
-      <label><input type="checkbox" name="classes" value="external"> external</label>
+    <div><fieldset><legend>Höchstens diese Ampelfarbe</legend>
+      <label><input type="radio" name="ceiling" value="green"> grün</label>
+      <label><input type="radio" name="ceiling" value="yellow" checked> gelb</label>
+      <label><input type="radio" name="ceiling" value="red"> rot</label>
+    </fieldset></div>
+    <div><fieldset><legend>Personenbezogene Daten</legend>
+      <label><input type="checkbox" name="personal_data" value="1"> freigegeben</label>
     </fieldset></div>
     <div><button type="submit">Ausstellen</button></div>
   </form>
-  <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <code>internal</code>
-    und <code>eu</code> — souverän ist das, was passiert, wenn niemand etwas
-    einstellt. <code>external</code> ist eine bewusste Zusatzerlaubnis.</p>
+  <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <b>gelb</b> —
+    souverän ist das, was passiert, wenn niemand etwas einstellt; <b>rot</b> ist
+    eine bewusste Zusatzerlaubnis. Die Freigabe für personenbezogene Daten
+    <b>schließt rot aus</b>: Das Gateway darf nicht in die Anfrage sehen und kann
+    eine Anfrage deshalb nicht von der anderen unterscheiden — eine Regel, die
+    das voraussetzte, wäre ein Versprechen, das wir nicht halten können.</p>
 </div>""")
 
     # --- Verbrauch
@@ -492,8 +521,23 @@ class Handler(BaseHTTPRequestHandler):
             row = self.authorize()
             if row is None:
                 return
-            data = [{"id": name, "object": "model", "created": 0, "owned_by": "oaap"}
-                    for name in sorted(allowed_aliases(row))]
+            ceiling, pbd = ceiling_of(row), pbd_of(row)
+            data = []
+            for name in sorted(allowed_aliases(row)):
+                # Die Farbe ist die schlechteste unter den Zielen, die
+                # dieser Schlüssel erreichen darf. Ein Alias, der auf einen
+                # roten Anbieter ausweichen kann, ist nicht grün — sonst
+                # wäre die Ampel eine Beruhigung statt einer Auskunft.
+                light = supply.alias_light(ALIASES[name], SUPPLIERS, ceiling, pbd)
+                if not light:
+                    # Für diesen Schlüssel gibt es kein erreichbares Ziel.
+                    # Ihn trotzdem anzubieten hieße, dem Client eine Wahl
+                    # hinzulegen, die beim ersten Klick scheitert.
+                    continue
+                data.append({"id": name, "object": "model", "created": 0,
+                             "owned_by": "oaap", "oaap_light": light,
+                             "oaap_light_meaning": supply.LIGHT_LABELS[light],
+                             "oaap_data_rule": supply.LIGHT_RULES[light]})
             self.send_json(200, {"object": "list", "data": data})
             return
         if path == "/v1/usage":
@@ -508,8 +552,11 @@ class Handler(BaseHTTPRequestHandler):
                 "input_tokens": int(totals["in_tokens"]) if totals else 0,
                 "output_tokens": int(totals["out_tokens"]) if totals else 0,
                 "budget_tokens": int(row["budget_tokens"]),
+                "ceiling": ceiling_of(row),
+                "personal_data_released": pbd_of(row),
                 "recent": [{"time": r["time"], "alias": r["alias"],
                             "supplier": r["supplier"], "model": r["model"],
+                            "light": SUPPLIERS.get(r["supplier"], {}).get("light", ""),
                             "input_tokens": r["in_tokens"], "output_tokens": r["out_tokens"],
                             "ms": r["ms"], "outcome": r["outcome"]}
                            for r in store.recent(DB, row["id"], 20)],
@@ -564,7 +611,10 @@ class Handler(BaseHTTPRequestHandler):
 
         notice, secret = "", None
         if path == "/issue":
-            classes = [c for c in multi.get("classes", []) if c in supply.CLASS_RANK]
+            ceiling = form.get("ceiling") or supply.DEFAULT_CEILING
+            if ceiling not in supply.LIGHT_RANK:
+                ceiling = supply.DEFAULT_CEILING
+            personal_data = form.get("personal_data") == "1"
             aliases = [a.strip() for a in form.get("aliases", "").split(",") if a.strip()]
             unknown = [a for a in aliases if a not in ALIASES]
             if unknown:
@@ -574,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     value, _ = store.issue(
                         DB, form.get("label", ""), user, aliases=aliases,
-                        classes=classes or list(supply.DEFAULT_CLASSES),
+                        ceiling=ceiling, personal_data=personal_data,
                         budget_tokens=_int(form.get("budget")),
                         rate_per_min=_int(form.get("rate")),
                         owner=form.get("owner", ""), cost_center=form.get("cost_center", ""),
@@ -638,16 +688,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         alias = ALIASES[alias_name]
-        classes = allowed_classes(row)
-        targets = supply.candidates(alias, SUPPLIERS, classes)
+        ceiling, pbd = ceiling_of(row), pbd_of(row)
+        targets = supply.candidates(alias, SUPPLIERS, ceiling, pbd)
         if not targets:
-            blocked = supply.blocked_classes(alias, SUPPLIERS, classes)
-            if blocked:
+            reasons = supply.blocked_reasons(alias, SUPPLIERS, ceiling, pbd)
+            if reasons:
                 self.send_error_doc(
-                    503, f"Für „{alias_name}“ ist nur {', '.join(blocked)} eingerichtet, "
-                         f"dieser Schlüssel darf {', '.join(classes)}. Der Betreiber kann die "
-                         "Klasse freigeben oder eine andere Quelle eintragen.",
-                    "class_not_permitted")
+                    503, f"Für „{alias_name}“ bleibt jede Quelle gesperrt: "
+                         f"{'; '.join(reasons)}. Der Betreiber kann die Obergrenze "
+                         "heraufsetzen oder eine andere Quelle eintragen.",
+                    "light_not_permitted")
             else:
                 self.send_error_doc(503, f"Für „{alias_name}“ ist keine Bezugsquelle erreichbar.",
                                     "no_supplier")
@@ -770,15 +820,17 @@ def _int(value):
 def cli(argv):
     """Für kopflose Knoten: `docker exec <container> python3 /srv/app.py key ...`."""
     if len(argv) < 2 or argv[0] != "key":
-        print("Aufruf: app.py key issue <etikett> [--aliases a,b] [--classes internal,eu] "
-              "[--budget N] [--rate N] [--owner X] | key list | key revoke <etikett>")
+        print("Aufruf: app.py key issue <etikett> [--aliases a,b] "
+              "[--ceiling green|yellow|red] [--personal-data ja] [--budget N] "
+              "[--rate N] [--owner X] | key list | key revoke <etikett>")
         return 2
     action = argv[1]
     if action == "list":
         for row in store.keys(DB):
             print(f'{row["label"]:24} {row["created"]} '
                   f'{"WIDERRUFEN" if row["revoked"] else "gültig":10} '
-                  f'aliasse={row["aliases"] or "alle"} klassen={row["classes"]}')
+                  f'aliasse={row["aliases"] or "alle"} bis={row["ceiling"]} '
+                  f'pbD={"freigegeben" if row["personal_data"] else "nein"}')
         return 0
     if action == "revoke" and len(argv) > 2:
         print("widerrufen" if store.revoke(DB, argv[2], "cli") else "unbekannt oder schon widerrufen")
@@ -792,8 +844,9 @@ def cli(argv):
         value, _ = store.issue(
             DB, argv[2], "cli",
             aliases=[a for a in opts.get("aliases", "").split(",") if a],
-            classes=[c for c in opts.get("classes", "").split(",") if c] or
-                    list(supply.DEFAULT_CLASSES),
+            ceiling=(opts.get("ceiling") if opts.get("ceiling") in supply.LIGHT_RANK
+                     else supply.DEFAULT_CEILING),
+            personal_data=opts.get("personal-data", "").lower() in ("ja", "yes", "1"),
             budget_tokens=_int(opts.get("budget")), rate_per_min=_int(opts.get("rate")),
             owner=opts.get("owner", ""))
         print(value)

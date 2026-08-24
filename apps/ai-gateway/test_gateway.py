@@ -113,9 +113,9 @@ FAKE_URL = f"http://127.0.0.1:{fake.server_address[1]}/v1"
 TMP = tempfile.mkdtemp(prefix="aigw-test-")
 os.environ["AIGW_DATA_DIR"] = TMP
 os.environ["AIGW_SUPPLIERS"] = (
-    f"lokal={FAKE_URL} class=internal\n"
-    f"eusrc={FAKE_URL} class=eu\n"
-    f"fern={FAKE_URL} class=external")
+    f"lokal={FAKE_URL} light=green\n"
+    f"eusrc={FAKE_URL} light=yellow\n"
+    f"fern={FAKE_URL} light=red")
 os.environ["AIGW_SUPPLIER_KEYS"] = f"fern={GEHEIM}"
 os.environ["AIGW_ALIASES"] = ("chat-default = fern:fern-modell, eusrc:eu-modell\n"
                               "nur-lokal = lokal:klein\n"
@@ -169,7 +169,7 @@ check("die Antwort verrät nichts über den Grund",
 
 print("\n-- Schlüssel ausstellen (Betreiber-Sicht)")
 status, body, _ = call("/issue", "POST", admin=True,
-                       form="label=laptop&owner=J%C3%B6rg&classes=internal&classes=eu"
+                       form="label=laptop&owner=J%C3%B6rg&ceiling=yellow"
                             "&aliases=chat-default%2Cnur-lokal&budget=0&rate=0")
 check("Ausstellen antwortet mit einer Seite", status == 200)
 text = body.decode("utf-8")
@@ -189,6 +189,41 @@ names = sorted(m["id"] for m in doc["data"])
 check("nur die erlaubten Aliasse", names == ["chat-default", "nur-lokal"], names)
 check("kein Modellname der Quelle", "fern-modell" not in body.decode())
 check("kein Quellenname", "eusrc" not in body.decode() and "fern" not in body.decode())
+
+print("\n-- §9.6a die Ampel ist die schlechteste erreichbare Farbe")
+by_id = {m["id"]: m for m in doc["data"]}
+check("nur-lokal ist grün", by_id["nur-lokal"]["oaap_light"] == "green", by_id["nur-lokal"])
+check("chat-default ist für diesen Schlüssel gelb (die Obergrenze schneidet rot ab)",
+      by_id["chat-default"]["oaap_light"] == "yellow", by_id["chat-default"])
+check("die Datenregel steht dabei",
+      "personenbezogen" in by_id["chat-default"]["oaap_data_rule"].lower(),
+      by_id["chat-default"]["oaap_data_rule"])
+
+key_rot, _ = store.issue(app.DB, "darf-rot", "test", ceiling="red")
+_, body_rot, _ = call("/v1/models", key=key_rot)
+rot = {m["id"]: m for m in json.loads(body_rot)["data"]}
+check("derselbe Alias ist ROT, sobald das Ausweichen nach rot möglich ist",
+      rot["chat-default"]["oaap_light"] == "red", rot["chat-default"])
+check("und ein rein grüner Alias bleibt grün",
+      rot["nur-lokal"]["oaap_light"] == "green", rot["nur-lokal"])
+
+print("\n-- §9.6b Freigabe für personenbezogene Daten heißt: nie rot")
+Fake.calls.clear()
+key_pbd, _ = store.issue(app.DB, "mit-pbd", "test", ceiling="red", personal_data=True)
+status, body, _ = call("/v1/chat/completions", "POST", key=key_pbd,
+                       body={"model": "nur-fern", "messages": []})
+check("rot wird verweigert, obwohl die Obergrenze rot ist", status == 503, status)
+check("die Quelle wurde nicht angefasst", Fake.calls == [], Fake.calls)
+check("und die Antwort sagt, warum", "personenbezogen" in body.decode(), body)
+_, body_pbd, _ = call("/v1/models", key=key_pbd)
+namen = [m["id"] for m in json.loads(body_pbd)["data"]]
+check("ein rein roter Alias wird so einem Schlüssel gar nicht erst angeboten",
+      "nur-fern" not in namen, namen)
+check("die erreichbaren bleiben in der Liste",
+      "chat-default" in namen and "nur-lokal" in namen, namen)
+status, _, _ = call("/v1/chat/completions", "POST", key=key_pbd,
+                    body={"model": "chat-default", "messages": []})
+check("gelb geht weiterhin", status == 200, status)
 
 print("\n-- §9.2 ein nicht erlaubter Alias wird mit der Liste abgelehnt")
 status, body, _ = call("/v1/chat/completions", "POST", key=KEY,
@@ -215,7 +250,7 @@ check("Token-Zahlen übernommen", (rows[0]["in_tokens"], rows[0]["out_tokens"]) 
 
 print("\n-- §9.10 Zugangsdaten fließen nur nach oben, nie nach unten")
 Fake.calls.clear()
-key_fern, _ = store.issue(app.DB, "mit-fern", "test", classes=["external"])
+key_fern, _ = store.issue(app.DB, "mit-fern", "test", ceiling="red")
 status, body, headers = call("/v1/chat/completions", "POST", key=key_fern,
                              body={"model": "nur-fern", "messages": []})
 check("die Quelle sieht ihre eigenen Zugangsdaten",
@@ -226,8 +261,7 @@ check("und auch in keiner Kopfzeile", GEHEIM not in json.dumps(headers))
 print("\n-- Ausweichen nur innerhalb der Gruppe, und es steht in der Messzeile")
 # Braucht einen Schlüssel, der beide Klassen der Gruppe darf — sonst gibt
 # es gar keine zweite Quelle, zu der ausgewichen werden könnte.
-key_alle, _ = store.issue(app.DB, "alle-klassen", "test",
-                          classes=["internal", "eu", "external"])
+key_alle, _ = store.issue(app.DB, "alle-farben", "test", ceiling="red")
 Fake.calls.clear()
 Fake.fail_times = 1                      # die erste Quelle fällt aus
 status, body, _ = call("/v1/chat/completions", "POST", key=key_alle,
@@ -237,19 +271,18 @@ check("zwei Versuche", len(Fake.calls) == 2, len(Fake.calls))
 rows = store.recent(app.DB, limit=1)
 check("die zweite Quelle steht in der Messzeile", rows[0]["supplier"] == "fern", dict(rows[0]))
 
-print("\n-- §9.6 eine verbotene Klasse wird nicht heimlich benutzt")
+print("\n-- §9.6 eine verbotene Farbe wird nicht heimlich benutzt")
 Fake.calls.clear()
-key_eu, _ = store.issue(app.DB, "nur-eu", "test", classes=["eu"])
-status, body, _ = call("/v1/chat/completions", "POST", key=key_eu,
-                       body={"model": "nur-lokal", "messages": []})
-check("503 statt Ausweichen über die Klassengrenze", status == 503, status)
+key_gruen, _ = store.issue(app.DB, "nur-gruen", "test", ceiling="green")
+status, body, _ = call("/v1/chat/completions", "POST", key=key_gruen,
+                       body={"model": "chat-default", "messages": []})
+check("503 statt Ausweichen über die Ampelgrenze", status == 503, status)
 check("keine Anfrage an die Quelle", Fake.calls == [], Fake.calls)
-check("die Antwort erklärt, was der Betreiber tun kann",
-      "internal" in body.decode() and "eu" in body.decode(), body)
+check("die Antwort nennt die Obergrenze", "Obergrenze" in body.decode(), body)
 
 print("\n-- §9.5 Budget: 429, und die Quelle wird nicht angefasst")
 Fake.calls.clear()
-key_arm, _ = store.issue(app.DB, "knapp", "test", classes=["eu"], budget_tokens=10)
+key_arm, _ = store.issue(app.DB, "knapp", "test", ceiling="yellow", budget_tokens=10)
 call("/v1/chat/completions", "POST", key=key_arm,
      body={"model": "chat-default", "messages": []})          # verbraucht 16
 status, body, headers = call("/v1/chat/completions", "POST", key=key_arm,
@@ -259,7 +292,7 @@ check("die Quelle wurde nur einmal gefragt", len(Fake.calls) == 1, len(Fake.call
 check("kein Retry-After, weil Warten nicht hilft", "Retry-After" not in headers, headers)
 
 print("\n-- Rate-Limit: das ist die andere Art von 429")
-key_lang, _ = store.issue(app.DB, "langsam", "test", classes=["eu"], rate_per_min=1)
+key_lang, _ = store.issue(app.DB, "langsam", "test", ceiling="yellow", rate_per_min=1)
 call("/v1/chat/completions", "POST", key=key_lang, body={"model": "chat-default", "messages": []})
 status, body, headers = call("/v1/chat/completions", "POST", key=key_lang,
                              body={"model": "chat-default", "messages": []})
@@ -299,6 +332,11 @@ check("die eigene Summe", mine["key"] == "laptop" and mine["calls"] >= 3, mine["
 check("Account und Mandant stehen dabei (heute default)",
       mine["account"] == "default" and mine["tenant"] == "default")
 check("kein fremder Schlüssel in der Antwort", "knapp" not in body.decode())
+check("die Obergrenze steht dabei", mine["ceiling"] == "yellow", mine.get("ceiling"))
+check("jede Zeile nennt die Farbe, die tatsächlich geantwortet hat",
+      all(r["light"] in ("green", "yellow", "red", "") for r in mine["recent"])
+      and any(r["light"] == "yellow" for r in mine["recent"]),
+      [r["light"] for r in mine["recent"]])
 
 print("\n-- Betreiber-Sicht bleibt der Serververwaltung vorbehalten")
 status, _, _ = call("/", admin=False)
