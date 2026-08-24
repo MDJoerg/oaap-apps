@@ -15,19 +15,43 @@
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/fleetview"
       },
-      "roles": ["admin", "partner"],
-      "categories": ["operations"],
+      "roles": [
+        "admin",
+        "partner"
+      ],
+      "categories": [
+        "operations"
+      ],
       "app_class": "frontend",
-      "audience": ["operator"],
+      "audience": [
+        "operator"
+      ],
       "maturity": "alpha",
       "status": "active",
-      "tags": ["flotte", "monitoring", "knoten", "landschaft", "fleet"],
+      "tags": [
+        "flotte",
+        "monitoring",
+        "knoten",
+        "landschaft",
+        "fleet"
+      ],
       "summary": "Die OAAP-Flotte auf einen Blick: Knoten, Versionen, Instanzen und Auffälligkeiten — strikt lesend.",
       "description": "Flotten-Übersicht (RFC-0021): Der Betreiber hinterlegt die Knotenliste und je Knoten einen Flotten-Schlüssel (geheimer Konfigurationswert, auf dem Knoten ausgestellt mit 'sudo oaap fleet key issue'); FleetView pollt die Knoten im Minutentakt über deren lesende Status-Auskunft /fleet/status und zeigt Ampeln, Plattformversionen, Instanzen und alle Auffälligkeiten der Landschaft oben auf der Seite. Seit 0.2 zusätzlich: die DNS-Sicht je Knoten (veröffentlichte Namen mit dem Urteil des Knotens, öffentliche IP — Schema oaap.fleet.status/0.2, braucht Plattform 0.1.43) und die Liste mehrfach vorhandener Instanznamen über Knoten hinweg (Umzugs-Reste fallen auf). Seit 0.3 zusätzlich je Instanz ihr automatischer Name <instanz>.<knoten> mit einem eigenen Urteil (Schema oaap.fleet.status/0.3, braucht Plattform 0.1.46): Automatische Namen stehen bewusst nicht in DNS-Einträgen — dort antwortet ein Wildcard für jeden Namen, auch für erfundene —, geprüft wird deshalb, ob die Instanz unter diesem Namen auf ihrem Knoten erreichbar ist (Route vorhanden, App antwortet); keine Aussage über TLS oder Zugang von außen. Nicht erreichbar ist ein Zustand, keine Fehlerseite: der letzte bekannte Stand bleibt sichtbar und wird als veraltet markiert. Kein Schreibweg und keine Fernsteuerung — gehandelt wird im Portal des jeweiligen Knotens, jede Zeile verlinkt dorthin; Alarmierung bleibt Sache des Monitorings (Uptime Kuma). Schlüssel werden nie angezeigt und nie gespeichert.",
       "links": [
-        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/fleetview" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0021-fleet-status-api-and-overview.md", "label": "RFC-0021 — Fleet Status API und Flotten-Übersicht" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.fleet.status.md", "label": "Spec oaap.fleet.status 0.2" }
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/fleetview"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0021-fleet-status-api-and-overview.md",
+          "label": "RFC-0021 — Fleet Status API und Flotten-Übersicht"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.fleet.status.md",
+          "label": "Spec oaap.fleet.status 0.2"
+        }
       ]
     },
     {
@@ -40,20 +64,49 @@
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
       },
-      "profiles": ["dev"],
-      "roles": ["keyuser", "admin"],
-      "categories": ["development"],
+      "profiles": [
+        "dev"
+      ],
+      "roles": [
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "development"
+      ],
       "app_class": "frontend",
-      "audience": ["operator", "developer"],
+      "audience": [
+        "operator",
+        "developer"
+      ],
       "maturity": "beta",
       "status": "active",
-      "tags": ["briefing", "ki", "vorhaben", "entwicklung", "paket", "deployment", "zielknoten"],
+      "tags": [
+        "briefing",
+        "ki",
+        "vorhaben",
+        "entwicklung",
+        "paket",
+        "deployment",
+        "zielknoten"
+      ],
       "summary": "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, gelieferte Pakete prüfen und ausrollen.",
       "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Gibt es die Instanz noch nicht, tut es dasselbe mit einer einmaligen Anlege-Erlaubnis aus dem Portal. Seit 0.3 muss die Instanz nicht auf demselben Knoten liegen wie das Studio: Jedes Vorhaben hat einen benannten Zielknoten (erkannt am Deploy-Hook) und darauf zwei Instanzen — Test und Produktiv —, beide verlinkt auf ihre Seite im Portal dieses Knotens; fehlt die produktive noch, sagt die Karte, wo sie entsteht. Ist für den Zielknoten ein Flotten-Schlüssel hinterlegt (geheime Konfiguration, ausgestellt auf dem Knoten), zeigt die Seite des Vorhabens zusätzlich, was der Knoten über beide Instanzen sagt: Version, Kanal, Ampel, veröffentlichte Adressen mit DNS-Urteil und die offenen Punkte, die sie betreffen — ein Schlüssel, der ausschließlich lesen kann; das Recht zu handeln bleibt der Deploy-Token, den der Anwender eingibt. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
       "links": [
-        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md", "label": "App Deployment Contract" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0019-artifact-deployment-private-sources.md", "label": "RFC-0019 — Deployment aus einem Paket" }
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/studio"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/docs/app-deployment-contract.md",
+          "label": "App Deployment Contract"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0019-artifact-deployment-private-sources.md",
+          "label": "RFC-0019 — Deployment aus einem Paket"
+        }
       ]
     },
     {
@@ -66,18 +119,41 @@
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/store-editor"
       },
-      "roles": ["user", "keyuser", "admin"],
-      "categories": ["development", "infrastructure"],
+      "roles": [
+        "user",
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "development",
+        "infrastructure"
+      ],
       "app_class": "frontend",
-      "audience": ["operator", "developer"],
+      "audience": [
+        "operator",
+        "developer"
+      ],
       "maturity": "alpha",
       "status": "active",
-      "tags": ["store", "liste", "pruefen", "manifest", "qualitaet"],
+      "tags": [
+        "store",
+        "liste",
+        "pruefen",
+        "manifest",
+        "qualitaet"
+      ],
       "summary": "Store-Listen prüfen und pflegen — gegen das Format und gegen die Manifeste, auf die sie zeigen.",
       "description": "Eine Store-Liste ist kein Dokument, sondern eine Anweisung, die auf fremden Rechnern Software installiert. Dieses Werkzeug hält jede Liste gegen das Format und gegen die Manifeste hinter ihren Einträgen: Widersprüche bei Version, Art oder Rollen fallen sofort auf, Behauptungen ohne Deckung im Paket ebenso. Der Anlass war echt — eine App stand wochenlang als Hintergrunddienst in der Liste, während ihr Manifest davon nichts sagte. Bearbeitet wird in einer Arbeitskopie: Redaktionelles frei, die fünf Felder aus dem Manifest verriegelt, und wer sie abweichend pflegt, dessen Abweichung wird markiert und überlebt die nächste Neuerzeugung. Das Ergebnis ist eine Datei zum Herunterladen. Der umgekehrte Weg ist der Nachpflege-Bericht: Er sagt, was dem Manifest einer App fehlt, mit einsetzbarem YAML-Block — zum Weiterreichen an den, der die App betreut. Dieser Stand (Bauschritte 1 und 2 aus RFC-0013) veröffentlicht noch nichts — kein Zurückschreiben ins Repository, keine Zugangsdaten.",
       "links": [
-        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/store-editor" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0013-store-editor.md", "label": "RFC-0013 — Der Store Editor" }
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/store-editor"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0013-store-editor.md",
+          "label": "RFC-0013 — Der Store Editor"
+        }
       ]
     },
     {
@@ -90,19 +166,142 @@
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/livekit"
       },
-      "profiles": ["exposed"],
-      "roles": ["public"],
-      "categories": ["infrastructure"],
+      "profiles": [
+        "exposed"
+      ],
+      "roles": [
+        "public"
+      ],
+      "categories": [
+        "infrastructure"
+      ],
       "app_class": "service",
-      "audience": ["operator", "developer"],
+      "audience": [
+        "operator",
+        "developer"
+      ],
       "maturity": "alpha",
       "status": "active",
-      "tags": ["webrtc", "sfu", "medien", "audio", "video", "meeting", "livekit"],
+      "tags": [
+        "webrtc",
+        "sfu",
+        "medien",
+        "audio",
+        "video",
+        "meeting",
+        "livekit"
+      ],
       "summary": "WebRTC-Medienserver (SFU) für Echtzeit-Audio und -Video — die Referenz der Echtzeit-Medien-Capability.",
       "description": "Ein SFU-Medienserver: Clients verbinden sich zu ihm, statt untereinander ein Netz aufzuspannen — damit ist NAT per Konstruktion gelöst und die Last wächst linear statt quadratisch. Signaling läuft als WSS über das Gateway; der Medienpfad ist EIN fester UDP/TCP-Port am Gateway vorbei (RFC-0015/RFC-0017), den ein server_admin auf einem Knoten mit Profil `exposed` freigibt und auf dem Router weiterleitet. Mehr-Container-App (LiveKit + Redis); die Meeting-App signiert ihre Client-Tokens mit dem hier hinterlegten Schlüsselpaar. Referenz-Implementierung — die Fähigkeit gehört der Plattform, LiveKit ist austauschbar.",
       "links": [
-        { "rel": "source", "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/livekit" },
-        { "rel": "docs", "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0017-realtime-media-livekit-reference.md", "label": "RFC-0017 — Echtzeit-Medien / LiveKit" }
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/livekit"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0017-realtime-media-livekit-reference.md",
+          "label": "RFC-0017 — Echtzeit-Medien / LiveKit"
+        }
+      ]
+    },
+    {
+      "id": "ai-gateway",
+      "name": "OAAP KI-Gateway",
+      "type": "native",
+      "version": "0.2.0",
+      "released": "2026-08-24",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/ai-gateway"
+      },
+      "roles": [
+        "admin",
+        "public"
+      ],
+      "categories": [
+        "ai",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator",
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "ki",
+        "llm",
+        "openai",
+        "gateway",
+        "api-key",
+        "verbrauch",
+        "souveraen"
+      ],
+      "summary": "Eine Bezugsquelle für alle KI-Verbräuche: OpenAI-kompatibel, mit Aliassen nach Zweck, API-Schlüsseln und Verbrauchsmessung.",
+      "description": "Bietet EINEN OpenAI-kompatiblen Endpunkt an und bedient sich bei einer oder mehreren Bezugsquellen: lokale Modelle (Ollama), externe Anbieter, ein Kunden-Endpunkt oder ein anderes Gateway. Der Verbraucher fragt nach einem Zweck („chat-default\", „code\", „embedding-default\") und nie nach einem Hersteller — deshalb funktioniert jeder fertige Client ohne Anpassung, und der Betreiber kann umleiten, ausweichen und abrechnen. Jede Quelle trägt eine AMPEL, die sagt, was mit den Daten geschehen kann: grün = sie verlassen das Unternehmen nicht; gelb = vielleicht, aber unter verbindlicher Zusage; rot = externer Anbieter, Daten können abfließen. Innerhalb einer erklärten Ausweich-Gruppe gilt grün vor gelb vor rot, und die Farbe eines Alias ist die SCHLECHTESTE seiner erreichbaren Ziele — wer nach rot ausweichen kann, ist nicht grün. Je Schlüssel: Metadaten (Verantwortlicher, Kostenstelle, Projekt), eine Ampel-Obergrenze (Standard gelb), eine Freigabe für personenbezogene Daten (die rot ausschließt), ein Token-Budget und ein Rate-Limit. Der API-Pfad /v1 ist als „public\" deklariert: Die Plattform authentifiziert dort nichts und bremst je Client (RFC-0010) — geprüft wird im Dienst selbst, denn für den KI-Verbrauch IST der API-Schlüssel die Identität. Die Oberfläche für den Betreiber liegt auf / und ist der Serververwaltung vorbehalten. In keinem Protokoll stehen jemals Prompts oder Antworten: gezählt wird, nicht mitgeschrieben. Ein Ollama auf demselben Knoten wird über eine App-zu-App-Verbindung erreichbar (RFC-0016) und nicht über eine Route.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/ai-gateway"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.ai.gateway.md",
+          "label": "Capability oaap.ai.gateway"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0023-ai-gateway.md",
+          "label": "RFC-0023 — Herkunft, Ort, Berechtigung"
+        }
+      ]
+    },
+    {
+      "id": "ollama-models",
+      "name": "OAAP Ollama-Modelle",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-08-24",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/ollama-models"
+      },
+      "roles": [
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "ai",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator",
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "ki",
+        "ollama",
+        "modelle",
+        "llm",
+        "betrieb"
+      ],
+      "summary": "Die Betriebsoberfläche zu Ollama: welche Modelle liegen da, was ist gerade geladen, holen und löschen.",
+      "description": "Ollama bringt keine Oberfläche mit — Modelle holt man auf der Kommandozeile, und was auf der Platte liegt, sieht man gar nicht. Diese App schließt genau diese Lücke: installierte Modelle mit Größe, Quantisierung und Alter; was GERADE IM SPEICHER liegt (auf einer Maschine ohne Grafikkarte die Zahl, die erklärt, warum die erste Antwort nach einer Pause so lange braucht); Modelle holen mit Fortschritt und löschen — beides der Serververwaltung vorbehalten und mit Protokoll, weil es Platz und Bandbreite auf dem Knoten belegt. Dazu die Zeilen zum Kopieren, mit denen das KI-Gateway diese Modelle anbietet. Erreicht wird Ollama über eine App-zu-App-Verbindung (RFC-0016: „sudo oaap app link add <diese-instanz> <ollama-instanz>\") statt über eine Route — Ollamas eigene API kennt keinerlei Authentifizierung, und was nicht geroutet ist, ruft niemand auf. Fehlt die Verbindung, zeigt die Seite genau den Befehl, der sie anlegt. Zwei Dinge behauptet die App bewusst nicht: freien Plattenplatz (sie sieht in einen fremden Container, nicht auf dessen Platte) und Geschwindigkeit — die Modell-Vorschläge sind für einen Knoten ohne Grafikkarte eingeordnet. Gechattet wird woanders: dafür gibt es Open WebUI in der Community-Liste.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/ollama-models"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/ollama/ollama/blob/main/docs/api.md",
+          "label": "Ollama-API"
+        }
       ]
     }
   ]
