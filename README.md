@@ -29,6 +29,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.0   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.0   |
 | [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.2.0   |
+| [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
 
 ## Installation
 

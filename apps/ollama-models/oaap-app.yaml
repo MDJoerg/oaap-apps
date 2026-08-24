@@ -1,0 +1,47 @@
+oaap_manifest: "0.2"
+
+app:
+  id: ollama-models
+  name: OAAP Ollama-Modelle
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Die Betriebsoberfläche zu Ollama: welche Modelle liegen da, was ist gerade geladen, Modelle holen und löschen — und die Zeilen für den Anschluss ans KI-Gateway"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Sehen darf jeder Schlüsselanwender; **holen und löschen** belegt Platz
+  # und Bandbreite auf dem Knoten und ist deshalb der Serververwaltung
+  # vorbehalten. Die Trennung macht die App selbst anhand der geprüften
+  # Rollen-Kopfzeile — die Route lässt beide herein.
+  - path: /
+    roles: [keyuser, admin]
+
+storage:
+  # Nur das Protokoll: wer wann welches Modell geholt oder gelöscht hat.
+  # Die Modelle selbst liegen im Mount der Ollama-Instanz, nicht hier.
+  - name: data
+    mount: /data
+
+config:
+  # Die Adresse der Ollama-Instanz auf DIESEM Knoten. Erreichbar wird sie
+  # erst durch eine App-zu-App-Verbindung (RFC-0016) — Standard ist
+  # Isolation, die Verbindung ist eine ausdrückliche Entscheidung des
+  # Betreibers und jederzeit widerrufbar:
+  #
+  #   sudo oaap app link add <diese-instanz> <ollama-instanz>
+  #
+  # Danach löst der Containername auf dem gemeinsamen Netz auf. Ollamas
+  # eigene API wird dabei NICHT veröffentlicht: Sie kennt keinerlei
+  # Authentifizierung, und was nicht geroutet ist, ruft niemand auf.
+  - key: OLLAMA_URL
+    label: "Adresse der Ollama-Instanz (z. B. http://oaap-app-ollama:11434)"
+    default: "http://oaap-app-ollama:11434"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15
