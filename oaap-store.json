@@ -160,8 +160,8 @@
       "id": "livekit",
       "name": "LiveKit (Echtzeit-Medien)",
       "type": "wrapped",
-      "version": "0.1.1",
-      "released": "2026-08-24",
+      "version": "0.1.2",
+      "released": "2026-09-05",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/livekit"

@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: livekit
   name: LiveKit (Echtzeit-Medien)
-  version: 0.1.1
+  version: 0.1.2
   type: wrapped
   # Kein Startfeld-Kachel: LiveKit hat keine Menschenoberfläche, sondern ist
   # ein Medienserver, zu dem sich eine andere App (das Meeting-Frontend)
@@ -52,9 +52,13 @@ config:
   - key: LIVEKIT_API_KEY
     label: "API-Schlüssel (Kennung; auch in der Meeting-App eintragen)"
     default: "oaap"
+  # Dieses Geheimnis bestimmt der Betreiber selbst — also darf der Knoten
+  # es erzeugen (Runtime 2.8). Der Knopf ist bewusst nur hier und nicht an
+  # LIVEKIT_API_KEY: das ist eine Kennung, kein Geheimnis.
   - key: LIVEKIT_API_SECRET
     label: "API-Geheimnis (mindestens 32 Zeichen; die Meeting-App signiert damit ihre Tokens)"
     secret: true
+    generate: token
 
 health:
   # Kein `service`: Die Gesundheitspruefung haengt am PRIMAEREN Dienst
