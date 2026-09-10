@@ -1,0 +1,51 @@
+oaap_manifest: "0.3"
+
+app:
+  id: raci
+  name: OAAP RACI
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Customer/Person als Referenz, schreibt 'responsible' in raci.assignments"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  - path: /
+    roles: [user]
+
+# RFC-0031 SS5 / oaap.data.model 0.1 SS2.2 -- fast wortgleich mit dem
+# RACI-Beispiel dort und in test_data_model.py's Fixtur. 'responsible'
+# und 'raci.assignments' sind RACIs EIGENE Typen (D1: "others attach
+# their own group types") auf Customer, einem Objekttyp, den RACI
+# weder besitzt noch veraendert.
+data_model:
+  relation_types:
+    - key: responsible
+      title: "is responsible for"
+      title_inverse: "has responsible"
+      from: Person
+      to: Customer
+  group_types:
+    - key: raci.assignments
+      "on": Customer
+      relations: [responsible]
+
+contributes:
+  - type: Customer
+    role: contributor
+    group: raci.assignments
+
+consumes:
+  - type: Customer
+    as: Kunde
+  - type: Person
+    as: Mitarbeiter
+    fields: [reference, Email]
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10

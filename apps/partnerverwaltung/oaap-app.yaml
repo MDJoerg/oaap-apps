@@ -1,0 +1,88 @@
+oaap_manifest: "0.3"
+
+app:
+  id: partnerverwaltung
+  name: OAAP Partnerverwaltung
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Customer und Person, verknuepft sie mit isContactOf"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  - path: /
+    roles: [user]
+
+storage:
+  # Nur der eigene Index (id + type dieser Instanz eigener Objekte) --
+  # keine Titel, keine Attribute. Der Zwilling ist die einzige Quelle
+  # dafuer; siehe app.py's Modulkommentar.
+  - name: data
+    mount: /data
+
+# RFC-0031 SS5 / oaap.data.model 0.1 SS2.2 -- die Typen dieser App und
+# was sie davon besitzt. Fast wortgleich mit dem CRM-Beispiel in
+# oaap.data.model 0.1 SS5 und test_data_model.py's eigener Fixtur, um
+# genau die schon geprueften Regeln zu treffen.
+data_model:
+  object_types:
+    - key: Customer
+      title: Kunde
+      title_plural: Kunden
+      identifying: [VatId, Email]
+    - key: Person
+      title: Person
+      title_plural: Personen
+      identifying: [Email]
+  attribute_types:
+    - key: VatId
+      title: USt-ID
+      value_type: text
+    - key: Email
+      title: E-Mail
+      value_type: text
+    - key: Location
+      title: Standort
+      value_type: text
+    - key: Phone
+      title: Telefon
+      value_type: text
+  group_types:
+    - key: crm.core
+      "on": Customer
+      attributes: [VatId, Email, Location, Phone]
+      relations: []
+      activities: [PhoneCall, Task]
+    - key: crm.contact
+      "on": Person
+      attributes: [Email, Phone]
+      relations: [isContactOf]
+      activities: [PhoneCall, Task]
+  relation_types:
+    - key: isContactOf
+      title: "is contact of"
+      title_inverse: "has contact"
+      from: Person
+      to: Customer
+      valid: true
+  activity_types:
+    - key: PhoneCall
+      title: Phone call
+      is_task: false
+    - key: Task
+      title: Task
+      is_task: true
+
+contributes:
+  - type: Customer
+    role: owner
+  - type: Person
+    role: owner
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10
