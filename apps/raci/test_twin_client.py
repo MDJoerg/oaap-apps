@@ -54,7 +54,7 @@ class Stub(BaseHTTPRequestHandler):
         LAST["method"] = "GET"
         LAST["path"] = self.path
         if self.path.endswith("customer"):
-            self._reply(200, {"id": "urn:oaap:obj:c1", "type": "Customer",
+            self._reply(200, {"id": "urn:oaap:obj:c1", "type": "Firma",
                               "title": "Mueller GmbH", "owner": "app:partnerverwaltung",
                               "groups": {"raci.assignments": {
                                   "origin": "app:raci", "attributes": {},
@@ -63,11 +63,11 @@ class Stub(BaseHTTPRequestHandler):
                                   "activities": []}}})
             return
         if self.path.endswith("p1"):
-            self._reply(200, {"id": "urn:oaap:obj:p1", "type": "Person", "title": "Anna",
+            self._reply(200, {"id": "urn:oaap:obj:p1", "type": "Kontaktperson", "title": "Anna",
                               "owner": "app:partnerverwaltung", "groups": {}})
             return
         if self.path.endswith("wrongtype"):
-            self._reply(200, {"id": "urn:oaap:obj:x", "type": "Person", "title": "Anna",
+            self._reply(200, {"id": "urn:oaap:obj:x", "type": "Kontaktperson", "title": "Anna",
                               "owner": "app:partnerverwaltung", "groups": {}})
             return
         self._reply(404, "no such object")
@@ -94,7 +94,7 @@ os.environ["OAAP_PLATFORM_KEY"] = "oaapk_test_secret"
 import twin  # noqa: E402
 import app as m  # noqa: E402
 
-print("=== render_customer: reads the Customer, resolves 'responsible' via a second GET ===")
+print("=== render_customer: reads the Firma, resolves 'responsible' via a second GET ===")
 html = m.render_customer("customer")
 ok("shows the customer's OWN title, read fresh, not cached",
    "Mueller GmbH" in html)
@@ -105,9 +105,9 @@ ok("the assignment is labelled with the group it lives in",
    "raci.assignments" in html or "responsible" in html)
 
 print("\n=== render_customer: wrong type and missing object are handled, not raised ===")
-ok("a Person id where a Customer was expected is refused with a plain reason",
-   "kein Customer" in m.render_customer("wrongtype")
-   or "ist ein Person" in m.render_customer("wrongtype"))
+ok("a Kontaktperson id where a Firma was expected is refused with a plain reason",
+   "keine Firma" in m.render_customer("wrongtype")
+   or "ist ein Kontaktperson" in m.render_customer("wrongtype"))
 ok("a 404 renders a plain 'no such object' card instead of crashing the page",
    "Kein Kunde" in m.render_customer("gone"))
 

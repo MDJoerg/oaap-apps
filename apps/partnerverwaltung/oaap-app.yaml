@@ -6,7 +6,7 @@ app:
   version: 0.1.0
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Customer und Person, verknuepft sie mit isContactOf"
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Firma und Kontaktperson, verknuepft sie mit isContactOf"
 
 services:
   web:
@@ -25,18 +25,27 @@ storage:
     mount: /data
 
 # RFC-0031 SS5 / oaap.data.model 0.1 SS2.2 -- die Typen dieser App und
-# was sie davon besitzt. Fast wortgleich mit dem CRM-Beispiel in
-# oaap.data.model 0.1 SS5 und test_data_model.py's eigener Fixtur, um
-# genau die schon geprueften Regeln zu treffen.
+# was sie davon besitzt. Fast wortgleich mit dem CRM-Beispiel dort und
+# in test_data_model.py's eigener Fixtur -- bis auf die OBJECT-TYPE-
+# SCHLUESSEL selbst: 'Customer'/'Person' sind auf oaap-test bereits
+# PERMANENT von 'app:model-live-check' belegt, einem Wegwerf-Probe-Paket
+# aus Schritt 2s eigener Live-Pruefung (CURRENT_STATE, 09.09.). oaap.
+# data.model 0.1 hat bewusst KEIN 'unregister' (SS2.1: "0.1 has no CLI to
+# drop a type at all"), also bleibt die Belegung stehen, auch nachdem
+# die Probe-Instanz laengst entfernt wurde -- gefunden beim Installieren
+# DIESER App auf oaap-test (RFC-0031 Schritt 4, 2026-09-10). 'Firma'/
+# 'Kontaktperson' sind die eigenen, dauerhaften Schluessel dieser
+# Referenz-App; alles andere (Attribut-, Gruppen-, Relations- und
+# Aktivitaetstypen) kollidiert mit nichts Registriertem.
 data_model:
   object_types:
-    - key: Customer
-      title: Kunde
-      title_plural: Kunden
+    - key: Firma
+      title: Firma
+      title_plural: Firmen
       identifying: [VatId, Email]
-    - key: Person
-      title: Person
-      title_plural: Personen
+    - key: Kontaktperson
+      title: Kontaktperson
+      title_plural: Kontaktpersonen
       identifying: [Email]
   attribute_types:
     - key: VatId
@@ -53,12 +62,12 @@ data_model:
       value_type: text
   group_types:
     - key: crm.core
-      "on": Customer
+      "on": Firma
       attributes: [VatId, Email, Location, Phone]
       relations: []
       activities: [PhoneCall, Task]
     - key: crm.contact
-      "on": Person
+      "on": Kontaktperson
       attributes: [Email, Phone]
       relations: [isContactOf]
       activities: [PhoneCall, Task]
@@ -66,8 +75,8 @@ data_model:
     - key: isContactOf
       title: "is contact of"
       title_inverse: "has contact"
-      from: Person
-      to: Customer
+      from: Kontaktperson
+      to: Firma
       valid: true
   activity_types:
     - key: PhoneCall
@@ -78,9 +87,9 @@ data_model:
       is_task: true
 
 contributes:
-  - type: Customer
+  - type: Firma
     role: owner
-  - type: Person
+  - type: Kontaktperson
     role: owner
 
 health:

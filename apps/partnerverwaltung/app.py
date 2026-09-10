@@ -1,5 +1,11 @@
-"""OAAP Partnerverwaltung 0.1 -- Owner of Customer and Person (RFC-0031
-Schritt 4, the digital twin's reference apps).
+"""OAAP Partnerverwaltung 0.1 -- Owner of Firma and Kontaktperson
+(RFC-0031 Schritt 4, the digital twin's reference apps; RFC-0031's own
+prose calls these "Customer"/"Person" -- this app's REGISTERED type
+keys are 'Firma'/'Kontaktperson' instead, because 'Customer'/'Person'
+are already permanently registered on oaap-test by a throwaway probe
+from Schritt 2's own live verification, and oaap.data.model 0.1 has no
+way to release a type key again -- see the module comment in
+oaap-app.yaml).
 
 Diese App ist der ERSTE Beweis, kein Werkzeug: RFC-0031 SS9 nennt
 "Partner management (owner) creates Muller GmbH and Anna, relates them
@@ -7,10 +13,10 @@ with isContactOf valid from 2019" als Schritt 1 des Konformitats-
 Szenarios, und oaap.data.twin 0.1 baut genau das als sein eigenes
 Minimum. Diese App macht daraus etwas, das ein Mensch anklicken kann:
 
-- Kunden und Personen ANLEGEN -- als Owner (RFC-0031 SS3.3: "the owner
-  is the origin that created it"), mit ihrer eigenen Kern-Gruppe
-  (crm.core auf Customer, crm.contact auf Person);
-- eine Person mit einem Kunden VERKNUPFEN (isContactOf, gultig ab
+- Firmen und Kontaktpersonen ANLEGEN -- als Owner (RFC-0031 SS3.3: "the
+  owner is the origin that created it"), mit ihrer eigenen Kern-Gruppe
+  (crm.core auf Firma, crm.contact auf Kontaktperson);
+- eine Kontaktperson mit einer Firma VERKNUPFEN (isContactOf, gultig ab
   einem Datum -- die Gultigkeitsachse, die RFC-0031 als das eine Ding
   nennt, das der Branchenstandard nicht kann);
 - eine Aktivitat (PhoneCall/Task) auf einem Objekt erfassen.
@@ -51,8 +57,8 @@ INDEX_PATH = os.path.join(DATA_DIR, "index.jsonl")
 
 esc = html.escape
 
-CUSTOMER_GROUP = "crm.core"
-PERSON_GROUP = "crm.contact"
+FIRMA_GROUP = "crm.core"
+KONTAKT_GROUP = "crm.contact"
 
 
 # --------------------------------------------------------- der eigene Index
@@ -155,7 +161,7 @@ def page(body, user, roles, title="Partnerverwaltung"):
 <main>{body}</main>
 <footer style="max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
   color:var(--oaap-muted);font-size:.8rem">
-  OAAP Partnerverwaltung {VERSION} -- Owner von Customer und Person (RFC-0031 Schritt 4)
+  OAAP Partnerverwaltung {VERSION} -- Owner von Firma und Kontaktperson (RFC-0031 Schritt 4)
 </footer>
 </html>"""
 
@@ -210,15 +216,15 @@ def render_object(obj, notice=""):
     for gk, g in sorted((obj.get("groups") or {}).items()):
         parts.append(group_html(gk, g))
 
-    if obj["type"] == "Person":
+    if obj["type"] == "Kontaktperson":
         parts.append(f"""<div class="card">
   <h2>Als Ansprechpartner verknupfen (isContactOf)</h2>
-  <p class="hint">Verbindet diese Person mit einem Kunden -- gultig ab einem
-    Datum, wie im Konformitats-Szenario (RFC-0031 SS9 Schritt 1: "relates
+  <p class="hint">Verbindet diese Kontaktperson mit einer Firma -- gultig ab
+    einem Datum, wie im Konformitats-Szenario (RFC-0031 SS9 Schritt 1: "relates
     them with isContactOf valid from 2019").</p>
   <form class="stack" method="post" action="/link">
     <input type="hidden" name="person_id" value="{esc(obj['id'])}">
-    <label>Kunde-ID<input type="text" name="customer_id" required
+    <label>Firma-ID<input type="text" name="customer_id" required
       placeholder="urn:oaap:obj:..."></label>
     <label>Gultig ab<input type="date" name="valid_from" value="{date.today().isoformat()}"></label>
     <button type="submit">Verknupfen</button>
@@ -229,7 +235,7 @@ def render_object(obj, notice=""):
   <h2>Aktivitat erfassen</h2>
   <form class="stack" method="post" action="/activity">
     <input type="hidden" name="object_id" value="{esc(obj['id'])}">
-    <input type="hidden" name="group_key" value="{esc(CUSTOMER_GROUP if obj['type'] == 'Customer' else PERSON_GROUP)}">
+    <input type="hidden" name="group_key" value="{esc(FIRMA_GROUP if obj['type'] == 'Firma' else KONTAKT_GROUP)}">
     <label>Art<select name="activity_key">
       <option value="PhoneCall">Anruf (PhoneCall)</option>
       <option value="Task">Aufgabe (Task)</option>
@@ -247,14 +253,14 @@ def render_home(notice=""):
     if notice:
         parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
 
-    for type_key, group_key, label, fields in (
-            ("Customer", CUSTOMER_GROUP, "Kunden", [
+    for type_key, group_key, label, singular, fields in (
+            ("Firma", FIRMA_GROUP, "Firmen", "Firma", [
                 ("title", "Name", "text", True),
                 ("VatId", "USt-ID", "text", False),
                 ("Email", "E-Mail", "text", False),
                 ("Location", "Standort", "text", False),
                 ("Phone", "Telefon", "text", False)]),
-            ("Person", PERSON_GROUP, "Personen", [
+            ("Kontaktperson", KONTAKT_GROUP, "Kontaktpersonen", "Kontaktperson", [
                 ("title", "Name", "text", True),
                 ("Email", "E-Mail", "text", False),
                 ("Phone", "Telefon", "text", False)])):
@@ -276,7 +282,7 @@ def render_home(notice=""):
     {table}
   </div>
   <div class="card">
-    <h2>{esc(label[:-1] if label.endswith('en') else label)} anlegen</h2>
+    <h2>{esc(singular)} anlegen</h2>
     <form class="stack" method="post" action="/create/{type_key.lower()}">
       {form_fields}
       <button type="submit">Anlegen</button>
@@ -373,9 +379,9 @@ class Handler(BaseHTTPRequestHandler):
         redirect = "/"
 
         try:
-            if path in ("/create/customer", "/create/person"):
-                type_key = "Customer" if path.endswith("customer") else "Person"
-                group_key = CUSTOMER_GROUP if type_key == "Customer" else PERSON_GROUP
+            if path in ("/create/firma", "/create/kontaktperson"):
+                type_key = "Firma" if path.endswith("firma") else "Kontaktperson"
+                group_key = FIRMA_GROUP if type_key == "Firma" else KONTAKT_GROUP
                 title = (form.get("title") or "").strip()
                 if not title:
                     notice = "Ohne Namen kann ich nichts anlegen."
@@ -390,9 +396,9 @@ class Handler(BaseHTTPRequestHandler):
                 customer_id = (form.get("customer_id") or "").strip()
                 valid_from = (form.get("valid_from") or "").strip() or None
                 if not (person_id and customer_id):
-                    notice = "Person- und Kunde-ID werden beide gebraucht."
+                    notice = "Kontaktperson- und Firma-ID werden beide gebraucht."
                 else:
-                    twin.write_group(person_id, PERSON_GROUP, relations=[
+                    twin.write_group(person_id, KONTAKT_GROUP, relations=[
                         {"key": "isContactOf", "target": customer_id, "valid_from": valid_from}])
                     redirect = f"/object?id={person_id}"
             elif path == "/activity":

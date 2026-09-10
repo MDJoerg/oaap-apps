@@ -6,7 +6,7 @@ app:
   version: 0.1.0
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Customer/Person als Referenz, schreibt 'responsible' in raci.assignments"
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Firma/Kontaktperson als Referenz, schreibt 'responsible' in raci.assignments"
 
 services:
   web:
@@ -18,31 +18,36 @@ routes:
     roles: [user]
 
 # RFC-0031 SS5 / oaap.data.model 0.1 SS2.2 -- fast wortgleich mit dem
-# RACI-Beispiel dort und in test_data_model.py's Fixtur. 'responsible'
-# und 'raci.assignments' sind RACIs EIGENE Typen (D1: "others attach
-# their own group types") auf Customer, einem Objekttyp, den RACI
-# weder besitzt noch veraendert.
+# RACI-Beispiel dort und in test_data_model.py's Fixtur, bis auf die
+# OBJECT-TYPE-SCHLUESSEL selbst: RFC-0031 nennt sie 'Customer'/'Person',
+# aber die sind auf oaap-test bereits permanent von 'app:model-live-
+# check' belegt (Schritt 2s eigene Live-Probe, kein 'unregister' in
+# oaap.data.model 0.1 -- siehe Partnerverwaltungs oaap-app.yaml). Diese
+# App konsumiert deshalb 'Firma'/'Kontaktperson', Partnerverwaltungs
+# eigene, dauerhafte Schluessel. 'responsible' und 'raci.assignments'
+# sind RACIs EIGENE Typen (D1: "others attach their own group types")
+# auf Firma, einem Objekttyp, den RACI weder besitzt noch veraendert.
 data_model:
   relation_types:
     - key: responsible
       title: "is responsible for"
       title_inverse: "has responsible"
-      from: Person
-      to: Customer
+      from: Kontaktperson
+      to: Firma
   group_types:
     - key: raci.assignments
-      "on": Customer
+      "on": Firma
       relations: [responsible]
 
 contributes:
-  - type: Customer
+  - type: Firma
     role: contributor
     group: raci.assignments
 
 consumes:
-  - type: Customer
+  - type: Firma
     as: Kunde
-  - type: Person
+  - type: Kontaktperson
     as: Mitarbeiter
     fields: [reference, Email]
 

@@ -1,18 +1,26 @@
 """OAAP RACI 0.1 -- Contributor into someone else's object (RFC-0031
 Schritt 4, the digital twin's reference apps).
 
-The second half of the proof [Partnerverwaltung](../partnerverwaltung/)
-started: RFC-0031 SS9 Schritt 3 -- *"RACI (contributor) reads both [the
-customer and the employee] as references, writes `responsible`
-relations into `raci.assignments` on Muller GmbH."* This app does
-exactly that, and nothing this app owns can be written by anyone else:
-`raci.assignments` is RACI's OWN group type (D1: "others attach their
-own group types") on `Customer`, an object type it neither owns nor
-alters -- the twin refuses any write to it from any other origin
-(RFC-0031 SS3.3, "nobody else writes there"), and refuses THIS app
-writing into `Customer`'s own core group even by naming it explicitly.
+RFC-0031's own prose calls the two consumed types "Customer"/"Person";
+this app's REGISTERED type keys are 'Firma'/'Kontaktperson' instead,
+because 'Customer'/'Person' are already permanently registered on
+oaap-test by a throwaway probe from Schritt 2's own live verification
+(see [Partnerverwaltung](../partnerverwaltung/)'s oaap-app.yaml for the
+full story -- oaap.data.model 0.1 has no way to release a type key
+again).
 
-RACI CONSUMES `Customer` and `Person` -- it reads them only as
+The second half of the proof Partnerverwaltung started: RFC-0031 SS9
+Schritt 3 -- *"RACI (contributor) reads both [the customer and the
+employee] as references, writes `responsible` relations into
+`raci.assignments` on Muller GmbH."* This app does exactly that, and
+nothing this app owns can be written by anyone else: `raci.assignments`
+is RACI's OWN group type (D1: "others attach their own group types")
+on `Firma`, an object type it neither owns nor alters -- the twin
+refuses any write to it from any other origin (RFC-0031 SS3.3, "nobody
+else writes there"), and refuses THIS app writing into `Firma`'s own
+core group even by naming it explicitly.
+
+RACI CONSUMES `Firma` and `Kontaktperson` -- it reads them only as
 references (D6: platform id, type, title, origin -- "more only through
 a consolidated model the tenant owns"). It never reads or writes
 `crm.core`/`crm.contact`, and it holds NO storage of its own: every
@@ -104,7 +112,7 @@ def page(body, user, roles):
 <main>{body}</main>
 <footer style="max-width:52rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
   color:var(--oaap-muted);font-size:.8rem">
-  OAAP RACI {VERSION} -- Contributor in raci.assignments, Consumer von Customer/Person (RFC-0031 Schritt 4)
+  OAAP RACI {VERSION} -- Contributor in raci.assignments, Consumer von Firma/Kontaktperson (RFC-0031 Schritt 4)
 </footer>
 </html>"""
 
@@ -149,10 +157,10 @@ def render_customer(customer_id, notice=""):
     if customer is None:
         parts.append('<div class="card attention"><p>Kein Kunde mit dieser ID.</p></div>')
         return "".join(parts)
-    if customer["type"] != "Customer":
+    if customer["type"] != "Firma":
         parts.append(f'<div class="card attention"><p>'
                       f'<code>{esc(customer_id)}</code> ist ein {esc(customer["type"])}, '
-                      f'kein Customer.</p></div>')
+                      f'keine Firma.</p></div>')
         return "".join(parts)
 
     group = (customer.get("groups") or {}).get(ASSIGNMENT_GROUP, {})
@@ -170,7 +178,7 @@ def render_customer(customer_id, notice=""):
                    else "<p class='muted' style='margin:0'>noch niemand zugewiesen</p>")
 
     parts.append(f"""<div class="card">
-  <h2>{esc(customer['title'])} <span class="badge">Customer</span></h2>
+  <h2>{esc(customer['title'])} <span class="badge">Firma</span></h2>
   <p class="muted"><code>{esc(customer_id)}</code></p>
   <p class="hint" style="margin-top:.8rem"><b>raci.assignments</b> -- verantwortlich (responsible):</p>
   {assignments}
