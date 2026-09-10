@@ -11,9 +11,29 @@ isContactOf valid from 2019."*
 | tut                                                          | tut nicht                                              |
 | ------------------------------------------------------------ | ------------------------------------------------------- |
 | Kunden und Personen als **Owner** anlegen (eigene Kern-Gruppe) | eine eigene Kopie der Daten halten                      |
-| Person mit Kunde verknuepfen, **gueltig ab** einem Datum      | Dubletten erkennen oder zusammenfuehren (Schritt 4.6)   |
+| Person mit Kunde verknuepfen, **gueltig ab** einem Datum      | Dubletten erkennen oder zusammenfuehren (Schritt 5)     |
 | Anrufe/Aufgaben auf einem Objekt erfassen                     | eine Liste/Suche ueber alle Kunden bieten (twin 0.1 hat keine) |
-| jeder anderen App ihre Objekte als **Referenz** anbieten (RACI) | fremde Gruppen lesen oder schreiben                    |
+| jeder anderen App ihre Objekte als **Referenz** anbieten (RACI, Projekt-App) | fremde Gruppen lesen oder schreiben     |
+| eigene **Projekt**-Instanzen anlegen (zweiter Owner, geteilter Typ) | den Typ `Projekt` definieren (das bleibt Projekt-Apps eigener) |
+
+## Zweite Welle: zweiter Owner von Projekt
+
+Seit 0.1.2 bindet sich diese App zusaetzlich an `Projekt` --
+`Projekt-App` DEFINIERT den Typ, diese App legt auf ihrer Firma-Seite
+eigene Instanzen an, ohne die Definition zu duplizieren (siehe
+[Projekt-App](../projekt/)s README fuer den Beweis am Code, dass das
+RFC-0031 D1 nicht verletzt). Der geteilte digitale Zwilling aus dem
+Zielbild: ein Typ, zwei unabhaengige Owner.
+
+## Design-Kontrakt (RFC-0035 Teil A)
+
+Seit 0.1.2 bindet die Seite `/platform/theme.css` ein und benutzt
+dessen Variablen mit lokalen Fallback-Werten statt der eigenen,
+inzwischen ersetzten Farbpalette; die Kopfzeile folgt der Mini-
+Konvention aus D4 (App-Name links, Link zurueck zum Portal rechts)
+statt der alten eigenen Marke -- ein Beispiel fuer D6 ("Bestand zieht
+mit, wenn er ohnehin veraendert wird"), nicht ein separater Umbau nur
+fuers Aussehen.
 
 ## Warum es diese App gibt
 

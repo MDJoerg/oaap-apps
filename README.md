@@ -14,8 +14,17 @@ apps/<app-id>/          ein Verzeichnis je App, Name = App-ID
   oaap-app.yaml         Manifest (Pflicht)
   Dockerfile            bei App-Typ `native` (Pflicht)
   README.md             was die App tut, bewusste Entscheidungen
+data_models/<id>/       ein Verzeichnis je data_models-Artefakt (RFC-0012 §8.5):
+  oaap-app.yaml         Manifest -- NUR `app`+`data_model`, kein Dienst
+  README.md             was der Typ ist, warum ohne App
 oaap-store.json         Store-Liste „OAAP Plattform-Apps"
 ```
+
+Ein `data_models`-Artefakt ist kein App-Paket im engeren Sinn (kein
+Dienst, kein Dockerfile, keine Instanz) -- `oaap.data.model` 0.1 §2.8
+sagt genau, was es validiert. Siehe
+[`kundenzufriedenheit`](data_models/kundenzufriedenheit/) als erstes
+Beispiel.
 
 Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 `oaap app install --path` und die Store-Liste zeigt direkt auf die Pfade.
@@ -30,8 +39,11 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.0   |
 | [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.2.0   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
-| [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson (RFC-0031) | 0.1.1   |
+| [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.2   |
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.1   |
+| [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.0   |
+| [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.0   |
+| [Kundenzufriedenheit](data_models/kundenzufriedenheit/) | `data_models`-Artefakt (kein App-Dienst): dritte Herkunftsgruppe auf Firma, gepflegt im Zwillings-Browser (RFC-0031) | 0.1.0   |
 
 ## Installation
 

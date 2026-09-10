@@ -1,0 +1,38 @@
+oaap_manifest: "0.3"
+
+app:
+  id: kundenzufriedenheit
+  name: Kundenzufriedenheit
+  version: 0.1.0
+  # KEIN 'type', KEIN 'services', KEIN 'routes', KEIN 'health': dies
+  # ist ein data_models-Artefakt (RFC-0012 SS8.5, oaap.data.model 0.1
+  # SS2.8) -- ein Paket nur mit Typen, ohne Dienst. Erkannt an genau
+  # diesem Merkmal (data_model vorhanden, 'services' fehlt), nicht an
+  # einer Klasse; registriert unter der Herkunft 'model:kundenzufrieden
+  # heit', nicht 'app:...' (RFC-0031 SS4). Kein Container, kein Port,
+  # kein Eintrag in der Instanz-Registrierung -- 'oaap app list' zeigt
+  # dieses Paket nie, 'oaap app remove' hat nichts zu entfernen. Der
+  # ERSTE echte Artefakt dieser Art im ganzen Programm (RFC-0031
+  # Bauplan, Zielbild Runde 1 Punkt 5): "Kundenzufriedenheit ... als
+  # Datenmodell ohne App".
+  description: "Datenmodell-Artefakt (RFC-0031 Schritt 4, zweite Welle): Kundenzufriedenheit auf Firma, ohne eigene App -- gepflegt im Zwillings-Browser (Schritt 5), sobald der existiert"
+
+# 'crm.satisfaction' ist eine WEITERE Herkunftsgruppe auf Firma, neben
+# Partnerverwaltungs 'crm.core' und RACIs 'raci.assignments' -- ein
+# dritter Ursprung auf demselben Objekt, keiner davon Partner-
+# verwaltung (D1: "others attach their own group types"). Niemand
+# KONSUMIERT oder KONTRIBUIERT hier (kein contributes, kein consumes):
+# 0.1 hat noch keinen Weg, in diese Gruppe zu schreiben -- das ist
+# bewusst Schritt 5s Aufgabe (der Zwillings-Browser schreibt als
+# Mandant, nicht als App). Diese Runde registriert nur den Typ.
+data_model:
+  attribute_types:
+    - key: SatisfactionScore
+      title: Zufriedenheits-Punktzahl
+      value_type: int
+  group_types:
+    - key: crm.satisfaction
+      "on": Firma
+      attributes: [SatisfactionScore]
+      relations: []
+      activities: []

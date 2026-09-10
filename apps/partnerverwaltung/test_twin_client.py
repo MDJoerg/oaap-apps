@@ -184,6 +184,14 @@ ok("the index file stores id+type ONLY -- no title, no attribute "
    "(the twin stays the only source, per this app's own module comment)",
    all(set(row.keys()) == {"id", "type"} for row in saved))
 
+print("\n=== oaap-app.yaml: a second, independent owner of Projekt (zweite Welle) ===")
+manifest_src = open(os.path.join(HERE, "oaap-app.yaml"), encoding="utf-8").read()
+ok("contributes to Projekt as owner, WITHOUT defining it "
+   "(no 'object_types' entry for Projekt -- that stays the "
+   "Projekt-App's own, RFC-0031 D1)",
+   "type: Projekt\n    role: owner" in manifest_src
+   and "key: Projekt" not in manifest_src.split("data_model:")[1].split("contributes:")[0])
+
 server.shutdown()
 
 print(f"\n{ok_n} bestanden, {fail_n} fehlgeschlagen")

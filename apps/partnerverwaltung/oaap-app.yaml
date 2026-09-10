@@ -3,10 +3,10 @@ oaap_manifest: "0.3"
 app:
   id: partnerverwaltung
   name: OAAP Partnerverwaltung
-  version: 0.1.1
+  version: 0.1.2
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Firma und Kontaktperson, verknuepft sie mit isContactOf"
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Firma und Kontaktperson, verknuepft sie mit isContactOf, legt eigene Projekt-Instanzen an"
 
 services:
   web:
@@ -90,6 +90,15 @@ contributes:
   - type: Firma
     role: owner
   - type: Kontaktperson
+    role: owner
+  # RFC-0031 Zielbild Runde 1, Punkt 5 / zweite Welle von Schritt 4:
+  # 'Projekt' ist von der Projekt-App DEFINIERT (Herkunft 'app:projekt',
+  # siehe deren oaap-app.yaml) -- diese App bindet sich nur an den
+  # schon registrierten Typ, definiert ihn NICHT neu (keine eigene
+  # data_model.object_types.Projekt-Zeile hier, sonst waere es dieselbe
+  # Kollision wie 'Customer'/'Person', nur andersrum). Zwei Owner,
+  # eine gemeinsame Typdefinition -- der geteilte digitale Zwilling.
+  - type: Projekt
     role: owner
 
 health:

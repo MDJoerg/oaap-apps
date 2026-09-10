@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import twin
 
-VERSION = "0.1.0"
+VERSION = "0.1.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("PARTNERVERWALTUNG_DATA_DIR", "/data")
@@ -59,6 +59,13 @@ esc = html.escape
 
 FIRMA_GROUP = "crm.core"
 KONTAKT_GROUP = "crm.contact"
+# RFC-0031 Zielbild Runde 1, Punkt 5 / zweite Welle von Schritt 4:
+# 'Projekt' ist von der Projekt-App (../projekt/) definiert und
+# registriert; diese App bindet sich nur an den schon registrierten
+# Typ (siehe oaap-app.yaml), legt aber eigene Instanzen an -- der
+# geteilte digitale Zwilling: ein Typ, zwei Owner.
+PROJEKT_TYPE = "Projekt"
+PROJECT_GROUP = "project.core"
 
 
 # --------------------------------------------------------- der eigene Index
@@ -93,57 +100,51 @@ def known(type_key):
 
 # --------------------------------------------------------------- Optik
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
+STYLE = """<link rel="stylesheet" href="/platform/theme.css">
+<style>
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 1.2rem}
+  body{font-family:var(--oaap-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
+       font-size:var(--oaap-font-size-base, 15px);margin:0;
+       background:var(--oaap-color-bg, #fff);color:var(--oaap-color-text, #1a1d21)}
+  main{max-width:62rem;margin:1.6rem auto;padding:0 var(--oaap-space-3, 16px)}
   h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
+  .card{background:var(--oaap-color-surface, #f4f5f7);
+       border:1px solid var(--oaap-color-border, #d8dbe0);
+       border-radius:var(--oaap-radius, 6px);padding:1.4rem;margin-bottom:1.2rem}
   .card.attention{border-color:#fcd34d;background:#fffbeb}
   .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
+       background:#fff;color:var(--oaap-color-primary, #2f6fed);white-space:nowrap;
+       border:1px solid var(--oaap-color-border, #d8dbe0)}
   .badge.ok{background:#dcfce7;color:#166534}
   .badge.err{background:#fee2e2;color:#991b1b}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .muted{color:var(--oaap-muted);font-size:.9rem}
+  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;
+       border-radius:var(--oaap-radius, 6px);
+       background:var(--oaap-color-primary, #2f6fed);
+       color:var(--oaap-color-primary-text, #fff);text-decoration:none;
+       font-size:.95rem;cursor:pointer;min-height:44px}
+  .hint{font-size:.8rem;color:var(--oaap-color-text-muted, #5b616b);margin:0 0 .6rem}
+  .muted{color:var(--oaap-color-text-muted, #5b616b);font-size:.9rem}
   table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
+  th,td{text-align:left;padding:.55rem .5rem;
+       border-bottom:1px solid var(--oaap-color-border, #d8dbe0);
        vertical-align:middle;font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  code{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
-       word-break:break-all}
+  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;
+       color:var(--oaap-color-text-muted, #5b616b)}
+  code{background:var(--oaap-color-surface, #f4f5f7);border-radius:.25rem;
+       padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
   form.stack{display:flex;flex-direction:column;gap:.6rem;max-width:28rem}
-  form.stack label{font-size:.82rem;color:var(--oaap-muted)}
-  input,select{padding:.5rem .6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
-       font-size:.95rem;min-height:40px}
+  form.stack label{font-size:.82rem;color:var(--oaap-color-text-muted, #5b616b)}
+  input,select{padding:.5rem .6rem;border-radius:var(--oaap-radius, 6px);
+       border:1px solid var(--oaap-color-border, #d8dbe0);font-size:.95rem;min-height:40px}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
-  @media (max-width:720px){ .cols{grid-template-columns:1fr} .userbox .who{display:none} }
+  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
 </style>"""
 
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
            "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
+
+BACK_TO_PORTAL = ('href="/" onclick="location.href=location.protocol+\'//\'+'
+                  "location.hostname+'/';return false;\"")
 
 
 def page(body, user, roles, title="Partnerverwaltung"):
@@ -152,15 +153,13 @@ def page(body, user, roles, title="Partnerverwaltung"):
 <link rel="icon" href="{FAVICON}">
 <title>{esc(title)} -- OAAP Partnerverwaltung</title>
 {STYLE}
-<header class="oaap">
-  <a class="brand" href="./">
-    <span><b>PARTNERVERWALTUNG</b><small>Kunden, Ansprechpartner, Zwilling</small></span>
-  </a>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
+<header class="oaap-header">
+  <span class="oaap-header-title">Partnerverwaltung</span>
+  <a class="oaap-header-back" {BACK_TO_PORTAL}>&larr; Portal</a>
 </header>
 <main>{body}</main>
-<footer style="max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-  color:var(--oaap-muted);font-size:.8rem">
+<footer style="max-width:62rem;margin:2rem auto 1.2rem;padding:0 var(--oaap-space-3, 16px);
+  color:var(--oaap-color-text-muted, #5b616b);font-size:.8rem">
   OAAP Partnerverwaltung {VERSION} -- Owner von Firma und Kontaktperson (RFC-0031 Schritt 4)
 </footer>
 </html>"""
@@ -203,6 +202,32 @@ def group_html(group_key, group):
 </div>"""
 
 
+def render_projects(firma_id):
+    """Projekte, die DIESE App fuer diese Firma angelegt hat -- aus dem
+    eigenen Index gefiltert, dann frisch vom Zwilling gelesen (kein
+    Titel im Index, siehe Modulkommentar). Zeigt nur, was diese App
+    selbst weiss: die Projekt-App legt moeglicherweise WEITERE Projekte
+    auf derselben Firma an, von denen dieser Index nichts sieht -- der
+    Punkt des geteilten Zwillings, nicht ein Fehler dieser Liste."""
+    rows = []
+    for obj_id in known(PROJEKT_TYPE):
+        proj = twin.get_object(obj_id)
+        if proj is None:
+            continue
+        group = (proj.get("groups") or {}).get(PROJECT_GROUP, {})
+        target = next((r["target"] for r in group.get("relations") or []
+                       if r["key"] == "forCustomer"), None)
+        if target != firma_id:
+            continue
+        rows.append(f"<li><a href='/object?id={esc(obj_id)}'>{esc(proj['title'])}</a></li>")
+    if not rows:
+        return ""
+    return f"""<div class="card">
+  <h2>Projekte (von dieser App angelegt)</h2>
+  <ul>{''.join(rows)}</ul>
+</div>"""
+
+
 def render_object(obj, notice=""):
     parts = []
     if notice:
@@ -215,6 +240,21 @@ def render_object(obj, notice=""):
 </div>""")
     for gk, g in sorted((obj.get("groups") or {}).items()):
         parts.append(group_html(gk, g))
+
+    if obj["type"] == "Firma":
+        parts.append(render_projects(obj["id"]))
+        parts.append(f"""<div class="card">
+  <h2>Projekt anlegen (Projekt-App's Typ, diese App als zweiter Owner)</h2>
+  <p class="hint">Bindet sich an <code>Projekt</code>, definiert von
+    <a href="../projekt/">Projekt-App</a> -- der geteilte digitale
+    Zwilling (Zielbild §1.5): ein Typ, zwei Owner.</p>
+  <form class="stack" method="post" action="/create/projekt">
+    <input type="hidden" name="kunde_id" value="{esc(obj['id'])}">
+    <label>Titel<input type="text" name="title" required></label>
+    <label>Status<input type="text" name="Status" placeholder="geplant"></label>
+    <button type="submit">Anlegen</button>
+  </form>
+</div>""")
 
     if obj["type"] == "Kontaktperson":
         parts.append(f"""<div class="card">
@@ -391,6 +431,19 @@ class Handler(BaseHTTPRequestHandler):
                     result = twin.create_object(type_key, title, group_key, attributes=attrs or None)
                     remember(result["id"], type_key)
                     redirect = f"/object?id={result['id']}"
+            elif path == "/create/projekt":
+                title = (form.get("title") or "").strip()
+                kunde_id = (form.get("kunde_id") or "").strip()
+                if not title:
+                    notice = "Ohne Titel kann ich nichts anlegen."
+                else:
+                    attrs = {k: form[k] for k in ("Status",) if form.get(k)}
+                    relations = ([{"key": "forCustomer", "target": kunde_id}]
+                                 if kunde_id else None)
+                    result = twin.create_object(PROJEKT_TYPE, title, PROJECT_GROUP,
+                                                attributes=attrs or None, relations=relations)
+                    remember(result["id"], PROJEKT_TYPE)
+                    redirect = f"/object?id={kunde_id}" if kunde_id else f"/object?id={result['id']}"
             elif path == "/link":
                 person_id = (form.get("person_id") or "").strip()
                 customer_id = (form.get("customer_id") or "").strip()

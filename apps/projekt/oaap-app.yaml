@@ -1,0 +1,82 @@
+oaap_manifest: "0.3"
+
+app:
+  id: projekt
+  name: OAAP Projekt-App
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4, zweite Welle): definiert Projekt, konsumiert Firma als Referenz -- Partnerverwaltung legt auf demselben Typ eigene Instanzen an"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  - path: /
+    roles: [user]
+
+storage:
+  - name: data
+    mount: /data
+
+# RFC-0031 Zielbild (program/zielbild-datenplattform.md, Runde 1,
+# Punkt 5): "Projekte als Beispiel fuer 'gleiches Datenobjekt,
+# verschiedene Herkunft' -- erzeugt von einer eigenen Projekt-App
+# und/oder in der Kunden-/Partnerverwaltung ... ein Typ, viele Owner,
+# jede Instanz mit ihrer Herkunft."
+#
+# WIE das tatsaechlich geht, ohne RFC-0031 D1 zu verletzen ("nur die
+# Herkunft aendert ihre Typen"): diese App ist die einzige, die
+# 'Projekt' unter data_model.object_types DEFINIERT (Herkunft
+# 'app:projekt'). Partnerverwaltung bekommt KEINE zweite Definition --
+# sie deklariert in ihrem eigenen Manifest nur
+# 'contributes: [{type: Projekt, role: owner}]' und bindet sich damit
+# an DIESEN, schon registrierten Typ (oaap.data.model 0.1 SS2.4:
+# Bindung ist unabhaengig von Definition). Geprueft am echten Code
+# (platform/services/twin/app.py's create_object): die Owner-Pruefung
+# fragt nur "steht {type: Projekt, role: owner} in DIESER Instanz
+# eigenen Bindungen", nie "hat diese Instanz den Typ definiert" -- ZWEI
+# Apps koennen also unabhaengig voneinander Projekt-Objekte anlegen,
+# jedes mit seiner eigenen Herkunft am Objekt (RFC-0031 SS3.3), ohne
+# dass eine App die andere kennt. Das ist der "geteilte digitale
+# Zwilling" aus dem Zielbild, nicht ein Sonderfall.
+data_model:
+  object_types:
+    - key: Projekt
+      title: Projekt
+      title_plural: Projekte
+      identifying: []
+  attribute_types:
+    - key: Status
+      title: Status
+      value_type: text
+    - key: StartDate
+      title: Beginn
+      value_type: date
+  group_types:
+    - key: project.core
+      "on": Projekt
+      attributes: [Status, StartDate]
+      relations: [forCustomer]
+      activities: []
+  relation_types:
+    - key: forCustomer
+      title: "is project for"
+      title_inverse: "has project"
+      from: Projekt
+      to: Firma
+
+contributes:
+  - type: Projekt
+    role: owner
+
+consumes:
+  - type: Firma
+    as: Kunde
+    fields: [reference]
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10

@@ -1,0 +1,87 @@
+oaap_manifest: "0.3"
+
+app:
+  id: mitarbeiterverwaltung
+  name: OAAP Mitarbeiterverwaltung
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4, zweite Welle): Owner von Mitarbeiter, unabhaengig von Partnerverwaltung"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  - path: /
+    roles: [user]
+
+storage:
+  # Nur der eigene Index (id + type) -- derselbe Grundsatz wie in
+  # Partnerverwaltung's app.py (siehe dessen Modulkommentar); der
+  # Zwilling ist die einzige Quelle fuer Titel und Attribute.
+  - name: data
+    mount: /data
+
+# RFC-0031 Zielbild (program/zielbild-datenplattform.md, Runde 1,
+# Punkt 5): "eine einfache Mitarbeiterverwaltung" -- der zweite,
+# UNABHAENGIGE Owner-Fall aus der zweiten Welle von Schritt 4. Diese
+# App legt Mitarbeiter an, OHNE Partnerverwaltungs Kontaktperson zu
+# kennen oder zu konsumieren -- absichtlich, weil genau das die erste
+# echte Dublette erzeugt (Bauplan: "Mitarbeiterverwaltung -- zweiter
+# Owner von Person -> erste echte Dublette, erster Merge"). 'Person'
+# selbst ist auf oaap-test bereits (anders) belegt (Entry 127), UND
+# oaap.data.model 0.1 D1 laesst ohnehin nur EINEN Owner je Typ zu --
+# ein zweiter Owner desselben Typ-SCHLUESSELS ist nicht das gemeinte
+# Bild. Der reale Doppel-Fall entsteht auf OBJEKT-Ebene: Anna existiert
+# nach diesem Bau als Kontaktperson (Partnerverwaltung) UND als
+# Mitarbeiter (hier) -- zwei Objekte, zwei Typen, dieselbe echte
+# Person, ohne dass eine App von der anderen weiss. Das Aufloesen
+# (Merge/Unmerge) ist Schritt 5 (Zwillings-Browser), bewusst NICHT
+# hier gebaut -- diese App erzeugt den Fall, sie loest ihn nicht.
+data_model:
+  object_types:
+    - key: Mitarbeiter
+      title: Mitarbeiter
+      title_plural: Mitarbeiter
+      identifying: [Email]
+  attribute_types:
+    # NUR 'Department' ist neu und gehoert dieser App. 'Email'/'Phone'
+    # sind bereits von Partnerverwaltung registriert (app:partner-
+    # verwaltung) -- ein zweiter attribute_types-Eintrag mit demselben
+    # Schluessel waere dieselbe Kollision wie 'Customer'/'Person'
+    # (RFC-0031 D1). Trotzdem unten in hr.core's attributes-Liste
+    # BENUTZT: oaap.data.model 0.1 prueft die Mitglieder einer Gruppe
+    # (attributes/relations/activities) nicht gegen die Registrierung
+    # -- ein Fund beim Schreiben dieses Manifests, kein Bug (siehe
+    # CURRENT_STATE): eine Gruppe kann heute jeden Schluessel nennen,
+    # registriert oder nicht. Das ist informelle Wiederverwendung
+    # eines Wortes, keine erklaerte Referenz (die gaebe es nur ueber
+    # consumes, und die gibt es fuer Objekttypen, nicht fuer
+    # Attributtypen) -- absichtlich so gelassen, nicht heimlich
+    # reformuliert, weil genau das die Wortwahl-Realitaet einer
+    # kleinen Firma ohne Zwilling ist: zwei Systeme nennen dasselbe
+    # Feld gleich, ohne dass es irgendwo festgeschrieben ist.
+    - key: Department
+      title: Abteilung
+      value_type: text
+  group_types:
+    - key: hr.core
+      "on": Mitarbeiter
+      attributes: [Email, Phone, Department]
+      relations: []
+      activities: []
+      # Bewusst KEIN eigener activity_type: 'Task' ist bereits von
+      # Partnerverwaltung registriert (app:partnerverwaltung), und ein
+      # zweiter activity_types-Eintrag mit demselben Schluessel waere
+      # dieselbe Kollision wie 'Customer'/'Person' (RFC-0031 D1) --
+      # diesmal absichtlich vermieden statt erst live gefunden.
+
+contributes:
+  - type: Mitarbeiter
+    role: owner
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10
