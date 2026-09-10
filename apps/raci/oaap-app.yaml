@@ -3,7 +3,7 @@ oaap_manifest: "0.3"
 app:
   id: raci
   name: OAAP RACI
-  version: 0.1.0
+  version: 0.1.1
   type: native
   class: frontend
   description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Firma/Kontaktperson als Referenz, schreibt 'responsible' in raci.assignments"

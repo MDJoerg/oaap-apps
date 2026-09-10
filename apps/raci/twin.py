@@ -23,6 +23,14 @@ import urllib.request
 
 TWIN_URL = os.environ.get("OAAP_TWIN_URL", "").rstrip("/")
 PLATFORM_KEY = os.environ.get("OAAP_PLATFORM_KEY", "")
+# TWIN_URL already ends in '/twin' (appctl.py: f"http://{GATEWAY_CONTAINER}/twin"),
+# and the Caddyfile's 'handle /twin/*' block forwards the path UNCHANGED --
+# it does not strip the prefix. So every path below is '/objects...',
+# NOT '/twin/objects...': the spec's route headers (SS2.5-2.7) name the
+# full path as reached through the gateway from its root, but TWIN_URL
+# is already past that root. Found live on oaap-test 2026-09-10 (a 404
+# from the twin's own Flask app, not from the gateway -- the give-away
+# that the path, not the auth, was wrong).
 
 
 class TwinError(Exception):
@@ -69,7 +77,7 @@ def get_object(obj_id):
     since a stale or mistyped id pasted into a form is routine, not
     exceptional."""
     try:
-        return _call("GET", f"/twin/objects/{obj_id}")
+        return _call("GET", f"/objects/{obj_id}")
     except TwinError as exc:
         if exc.status == 404:
             return None
@@ -93,4 +101,4 @@ def write_group(obj_id, group_key, attributes=None, relations=None,
         body["relations"] = relations
     if activities:
         body["activities"] = activities
-    _call("PUT", f"/twin/objects/{obj_id}/groups/{group_key}", body)
+    _call("PUT", f"/objects/{obj_id}/groups/{group_key}", body)

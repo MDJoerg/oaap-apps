@@ -89,7 +89,7 @@ server = HTTPServer(("127.0.0.1", 0), Stub)
 port = server.server_port
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
-os.environ["OAAP_TWIN_URL"] = f"http://127.0.0.1:{port}"
+os.environ["OAAP_TWIN_URL"] = f"http://127.0.0.1:{port}/twin"  # prod shape, see twin.py
 os.environ["OAAP_PLATFORM_KEY"] = "oaapk_test_secret"
 import twin  # noqa: E402
 import app as m  # noqa: E402
