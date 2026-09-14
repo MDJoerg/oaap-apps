@@ -58,8 +58,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.3.4",
-      "released": "2026-08-24",
+      "version": "0.4.0",
+      "released": "2026-09-14",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -88,10 +88,12 @@
         "entwicklung",
         "paket",
         "deployment",
-        "zielknoten"
+        "zielknoten",
+        "onboarding",
+        "starter"
       ],
-      "summary": "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, gelieferte Pakete prüfen und ausrollen.",
-      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Gibt es die Instanz noch nicht, tut es dasselbe mit einer einmaligen Anlege-Erlaubnis aus dem Portal. Seit 0.3 muss die Instanz nicht auf demselben Knoten liegen wie das Studio: Jedes Vorhaben hat einen benannten Zielknoten (erkannt am Deploy-Hook) und darauf zwei Instanzen — Test und Produktiv —, beide verlinkt auf ihre Seite im Portal dieses Knotens; fehlt die produktive noch, sagt die Karte, wo sie entsteht. Ist für den Zielknoten ein Flotten-Schlüssel hinterlegt (geheime Konfiguration, ausgestellt auf dem Knoten), zeigt die Seite des Vorhabens zusätzlich, was der Knoten über beide Instanzen sagt: Version, Kanal, Ampel, veröffentlichte Adressen mit DNS-Urteil und die offenen Punkte, die sie betreffen — ein Schlüssel, der ausschließlich lesen kann; das Recht zu handeln bleibt der Deploy-Token, den der Anwender eingibt. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
+      "summary": "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, gelieferte Pakete prüfen und ausrollen — und Projekte onboarden, die es schon gibt.",
+      "description": "Beschreibt ein Vorhaben in den Worten des Auftraggebers und erzeugt daraus ein vollständiges Briefing für eine KI, die die App bauen soll — fachlicher Auftrag plus alle Plattformregeln (Manifest, Speicher, Oberfläche, Deploy-Hook, Postkasten). Seit 0.2 auch die Rückrichtung: das gelieferte Paket (ZIP) prüfen, ohne es zu entpacken, das Vorhaben aus dem Manifest füllen, vorab sagen was eine Bestätigung braucht — und es über den Drei-Phasen-Weg aus RFC-0019 auf die Test-Instanz ausrollen. Dabei bekommt das Studio kein Sonderrecht: Es läuft denselben Ablauf wie die Projekt-KI, und der Deploy-Token wird bei jedem Upload eingegeben statt gespeichert. Gibt es die Instanz noch nicht, tut es dasselbe mit einer einmaligen Anlege-Erlaubnis aus dem Portal. Seit 0.3 muss die Instanz nicht auf demselben Knoten liegen wie das Studio: Jedes Vorhaben hat einen benannten Zielknoten (erkannt am Deploy-Hook) und darauf zwei Instanzen — Test und Produktiv —, beide verlinkt auf ihre Seite im Portal dieses Knotens; fehlt die produktive noch, sagt die Karte, wo sie entsteht. Ist für den Zielknoten ein Flotten-Schlüssel hinterlegt (geheime Konfiguration, ausgestellt auf dem Knoten), zeigt die Seite des Vorhabens zusätzlich, was der Knoten über beide Instanzen sagt: Version, Kanal, Ampel, veröffentlichte Adressen mit DNS-Urteil und die offenen Punkte, die sie betreffen — ein Schlüssel, der ausschließlich lesen kann; das Recht zu handeln bleibt der Deploy-Token, den der Anwender eingibt. Seit 0.4 gibt es beides auch ohne Vorhaben zum Herunterladen: ein Plattform-Briefing mit allen verbindlichen Regeln (neu darin: Benutzer und fachliche Rechte) und ein Starter-Paket als ZIP — das kleinste vollständige Paket, das die eigene Prüfung ohne Befund passiert. Damit lässt sich ein Projekt onboarden, das schon läuft und dem nur noch das Deployment fehlt; beide Dateien enthalten nichts Privilegiertes. Der Plattformteil wird an einer Stelle gepflegt und steht wortgleich in beiden Blättern. Das Studio ist bewusst eine gewöhnliche App aus dem Store und kein Portal-Bestandteil. Sinnvoll auf einem Knoten mit Profil „dev\" — dort führt der Weg vom Vorhaben direkt zur Test-Instanz.",
       "links": [
         {
           "rel": "source",

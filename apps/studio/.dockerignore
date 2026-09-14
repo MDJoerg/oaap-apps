@@ -1,3 +1,7 @@
 __pycache__/
 *.py[cod]
 README.md
+
+# Die README des Starter-Pakets ist Teil der ausgelieferten ZIP und
+# muss ins Image — die Regel darueber meint nur die README des Studios.
+!starter/README.md

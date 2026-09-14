@@ -266,6 +266,35 @@ r6 = inspect(good, previous=base)
 ok("gleiche Version: das Studio hält es zurück, bevor der Knoten es tut",
    not r6["deployable"] and r6["envelope_hard"])
 
+print()
+print("=== Das ausgelieferte Starter-Paket ===")
+# Der eigentliche Zweck dieses Blocks: Das Starter-Paket ist ein
+# Versprechen ("ein Paket, das ankommt"). Geprueft wird es mit demselben
+# Pruefer, durch den fremde Pakete gehen — ein Versprechen, das sich
+# selbst kontrolliert. Aendert jemand die Manifest-Regeln, faellt es hier
+# auf und nicht erst beim Anwender.
+import app as studio  # noqa: E402
+
+starter_zip_path = os.path.join(tempfile.gettempdir(), "oaap-starter-test.zip")
+with open(starter_zip_path, "wb") as fh:
+    fh.write(studio.starter_zip())
+r_starter = pkg.inspect(starter_zip_path, 64 * 1024 * 1024)
+ok("das Starter-Paket ist ausrollbar", r_starter["deployable"])
+ok("und ohne jeden Befund", sum(r_starter["counts"].values()) == 0,
+   str([f["text"] for f in r_starter["findings"]]))
+ok("sein Manifest nennt Kennung, Version, Typ und Klasse",
+   r_starter["summary"]["id"] == "starter"
+   and r_starter["summary"]["version"] == "0.1.0"
+   and r_starter["summary"]["type"] == "native"
+   and r_starter["summary"]["class"] == "frontend")
+ok("es deklariert einen Speicher und einen Gesundheitspfad",
+   r_starter["summary"]["storage"] and r_starter["summary"]["health"])
+ok("und keine oeffentliche Route — sonst waere die Vorlage ein schlechtes Vorbild",
+   not pkg.public_paths(r_starter["summary"]))
+ok("zwei Abrufe ergeben dieselben Bytes (Pruefsumme bedeutet etwas)",
+   studio.starter_zip() == studio.starter_zip())
+os.remove(starter_zip_path)
+
 for f in (good, nested, absolute, travers, link, plain, nomani, broken):
     try:
         os.remove(f)

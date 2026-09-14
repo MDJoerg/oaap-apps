@@ -1,0 +1,60 @@
+oaap_manifest: "0.2"
+
+# ---------------------------------------------------------------------
+# Starter-Paket: das kleinste Manifest, das durch die Prüfung geht.
+# Jede Zeile hier ist entweder Pflicht oder erklärt, warum sie da ist.
+# Zum Anpassen: app.id, app.name, app.version und app.description
+# ändern — der Rest passt für die allermeisten Apps unverändert.
+# ---------------------------------------------------------------------
+
+app:
+  # Kleinbuchstaben, Ziffern, Bindestriche, 3–40 Zeichen. Die Kennung
+  # ist unveränderlich: Ein Deployment mit anderer Kennung wird hart
+  # abgelehnt, weil es eine andere App wäre.
+  id: starter
+  name: OAAP Starter
+  # Muss bei JEDEM Deployment steigen (1.2.3). Unveränderte Version =
+  # harte Ablehnung. Einzige Ausnahme: das erneute Anmelden desselben
+  # Pakets, nachdem ein Mensch den erweiterten Rahmen bestätigt hat.
+  version: 0.1.0
+  # native = Quellcode, die Plattform baut das Image auf dem Zielknoten
+  # (also auf amd64 UND arm64 — keine architekturgebundenen Basisimages).
+  type: native
+  # frontend = hat eine Oberfläche; service = nur Hintergrunddienst.
+  class: frontend
+  description: "Kleinste lauffähige OAAP-App — Vorlage für eigene Pakete"
+
+services:
+  web:
+    # Baut aus dem Dockerfile neben dieser Datei.
+    build: .
+    # Genau EIN HTTP-Port, kein TLS in der App — das macht das Gateway.
+    port: 8000
+
+routes:
+  # Wer die App überhaupt erreicht, entscheidet das Gateway anhand
+  # dieser Liste. `public` hieße: ohne Anmeldung — dann steht die Route
+  # im Internet offen, und der Knoten verlangt dafür eine Bestätigung.
+  - path: /
+    roles: [user, keyuser, admin]
+
+storage:
+  # Alles, was einen Neustart überleben soll, gehört in einen
+  # deklarierten Mount. Nur diese Pfade werden gesichert; alles andere
+  # im Container ist nach dem nächsten Deployment weg.
+  - name: data
+    mount: /data
+
+config:
+  # Konfiguration kommt ausschließlich über deklarierte
+  # Umgebungsvariablen. Geheimnisse bekommen `secret: true` — dann
+  # zeigt das Portal den Wert nie wieder zurück.
+  - key: STARTER_GREETING
+    label: "Begrüßung auf der Startseite"
+    default: "Willkommen"
+
+health:
+  # Der Knoten fragt hier, ob die App lebt. Ohne Anmeldung, ohne
+  # Seiteneffekte, schnell.
+  path: /healthz
+  startup_grace_seconds: 20

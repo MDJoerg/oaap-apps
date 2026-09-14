@@ -23,6 +23,9 @@ WORKDIR /srv
 # ein neues Modul hier eingetragen werden MUSS — vergisst man es, startet
 # der Container nicht (bei fleet.py in 0.3 fast passiert).
 COPY app.py pkg.py deployer.py multipart.py fleet.py /srv/
+# Das Starter-Paket wird auf Anfrage zu einer ZIP gepackt und
+# herausgegeben — es gehört also ins Image, nicht nur ins Repository.
+COPY starter/ /srv/starter/
 
 USER 10001
 EXPOSE 8000

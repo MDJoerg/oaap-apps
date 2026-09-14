@@ -543,6 +543,48 @@ st, b, _ = call("GET", f"/vorhaben/{PID}/zettel", USER)
 ok("und ist danach wieder weg — nichts gespeichert",
    "richtiger-token" not in b)
 
+print("\n=== Onboarding: Briefing und Starter-Paket ohne Vorhaben ===")
+st, b, _ = call("GET", "/briefing", USER)
+ok("die Onboarding-Seite steht ohne jedes Vorhaben da",
+   st == 200 and "Projekt onboarden" in b and "Starter-Paket" in b)
+
+st, b, h = call("GET", "/briefing.md", USER)
+ok("das Plattform-Briefing kommt als Markdown-Datei",
+   st == 200 and "text/markdown" in h.get("Content-Type", "")
+   and "oaap-plattform-briefing.md" in h.get("Content-Disposition", ""))
+ok("es nennt die Regeln, aber keinen fachlichen Auftrag",
+   "X-OAAP-User" in b and "Worum es geht" not in b)
+ok("und nichts Privilegiertes: keine Instanz, keine Adresse eines Knotens",
+   PID not in b and NODE_HOST not in b and "Bearer" not in b)
+
+SATZ = "Die App entscheidet, wer er *darin* ist."
+ok("es erklaert, wie Benutzer und fachliche Rechte gemeint sind",
+   SATZ in b and "Selbstregistrierung" in b)
+st, vb, _ = call("GET", f"/vorhaben/{PID}/briefing.md", USER)
+ok("und das Vorhaben-Briefing sagt dazu WORTGLEICH dasselbe - ein Erzeuger",
+   SATZ in vb)
+ok("der Plattformteil steht in beiden Blaettern",
+   "Ein HTTP-Port" in b and "Ein HTTP-Port" in vb)
+
+req = urllib.request.Request(BASE + "/starter.zip", method="GET")
+for k, v in USER.items():
+    req.add_header(k, v)
+with urllib.request.urlopen(req) as r:
+    zip_bytes, zip_headers = r.read(), dict(r.headers)
+ok("das Starter-Paket kommt als ZIP zum Herunterladen",
+   zip_headers.get("Content-Type") == "application/zip"
+   and "oaap-starter.zip" in zip_headers.get("Content-Disposition", ""))
+zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+ok("mit Manifest, Dockerfile und App darin",
+   {"starter/oaap-app.yaml", "starter/Dockerfile", "starter/app.py"}
+   <= set(zf.namelist()))
+ok("sein Manifest ist das echte, nicht eine Beschreibung davon",
+   b"id: starter" in zf.read("starter/oaap-app.yaml"))
+
+st, b, _ = call("GET", f"/vorhaben/{PID}/briefing", USER)
+ok("der Onboarding-Eintrag im Kopf funktioniert auch auf tiefen Seiten",
+   'href="/briefing"' in b)
+
 print("\n=== Rollen ===")
 KEY = {"X-OAAP-User": "kim", "X-OAAP-Roles": "keyuser"}
 st, b, _ = call("GET", f"/vorhaben/{PID}/loeschen", KEY)

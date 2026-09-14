@@ -130,6 +130,55 @@ Versionen greift dort nicht — sie vergleicht mit dem, was
 Zettel und Hilfeseite tragen den Hinweis; der Knoten sagt es seit
 Referenz 0.1.47 zusätzlich in der Ablehnung selbst.
 
+### Projekte onboarden, die es schon gibt (seit 0.4.0)
+
+Bis 0.3 führte der einzige Weg zu den Regeln der Plattform über ein
+Vorhaben. Für ein Projekt, das längst entwickelt wird und dem nur noch
+das Deployment fehlt, hieß das: eine Karteileiche anlegen, um an ein
+Dokument zu kommen. Unter **Onboarding** (Kopfzeile, oder Karte auf der
+Startseite) gibt es deshalb zwei Dateien ohne jedes Vorhaben:
+
+- **Plattform-Briefing** (`oaap-plattform-briefing.md`) — alles
+  Verbindliche: Gateway und Identität, Manifest, Oberfläche, **Benutzer
+  und fachliche Rechte**, was ein Paket erfüllen muss, wie es in drei
+  Phasen ankommt, Postkasten-Regeln. Ohne fachlichen Auftrag.
+- **Starter-Paket** (`oaap-starter.zip`) — das kleinste vollständige
+  Paket: kommentiertes Manifest, Dockerfile, eine App, die Identität aus
+  den Kopfzeilen liest, unter `/data` zählt und `/healthz` beantwortet.
+  Quelle ist das Verzeichnis [`starter/`](starter/).
+
+**Ein Erzeuger, zwei Ausgaben.** Der Plattformteil steht genau einmal im
+Quelltext (`_sec_platform`, `_sec_ui`, `_sec_users`, `_sec_collab`) und
+geht sowohl ins Plattform- als auch ins Vorhaben-Briefing. Zwei getrennt
+gepflegte Texte über dieselbe Sache wären der sichere Weg in die Drift —
+einer wird geändert, der andere nicht, und niemand merkt es (das
+Argument von RFC-0014). `test_pages.py` prüft deshalb nicht nur, dass
+beide Blätter erscheinen, sondern dass ein bestimmter Satz **wortgleich**
+in beiden steht.
+
+**Das Starter-Paket prüft sich selbst.** Es wird aus den echten Dateien
+gepackt und in `test_pkg.py` durch denselben Prüfer geschickt, durch den
+fremde Pakete gehen — mit der Erwartung: ausrollbar, **kein einziger
+Befund**. Ändern sich die Manifest-Regeln, fällt das hier auf und nicht
+beim Anwender. Zusätzlich validiert es gegen das veröffentlichte
+JSON-Schema (`oaap-spec/schema/validate.py`).
+
+**Beide Dateien enthalten nichts Privilegiertes**: keinen Deploy-Token,
+keine Anlege-Erlaubnis, keine Adresse einer Instanz. Sie dürfen
+weitergegeben werden, ohne dass damit ein Zugang weitergegeben wird —
+Adresse und Token gehören zu einer bestimmten Instanz und werden
+getrennt übergeben. Das ist dieselbe Trennung wie beim
+Deployment-Zettel.
+
+**Neu im Text: „Benutzer und fachliche Rechte".** Das Muster steht seit
+dem 04.08.2026 im App Deployment Contract, stand aber in keinem
+Briefing: Die Plattform entscheidet, *wer* jemand ist und *ob* er die
+App betreten darf — die App entscheidet, wer er *darin* ist. Der
+Abschnitt sagt auch ausdrücklich, was es **nicht** gibt
+(Selbstregistrierung mit Fremdkonten, zentrale Vergabe fachlicher
+Rollen) und bittet um einen Brief, statt dass jede App sich ihre eigene
+Anmeldung baut.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt

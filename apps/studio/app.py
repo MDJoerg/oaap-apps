@@ -1,4 +1,4 @@
-"""OAAP Studio 0.3 — Entwicklungsvorhaben, Briefings und Pakete.
+"""OAAP Studio 0.4 — Entwicklungsvorhaben, Briefings und Pakete.
 
 Zweite Ausbaustufe (siehe program/studio/ideas.md). 0.1 verwaltete
 Vorhaben und erzeugte daraus **Briefings**; 0.2 nimmt die andere Seite
@@ -28,6 +28,24 @@ seinem **eigenen** Hostnamen ab und zeigte damit ins Leere. Deshalb:
   optional, mit einem Schlüssel, der ausschließlich lesen kann
   (Begründung in fleet.py).
 
+0.4 macht den Weg auch für Projekte auf, die es schon gibt. Bis dahin
+kam man an die Regeln der Plattform nur über ein Vorhaben — wer nur
+noch das Deployment brauchte, musste eine Karteileiche anlegen. Jetzt
+gibt es beides ohne Vorhaben zum Herunterladen:
+
+- das **Plattform-Briefing** (alles Verbindliche, kein fachlicher
+  Auftrag, keine Adressen, nichts Privilegiertes),
+- das **Starter-Paket** als ZIP — das kleinste vollständige Paket, das
+  die eigene Paketprüfung ohne einen einzigen Befund passiert.
+
+Dabei gilt: **ein Erzeuger, zwei Ausgaben.** Der Plattformteil steht
+genau einmal im Quelltext und geht in beide Blätter; zwei getrennt
+gepflegte Texte über dieselbe Sache wären der sichere Weg in die Drift
+(das Argument von RFC-0014). Neu darin ist der Abschnitt „Benutzer und
+fachliche Rechte" — das Muster aus dem App Deployment Contract, das bis
+hierhin in keinem Briefing stand, obwohl Apps mit eigenem Rollenmodell
+genau daran scheitern.
+
 Die Regel, die das alles zusammenhält (RFC-0019, Abschnitt „Studio"):
 **Das Studio hält nie ein Recht.** Alles Privilegierte gibt der Anwender
 im Augenblick der Handlung — der Deploy-Token wird bei jedem Upload
@@ -56,11 +74,13 @@ Objektseite, Dialogseite), keine externen Ressourcen.
 """
 
 import html
+import io
 import json
 import os
 import re
 import sqlite3
 import sys
+import zipfile
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -81,6 +101,15 @@ PORT = 8000
 # landen. Der Knoten hebt das Artefakt auf — das ist seine Aufgabe
 # (RFC-0019 §4), nicht die des Studios.
 TMP_DIR = os.environ.get("STUDIO_TMP_DIR", "/tmp")
+
+# Das Starter-Paket liegt als lesbares Verzeichnis im Image und wird auf
+# Anfrage zu einer ZIP gepackt. Eine vorgefertigte ZIP mitzuliefern wäre
+# bequemer und wäre eine zweite Wahrheit: So prüft die eigene Testsuite
+# genau die Dateien, die der Anwender bekommt — mit demselben Prüfer,
+# durch den auch fremde Pakete gehen.
+STARTER_DIR = os.environ.get(
+    "STUDIO_STARTER_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "starter"))
+STARTER_FILES = ("oaap-app.yaml", "Dockerfile", "app.py", "README.md")
 
 # Declared configuration (manifest `config`)
 CONTRACT_URL = os.environ.get(
@@ -471,12 +500,16 @@ def page(title, body, user, roles, active=""):
 <title>{esc(title)} — OAAP Studio</title>
 {STYLE}
 <header class="oaap">
-  <a class="brand" href="./">{LOGO_SVG}
+  <a class="brand" href="/">{LOGO_SVG}
     <span><b>OAAP STUDIO</b><small>Entwicklungsvorhaben und Briefings</small></span>
   </a>
+  <!-- Absolut, nicht relativ: Der Kopf steht auf JEDER Seite, auch auf
+       /vorhaben/<id>/briefing. Ein relatives ./hilfe landete dort im
+       Nichts — aufgefallen beim Einbau des Onboarding-Eintrags in 0.4. -->
   <nav class="main">
-    <a href="./" class="{'active' if active == 'projects' else ''}">Vorhaben</a>
-    <a href="./hilfe" class="{'active' if active == 'help' else ''}">Hilfe</a>
+    <a href="/" class="{'active' if active == 'projects' else ''}">Vorhaben</a>
+    <a href="/briefing" class="{'active' if active == 'onboarding' else ''}">Onboarding</a>
+    <a href="/hilfe" class="{'active' if active == 'help' else ''}">Hilfe</a>
   </nav>
   <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
 </header>
@@ -489,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.3.4"
+VERSION = "0.4.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -603,7 +636,15 @@ def list_page(rows, user, roles, msg=""):
   <a class="btn" href="./vorhaben/neu">Vorhaben anlegen</a>
 </div>
 {msg_html}
-{table}"""
+{table}
+<div class="card">
+  <h2>Projekt onboarden — ohne Vorhaben</h2>
+  <p class="muted">Ein Projekt läuft schon und es fehlt nur das Deployment?
+  Dann braucht es keinen fachlichen Auftrag, sondern nur die Regeln der
+  Plattform: <b>Plattform-Briefing</b> und <b>Starter-Paket</b> herunterladen,
+  der KI des Projekts geben, fertiges Paket hier hochladen.</p>
+  <p><a class="btn" href="./briefing">Briefing und Starter-Paket</a></p>
+</div>"""
     return page("Vorhaben", body, user, roles, "projects")
 
 
@@ -926,6 +967,51 @@ def briefing_page(p, text, user, roles):
 </div>
 <pre class="briefing">{esc(text)}</pre>"""
     return page("Briefing", body, user, roles, "projects")
+
+
+def onboarding_page(text, user, roles):
+    """Das Plattform-Briefing zum Ansehen und Herunterladen — ohne Vorhaben.
+
+    Für den Fall, den es bis 0.3 nicht gab: ein Projekt läuft schon, und
+    es fehlt nur das Deployment. Wer dafür erst ein Vorhaben anlegen
+    muss, legt eine Karteileiche an.
+    """
+    body = f"""
+<a class="back" href="./">← Zurück zu den Vorhaben</a>
+<div class="pagehead">
+  <h1>Projekt onboarden</h1>
+  <a class="btn" href="./briefing.md" download>Plattform-Briefing (MD)</a>
+</div>
+<div class="card">
+  <h2>Für Projekte, die es schon gibt</h2>
+  <p>Diese beiden Dateien sind alles, was eine fremde Entwicklerin oder eine
+  fremde KI braucht, um aus einer bestehenden Anwendung ein Paket zu machen,
+  das hier ankommt. Ein Vorhaben ist dafür nicht nötig — es geht um keinen
+  fachlichen Auftrag, nur um die Regeln der Plattform.</p>
+  <ol style="line-height:1.8;padding-left:1.2rem">
+    <li><b>Plattform-Briefing</b> herunterladen und der KI als Kontext geben
+        („Mach diese Anwendung OAAP-fähig — als Paket, das durch die Prüfung
+        geht.“).</li>
+    <li><b>Starter-Paket</b> daneben legen: das kleinste vollständige Paket,
+        mit kommentiertem Manifest. Schneller gelesen als beschrieben.</li>
+    <li>Das fertige Paket kommt über <b>Paket prüfen → Ausrollen</b> auf eine
+        Test-Instanz — oder die KI geht denselben Weg selbst über den
+        Deploy-Hook.</li>
+  </ol>
+  <p><a class="btn" href="./starter.zip" download>Starter-Paket (ZIP)</a></p>
+  <p class="muted">Beide Dateien enthalten <b>nichts Privilegiertes</b>:
+  keinen Token, keine Anlege-Erlaubnis, keine Adresse einer Instanz. Sie
+  dürfen weitergegeben werden; einen Zugang gibt das nicht.</p>
+</div>
+<div class="card">
+  <h2>Wenn daraus doch ein Vorhaben wird</h2>
+  <p class="muted">Sobald es einen fachlichen Auftrag gibt, leg ein Vorhaben
+  an: Das Briefing dort enthält <b>denselben</b> Plattformteil wie dieses
+  Blatt und zusätzlich Auftrag, Zielknoten und Instanzen. Es wird an einer
+  Stelle gepflegt — die beiden Blätter können nicht auseinanderlaufen.</p>
+</div>
+<pre class="briefing">{esc(text)}</pre>"""
+    return page("Projekt onboarden", body, user, roles, "onboarding")
 
 
 LEVEL_LABEL = {pkg.FEHLER: "Fehler", pkg.BEFUND: "Befund", pkg.HINWEIS: "Hinweis"}
@@ -1269,6 +1355,22 @@ HELP_BODY = f"""
   enthält den fachlichen Auftrag und alle technischen Regeln, die eine App
   auf dieser Plattform erfüllen muss. Ihr müsst diese Regeln nicht kennen;
   das Studio schreibt sie mit.</p>
+</div>
+<div class="card">
+  <h2>Ein Projekt, das es schon gibt</h2>
+  <p>Wenn eine Anwendung bereits entwickelt wird und nur noch das Deployment
+  fehlt, braucht es dafür <b>kein Vorhaben</b>. Unter <a href="/briefing">
+  Onboarding</a> gibt es zwei Dateien zum Herunterladen:</p>
+  <ul style="line-height:1.8">
+    <li><b>Plattform-Briefing</b> — alle verbindlichen Regeln, ohne
+    fachlichen Auftrag und ohne Adressen.</li>
+    <li><b>Starter-Paket (ZIP)</b> — das kleinste vollständige Paket mit
+    kommentiertem Manifest, als Vorlage zum Umbauen.</li>
+  </ul>
+  <p class="muted">Der Plattformteil ist derselbe Text, der auch in jedem
+  Vorhaben-Briefing steht — er wird an einer Stelle gepflegt, damit die
+  beiden Blätter nicht auseinanderlaufen können. Beide Dateien enthalten
+  nichts Privilegiertes und dürfen weitergegeben werden.</p>
 </div>
 <div class="card">
   <h2>Der Weg von der Idee zur App</h2>
@@ -1622,6 +1724,291 @@ def deployment_sheet(p, token=""):
 
 
 # ---------------------------------------------------------------- briefing
+#
+# Ein Erzeuger, zwei Ausgaben. Der Plattformteil eines Briefings gilt
+# für jede App gleich — er steht deshalb genau einmal hier und geht in
+# beide Blätter:
+#
+#   * das **Vorhaben-Briefing** (mit fachlichem Auftrag und Adressen),
+#   * das **Plattform-Briefing** (ohne beides, für Projekte, die schon
+#     laufen und nur noch das Deployment brauchen).
+#
+# Zwei getrennt gepflegte Texte über dieselbe Sache wären der sichere
+# Weg in die Drift: Einer wird geändert, der andere nicht, und niemand
+# merkt es (das Argument von RFC-0014).
+
+
+def _numbered(sections):
+    """Abschnitte (Titel, Zeilen) fortlaufend nummeriert aneinanderhängen."""
+    out = []
+    for i, (title, lines) in enumerate(sections, 1):
+        out += [f"## {i}. {title}", ""] + lines + [""]
+    return out
+
+
+def _sec_platform(app_type=None):
+    lines = [
+        "Die App läuft auf **OAAP** — Container hinter einem zentralen",
+        "Gateway, das **die gesamte Anmeldung erledigt**. Verbindlich ist der",
+        "App Deployment Contract:",
+        "",
+        f"  {CONTRACT_URL}",
+        "",
+        "**Lies ihn und arbeite danach.** Das Wichtigste in Kürze:",
+        "",
+        "- **Kein eigener Login.** Die geprüfte Identität kommt als Header",
+        "  `X-OAAP-User` und `X-OAAP-Roles`; sie sind nicht fälschbar.",
+        "  Niemals ein Anmeldeformular bauen.",
+        "- **Ein HTTP-Port**, kein TLS in der App (das macht das Gateway).",
+        "- **Persistenz nur in deklarierten Mounts** (`storage` im Manifest).",
+        "- **Konfiguration nur über deklarierte Umgebungsvariablen**,",
+        "  Geheimnisse mit `secret: true`.",
+        "- **Logs nach stdout**, dazu ein Health-Endpunkt.",
+        "- **Mehrfach-instanzfähig und offline-fähig** — keine festen",
+        "  Hostnamen, keine absoluten URLs, kein Internetzwang zur Laufzeit.",
+        "",
+    ]
+    if app_type:
+        lines += [
+            f"**App-Typ dieses Vorhabens:** `{app_type}` — "
+            f"{APP_TYPES.get(app_type, '')}",
+            "",
+        ]
+    lines += [
+        "Liefere im Paket ein gültiges `oaap-app.yaml` (Manifest) und,",
+        "bei App-Typ `native`, ein `Dockerfile` je Service. Das Manifest muss",
+        "gegen das veröffentlichte JSON-Schema validieren; das Image muss auf",
+        "amd64 **und** arm64 bauen.",
+    ]
+    return ("Die Plattform, auf der die App läuft", lines)
+
+
+def _sec_ui():
+    return ("Oberfläche", [
+        "Die App soll aussehen, als gehöre sie zur Plattform:",
+        "",
+        "- Deutsch als Oberflächensprache, Blau als Leitfarbe",
+        "  (`#2563eb`, dunkler Kopf `#1e3a8a`), Systemschriften,",
+        "  **keine externen Ressourcen** (keine Webfonts, keine CDNs).",
+        "- **Tablet zuerst**: Bedienelemente mindestens 44 px hoch.",
+        "- **Listen zeigen, Objektseiten pflegen** — Formulare gehören nie",
+        "  in Tabellenzeilen. Nach dem Speichern umleiten (kein erneutes",
+        "  Absenden beim Neuladen).",
+    ])
+
+
+def _sec_users():
+    """Benutzer und fachliche Rechte — die Naht zwischen App und Plattform.
+
+    Steht seit dem 04.08. als empfohlenes Muster im App Deployment
+    Contract und wurde bis 0.4 in keinem Briefing erwähnt; genau daran
+    scheitern Apps mit einem eigenen Rollenmodell. Der letzte Absatz
+    sagt bewusst, was es **nicht** gibt: Selbstregistrierung mit
+    Fremdkonten ist heute keine Plattformfunktion. Etwas anderes zu
+    behaupten wäre schlimmer als die Lücke.
+    """
+    return ("Benutzer und fachliche Rechte", [
+        "Der Grundsatz, an dem die Naht verläuft:",
+        "",
+        "> **Die Plattform entscheidet, wer jemand ist und ob er die App",
+        "> betreten darf. Die App entscheidet, wer er *darin* ist.**",
+        "",
+        "Konkret:",
+        "",
+        "- **Der Zutritt ist Sache des Manifests.** Die Rollen an der Route",
+        "  entscheiden, wer die App überhaupt erreicht; das Gateway setzt",
+        "  das durch. Die Plattform kennt `admin`, `keyuser`, `user`,",
+        "  `guest`, `partner` — mehr nicht, und diese Liste wächst nicht",
+        "  je App.",
+        "- **Braucht die App ein feineres Rollenmodell, baut sie es selbst**",
+        "  — das ist erwartet und richtig, kein Umweg.",
+        "- **Beim ersten Kontakt einen eigenen Benutzersatz anlegen.**",
+        "  Kommt ein unbekannter `X-OAAP-User`, legt die App ihren eigenen",
+        "  Datensatz dazu an. Entweder leitet sie eine fachliche",
+        "  Anfangsrolle aus `X-OAAP-Roles` ab — oder sie legt ihn, bei",
+        "  sensiblen Anwendungen, **gesperrt und ohne Rechte** an und zeigt",
+        "  einen Hinweis „bitte an die Administration wenden“. Dazu eine",
+        "  **Freigabeansicht**, in der neue Anmeldungen eine fachliche",
+        "  Rolle bekommen oder mit einem **vorhandenen Stammsatz verknüpft**",
+        "  werden (ein Mitarbeiter existiert meist schon, bevor er sich das",
+        "  erste Mal anmeldet — verknüpfen, nicht doppeln).",
+        "- **Nach der ersten Zuordnung gehört die Rolle der App.** Niemals",
+        "  bei späteren Anfragen erneut aus `X-OAAP-Roles` ableiten: Ein",
+        "  Dauerabgleich überschreibt lautlos, was die Administration",
+        "  eingestellt hat. Für die Sicherheit braucht man ihn auch nicht —",
+        "  wer auf der Plattform deaktiviert wird, kommt am Gateway nicht",
+        "  mehr vorbei und erreicht die App nie wieder.",
+        "- **`X-OAAP-User` ist der stabile Schlüssel** zum Verknüpfen.",
+        "  Anzeigenamen sind änderbar; echte Personen als Stammdaten ohne",
+        "  Login anlegen und beim ersten Kontakt verknüpfen.",
+        "",
+        "**Was es heute nicht gibt — ehrlich gesagt:** Eine",
+        "**Selbstregistrierung** von Anwendern (auch mit Google-,",
+        "Microsoft-, Apple- oder GitHub-Konto) ist **keine**",
+        "Plattformfunktion; Benutzer legt die Administration an. Ebenso",
+        "wenig gibt es heute eine zentrale Vergabe **fachlicher** Rollen:",
+        "Die App verwaltet sie selbst, nach dem Muster oben. Beides ist",
+        "vorgemerkt. Braucht die App es jetzt, ist das keine",
+        "Bastelaufgabe — schreib einen Brief in den Postkasten, bevor Du",
+        "eine eigene Anmeldung baust.",
+    ])
+
+
+def _sec_collab(repo_line=None):
+    lines = []
+    if repo_line:
+        lines += [f"**Repository:** {repo_line}", "",
+                  "- Default-Branch ist **`main`**.",
+                  "- Committe selbstständig in kleinen, nachvollziehbaren",
+                  "  Schritten mit aussagekräftigen Nachrichten."]
+    lines += [
+        "- **Postkasten:** Rückfragen, Testergebnisse und Befunde laufen als",
+        "  Markdown-Briefe im Projekt-Repository unter `collab/letters/`",
+        "  bzw. `collab/reports/`. Regeln: zu Sitzungsbeginn **immer erst",
+        "  `git pull`**, Briefe sind unveränderlich (Antwort = neuer Brief",
+        "  mit `re:`-Betreff), Brief sofort committen und pushen, und so",
+        "  schreiben, dass die beteiligten Menschen mitlesen können.",
+        "- Schreib einen ersten Brief, sobald Du dieses Blatt gelesen hast:",
+        "  was Du verstanden hast, was Du zuerst baust, was Dir fehlt.",
+    ]
+    if not repo_line:
+        lines += [
+            "",
+            "Gibt es kein gemeinsames Repository — etwa weil das Projekt nur",
+            "Pakete abliefert —, vereinbart einen anderen festen Ort für",
+            "diese Briefe. Wichtig ist nicht das Verzeichnis, sondern dass",
+            "Fragen und Befunde **schriftlich an einer Stelle** stehen, an",
+            "der beide Seiten nachsehen.",
+        ]
+    # Ohne Repository hieße die Überschrift die Hälfte des Blattes lang
+    # etwas, was darin nicht steht.
+    return ("Repository und Zusammenarbeit" if repo_line
+            else "Zusammenarbeit und Postkasten", lines)
+
+
+def _sec_unclear():
+    return ("Wenn etwas unklar ist", [
+        "Rate nicht bei fachlichen Fragen — leg einen Brief in den Postkasten",
+        "und arbeite so lange an dem weiter, was klar ist. Technische",
+        "Unklarheiten zur Plattform beantwortet der Contract; bleibt eine",
+        "Lücke, schreib sie in einen Brief (das verbessert die Plattform).",
+    ])
+
+
+def starter_zip():
+    """Das Starter-Paket als ZIP — im Speicher, aus den echten Dateien.
+
+    Feste Zeitstempel und sortierte Reihenfolge: Zwei Abrufe ergeben
+    Byte für Byte dieselbe Datei, damit eine Prüfsumme etwas bedeutet.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in STARTER_FILES:
+            path = os.path.join(STARTER_DIR, name)
+            with open(path, "rb") as fh:
+                data = fh.read()
+            info = zipfile.ZipInfo(f"starter/{name}", date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, data)
+    return buf.getvalue()
+
+
+def platform_briefing():
+    """Das Briefing ohne Vorhaben — alles Verbindliche, nichts Konkretes.
+
+    Für Projekte, die schon laufen und denen nur das Deployment fehlt.
+    Es enthält bewusst **nichts Privilegiertes**: keinen Token, keine
+    Anlege-Erlaubnis, keine Adresse einer Instanz. Es ist ein Dokument,
+    kein Zugang.
+    """
+    lines = [
+        "# OAAP — Plattform-Briefing",
+        "",
+        f"Erzeugt vom OAAP Studio {VERSION} am {now()}.",
+        f"Verbindlich ist der App Deployment Contract: {CONTRACT_URL}",
+        "",
+        "Dieses Blatt ist für die KI oder die Entwicklerin eines Projekts,",
+        "das **schon existiert** und auf OAAP laufen soll. Es enthält keinen",
+        "fachlichen Auftrag — nur das, was jede App auf dieser Plattform",
+        "erfüllen muss, damit ihr Paket angenommen wird.",
+        "",
+        "Dein Auftrag lautet sinngemäß: **„Mach diese Anwendung",
+        "OAAP-fähig — als Paket, das durch die Prüfung geht.“**",
+        "",
+        "Zu diesem Blatt gehört das **Starter-Paket** (`oaap-starter.zip`)",
+        "aus derselben Quelle: das kleinste vollständige Paket, mit",
+        "kommentiertem Manifest, Dockerfile und einer App, die genau die",
+        "Regeln unten vorführt. Sieh es Dir zuerst an — es ist schneller",
+        "gelesen als beschrieben.",
+        "",
+    ]
+    sections = [
+        _sec_platform(),
+        _sec_ui(),
+        _sec_users(),
+        ("Was Du abgibst: das Paket", [
+            "Ein OAAP-Paket ist eine **ZIP** mit dem Manifest",
+            "`oaap-app.yaml` im Wurzelverzeichnis (ein einzelner",
+            "umschließender Ordner ist erlaubt) und allem, was zum Bauen",
+            "nötig ist.",
+            "",
+            "Hart abgelehnt wird ein Paket, das",
+            "",
+            "- eine **andere App-Kennung** trägt als die installierte Instanz,",
+            "- eine **unveränderte `app.version`** mitbringt (zähl sie vor",
+            "  jedem Deployment hoch),",
+            "- ein **ungültiges Manifest** hat,",
+            "- **absolute Pfade**, `..` oder **Symlinks** enthält.",
+            "",
+            "Eine **Bestätigung durch einen Menschen** kostet, was den Rahmen",
+            "erweitert: neue öffentliche Routen, neue Speicher, neue Ports am",
+            "Gateway vorbei. Das ist kein Fehler, sondern eine Rückfrage.",
+            "",
+            "**Wichtig nach so einer Bestätigung:** Melde **dasselbe Paket",
+            "unverändert** erneut an. Die Bestätigung gilt für genau das",
+            "Manifest, das abgelehnt wurde — zählst Du die Version hoch,",
+            "deckt sie es nicht mehr, und Du drehst Dich im Kreis. Die Regel",
+            "gegen unveränderte Versionen greift hier nicht: Sie vergleicht",
+            "mit dem, was **installiert** ist.",
+        ]),
+        ("Wie das Paket auf die Plattform kommt", [
+            "Drei Phasen, immer dieselben (RFC-0019):",
+            "",
+            "1. **Anmelden** — Version, vollständiges Manifest, Prüfsumme und",
+            "   Größe. Der Knoten prüft das, *bevor* etwas übertragen wird.",
+            "2. **Freigabe** — bei Erfolg ein Einmal-Token, 15 Minuten gültig,",
+            "   an genau diese Instanz und Prüfsumme gebunden.",
+            "3. **Hochladen** — nur damit.",
+            "",
+            "Diesen Weg gehst Du entweder selbst gegen den **Deploy-Hook**",
+            "Deiner Test-Instanz, oder ein Mensch lädt die ZIP im **Studio**",
+            "hoch („Paket prüfen“ → „Ausrollen“). Beides ist derselbe",
+            "Ablauf mit denselben Prüfungen.",
+            "",
+            "**Adresse und Token stehen absichtlich nicht in diesem Blatt.**",
+            "Sie gehören zu einer bestimmten Instanz und werden getrennt",
+            "übergeben — wer dieses Blatt weitergibt, gibt damit keinen",
+            "Zugang weiter. Gibt es die Instanz noch gar nicht, stellt ein",
+            "`server_admin` im Portal eine einmalige **Anlege-Erlaubnis**",
+            "aus, die an ihrer Stelle tritt.",
+            "",
+            "**Produktiv setzen ist nie Deine Handlung**: Das bleibt eine",
+            "bewusste Entscheidung eines Menschen, mit Versions-Sprung.",
+        ]),
+        _sec_collab(),
+        _sec_unclear(),
+    ]
+    lines += _numbered(sections)
+    lines += [
+        "---",
+        "",
+        "*Dieses Blatt wurde zu einem Zeitpunkt erzeugt und veraltet, wenn",
+        "sich die Plattform ändert. Maßgeblich ist immer der Contract unter",
+        f"{CONTRACT_URL} — bei einem Widerspruch gilt er, nicht dieses Blatt.*",
+    ]
+    return "\n".join(lines) + "\n"
+
 
 def briefing(p):
     """Generate the AI briefing for one project.
@@ -1645,8 +2032,6 @@ def briefing(p):
     artifact_way = (p["deploy_way"] or "git") == "artifact"
     node = fleet.node_base(p["hook_url"]) or fleet.node_base(p["node_url"])
     deploy = [
-        "## 6. Test-Deployment (Deploy-Hook)",
-        "",
         "Getestete Stände rollst du selbst auf die **Test-Instanz** aus —",
         "Produktivsetzung bleibt eine menschliche Entscheidung mit",
         "Versions-Sprung.",
@@ -1709,89 +2094,29 @@ def briefing(p):
         "Regeln und die Art, wie wir zusammenarbeiten. Lies es vollständig,",
         "bevor du Code schreibst, und frag nach, wenn etwas fehlt.",
         "",
-        "## 1. Worum es geht",
-        "",
-        block(p["goal"], "Ziel noch nicht beschrieben — bitte beim Auftraggeber erfragen."),
-        "",
-        f"**Auftraggeber:** {block(p['owner'], 'nicht benannt')}",
-        f"**Kontext:** {block(p['context'], 'nicht angegeben')}",
-        "",
-        "## 2. Wer die App benutzt",
-        "",
-        block(p["target_users"], "Zielanwender noch nicht beschrieben — bitte erfragen."),
-        "",
-        "## 3. Was die erste Version können muss",
-        "",
-        block(p["scope"], "Umfang noch nicht festgelegt — bitte gemeinsam schärfen."),
-        "",
-        "Halte dich an diesen Umfang. Ideen darüber hinaus schreibst du auf,",
-        "statt sie einzubauen.",
-        "",
-        "## 4. Die Plattform, auf der die App läuft",
-        "",
-        "Die App läuft auf **OAAP** — Container hinter einem zentralen",
-        "Gateway, das **die gesamte Anmeldung erledigt**. Verbindlich ist der",
-        "App Deployment Contract:",
-        "",
-        f"  {CONTRACT_URL}",
-        "",
-        "**Lies ihn und arbeite danach.** Das Wichtigste in Kürze:",
-        "",
-        "- **Kein eigener Login.** Die geprüfte Identität kommt als Header",
-        "  `X-OAAP-User` und `X-OAAP-Roles`; sie sind nicht fälschbar.",
-        "  Niemals ein Anmeldeformular bauen.",
-        "- **Ein HTTP-Port**, kein TLS in der App (das macht das Gateway).",
-        "- **Persistenz nur in deklarierten Mounts** (`storage` im Manifest).",
-        "- **Konfiguration nur über deklarierte Umgebungsvariablen**,",
-        "  Geheimnisse mit `secret: true`.",
-        "- **Logs nach stdout**, dazu ein Health-Endpunkt.",
-        "- **Mehrfach-instanzfähig und offline-fähig** — keine festen",
-        "  Hostnamen, keine absoluten URLs, kein Internetzwang zur Laufzeit.",
-        "",
-        f"**App-Typ dieses Vorhabens:** `{p['app_type']}` — {APP_TYPES.get(p['app_type'], '')}",
-        "",
-        "Liefere im Repository ein gültiges `oaap-app.yaml` (Manifest) und,",
-        "bei App-Typ `native`, ein `Dockerfile` je Service. Das Manifest muss",
-        "gegen das veröffentlichte JSON-Schema validieren; das Image muss auf",
-        "amd64 **und** arm64 bauen.",
-        "",
-        "## 5. Oberfläche",
-        "",
-        "Die App soll aussehen, als gehöre sie zur Plattform:",
-        "",
-        "- Deutsch als Oberflächensprache, Blau als Leitfarbe",
-        "  (`#2563eb`, dunkler Kopf `#1e3a8a`), Systemschriften,",
-        "  **keine externen Ressourcen** (keine Webfonts, keine CDNs).",
-        "- **Tablet zuerst**: Bedienelemente mindestens 44 px hoch.",
-        "- **Listen zeigen, Objektseiten pflegen** — Formulare gehören nie",
-        "  in Tabellenzeilen. Nach dem Speichern umleiten (kein erneutes",
-        "  Absenden beim Neuladen).",
-        "",
-    ] + deploy + [
-        "",
-        "## 7. Repository und Zusammenarbeit",
-        "",
-        f"**Repository:** {repo_line}",
-        "",
-        "- Default-Branch ist **`main`**.",
-        "- Committe selbstständig in kleinen, nachvollziehbaren Schritten",
-        "  mit aussagekräftigen Nachrichten.",
-        "- **Postkasten:** Rückfragen, Testergebnisse und Befunde laufen als",
-        "  Markdown-Briefe im Repository unter `collab/letters/` bzw.",
-        "  `collab/reports/`. Regeln: zu Sitzungsbeginn **immer erst",
-        "  `git pull`**, Briefe sind unveränderlich (Antwort = neuer Brief",
-        "  mit `re:`-Betreff), Brief sofort committen und pushen, und so",
-        "  schreiben, dass die beteiligten Menschen mitlesen können.",
-        "- Schreib einen ersten Brief, sobald du das Briefing gelesen hast:",
-        "  was du verstanden hast, was du zuerst baust, was dir fehlt.",
-        "",
-        "## 8. Wenn etwas unklar ist",
-        "",
-        "Rate nicht bei fachlichen Fragen — leg einen Brief in den Postkasten",
-        "und arbeite so lange an dem weiter, was klar ist. Technische",
-        "Unklarheiten zur Plattform beantwortet der Contract; bleibt eine",
-        "Lücke, schreib sie in einen Brief (das verbessert die Plattform).",
-        "",
+    ] + _numbered([
+        ("Worum es geht", [
+            block(p["goal"], "Ziel noch nicht beschrieben — bitte beim Auftraggeber erfragen."),
+            "",
+            f"**Auftraggeber:** {block(p['owner'], 'nicht benannt')}",
+            f"**Kontext:** {block(p['context'], 'nicht angegeben')}",
+        ]),
+        ("Wer die App benutzt", [
+            block(p["target_users"], "Zielanwender noch nicht beschrieben — bitte erfragen."),
+        ]),
+        ("Was die erste Version können muss", [
+            block(p["scope"], "Umfang noch nicht festgelegt — bitte gemeinsam schärfen."),
+            "",
+            "Halte dich an diesen Umfang. Ideen darüber hinaus schreibst du",
+            "auf, statt sie einzubauen.",
+        ]),
+        _sec_platform(p["app_type"]),
+        _sec_ui(),
+        _sec_users(),
+        ("Test-Deployment (Deploy-Hook)", deploy),
+        _sec_collab(repo_line),
+        _sec_unclear(),
+    ]) + [
         "---",
         "",
         f"*Status des Vorhabens: {STATUSES.get(p['status'], p['status'])}*",
@@ -1811,6 +2136,19 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # stdout, contract rule 5
         sys.stdout.write("%s - %s\n" % (self.address_string(), fmt % args))
         sys.stdout.flush()
+
+    def send_bytes(self, raw, status=200, content_type="application/octet-stream",
+                   extra_headers=()):
+        """Wie send_html, nur für fertige Bytes (das Starter-Paket)."""
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Content-Security-Policy", "default-src 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for k, v in extra_headers:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(raw)
 
     def send_html(self, body, status=200, content_type="text/html; charset=utf-8",
                   extra_headers=()):
@@ -1907,6 +2245,30 @@ class Handler(BaseHTTPRequestHandler):
                                                 (query.get("msg") or [""])[0]))
             if path == "/hilfe":
                 return self.send_html(page("Hilfe", HELP_BODY, user, roles_label, "help"))
+            # Onboarding: beide Blätter hängen an KEINEM Vorhaben — das ist
+            # der Sinn der Sache (siehe onboarding_page).
+            if path == "/briefing":
+                return self.send_html(
+                    onboarding_page(platform_briefing(), user, roles_label))
+            if path == "/briefing.md":
+                return self.send_html(
+                    platform_briefing(),
+                    content_type="text/markdown; charset=utf-8",
+                    extra_headers=[("Content-Disposition",
+                                    'attachment; filename="oaap-plattform-briefing.md"')])
+            if path == "/starter.zip":
+                try:
+                    data = starter_zip()
+                except OSError as exc:
+                    self.log_message("starter-paket nicht lesbar: %s", exc)
+                    return self.send_html(
+                        "<p>Das Starter-Paket liegt in dieser Installation nicht "
+                        "vor. Das Plattform-Briefing gibt es unabhängig davon.</p>",
+                        status=404)
+                return self.send_bytes(
+                    data, content_type="application/zip",
+                    extra_headers=[("Content-Disposition",
+                                    'attachment; filename="oaap-starter.zip"')])
             if path == "/vorhaben/neu":
                 empty = {f: "" for f in FIELDS}
                 empty.update(app_type="native", status="idee")
