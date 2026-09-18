@@ -13,6 +13,7 @@ Damit läuft der ganze Weg durch echten Code: Formular → Upload im Fluss
     python3 test_pages.py
 """
 import io
+import re
 import json
 import os
 import shutil
@@ -554,8 +555,12 @@ ok("das Plattform-Briefing kommt als Markdown-Datei",
    and "oaap-plattform-briefing.md" in h.get("Content-Disposition", ""))
 ok("es nennt die Regeln, aber keinen fachlichen Auftrag",
    "X-OAAP-User" in b and "Worum es geht" not in b)
+# "Bearer" alone may appear since 0.4.2 -- the API-key section shows the
+# FORM `Bearer oaapk_…`. What must never appear is a VALUE after it.
 ok("und nichts Privilegiertes: keine Instanz, keine Adresse eines Knotens",
-   PID not in b and NODE_HOST not in b and "Bearer" not in b)
+   PID not in b and NODE_HOST not in b
+   and not re.search(r"Bearer (?!oaapk_…)[A-Za-z0-9_\-]{8,}", b),
+   re.findall(r"Bearer \S+", b))
 
 SATZ = "Die App entscheidet, wer er *darin* ist."
 ok("es erklaert, wie Benutzer und fachliche Rechte gemeint sind",
@@ -565,6 +570,16 @@ ok("und das Vorhaben-Briefing sagt dazu WORTGLEICH dasselbe - ein Erzeuger",
    SATZ in vb)
 ok("der Plattformteil steht in beiden Blaettern",
    "Ein HTTP-Port" in b and "Ein HTTP-Port" in vb)
+ZUGANG = "**API-Schlüssel** der Plattform."
+ok("0.4.2: beide nennen API-Schluessel fuer Programme, wortgleich",
+   ZUGANG in b and ZUGANG in vb)
+ok("...und die Fakten zu public-Routen (Kopfzeilen fehlen, Bremse, "
+   "Protokoll mit Pfad, Fragment)",
+   all(x in b for x in ("fehlen `X-OAAP-User`", "300 Anfragen",
+                        "speichert den **Pfad**", "Fragment")))
+ok("...und Netz, Bau-Grenzen und offene WebSockets",
+   all(x in b for x in ("nach außen offen", "256 MB", "20 Minuten",
+                        "Ausrollen anderer Apps")))
 
 req = urllib.request.Request(BASE + "/starter.zip", method="GET")
 for k, v in USER.items():

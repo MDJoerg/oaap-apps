@@ -186,6 +186,16 @@ sind. Aufgefallen beim Onboarding des Handball-Infoboards (Fiori-Look).
 Verbindlich bleiben: keine externen Ressourcen, Deutsch, 44 px, Listen
 und Objektseiten.
 
+**0.4.2: Zugänge ohne Browser-Anmeldung.** Neuer Abschnitt in beiden
+Briefings: **Programme** bekommen API-Schlüssel der Plattform (RFC-0027)
+statt einer `public`-Route mit eigenem Schlüssel; **Geräte ohne
+Benutzer** bekommen `public` mit eigenem Schlüssel, samt der Fakten, die
+bis dahin nirgends im Briefing standen (Kopfzeilen fehlen immer, Bremse,
+Protokoll mit Pfad → Schlüssel ins Fragment, keine `public`-Route in der
+Generalprobe). Dazu im Plattformteil: Mandanten, Netz, Bau-Grenzen,
+offene WebSockets. Inhaltlich gleich mit Contract v0.6. Anlass: Das
+Handball-Infoboard plante für beide Fälle `public`-Routen.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt

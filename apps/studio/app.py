@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1766,6 +1766,17 @@ def _sec_platform(app_type=None):
         "- **Logs nach stdout**, dazu ein Health-Endpunkt.",
         "- **Mehrfach-instanzfähig und offline-fähig** — keine festen",
         "  Hostnamen, keine absoluten URLs, kein Internetzwang zur Laufzeit.",
+        "  Links immer aus `Host` + `X-Forwarded-Proto` der Anfrage bauen.",
+        "- **Mandanten:** Jede Instanz gehört genau einem Mandanten; die App",
+        "  sieht davon nichts und filtert nicht selbst — die Grenze setzt",
+        "  das Gateway durch. Ein eigenes Mandantenmodell der App bleibt.",
+        "- **Netz:** nach innen abgeschottet (andere Apps unerreichbar),",
+        "  nach außen offen. Jedes externe Ziel als deklarierte Variable,",
+        "  und bei Ausfall weiterarbeiten statt abstürzen.",
+        "- **Offene WebSockets** überstehen das Ausrollen anderer Apps,",
+        "  nicht das eigene und nicht das nächtliche Backup: Clients",
+        "  verbinden selbst neu (mit etwas Zufall im Wartetakt) und senden",
+        "  alle 20–30 s einen Ping.",
         "",
     ]
     if app_type:
@@ -1778,9 +1789,65 @@ def _sec_platform(app_type=None):
         "Liefere im Paket ein gültiges `oaap-app.yaml` (Manifest) und,",
         "bei App-Typ `native`, ein `Dockerfile` je Service. Das Manifest muss",
         "gegen das veröffentlichte JSON-Schema validieren; das Image muss auf",
-        "amd64 **und** arm64 bauen.",
+        "amd64 **und** arm64 bauen. Gebaut wird auf dem Zielknoten, **mit**",
+        "Internet (öffentliche Paket-Registries erreichbar), aber **ohne**",
+        "Build-Geheimnisse. Grenzen: Paket höchstens 256 MB (ohne",
+        "`node_modules`, Build-Ausgaben, virtuelle Umgebungen), ein",
+        "Deployment samt Start höchstens 20 Minuten.",
     ]
     return ("Die Plattform, auf der die App läuft", lines)
+
+
+def _sec_access():
+    """Zugänge ohne Browser-Anmeldung: Programme und Geräte.
+
+    Seit 0.4.2. Das Handball-Infoboard (18.09.) plante für beides
+    `public`-Routen mit eigenen Schlüsseln -- für Programme unnötig
+    (RFC-0027 gibt es seit 0.1.62), für Geräte richtig, aber mit Fakten,
+    die in keinem Briefing standen: keine Identität, eine Bremse, ein
+    Zugriffsprotokoll mit Pfad. Stand im Contract erst ab v0.6.
+    """
+    return ("Zugänge ohne Browser-Anmeldung", [
+        "Nicht jeder Aufrufer ist ein Mensch mit Browser. Zwei Fälle, zwei",
+        "Wege — bitte nichts selbst erfinden, was es schon gibt:",
+        "",
+        "**Programme** (Desktop-Client, Webhook, anderes System, Skript):",
+        "**API-Schlüssel** der Plattform. Der Betreiber legt einen",
+        "Maschinen-Zugang mit Rolle an und stellt einen Schlüssel aus, auf",
+        "**eine Instanz** begrenzt und mit Ablaufdatum. Das Programm ruft",
+        "die **normale, geschützte Route** mit",
+        "`Authorization: Bearer oaapk_…` — die App bekommt `X-OAAP-User`",
+        "und `X-OAAP-Roles` wie bei einem Menschen. Keine `public`-Route,",
+        "kein eigenes Schlüsselverfahren. Zwei Stolpersteine:",
+        "",
+        "- Den `Authorization`-Header auf geschützten Routen **nicht** für",
+        "  Eigenes benutzen und einen unbekannten Wert dort nicht ablehnen",
+        "  — der Aufrufer ist schon geprüft.",
+        "- Ruft eine Browserseite fremder Herkunft die API mit Schlüssel,",
+        "  kommt vorher ein `OPTIONS`-Preflight **ohne** Anmeldung bei der",
+        "  App an: mit `200`/`204` und CORS-Kopfzeilen beantworten.",
+        "",
+        "**Geräte ohne Benutzer** (Anzeige, geteiltes Tablet, Brille): Ein",
+        "Browser kann bei Seitenaufruf und WebSocket-Aufbau keinen",
+        "Schlüssel-Header senden. Hier ist eine `public`-Route mit",
+        "**eigenem** Schlüssel richtig — mit diesen Fakten:",
+        "",
+        "- Auf `public`-Routen fehlen `X-OAAP-User`/`X-OAAP-Roles`",
+        "  **immer**, auch wenn jemand angemeldet ist.",
+        "- Schlüssel lang und zufällig, widerrufbar, Sperre nach",
+        "  Fehlversuchen — das weiß nur die App.",
+        "- Vor der Route sitzt eine **Bremse**: Standard 300 Anfragen je",
+        "  60 s je Client-Adresse, dann `429` mit `Retry-After`. Ein",
+        "  WebSocket zählt einmal; alle Geräte hinter einem Anschluss",
+        "  zählen als **einer**. Braucht die App mehr, im Postkasten sagen.",
+        "- Das Zugriffsprotokoll des Gateways speichert den **Pfad**, nicht",
+        "  den Query-Teil. Schlüssel deshalb **ins Fragment** der Adresse",
+        "  (`…/display#k=…`), das der Browser nie an einen Server schickt;",
+        "  nach dem Laden mit `history.replaceState` aus der Adresse nehmen.",
+        "- `public` erweitert den Rahmen: Ein Mensch bestätigt das Manifest",
+        "  einmal. In einer Generalprobe (Testcode auf Produktivdaten) gibt",
+        "  es keine `public`-Route.",
+    ])
 
 
 def _sec_ui():
@@ -1952,6 +2019,7 @@ def platform_briefing():
         _sec_platform(),
         _sec_ui(),
         _sec_users(),
+        _sec_access(),
         ("Was Du abgibst: das Paket", [
             "Ein OAAP-Paket ist eine **ZIP** mit dem Manifest",
             "`oaap-app.yaml` im Wurzelverzeichnis (ein einzelner",
@@ -2118,6 +2186,7 @@ def briefing(p):
         _sec_platform(p["app_type"]),
         _sec_ui(),
         _sec_users(),
+        _sec_access(),
         ("Test-Deployment (Deploy-Hook)", deploy),
         _sec_collab(repo_line),
         _sec_unclear(),
