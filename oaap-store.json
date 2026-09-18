@@ -58,8 +58,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.4.0",
-      "released": "2026-09-14",
+      "version": "0.4.1",
+      "released": "2026-09-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"

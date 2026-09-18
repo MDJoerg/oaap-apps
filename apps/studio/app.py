@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1785,15 +1785,20 @@ def _sec_platform(app_type=None):
 
 def _sec_ui():
     return ("Oberfläche", [
-        "Die App soll aussehen, als gehöre sie zur Plattform:",
+        "Die App soll sich neben dem Portal nicht fremd anfühlen. Verbindlich:",
         "",
-        "- Deutsch als Oberflächensprache, Blau als Leitfarbe",
-        "  (`#2563eb`, dunkler Kopf `#1e3a8a`), Systemschriften,",
-        "  **keine externen Ressourcen** (keine Webfonts, keine CDNs).",
+        "- **Keine externen Ressourcen** im Browser (keine Webfonts, keine",
+        "  CDNs, keine Tracker) — alles wird von der App selbst ausgeliefert.",
+        "- Deutsch als Oberflächensprache.",
         "- **Tablet zuerst**: Bedienelemente mindestens 44 px hoch.",
         "- **Listen zeigen, Objektseiten pflegen** — Formulare gehören nie",
         "  in Tabellenzeilen. Nach dem Speichern umleiten (kein erneutes",
         "  Absenden beim Neuladen).",
+        "",
+        "Empfohlen, nicht verbindlich: die Plattformfarben (`#2563eb`,",
+        "dunkler Kopf `#1e3a8a`) und Systemschriften. Eine App mit eigener,",
+        "stimmiger Gestaltung — etwa ein SAP-Fiori-Look oder Vereinsfarben",
+        "auf einer Anzeige — ist ausdrücklich in Ordnung.",
     ])
 
 

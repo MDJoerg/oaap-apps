@@ -179,6 +179,13 @@ Abschnitt sagt auch ausdrücklich, was es **nicht** gibt
 Rollen) und bittet um einen Brief, statt dass jede App sich ihre eigene
 Anmeldung baut.
 
+**0.4.1: Farbe ist Empfehlung, nicht Pflicht.** Der Abschnitt
+„Oberfläche" nannte `#2563eb` als Leitfarbe und war damit strenger als
+die Design-Guidelines, die nur für Plattform-Oberflächen verbindlich
+sind. Aufgefallen beim Onboarding des Handball-Infoboards (Fiori-Look).
+Verbindlich bleiben: keine externen Ressourcen, Deutsch, 44 px, Listen
+und Objektseiten.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt
