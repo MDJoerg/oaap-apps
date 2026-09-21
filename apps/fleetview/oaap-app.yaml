@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: fleetview
   name: OAAP FleetView
-  version: 0.3.1
+  version: 0.3.2
   type: native
   class: frontend
   description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"
@@ -14,13 +14,15 @@ services:
     port: 8000
 
 routes:
-  # RFC-0021 Entscheidung 3: sichtbar für server_admin und partner.
-  # `server_admin` wird nie an Apps durchgereicht (RFC-0008) und jeder
-  # server_admin trägt in der Praxis auch `admin` — deshalb steht hier
-  # admin. `partner` ist die Rolle der Dienstleister, die die Landschaft
-  # lesend betreuen (dieselbe Kombination wie die Gesundheitsseite).
+  # RFC-0021 Entscheidung 3: sichtbar für server_admin und den
+  # Dienstleister. `server_admin` wird nie an Apps durchgereicht
+  # (RFC-0008) und jeder server_admin trägt in der Praxis auch `admin`
+  # — deshalb steht hier admin. Die Rolle der Dienstleister, die die
+  # Landschaft lesend betreuen, heißt seit RFC-0039 `support` (vorher
+  # stand hier `partner`, das inzwischen nur noch die externe Firma
+  # meint — dieselbe Kombination wie die Gesundheitsseite).
   - path: /
-    roles: [admin, partner]
+    roles: [admin, support]
 
 storage:
   # Nur der letzte bekannte Stand je Knoten (fleet-state.json) — damit

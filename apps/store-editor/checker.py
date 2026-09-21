@@ -33,7 +33,11 @@ APP_CLASSES = {"frontend", "service"}
 AUDIENCES = {"everyone", "operator", "developer", "expert"}
 MATURITIES = {"alpha", "beta", "preview", "stable"}
 STATUSES = {"active", "deprecated", "archived"}
-ROLES = {"admin", "keyuser", "user", "guest", "partner", "public"}
+# `support` seit RFC-0039 (der Dienstleister, der einen Knoten
+# betreut). Muss mit appctl.ROLES und beiden Schemata gleich sein --
+# eine App, die hier durchfaellt, ist sonst auf dem Knoten gueltig.
+ROLES = {"support", "admin", "keyuser", "user", "guest", "partner",
+         "public"}
 
 SEMVER = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$")
 APP_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")

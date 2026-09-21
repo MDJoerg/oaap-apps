@@ -57,7 +57,10 @@ KNOWN_MANIFEST_MAJOR = 0
 KNOWN_MANIFEST_MINOR = 2
 APP_TYPES = ("native", "image", "wrapped")
 APP_CLASSES = ("frontend", "service")
-ROLES = ("admin", "keyuser", "user", "guest", "partner", "public")
+# `support` seit RFC-0039 -- der Dienstleister, der einen Knoten
+# betreut. Gleiche Liste wie appctl.ROLES und die beiden Schemata.
+ROLES = ("support", "admin", "keyuser", "user", "guest", "partner",
+         "public")
 TOP_LEVEL = ("oaap_manifest", "must_understand", "app", "services", "routes",
              "storage", "config", "health", "placement", "endpoints")
 

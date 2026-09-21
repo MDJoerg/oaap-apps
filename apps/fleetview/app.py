@@ -439,7 +439,10 @@ class Handler(BaseHTTPRequestHandler):
     def _allowed(self, roles):
         # Das Gateway erzwingt die Manifest-Rollen; die App prüft
         # zusätzlich (Verteidigung in der Tiefe, wie das Studio).
-        return bool(roles & {"admin", "partner"})
+        # `support` seit RFC-0039 — die Rolle der Dienstleister, die
+        # die Landschaft lesend betreuen; vorher hieß sie hier
+        # `partner`, das inzwischen nur noch die externe Firma meint.
+        return bool(roles & {"admin", "support"})
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -452,7 +455,7 @@ class Handler(BaseHTTPRequestHandler):
                 "Kein Zugriff",
                 '<div class="card"><h2>Kein Zugriff</h2><p>Die Flotten-'
                 "Übersicht erfordert die Rolle <strong>admin</strong> oder "
-                "<strong>partner</strong>.</p></div>", user, ",".join(sorted(roles)) or "?"))
+                "<strong>support</strong>.</p></div>", user, ",".join(sorted(roles)) or "?"))
         if path == "/":
             return self._send(200, overview(user, ",".join(sorted(roles))))
         if path.startswith("/node/"):
