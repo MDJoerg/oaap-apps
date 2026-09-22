@@ -18,7 +18,29 @@ data_models/<id>/       ein Verzeichnis je data_models-Artefakt (RFC-0012 §8.5)
   oaap-app.yaml         Manifest -- NUR `app`+`data_model`, kein Dienst
   README.md             was der Typ ist, warum ohne App
 oaap-store.json         Store-Liste „OAAP Plattform-Apps"
+check-store.py          prüft, ob Store-Liste und die Tabelle unten
+                        noch dasselbe sagen wie die Manifeste
 ```
+
+## Nach jeder Versionsanhebung
+
+Die Version einer App steht hier an **drei** Stellen: im Manifest
+(daraus wird installiert — es gilt), in `oaap-store.json` (das zeigt
+die Store-Seite) und in der Tabelle unten. Dieselbe Angabe dreimal
+läuft auseinander, sobald niemand sie zählt:
+
+```bash
+python3 check-store.py          # meldet, was auseinanderläuft
+python3 check-store.py --fix    # zieht Store-Liste und Tabelle nach
+```
+
+Geprüft werden Version, Name, Typ, App-Klasse und die Rollen. Am
+21.09.2026 hob ein Commit drei Manifeste an und ließ die Store-Liste
+stehen; einen Tag später bot die Store-Seite „Aktualisieren auf
+v0.4.2" über einer Instanz, die 0.4.3 lief — und nannte für FleetView
+weiter die Rolle `partner`, die derselbe Commit gerade ersetzt hatte.
+`released` muss von Hand nachgetragen werden, das Skript sagt bei
+welcher App.
 
 Ein `data_models`-Artefakt ist kein App-Paket im engeren Sinn (kein
 Dienst, kein Dockerfile, keine Instanz) -- `oaap.data.model` 0.1 §2.8
@@ -33,11 +55,11 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 
 | App                                | Was es tut                                                 | Version |
 | ---------------------------------- | ---------------------------------------------------------- | ------- |
-| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.4.2   |
-| [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.0   |
-| [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.0   |
-| [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.0   |
-| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.2.0   |
+| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.4.3   |
+| [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.2   |
+| [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.1   |
+| [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.2   |
+| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.2.1   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.2   |
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.1   |

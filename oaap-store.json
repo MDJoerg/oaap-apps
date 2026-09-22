@@ -9,15 +9,15 @@
       "id": "fleetview",
       "name": "OAAP FleetView",
       "type": "native",
-      "version": "0.3.1",
-      "released": "2026-08-24",
+      "version": "0.3.2",
+      "released": "2026-09-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/fleetview"
       },
       "roles": [
         "admin",
-        "partner"
+        "support"
       ],
       "categories": [
         "operations"
@@ -58,8 +58,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.4.2",
-      "released": "2026-09-18",
+      "version": "0.4.3",
+      "released": "2026-09-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -115,8 +115,8 @@
       "id": "store-editor",
       "name": "OAAP Store Editor",
       "type": "native",
-      "version": "0.3.0",
-      "released": "2026-08-09",
+      "version": "0.3.1",
+      "released": "2026-09-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/store-editor"
