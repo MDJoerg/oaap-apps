@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: keycloak
   name: Keycloak (Anmeldedienst)
-  version: 0.1.2
+  version: 0.1.3
   type: wrapped
   # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
   # keine App, die jemand "benutzt" — es ist die Tür, durch die andere

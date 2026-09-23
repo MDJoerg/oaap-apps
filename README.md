@@ -59,7 +59,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.2   |
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.1   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.2   |
-| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.2   |
+| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.3   |
 | [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.2.1   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.2   |
