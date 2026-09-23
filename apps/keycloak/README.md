@@ -120,6 +120,9 @@ gesagt, wenn der Konnektor gedruckt wird.
 | die Fassung des Servers lesen | **geht nicht** |
 | in den selbst angelegten Realms die Schalter umlegen (23.09., Schritt 6) | **204** |
 | in einem fremden Realm dieselben Schalter lesen | **403** |
+| die Menschen in einem selbst angelegten Realm zählen (23.09., Schritt 7) | **200** |
+| die Menschen in einem fremden Realm zählen | **403** |
+| in einem **eingespielten** Realm irgendetwas tun | **403** — siehe unten |
 
 ### `--accept-version`: was bei dieser Messung herauskam
 
@@ -282,28 +285,75 @@ Ablehnung sagt, welche Hälfte offen ist.
 
 ## Was hier noch fehlt
 
-Der Umzug (RFC-0041 Schritt 7, K6): Der Realm-Export und sein
-Einspielen auf dem neuen Knoten sind noch Handarbeit — das Rezept
-steht unten. Der Konnektor nennt das fehlende Verb ausdrücklich
-`export` statt es wegzulassen; ein genanntes und nicht gebautes Verb
-ist die kleinere Lüge.
+Nichts mehr an Verben. Seit 0.1.124 (RFC-0041 Schritt 7) sind alle
+sechs gebaut, und `later` im Konnektor ist leer.
 
 Ausdrücklich **nicht** fehlend, sondern abgeschworen: `users`. OAAP
 legt in einem Realm keine Menschen an, ändert keine und entfernt
 keine. Das steht im Konnektor unter `never` und nicht unter „noch
 nicht".
 
-## Umzug (RFC-0041 K6)
+## Umzug: ein Verein zieht auf einen eigenen Knoten (RFC-0041 K6)
 
-Zieht ein Verein auf einen eigenen Knoten, sind es drei Teile:
+Seit Referenz 0.1.124. Das Rezept, in der Reihenfolge, in der es
+gemessen wurde (oaap-test → oaap-demo, 23.09.2026):
 
-1. das Mandantenarchiv (`oaap backup create --tenant hbvp`),
-2. der Realm-Export aus Keycloak,
-3. **eine Zeile**: `oaap tenant idp hbvp --issuer <neue Adresse>`.
+```sh
+# --- auf dem ALTEN Knoten ---
+sudo oaap idp export auth --tenant hbvp --out /root/hbvp-realm.json
+sudo oaap backup create --tenant hbvp --to /root
 
-Gemessen: Die Kennung (`sub`) überlebt Export und Import unverändert,
-also überleben **alle Bindungen** den Umzug. Und die Exportdatei
-enthält das Client-Geheimnis und die Passwort-Nachweise der Mitglieder
-— sie ist **ein Geheimnis wie ein Backup-Archiv**: `0600`, nie im
-Speicher einer Instanz, nie für eine App lesbar, nie als gewöhnlicher
-Download, nach dem Umzug gelöscht.
+# --- beide Dateien hinüber, wie man ein Backup bewegt ---
+
+# --- auf dem NEUEN Knoten ---
+# 1. Keycloak dort installieren (siehe oben)
+# 2. den Realm einspielen — POST /admin/realms mit der Exportdatei
+# 3. DEM DIENSTKONTO RECHTE AN DIESEM REALM GEBEN (siehe unten!)
+sudo oaap tenant adopt /root/hbvp.tar.gz
+sudo oaap idp provision auth --tenant hbvp
+```
+
+**Schritt 3 ist der, den man vergisst.** Keycloak gibt die Verwaltung
+eines Realms dem, der ihn **angelegt** hat — über die Rollen des
+Clients `<realm>-realm` im `master`-Realm. Einen **eingespielten**
+Realm hat niemand angelegt, also hat auch das OAAP-Dienstkonto keine
+Rechte darin, und `oaap idp provision` wird mit *„this credential may
+not look at the clients in the realm"* abgelehnt. Das ist richtig und
+es ist nicht offensichtlich. In der Verwaltungsoberfläche:
+`master` → Clients → `oaap-admin` → Service account roles → die Rollen
+des Clients `<realm>-realm` zuweisen.
+
+**Was der Export ist und was nicht.** Er trägt den Realm, seine
+Clients samt Geheimnis **und die Menschen mit ihren
+Passwort-Nachweisen**. Er ist damit ein Geheimnis wie ein
+Backup-Archiv: `0600`, nie im Datenverzeichnis der Plattform, nie für
+eine App lesbar, nie als gewöhnlicher Download — und nach dem Umzug
+gelöscht. `oaap idp export` sagt das jedes Mal.
+
+**Drei Türen, und zwei davon lügen** (gemessen, 26.7.4):
+
+| Tür | trägt die Menschen? | meldet den Fehler? |
+| --- | --- | --- |
+| `POST /admin/realms/{r}/partial-export` | **nein** — antwortet 200, trägt Clients und Geheimnis, keinen einzigen Menschen | nein |
+| `kc.sh export` per `docker exec` im bedienenden Container | **nein** — dort stehen keine `KC_DB_*` (der Entrypoint setzt sie in seinen eigenen Prozess), also fällt es still auf sein eingebautes leeres H2 zurück und exportiert einen Realm, den nie jemand benutzt hat. Es schreibt außerdem die Konfiguration des Containers neu | nein |
+| `kc.sh export` in einem **Wegwerf-Container** am selben Netz und derselben Datenbank | **ja**, mit den Passwort-Nachweisen | — |
+
+Zwei von drei schreiben eine Datei, die wie die richtige aussieht.
+Deshalb **zählt** OAAP: vorher den Realm fragen, wie viele Menschen er
+hat, hinterher die Datei zählen, und bei einer Differenz die Datei
+wegwerfen.
+
+**Und die Bindungen ziehen mit um.** Eine Person hängt bei OAAP an
+`(Aussteller, sub)`. Gemessen: der `sub` übersteht Export und Import
+unverändert — der **Aussteller** nicht, denn der ist
+`<knoten>/realms/<name>`, also die Adresse des Knotens, und genau die
+wechselt beim Umzug. `oaap idp provision` hängt die Bindungen deshalb
+beim Ablösen des mitgebrachten Anbieters um und sagt, wie viele. Ohne
+das wäre jedes Mitglied am neuen Knoten ein Fremder: erste Anmeldung,
+Eingang, Rollen weg.
+
+**Was auf dem alten Knoten liegen bleibt.** Alles. OAAP greift nicht
+auf eine Maschine, auf der es nicht läuft, und löscht nichts — auch
+nicht den alten Client im umgezogenen Realm, der dort weiter steht.
+Beides ist Handarbeit eines Menschen, und bis dahin gibt es den Verein
+zweimal.
