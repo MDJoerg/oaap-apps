@@ -51,12 +51,69 @@ Das ist Absicht: Ein aus der Host-Kopfzeile abgeleiteter `issuer` wäre
 eine Identität, die sich mit dem Namen ändert, unter dem jemand gerade
 vorbeikam — und OAAP bindet seine Benutzer an genau diesen `issuer`.
 
+## OAAP legt den Realm selbst an
+
+Seit Referenz 0.1.122 (RFC-0041 Schritt 4). Zwei Handgriffe am Knoten,
+und der Verein hat seine Tür:
+
+```sh
+sudo oaap idp add auth --url https://auth.<knoten> \
+  --admin-id oaap-admin --admin-secret '<das Geheimnis des Dienstkontos>'
+sudo oaap idp check auth
+sudo oaap idp provision auth --tenant hbvp \
+  --idp-label "Mit dem Vereinskonto anmelden"
+```
+
+`provision` fragt zuerst, **welche Fassung** dieser Keycloak ist, legt
+dann den Realm an (oder benutzt den vorgefundenen), legt den Client an
+(oder trägt nur die fehlende Rückkehradresse nach), holt das Geheimnis
+und schreibt das Anbieter-Objekt des Mandanten. `--dry-run` druckt
+vorher jeden Aufruf, den es machen **könnte**.
+
+Drei Dinge, die dieser Weg **nicht** tut, und zwar mit Absicht:
+
+- Er **löscht nichts**. Nie. Ein Realm ist die Mitgliederliste eines
+  Vereins; einen Mandanten zu entfernen darf die Menschen darin nicht
+  entfernen. Die Regel steht als Funktion auf dem Weg jedes Aufrufs,
+  nicht als eine Zeile, die niemand geschrieben hat.
+- Er **legt nichts halb an**. Passt die Fassung nicht, bricht er ab,
+  bevor irgendetwas entsteht — gemessen, nicht versprochen.
+- Er **nimmt, was er vorfindet**. Ein von Hand gebauter Realm bleibt
+  ein von Hand gebauter Realm; OAAP benutzt ihn, wie er ist.
+
+### Das Dienstkonto, das OAAP dafür braucht
+
+Einmal von Hand, in der Verwaltungsoberfläche des **master**-Realms:
+
+1. *Clients → Create client* → Client ID `oaap-admin`,
+   *Client authentication:* **ein**, *Standard flow:* **aus**,
+   *Service accounts roles:* **ein**.
+2. *Credentials → Client secret* abholen.
+3. *Service accounts roles → Assign role → Filter by realm roles* →
+   **`create-realm`**, und sonst nichts.
+
+**Warum nicht der Verwalter, der beim ersten Start entsteht?** Weil der
+alles kann, was dieser Server kann — auf einer Maschine mit mehreren
+Vereinen ist das jede Mitgliederliste darauf. RFC-0041 K3.4 wollte eine
+Vollmacht, die **nie** die des master-Realms ist; beim Bauen zeigte
+sich, dass einen Realm *anzulegen* bei Keycloak ein Akt im master-Realm
+**ist**. Was bleibt, ist die Verengung, die möglich ist: ein Konto ohne
+Menschen dahinter, mit genau einem Recht. Wer stattdessen ein
+Benutzerkonto einträgt (`--auth password`), bekommt das jedes Mal
+gesagt, wenn der Konnektor gedruckt wird.
+
+Die Vollmacht liegt danach `0600` auf dem Knoten, in einem Verzeichnis,
+das **kein** Container einhängt — auch der Anmeldedienst nicht, der die
+Client-Geheimnisse der Mandanten hält. Ein Dienst, der Anmeldungen
+abschließt, hat mit einer Vollmacht, die Realms anlegen kann, nichts zu
+tun.
+
 ## Das Rezept: ein Realm für einen Mandanten, von Hand
 
-K3 sagt *verwalten*, nicht *besitzen*. OAAP wird Realms anlegen können
-(nächster Bauschritt) — **ein von Hand angelegter Realm bleibt trotzdem
-benutzbar**, und OAAP löscht nie einen Realm, den es vorgefunden hat.
-Deshalb steht das Rezept hier und bleibt hier.
+K3 sagt *verwalten*, nicht *besitzen*. Auch wenn OAAP es selbst kann:
+**ein von Hand angelegter Realm bleibt benutzbar**, und OAAP löscht nie
+einen Realm, den es vorgefunden hat. Deshalb steht das Rezept hier und
+bleibt hier.
 
 1. **Realm anlegen.** Verwaltungsoberfläche → *Create realm* →
    Name = das Mandanten-Kürzel, z. B. `hbvp`.
@@ -128,6 +185,17 @@ hinter die Sichtbarkeits- oder Randregeln des Knotens. Die Route dieser
 App ist `public`, weil Keycloak die Anmeldung **ist** — sie hinter die
 Anmeldung des Gateways zu stellen wäre eine Tür, die sich selbst als
 Schlüssel verlangt.
+
+## Was hier noch fehlt
+
+OAAP schaltet **im Realm** noch nichts ein: Selbstregistrierung und den
+zweiten Faktor stellt bis auf Weiteres ein Mensch in der
+Verwaltungsoberfläche ein (RFC-0041 Schritt 6). Die OAAP-Hälfte steht
+schon — die Ablehnung der gefährlichen Kombination `role` +
+Selbstregistrierung, und das Mitschreiben eines behaupteten zweiten
+Faktors. Der Konnektor nennt das fehlende Verb ausdrücklich `settings`
+statt es wegzulassen: ein genanntes und nicht gebautes Verb ist die
+kleinere Lüge.
 
 ## Umzug (RFC-0041 K6)
 
