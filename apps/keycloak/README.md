@@ -192,6 +192,13 @@ bleibt hier.
      Kein Sternchen. Die Rückkehradresse ist der einzige Ort, an dem
      der Autorisierungscode landet.
 
+     Nur wenn dieser Knoten **ohne TLS** erreicht wird, ist es
+     stattdessen die `http`-Form. `oaap idp provision` trägt seit
+     0.1.125 von sich aus **nur** `https` ein — auf einem Knoten mit
+     externem Namen schickt das Gateway die `http`-Form dieser Namen
+     ohnehin mit 301 weg. Für einen Klartext-Knoten sagt der Betreiber
+     es ausdrücklich: `--plain-callback`.
+
 3. **Geheimnis abholen.** *Clients → <Client> → Credentials →
    Client secret*.
 
