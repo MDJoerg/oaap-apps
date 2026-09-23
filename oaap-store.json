@@ -305,6 +305,50 @@
           "label": "Ollama-API"
         }
       ]
+    },
+    {
+      "id": "keycloak",
+      "name": "Keycloak (Anmeldedienst)",
+      "type": "wrapped",
+      "version": "0.1.0",
+      "released": "2026-09-23",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/keycloak"
+      },
+      "roles": [
+        "public"
+      ],
+      "categories": [
+        "infrastructure"
+      ],
+      "app_class": "service",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "identitaet",
+        "anmeldung",
+        "oidc",
+        "keycloak",
+        "sso",
+        "realm"
+      ],
+      "summary": "Identitaetsanbieter (OIDC) fuer OAAP-Mandanten — ein Realm je Mandant; OAAP wird OIDC-Client, die Apps sehen den Anbieter nie.",
+      "description": "Keycloak als gewoehnliche OAAP-App (RFC-0041): mehrere Container (Server + eigenes Postgres, RFC-0016), damit ein Knoten fuer dieses RFC NICHT das Profil 'store' tragen muss. Ein Realm je Mandant; das Anbieter-Objekt der Plattform ist eine URL, und nichts in der Plattform sagt 'das Keycloak hier' — genau das macht den spaeteren Umzug eines Vereins auf einen eigenen Knoten zu einer Aenderung statt zu einem Projekt. Die Version ist auf 26.7.4 festgenagelt, weil OAAP Realms ueber die Verwaltungsschnittstelle anlegt und so eine Anbindung unsichtbar gegen ein fremdes Produkt altert; der Server nennt seine Fassung unter /admin/serverinfo, was die Zahl pruefbar macht. Die Route ist 'public', weil Keycloak die Anmeldung IST — hinter die Anmeldung des Gateways gestellt waere es eine Tuer, die sich selbst als Schluessel verlangt; die Verwaltungsoberflaeche schuetzt Keycloak mit seinem eigenen Admin-Login. KC_HOSTNAME ist Pflicht: Keycloak schreibt diese Adresse als 'issuer' in jedes Token, und OAAP bindet seine Benutzer an genau diesen issuer.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/keycloak"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0041-external-identity-providers.md",
+          "label": "RFC-0041 — Externe Identitaetsanbieter"
+        }
+      ]
     }
   ]
 }

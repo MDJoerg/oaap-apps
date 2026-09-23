@@ -1,0 +1,83 @@
+oaap_manifest: "0.2"
+
+app:
+  id: keycloak
+  name: Keycloak (Anmeldedienst)
+  version: 0.1.0
+  type: wrapped
+  # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
+  # keine App, die jemand "benutzt" — es ist die Tür, durch die andere
+  # Apps betreten werden. `service` hält es aus dem Startfeld heraus
+  # (Runtime 2.10); der Betreiber erreicht die Verwaltung über die
+  # Instanzseite.
+  class: service
+  description: "Identitätsanbieter (OIDC) für OAAP-Mandanten — ein Realm je Mandant (RFC-0041). OAAP wird OIDC-Client, die Apps sehen den Anbieter nie: sie bekommen weiterhin nur die X-OAAP-*-Kopfzeilen. Version festgenagelt auf 26.7.4, weil OAAP Realms über die Verwaltungsschnittstelle anlegt und so eine Anbindung unsichtbar gegen ein fremdes Produkt altert."
+
+# Mehr-Container (RFC-0016): der Server und seine Datenbank. `db` bekommt
+# KEINE Route und KEINEN Endpunkt, ist also von außen und von anderen
+# Apps nie erreichbar — sie findet sich über den Dienstnamen auf dem
+# privaten Instanznetz.
+#
+# Ausdrücklich NICHT das Plattform-Postgres (oaap.data.store): Dieses RFC
+# darf einen Knoten nicht dazu zwingen, das Profil `store` zu tragen —
+# oaapx01 trägt es nicht (RFC-0041 K2).
+services:
+  keycloak:
+    build: .
+    port: 8080
+  db:
+    image: postgres:16-alpine
+    port: 5432
+
+storage:
+  # Die Identitäten des Vereins. Das ist der Grund, warum diese App eine
+  # gewöhnliche OAAP-App ist: Sicherung, Rückspielen und Generalprobe
+  # gelten hier wie überall.
+  - name: db
+    mount: /var/lib/postgresql/data
+    service: db
+
+# `public`, und das ist keine Nachlässigkeit: Keycloak IST die Anmeldung.
+# Es hinter die Anmeldung des Gateways zu stellen wäre eine Tür, die sich
+# selbst als Schlüssel verlangt. Die Verwaltungsoberfläche schützt
+# Keycloak mit seinem eigenen Admin-Login; die Mengenbremse (RFC-0010)
+# greift weiterhin.
+routes:
+  - path: /
+    roles: [public]
+    service: keycloak
+
+config:
+  # Die öffentliche Adresse DIESER Instanz. Keycloak schreibt sie als
+  # `issuer` in jedes Token, und OAAP bindet die Benutzer daran
+  # (RFC-0041 K4). Ohne sie startet der Container absichtlich nicht.
+  - key: KC_HOSTNAME
+    label: "Öffentliche Adresse dieser Instanz, z. B. https://auth.example.org (Pflicht — steht als 'issuer' in jedem Token)"
+  # Ein Geheimnis, das der Betreiber nie selbst wählen muss. Es wird von
+  # BEIDEN Containern gelesen: postgres richtet damit seinen Benutzer
+  # ein, der Entrypoint von Keycloak gibt es als KC_DB_PASSWORD weiter.
+  # Eine Angabe statt zweier, die auseinanderlaufen könnten.
+  - key: POSTGRES_PASSWORD
+    label: "Datenbank-Geheimnis (wird erzeugt; Keycloak und Postgres benutzen dasselbe)"
+    secret: true
+    generate: token
+  # Der erste Verwalter. Keycloak legt ihn beim ALLERERSTEN Start an und
+  # ignoriert die Werte danach; das Passwort wird in der
+  # Verwaltungsoberfläche geändert.
+  - key: KC_BOOTSTRAP_ADMIN_USERNAME
+    label: "Erster Keycloak-Verwalter (nur beim allerersten Start)"
+    default: "admin"
+  - key: KC_BOOTSTRAP_ADMIN_PASSWORD
+    label: "Passwort dieses Verwalters (nur beim allerersten Start; danach in Keycloak ändern)"
+    secret: true
+    generate: token
+
+health:
+  # Kein `service`: Die Gesundheitsprüfung hängt am PRIMÄREN Dienst
+  # (Runtime 2.12 — der, der `/` bedient), hier also an keycloak.
+  #
+  # Genau das Dokument, das ein OIDC-Client als erstes abholt. Eine
+  # Prüfung, die dasselbe fragt wie der echte Abnehmer, ist mehr wert
+  # als eine, die nur "der Port ist offen" sagt.
+  path: /realms/master/.well-known/openid-configuration
+  startup_grace_seconds: 120
