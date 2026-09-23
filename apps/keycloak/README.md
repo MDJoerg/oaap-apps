@@ -116,13 +116,23 @@ gesagt, wenn der Konnektor gedruckt wird.
 | Mitglieder des master-Realms lesen | **403** |
 | Clients des master-Realms lesen | **403** |
 | Mitglieder eines fremden Realms lesen | **403** |
-| alle Realms auflisten | **403** |
-| die Fassung des Servers lesen | **geht nicht** |
+| alle Realms auflisten | **200 — und darin steht genau ein Realm: der selbst angelegte** |
+| die Fassung des Servers lesen | **200, aber ohne Fassung** — das Dokument kommt beschnitten zurück |
 | in den selbst angelegten Realms die Schalter umlegen (23.09., Schritt 6) | **204** |
 | in einem fremden Realm dieselben Schalter lesen | **403** |
 | die Menschen in einem selbst angelegten Realm zählen (23.09., Schritt 7) | **200** |
 | die Menschen in einem fremden Realm zählen | **403** |
 | in einem **eingespielten** Realm irgendetwas tun | **403** — siehe unten |
+
+**Nachgemessen am 23.09.2026 auf `oaapx01`, und zwei Zeilen wurden
+dabei genauer.** *Alle Realms auflisten* stand hier als **403** — das
+war die Messung auf `oaap-test`, und sie entstand, **bevor** das Konto
+einen Realm angelegt hatte. Sobald es einen hat, antwortet dieselbe
+Anfrage **200** und nennt genau diesen einen. Die Eigenschaft, um die
+es geht, gilt unverändert: *diese Vollmacht sieht keinen fremden
+Verein*. Der Satz war richtig, die Zahl war der Zustand eines
+Augenblicks. Eine leere Menge und eine Ablehnung sehen von außen
+gleich aus — und diese Tabelle misst jetzt die Menge, nicht den Code.
 
 ### `--accept-version`: was bei dieser Messung herauskam
 
