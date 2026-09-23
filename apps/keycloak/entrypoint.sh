@@ -64,6 +64,11 @@ export KC_DB_PASSWORD="${POSTGRES_PASSWORD}"
 # seine eigenen Weiterleitungen, obwohl der Browser https:// sieht.
 export KC_HTTP_ENABLED=true
 export KC_PROXY_HEADERS=xforwarded
-export KC_HEALTH_ENABLED=true
 
+# NICHTS setzen, was eine BAU-Option ist. Keycloak unterscheidet
+# Bau- von Laufzeit-Optionen, und `start --optimized` bricht ab, sobald
+# eine Bau-Option hier anders steht als im Image -- gemessen auf
+# oaap-test am 23.09.2026, wo ein gutgemeintes KC_HEALTH_ENABLED die
+# Instanz in eine Neustart-Schleife schickte. Bau-Optionen gehoeren in
+# die Zeile `kc.sh build` im Dockerfile, wo man sie sieht.
 exec /opt/keycloak/bin/kc.sh start --optimized
