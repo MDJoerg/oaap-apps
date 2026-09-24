@@ -349,6 +349,57 @@
           "label": "RFC-0041 — Externe Identitaetsanbieter"
         }
       ]
+    },
+    {
+      "id": "wegweiser",
+      "name": "Wegweiser",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-09-24",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/wegweiser"
+      },
+      "roles": [
+        "admin",
+        "public",
+        "user"
+      ],
+      "categories": [
+        "tools",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator",
+        "user",
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "kurzlink",
+        "shortener",
+        "zaehlpixel",
+        "download",
+        "upload",
+        "uebergabe",
+        "rest-api",
+        "souveraen"
+      ],
+      "summary": "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> mit Areas, PIN, Statistik und REST-API.",
+      "description": "Eine Adresse der Form go.<domain>/<area>/<key> wird öffentlich aufgelöst; die Area sagt, was passiert: Weiterleitung (302), Zählpixel für Mails (1×1-GIF, zählt „geladen\", nicht „geöffnet\"), Einmal-Download, Zeitraum-Download mit Höchstzahl, Einmal-Upload. Einmal-Links entwertet nie der erste GET, sondern erst der Knopf auf der Zwischenseite — Mailprogramme und Messenger rufen Links für Vorschauen auf. Areas legt admin an und benennt Verantwortliche (keyuser); Benutzer legen Links an und sehen nur eigene. Keys alphanumerisch bis 8 Zeichen ohne verwechselbare Zeichen, optional PIN mit Sperre nach fünf Fehlversuchen. Die Speichertiefe der Zugriffsstatistik ist eine Eigenschaft der Area (nur Zähler / minimal / gekürzte Adresse und Geräteklassen / alles) mit Aufbewahrungsfrist. Die öffentliche Route ist als public deklariert und wird von der Plattform je Client gebremst (RFC-0010); /manage, /api und /admin laufen über die Anmeldung, die REST-API auch mit API-Schlüsseln (RFC-0027). Je Mandant eine Instanz mit eigener Domain (RFC-0009/0018). Nur Standardbibliothek, SQLite und Dateien auf /data.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/wegweiser"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-apps/blob/main/apps/wegweiser/README.md",
+          "label": "README mit REST-API"
+        }
+      ]
     }
   ]
 }

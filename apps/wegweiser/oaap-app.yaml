@@ -1,0 +1,53 @@
+oaap_manifest: "0.2"
+
+app:
+  id: wegweiser
+  name: Wegweiser
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, REST-API"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Drei Wege in dieselbe App. Der längere Pfad gewinnt.
+  #
+  # /admin: Areas anlegen, Eigenschaften, Verantwortliche. Nur admin.
+  - path: /admin
+    roles: [admin]
+  # /manage: eigene Links, Statistik; Keyuser sehen ihre Areas.
+  - path: /manage
+    roles: [user]
+  # /api: dieselben Rechte wie die Oberfläche, für Maschinen — auch mit
+  # API-Schlüsseln der Plattform (RFC-0027), die denselben Weg kommen.
+  - path: /api
+    roles: [user]
+  # /: die Welt. /<area>/<key> und die Zwischenseiten. Die Plattform
+  # authentifiziert hier NICHTS und bremst je Client-Adresse (RFC-0010);
+  # PIN, Fristen und Zähler prüft die App selbst. Sonst 404.
+  - path: /
+    roles: [public]
+
+storage:
+  # SQLite (Areas, Links, Zugriffe) und die Dateien der Übergaben.
+  - name: data
+    mount: /data
+
+config:
+  - key: WEGWEISER_MAX_UPLOAD_MB
+    label: "Obergrenze je Datei in MB (Areas dürfen weniger verlangen, nie mehr)"
+    default: "512"
+  - key: WEGWEISER_TZ
+    label: "Zeitzone für Anzeige und Eingaben (IANA-Name)"
+    default: "Europe/Berlin"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15
+
+launchpad:
+  group: Werkzeuge
