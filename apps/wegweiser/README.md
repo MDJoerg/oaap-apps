@@ -96,7 +96,9 @@ Browser oder ein API-Schlüssel der Plattform
 | `PUT /links/{id}/file` | Besitzer, Verantwortliche | Datei an Download-Link hängen: roher Body, Kopfzeile `X-File-Name` (URL-kodiert), `Content-Type` |
 | `GET /links/{id}/file` | Besitzer, Verantwortliche | Datei holen (auch die eines eingegangenen Uploads) |
 | `DELETE /links/{id}/file` | Besitzer, Verantwortliche | Datei entfernen; ein Upload-Link wartet danach wieder |
-| `GET /links/{id}/qr?format=png&scale=8&download=1` | Besitzer, Verantwortliche | QR-Code der öffentlichen Adresse als PNG oder SVG (`format`), `scale` Pixel je Modul (2–32), `download=1` als Datei `<area>-<key>.png` |
+| `GET /links/{id}/qr?format=png&scale=8&host=&download=1` | Besitzer, Verantwortliche | QR-Code der öffentlichen Adresse als PNG oder SVG (`format`), `scale` Pixel je Modul (2–32), `host` eine der eingetragenen Adressen (Vorgabe: die erste), `download=1` als Datei `<area>-<key>.png` |
+| `GET /hosts` | alle | eingetragene öffentliche Adressen, `default`, `configured` |
+| `PUT /hosts` | admin | Adressen setzen: `{"hosts": ["go.example.org", …]}`; leere Liste = Adresse der Anfrage |
 | `GET /links/{id}/stats?days=30` | Besitzer, Verantwortliche | Auswertung |
 | `GET /links/{id}/accesses?limit&offset&format=csv` | Besitzer, Verantwortliche | Zugriffszeilen |
 
@@ -113,7 +115,8 @@ wenn die Area Wunsch-Keys erlaubt), `title`, `note`, `pin`,
 `max_downloads` (download_window). Zeiten als ISO mit `Z`
 (`2030-06-01T12:00:00Z`) oder ohne Zone in der Zeitzone der Instanz
 (`WEGWEISER_TZ`, Vorgabe Europe/Berlin). Die Antwort enthält `url`
-(gebaut aus dem Host der Anfrage), `has_pin`, `file_present`,
+(unter der ersten eingetragenen Adresse, sonst dem Host der Anfrage),
+`urls` (unter jeder eingetragenen Adresse), `has_pin`, `file_present`,
 `hit_count`, `download_count`, `state` (Upload: `waiting`/`received`).
 
 Öffentliche Endpunkte je Link, ohne Anmeldung:
@@ -165,6 +168,22 @@ Startet den Dienst im Prozess und prüft Areas, alle fünf Typen, PIN und
 Sperre, gleichzeitige Klicks auf einen Einmal-Download, Speichertiefen,
 Formulare und den Aufräumlauf. Keine Fremdbibliothek.
 
+## Öffentliche Adressen
+
+Eine Instanz trägt auf der Plattform einen Hauptnamen und beliebig
+viele Aliasse (RFC-0018), etwa `go.example.org` und `go.example.net`;
+alle führen zur selben Instanz. Die Plattform gibt diese Namen der App
+nicht mit — die App sieht nur den Host der jeweiligen Anfrage. Darum
+trägt die Verwaltung die Adressen unter „Öffentliche Adressen" ein
+(eine je Zeile, ohne Schema gilt https; `localhost` und `127.*` bekommen
+http). Die erste ist die Vorgabe: sie steht in `url`, in der Link-Liste
+und im QR-Code. Jede weitere ist auf der Link-Seite wählbar und für den
+QR-Code per `host=` abrufbar. Ohne Eintrag gilt der Host der Anfrage.
+
+Die Adressen sind kein Zugriffsschutz: die Plattform entscheidet, welche
+Namen die Instanz erreichen. Ein unbekannter `host` in der API ist ein
+422, auf der Link-Seite gilt dann die Vorgabe.
+
 ## QR-Code
 
 Jede Link-Seite zeigt den QR-Code der öffentlichen Adresse und bietet
@@ -173,7 +192,9 @@ ihn als PNG und SVG zum Herunterladen an; die API liefert ihn unter
 Fehlerkorrektur M, Versionen 1–10, also bis 213 Byte) und braucht
 keine Fremdbibliothek. Zählpixel bekommen keinen QR-Code.
 
-## Nicht in 0.2
+## Nicht in 0.3
 
 E-Mail bei Upload-Eingang, Geo-Auswertung, Mehrfach-Upload, eigene
-Domains je Area, Rechte an Links weitergeben.
+Domains je Area, Rechte an Links weitergeben, Adressen automatisch von
+der Plattform (bräuchte eine Umgebungsvariable oder Kopfzeile, die das
+Gateway heute nicht setzt).

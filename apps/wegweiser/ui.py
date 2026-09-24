@@ -54,6 +54,8 @@ STYLE = """<style>
   button.quiet,a.btn.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;
        font-size:.85rem}
   button.quiet:hover,a.btn.quiet:hover{background:#e5e7eb}
+  a.btn.quiet.on{background:#111827;color:#fff}
+  .hosts{margin:0 0 .5rem}
   button.danger{background:#fee2e2;color:#991b1b}
   button.danger:hover{background:#fecaca}
   .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}

@@ -36,7 +36,7 @@ import qr
 import store
 import ui
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -224,9 +224,13 @@ def prepare_link(who, area, data, existing=None):
     return fields, key, pin, errors
 
 
-def link_json(link, base, area=None):
+def link_json(link, bases, area=None):
+    """`bases`: die öffentlichen Ursprünge (Handler.bases()); `url` nutzt den ersten, `urls` alle."""
+    if isinstance(bases, str):
+        bases = [bases]
     out = {k: v for k, v in link.items() if k not in ("key_norm", "pin_failures", "lock_count")}
-    out["url"] = f"{base}/{link['area']}/{link['key']}"
+    out["url"] = f"{bases[0]}/{link['area']}/{link['key']}"
+    out["urls"] = [f"{b}/{link['area']}/{link['key']}" for b in bases]
     out["type"] = area["type"] if area else None
     out["locked"] = bool(link.get("locked_until") and link["locked_until"] > store.now_iso())
     out["file_present"] = bool(store.file_path(FILES_DIR, link) and os.path.exists(store.file_path(FILES_DIR, link)))
@@ -270,9 +274,29 @@ class Handler(BaseHTTPRequestHandler):
                 "lang": self.headers.get("Accept-Language", "")}
 
     def base_url(self):
+        """Der Ursprung, unter dem diese Anfrage hereinkam."""
         host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "localhost"
         scheme = self.headers.get("X-Forwarded-Proto") or ("http" if host.startswith(("localhost", "127.")) else "https")
         return f"{scheme}://{host}"
+
+    def bases(self):
+        """Die öffentlichen Ursprünge für Link-Adressen: was die Verwaltung eingetragen hat
+        (erster Eintrag = Vorgabe), sonst der Ursprung der Anfrage. Die Plattform gibt der
+        App die Instanz-Namen nicht mit, darum pflegt die Verwaltung sie in der App."""
+        return store.get_hosts(DB) or [self.base_url()]
+
+    def pick_base(self, bases, strict=True):
+        """?host=… wählt einen der Ursprünge (Hostname oder ganzer Ursprung); ohne Angabe der erste.
+        Unbekannt: 422 in der API, auf Seiten die Vorgabe."""
+        want = str(self.query.get("host") or "").strip().lower().rstrip("/")
+        if not want:
+            return bases[0]
+        for b in bases:
+            if want in (b, b.split("://", 1)[1]):
+                return b
+        if strict:
+            raise ApiError(422, "host ist keine eingetragene Adresse", "validation")
+        return bases[0]
 
     def send_bytes(self, status, body, ctype, extra=()):
         self.send_response(status)
@@ -590,8 +614,24 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "Unbekannter API-Pfad", "not_found")
         who = self.who()
         parts = parts[1:]
-        base = self.base_url()
+        bases = self.bases()
         head = parts[0] if parts else ""
+
+        if head == "hosts" and len(parts) == 1:
+            if method == "GET":
+                hosts = store.get_hosts(DB)
+                self.send_json(200, {"hosts": hosts, "default": bases[0], "configured": bool(hosts)})
+                return
+            if method == "PUT":
+                self.need_admin(who)
+                data = self.read_json()
+                hosts, errors = store.normalize_hosts(data.get("hosts", []))
+                if errors:
+                    raise ApiError(422, "; ".join(errors), "validation")
+                store.set_hosts(DB, hosts)
+                self.send_json(200, {"hosts": hosts, "default": (hosts or [self.base_url()])[0], "configured": bool(hosts)})
+                return
+            raise ApiError(405, "Methode nicht erlaubt", "method")
 
         if head == "me" and method == "GET":
             areas = [area_json(a, who) for a in store.list_areas(DB) if who.may_use(a) or who.manages(a)]
@@ -666,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         links = store.list_links(DB) if who.is_admin and self.query.get("all") else store.list_links(DB, who.id)
                     areas = {a["slug"]: a for a in store.list_areas(DB)}
-                    self.send_json(200, {"links": [link_json(l, base, areas.get(l["area"])) for l in links]})
+                    self.send_json(200, {"links": [link_json(l, bases, areas.get(l["area"])) for l in links]})
                     return
                 if method == "POST":
                     data = self.read_json()
@@ -679,7 +719,7 @@ class Handler(BaseHTTPRequestHandler):
                     if errors:
                         raise ApiError(422, "; ".join(errors), "validation")
                     link = store.create_link(DB, APP_SECRET, area, who.id, who.display or who.name, fields, key, pin)
-                    self.send_json(201, {"link": link_json(link, base, area)})
+                    self.send_json(201, {"link": link_json(link, bases, area)})
                     return
                 raise ApiError(405, "Methode nicht erlaubt", "method")
             link = store.get_link(DB, parts[1])
@@ -691,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             sub = parts[2] if len(parts) > 2 else ""
             if not sub:
                 if method == "GET":
-                    self.send_json(200, {"link": link_json(link, base, area)})
+                    self.send_json(200, {"link": link_json(link, bases, area)})
                     return
                 if method in ("PATCH", "PUT"):
                     data = self.read_json()
@@ -701,7 +741,7 @@ class Handler(BaseHTTPRequestHandler):
                     if "pin" in data:
                         store.set_pin(DB, APP_SECRET, link["id"], pin or None)
                     link = store.update_link(DB, link["id"], fields)
-                    self.send_json(200, {"link": link_json(link, base, area)})
+                    self.send_json(200, {"link": link_json(link, bases, area)})
                     return
                 if method == "DELETE":
                     self.delete_link(link)
@@ -727,7 +767,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 raise ApiError(405, "Methode nicht erlaubt", "method")
             if sub == "qr" and method == "GET":
-                self.send_qr(link, base)
+                self.send_qr(link, self.pick_base(bases))
                 return
             if sub == "stats" and method == "GET":
                 self.send_json(200, {"link": link["id"], "stats": store.stats(DB, link_id=link["id"], days=self.days())})
@@ -742,7 +782,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_qr(self, link, base):
         """QR-Code der öffentlichen Adresse: ?format=png|svg, ?scale=2..32 (Pixel je Modul),
-        ?download=1 liefert ihn als Datei <area>-<key>.<format>."""
+        ?host=… wählt eine der eingetragenen Adressen, ?download=1 liefert ihn als Datei
+        <area>-<key>.<format>."""
         url = f"{base}/{link['area']}/{link['key']}"
         fmt = str(self.query.get("format", "png")).lower()
         if fmt not in ("png", "svg"):
@@ -806,7 +847,7 @@ class Handler(BaseHTTPRequestHandler):
         except (IOError, OSError) as e:
             raise ApiError(400, f"Die Übertragung war unvollständig: {e}", "incomplete")
         store.set_file(DB, link["id"], name, size, sha, self.headers.get("Content-Type") or "application/octet-stream")
-        self.send_json(201, {"link": link_json(store.get_link(DB, link["id"]), self.base_url(), area)})
+        self.send_json(201, {"link": link_json(store.get_link(DB, link["id"]), self.bases(), area)})
 
     def delete_link(self, link):
         store.remove_file(FILES_DIR, link["area"], link["id"])
@@ -965,7 +1006,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def link_page(self, who, link, area, base, notice="", errors=()):
         ts = store.now_iso()
-        url = f"{base}/{link['area']}/{link['key']}"
+        bases = self.bases()
+        chosen = self.pick_base(bases, strict=False)
+        url = f"{chosen}/{link['area']}/{link['key']}"
         t = area["type"]
         path = store.file_path(FILES_DIR, link)
         present = bool(path and os.path.exists(path))
@@ -992,13 +1035,19 @@ class Handler(BaseHTTPRequestHandler):
         details = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
 
         qr_api = f"/api/v1/links/{esc(link['id'])}/qr"
+        hq = "&amp;host=" + esc(urllib.parse.quote(chosen.split("://", 1)[1])) if len(bases) > 1 else ""
         qrbox = "" if t == "pixel" else f"""<div class="qrbox">
-    <img src="{qr_api}?format=svg&amp;scale=4" alt="QR-Code zu {esc(url)}" width="132" height="132">
-    QR-Code: <a href="{qr_api}?format=png&amp;scale=10&amp;download=1">PNG</a> · <a href="{qr_api}?format=svg&amp;download=1">SVG</a></div>"""
+    <img src="{qr_api}?format=svg&amp;scale=4{hq}" alt="QR-Code zu {esc(url)}" width="132" height="132">
+    QR-Code: <a href="{qr_api}?format=png&amp;scale=10&amp;download=1{hq}">PNG</a> · <a href="{qr_api}?format=svg&amp;download=1{hq}">SVG</a></div>"""
+        chips = ""
+        if len(bases) > 1:
+            chips = '<p class="row hosts"><span class="muted">Adresse:</span>' + "".join(
+                f'<a class="btn quiet{" on" if b == chosen else ""}" href="/manage/links/{esc(link["id"])}?host={esc(urllib.parse.quote(b.split("://", 1)[1]))}">{esc(b.split("://", 1)[1])}</a>'
+                for b in bases) + "</p>"
         body = ui.notice_card(notice) + ui.errors_card(errors)
         body += f"""<div class="card">{qrbox}
   <h1>{esc(link["title"] or (link["area"] + "/" + link["key"]))}</h1>
-  <p class="linkurl"><a href="{esc(url)}" target="_blank" rel="noopener" id="theurl">{esc(url)}</a>
+  {chips}<p class="linkurl"><a href="{esc(url)}" target="_blank" rel="noopener" id="theurl">{esc(url)}</a>
     <button type="button" class="quiet" onclick="navigator.clipboard.writeText(document.getElementById('theurl').textContent).then(function(){{document.getElementById('copied').textContent='kopiert';}})">Kopieren</button>
     <span id="copied" class="muted"></span></p>
   {"<p class='hint'>Als Bild einbetten: <code>&lt;img src=&quot;" + esc(url) + ".gif&quot; width=&quot;1&quot; height=&quot;1&quot; alt=&quot;&quot;&gt;</code></p>" if t == "pixel" else ""}
@@ -1160,6 +1209,15 @@ class Handler(BaseHTTPRequestHandler):
         if not parts and method == "GET":
             self.send_html(200, self.admin_page(who, notice=self.query.get("ok", "")))
             return
+        if parts == ["hosts"] and method == "POST":
+            form = self.read_form()
+            hosts, errors = store.normalize_hosts(form.get("hosts", ""))
+            if errors:
+                self.send_html(422, self.admin_page(who, errors=errors, hosts_text=form.get("hosts", "")))
+                return
+            store.set_hosts(DB, hosts)
+            self.redirect("/admin?ok=" + urllib.parse.quote("Adressen gespeichert." if hosts else "Keine Adressen eingetragen; es gilt die Adresse der Anfrage."))
+            return
         if parts and parts[0] == "areas":
             if len(parts) == 1 and method == "POST":
                 form = self.read_form()
@@ -1233,7 +1291,7 @@ class Handler(BaseHTTPRequestHandler):
     <div class="wide"><label>Speichertiefe der Zugriffe</label><select name="log_level">{levels}</select></div>
     <div><label>Aufbewahrung der Zugriffe in Tagen</label><input type="number" name="log_retention_days" min="1" value="{g("log_retention_days", 90)}"></div>"""
 
-    def admin_page(self, who, errors=(), data=None, notice=""):
+    def admin_page(self, who, errors=(), data=None, notice="", hosts_text=None):
         counts = store.area_counts(DB)
         rows = "".join(
             f'<tr><td><a href="/admin/areas/{esc(a["slug"])}"><code>{esc(a["slug"])}</code></a></td><td>{esc(a["type_label"])}</td>'
@@ -1249,9 +1307,17 @@ class Handler(BaseHTTPRequestHandler):
         body += f"""<div class="card"><h2>Neue Area</h2>
   <p class="hint">Der Typ steht danach fest. Der Slug ist das erste Pfadsegment der öffentlichen Adresse; reserviert sind {esc(", ".join(sorted(store.RESERVED_SLUGS)))}.</p>
   <form class="grid" method="post" action="/admin/areas">{self.area_form(data or {}, creating=True)}<div><button type="submit">Anlegen</button></div></form></div>"""
+        if hosts_text is None:
+            hosts_text = chr(10).join(store.get_hosts(DB))
+        body += f"""<div class="card"><h2>Öffentliche Adressen</h2>
+  <p class="hint">Die Namen, unter denen diese Instanz erreichbar ist — der Hauptname und die Aliasse der Instanz auf der Plattform, deren DNS auf den Knoten zeigt.
+  Die Plattform gibt sie der App nicht mit, darum stehen sie hier. Eine je Zeile; die erste ist die Vorgabe für Link-Adressen und QR-Codes, jede weitere ist auf der Link-Seite wählbar.
+  Ohne Schema gilt https. Leer: die Adresse, unter der die Verwaltung gerade aufgerufen ist (<code>{esc(self.base_url())}</code>).</p>
+  <form method="post" action="/admin/hosts"><textarea name="hosts" rows="4" placeholder="go.example.org">{esc(hosts_text)}</textarea>
+  <div style="margin-top:.6rem"><button type="submit">Speichern</button></div></form></div>"""
         body += f"""<div class="card"><h2>REST-API</h2>
   <p class="hint">Basis <code>{esc(self.base_url())}/api/v1</code>, Anmeldung über die Sitzung oder einen API-Schlüssel der Plattform (<code>Authorization: Bearer oaapk_…</code>, RFC-0027).
-  Endpunkte: <code>me</code>, <code>areas</code>, <code>areas/&lt;slug&gt;/stats|accesses</code>, <code>links?area=</code>, <code>links/&lt;id&gt;</code>, <code>links/&lt;id&gt;/file|stats|accesses</code>.
+  Endpunkte: <code>me</code>, <code>hosts</code>, <code>areas</code>, <code>areas/&lt;slug&gt;/stats|accesses</code>, <code>links?area=</code>, <code>links/&lt;id&gt;</code>, <code>links/&lt;id&gt;/file|qr|stats|accesses</code>.
   Rollen wie in der Oberfläche. Details in der README der App.</p></div>"""
         return ui.page("Verwaltung", body, who, VERSION, self.nav(who, "admin"))
 

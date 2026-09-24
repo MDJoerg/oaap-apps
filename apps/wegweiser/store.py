@@ -15,6 +15,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -126,6 +127,10 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL DEFAULT '',
   last_seen TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 AREA_INT_FIELDS = ("open_for_users", "active", "key_length", "custom_keys",
@@ -187,6 +192,67 @@ class DB:
 
 def connect(path):
     return DB(path)
+
+
+# ---------------------------------------------------- Einstellungen
+
+def get_setting(db, key, default=None):
+    row = db.one("SELECT value FROM settings WHERE key=?", (key,))
+    return row["value"] if row else default
+
+
+def set_setting(db, key, value):
+    db.x("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+         (key, value))
+
+
+_HOST_LABEL = r"[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?"
+_HOST_RE = re.compile(rf"^{_HOST_LABEL}(\.{_HOST_LABEL})*(:[0-9]{{1,5}})?$")
+MAX_HOSTS = 20
+
+
+def normalize_hosts(raw):
+    """Öffentliche Adressen der Instanz, wie die Verwaltung sie einträgt: eine je Zeile
+    (oder eine Liste). Ohne Schema wird https angenommen, außer bei localhost und 127.*.
+    Gibt (Liste von Ursprüngen wie `https://go.example.org`, Fehlerliste) zurück; die
+    Reihenfolge bleibt, Doppelte fallen weg, der erste Eintrag ist die Vorgabe."""
+    if isinstance(raw, str):
+        items = re.split(r"[\n,;]+", raw)
+    elif isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        return [], ["hosts: Liste oder Text erwartet"]
+    out, errors = [], []
+    for item in items:
+        item = item.strip().lower().rstrip("/")
+        if not item:
+            continue
+        scheme = None
+        for pre in ("https://", "http://"):
+            if item.startswith(pre):
+                scheme, item = pre[:-3], item[len(pre):]
+        item = item.split("/", 1)[0]
+        if not _HOST_RE.match(item):
+            errors.append(f"hosts: {item!r} ist kein Hostname")
+            continue
+        if scheme is None:
+            scheme = "http" if item.startswith(("localhost", "127.")) else "https"
+        origin = f"{scheme}://{item}"
+        if origin not in out:
+            out.append(origin)
+    if len(out) > MAX_HOSTS:
+        errors.append(f"hosts: höchstens {MAX_HOSTS} Adressen")
+    return out, errors
+
+
+def get_hosts(db):
+    """Die eingetragenen Adressen als Liste von Ursprüngen; leer, wenn keine gepflegt sind."""
+    raw = get_setting(db, "hosts", "")
+    return [h for h in raw.split("\n") if h] if raw else []
+
+
+def set_hosts(db, hosts):
+    set_setting(db, "hosts", "\n".join(hosts))
 
 
 # -------------------------------------------------------------- Benutzer
