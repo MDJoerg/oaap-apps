@@ -32,10 +32,11 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import qr
 import store
 import ui
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -725,6 +726,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(200, {"deleted": True})
                     return
                 raise ApiError(405, "Methode nicht erlaubt", "method")
+            if sub == "qr" and method == "GET":
+                self.send_qr(link, base)
+                return
             if sub == "stats" and method == "GET":
                 self.send_json(200, {"link": link["id"], "stats": store.stats(DB, link_id=link["id"], days=self.days())})
                 return
@@ -735,6 +739,26 @@ class Handler(BaseHTTPRequestHandler):
                 return
             raise ApiError(404, "Unbekannter API-Pfad", "not_found")
         raise ApiError(404, "Unbekannter API-Pfad", "not_found")
+
+    def send_qr(self, link, base):
+        """QR-Code der öffentlichen Adresse: ?format=png|svg, ?scale=2..32 (Pixel je Modul),
+        ?download=1 liefert ihn als Datei <area>-<key>.<format>."""
+        url = f"{base}/{link['area']}/{link['key']}"
+        fmt = str(self.query.get("format", "png")).lower()
+        if fmt not in ("png", "svg"):
+            raise ApiError(422, "format muss png oder svg sein", "validation")
+        try:
+            scale = max(2, min(32, int(self.query.get("scale", 8))))
+        except (TypeError, ValueError):
+            raise ApiError(422, "scale muss eine Zahl sein", "validation")
+        matrix = qr.encode(url)
+        extra = [("Cache-Control", "private, max-age=3600")]
+        if self.query.get("download"):
+            extra.append(("Content-Disposition", f'attachment; filename="{link["area"]}-{link["key"]}.{fmt}"'))
+        if fmt == "svg":
+            self.send_bytes(200, qr.svg(matrix, scale).encode("utf-8"), "image/svg+xml; charset=utf-8", extra)
+        else:
+            self.send_bytes(200, qr.png(matrix, scale), "image/png", extra)
 
     def need_admin(self, who):
         if not who.is_admin:
@@ -967,8 +991,12 @@ class Handler(BaseHTTPRequestHandler):
             rows.append(("Notiz", esc(link["note"])))
         details = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
 
+        qr_api = f"/api/v1/links/{esc(link['id'])}/qr"
+        qrbox = "" if t == "pixel" else f"""<div class="qrbox">
+    <img src="{qr_api}?format=svg&amp;scale=4" alt="QR-Code zu {esc(url)}" width="132" height="132">
+    QR-Code: <a href="{qr_api}?format=png&amp;scale=10&amp;download=1">PNG</a> · <a href="{qr_api}?format=svg&amp;download=1">SVG</a></div>"""
         body = ui.notice_card(notice) + ui.errors_card(errors)
-        body += f"""<div class="card">
+        body += f"""<div class="card">{qrbox}
   <h1>{esc(link["title"] or (link["area"] + "/" + link["key"]))}</h1>
   <p class="linkurl"><a href="{esc(url)}" target="_blank" rel="noopener" id="theurl">{esc(url)}</a>
     <button type="button" class="quiet" onclick="navigator.clipboard.writeText(document.getElementById('theurl').textContent).then(function(){{document.getElementById('copied').textContent='kopiert';}})">Kopieren</button>

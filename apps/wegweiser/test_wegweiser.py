@@ -415,6 +415,44 @@ try:
 except ValueError:
     check("parse_when Unsinn wirft", True)
 
+# ------------------------------------------------------------------ QR-Code
+print("QR-Code")
+import struct  # noqa: E402
+
+import qr  # noqa: E402
+
+m = qr.encode("a")
+check("QR: kürzester Text ist Version 1 mit 21 Modulen", len(m) == 21 and all(len(r) == 21 for r in m))
+check("QR: Suchmuster oben links", [m[0][i] for i in range(7)] == [1] * 7 and [m[i][0] for i in range(7)] == [1] * 7
+      and m[1][1] == 0 and m[3][3] == 1)
+check("QR: Taktspur", [m[6][i] for i in range(8, 13)] == [1, 0, 1, 0, 1])
+check("QR: 213 Byte passen (Version 10, 57 Module)", len(qr.encode("x" * 213)) == 57)
+try:
+    qr.encode("x" * 214)
+    check("QR: 214 Byte werden abgelehnt", False)
+except ValueError:
+    check("QR: 214 Byte werden abgelehnt", True)
+png = qr.png(m, 8)
+check("QR: PNG-Signatur und Bildgröße (21+8)·8", png[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", png[16:24]) == (232, 232))
+check("QR: SVG mit Ruhezone", 'viewBox="0 0 29 29"' in qr.svg(m))
+# Orakel: dieselbe Matrix, die segno 1.6 für diese 26-Byte-Adresse mit Maske 6 erzeugt
+# (26 Byte füllen Version 2 genau — dort sind beide Encoder Bit für Bit gleich)
+ORACLE = ("1fd0c7f;1053841;175c85d;174fb5d;175845d;1047541;1fd557f;000e800;13f1297;1d2be3e;1b69b29;1f1742f;"
+          "0d4d1e1;1031b12;1a4129f;15ab62d;105edf6;0015916;1fda151;1051b10;17547f0;17536c3;174759f;10494b7;1fd7189")
+rows = [int("".join(map(str, row)), 2) for row in qr.encode("https://go.joomp.de/r/ab12", mask=6)]
+check("QR: Matrix Bit für Bit wie segno (unabhängiges Orakel)", rows == [int(h, 16) for h in ORACLE.split(";")])
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr", USER)
+check("QR per API: PNG", s == 200 and h.get("Content-Type") == "image/png" and b[:8] == b"\x89PNG\r\n\x1a\n" and not h.get("Content-Disposition"))
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr?format=svg&download=1", USER)
+check("QR per API: SVG als Datei", s == 200 and str(h.get("Content-Type", "")).startswith("image/svg+xml") and b"<svg" in b
+      and h.get("Content-Disposition") == f'attachment; filename="{D3["area"]}-{D3["key"]}.svg"', (s, h.get("Content-Disposition")))
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr?format=gif", USER)
+check("QR: unbekanntes Format 422", s == 422)
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr", OTHER)
+check("QR: fremder Link 404", s == 404)
+s, h, b = call("GET", f"/manage/links/{D3['id']}", USER)
+check("Link-Seite zeigt QR-Code", s == 200 and f"/api/v1/links/{D3['id']}/qr?format=svg".encode() in b)
+
 server.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} bestanden, {fail} fehlgeschlagen")

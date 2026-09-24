@@ -79,6 +79,9 @@ STYLE = """<style>
        font-size:.9rem;min-height:44px}
   .row{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
   .linkurl{font-size:1.1rem;word-break:break-all}
+  .qrbox{float:right;margin:0 0 .6rem 1rem;text-align:center;font-size:.85rem}
+  .qrbox img{display:block;border:1px solid var(--oaap-border);border-radius:6px;background:#fff;margin-bottom:.25rem}
+  .card::after{content:"";display:block;clear:both}
   .bars td:first-child{width:40%}
   .bar{background:var(--oaap-blue-100);height:.8rem;border-radius:.2rem}
   .bar i{display:block;height:100%;background:var(--oaap-blue-600);border-radius:.2rem}

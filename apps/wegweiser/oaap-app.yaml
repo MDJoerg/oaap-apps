@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: wegweiser
   name: Wegweiser
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
   description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, REST-API"

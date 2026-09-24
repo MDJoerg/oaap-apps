@@ -96,6 +96,7 @@ Browser oder ein API-Schlüssel der Plattform
 | `PUT /links/{id}/file` | Besitzer, Verantwortliche | Datei an Download-Link hängen: roher Body, Kopfzeile `X-File-Name` (URL-kodiert), `Content-Type` |
 | `GET /links/{id}/file` | Besitzer, Verantwortliche | Datei holen (auch die eines eingegangenen Uploads) |
 | `DELETE /links/{id}/file` | Besitzer, Verantwortliche | Datei entfernen; ein Upload-Link wartet danach wieder |
+| `GET /links/{id}/qr?format=png&scale=8&download=1` | Besitzer, Verantwortliche | QR-Code der öffentlichen Adresse als PNG oder SVG (`format`), `scale` Pixel je Modul (2–32), `download=1` als Datei `<area>-<key>.png` |
 | `GET /links/{id}/stats?days=30` | Besitzer, Verantwortliche | Auswertung |
 | `GET /links/{id}/accesses?limit&offset&format=csv` | Besitzer, Verantwortliche | Zugriffszeilen |
 
@@ -164,7 +165,15 @@ Startet den Dienst im Prozess und prüft Areas, alle fünf Typen, PIN und
 Sperre, gleichzeitige Klicks auf einen Einmal-Download, Speichertiefen,
 Formulare und den Aufräumlauf. Keine Fremdbibliothek.
 
-## Nicht in 0.1
+## QR-Code
 
-QR-Code je Link, E-Mail bei Upload-Eingang, Geo-Auswertung,
-Mehrfach-Upload, eigene Domains je Area, Rechte an Links weitergeben.
+Jede Link-Seite zeigt den QR-Code der öffentlichen Adresse und bietet
+ihn als PNG und SVG zum Herunterladen an; die API liefert ihn unter
+`/links/{id}/qr`. Der Encoder steckt in `qr.py` (Byte-Modus,
+Fehlerkorrektur M, Versionen 1–10, also bis 213 Byte) und braucht
+keine Fremdbibliothek. Zählpixel bekommen keinen QR-Code.
+
+## Nicht in 0.2
+
+E-Mail bei Upload-Eingang, Geo-Auswertung, Mehrfach-Upload, eigene
+Domains je Area, Rechte an Links weitergeben.
