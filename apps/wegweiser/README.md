@@ -97,8 +97,8 @@ Browser oder ein API-Schlüssel der Plattform
 | `GET /links/{id}/file` | Besitzer, Verantwortliche | Datei holen (auch die eines eingegangenen Uploads) |
 | `DELETE /links/{id}/file` | Besitzer, Verantwortliche | Datei entfernen; ein Upload-Link wartet danach wieder |
 | `GET /links/{id}/qr?format=png&scale=8&host=&download=1` | Besitzer, Verantwortliche | QR-Code der öffentlichen Adresse als PNG oder SVG (`format`), `scale` Pixel je Modul (2–32), `host` eine der eingetragenen Adressen (Vorgabe: die erste), `download=1` als Datei `<area>-<key>.png` |
-| `GET /hosts` | alle | eingetragene öffentliche Adressen, `default`, `configured` |
-| `PUT /hosts` | admin | Adressen setzen: `{"hosts": ["go.example.org", …]}`; leere Liste = Adresse der Anfrage |
+| `GET /hosts` | alle | öffentliche Adressen: `hosts` (alle, Vorgabe zuerst), `platform` (von der Plattform), `extra` (ergänzt), `default`, `configured` |
+| `PUT /hosts` | admin | ergänzte Adressen und Vorgabe setzen: `{"hosts": ["go.example.org", …], "default": "https://go.example.org"}`; `default` leer = erste der Liste |
 | `GET /links/{id}/stats?days=30` | Besitzer, Verantwortliche | Auswertung |
 | `GET /links/{id}/accesses?limit&offset&format=csv` | Besitzer, Verantwortliche | Zugriffszeilen |
 
@@ -172,17 +172,24 @@ Formulare und den Aufräumlauf. Keine Fremdbibliothek.
 
 Eine Instanz trägt auf der Plattform einen Hauptnamen und beliebig
 viele Aliasse (RFC-0018), etwa `go.example.org` und `go.example.net`;
-alle führen zur selben Instanz. Die Plattform gibt diese Namen der App
-nicht mit — die App sieht nur den Host der jeweiligen Anfrage. Darum
-trägt die Verwaltung die Adressen unter „Öffentliche Adressen" ein
-(eine je Zeile, ohne Schema gilt https; `localhost` und `127.*` bekommen
-http). Die erste ist die Vorgabe: sie steht in `url`, in der Link-Liste
-und im QR-Code. Jede weitere ist auf der Link-Seite wählbar und für den
-QR-Code per `host=` abrufbar. Ohne Eintrag gilt der Host der Anfrage.
+alle führen zur selben Instanz. Seit OAAP 0.1.126 gibt die Plattform
+diese Namen der App mit (RFC-0043): `OAAP_INSTANCE_NAMES`, Hauptname
+zuerst, dann Aliasse, dann die Knoten-Adresse, jeder als Ursprung mit
+Schema. Die App liest die Variable beim Start und zeigt die Namen unter
+„Öffentliche Adressen" zum Lesen. Die Verwaltung kann Adressen ergänzen
+(eine je Zeile, ohne Schema gilt https; `localhost` und `127.*`
+bekommen http) und die Vorgabe wählen; ohne Wahl ist es der erste
+Plattform-Name. Die Vorgabe steht in `url`, in der Link-Liste und im
+QR-Code; jede andere Adresse ist auf der Link-Seite wählbar und für den
+QR-Code per `host=` abrufbar. Gibt es weder Plattform-Namen noch
+ergänzte, gilt der Host der Anfrage. Auf einer Plattform vor 0.1.126
+fehlt die Variable, und die ergänzten Adressen sind die ganze Liste.
 
 Die Adressen sind kein Zugriffsschutz: die Plattform entscheidet, welche
 Namen die Instanz erreichen. Ein unbekannter `host` in der API ist ein
-422, auf der Link-Seite gilt dann die Vorgabe.
+422, auf der Link-Seite gilt dann die Vorgabe. Ändern sich die Namen
+auf der Plattform, erzeugt sie den Container neu; die App braucht dafür
+nichts zu tun.
 
 ## QR-Code
 
@@ -192,9 +199,7 @@ ihn als PNG und SVG zum Herunterladen an; die API liefert ihn unter
 Fehlerkorrektur M, Versionen 1–10, also bis 213 Byte) und braucht
 keine Fremdbibliothek. Zählpixel bekommen keinen QR-Code.
 
-## Nicht in 0.3
+## Nicht in 0.4
 
 E-Mail bei Upload-Eingang, Geo-Auswertung, Mehrfach-Upload, eigene
-Domains je Area, Rechte an Links weitergeben, Adressen automatisch von
-der Plattform (bräuchte eine Umgebungsvariable oder Kopfzeile, die das
-Gateway heute nicht setzt).
+Domains je Area, Rechte an Links weitergeben.

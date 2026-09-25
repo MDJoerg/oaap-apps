@@ -461,13 +461,13 @@ check("Adressen: normalisiert, ohne Doppelte, http nur für localhost/127.", hos
 check("Adressen: kein Hostname → Fehler", store.normalize_hosts("bad host!")[1] and store.normalize_hosts("a_b.de")[1])
 check("Adressen: zu viele → Fehler", store.normalize_hosts([f"h{i}.example" for i in range(21)])[1])
 s, h, b = call("GET", "/api/v1/hosts", USER)
-check("Adressen: ohne Eintrag gilt die Adresse der Anfrage", s == 200 and j(b) == {"hosts": [], "default": BASE, "configured": False}, b)
+check("Adressen: ohne Eintrag gilt die Adresse der Anfrage", s == 200 and j(b) == {"hosts": [], "platform": [], "extra": [], "default": BASE, "configured": False}, b)
 s, h, b = call("PUT", "/api/v1/hosts", USER, {"hosts": ["go.joomp.de"]})
 check("Adressen: nur admin schreibt", s == 403)
 s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": ["go.joomp.de", "bad host!"]})
 check("Adressen: ungültige Zeile → 422, nichts gespeichert", s == 422 and j(call("GET", "/api/v1/hosts", USER)[2])["hosts"] == [])
 s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": ["Go.joomp.de", "go.objid.info", "go.joomp.de"]})
-check("Adressen: admin trägt zwei ein", s == 200 and j(b) == {"hosts": ["https://go.joomp.de", "https://go.objid.info"], "default": "https://go.joomp.de", "configured": True}, b)
+check("Adressen: admin trägt zwei ein", s == 200 and j(b) == {"hosts": ["https://go.joomp.de", "https://go.objid.info"], "platform": [], "extra": ["https://go.joomp.de", "https://go.objid.info"], "default": "https://go.joomp.de", "configured": True}, b)
 s, h, b = call("GET", f"/api/v1/links/{D3['id']}", USER)
 L = j(b).get("link", {})
 check("Link: url nutzt die erste Adresse, urls alle", L.get("url") == f"https://go.joomp.de/{D3['area']}/{D3['key']}"
@@ -503,9 +503,49 @@ check("Verwaltung: Formular nur admin", s == 403)
 s, h, b = call("GET", f"/manage/links/{D3['id']}", USER)
 check("Eine Adresse: keine Auswahl auf der Link-Seite", s == 200 and b"Adresse:" not in b and b"?host=" not in b)
 s, h, b = call("POST", "/admin/hosts", ADMIN, form={"hosts": ""})
-check("Verwaltung: leer = Adresse der Anfrage", s == 303 and j(call("GET", "/api/v1/hosts", USER)[2]) == {"hosts": [], "default": BASE, "configured": False})
+check("Verwaltung: leer = Adresse der Anfrage", s == 303 and j(call("GET", "/api/v1/hosts", USER)[2]) == {"hosts": [], "platform": [], "extra": [], "default": BASE, "configured": False})
 s, h, b = call("GET", f"/api/v1/links/{D3['id']}", USER)
 check("Link: url wieder aus der Anfrage", j(b)["link"]["url"] == f"{BASE}/{D3['area']}/{D3['key']}")
+
+# ------------------------------------- Namen von der Plattform (RFC-0043, 0.4)
+print("Namen von der Plattform")
+check("Ohne OAAP_INSTANCE_NAMES ist die Plattform-Liste leer", app.PLATFORM_HOSTS == [])
+app.PLATFORM_HOSTS = store.normalize_hosts("https://go.plattform.example,https://go.alias.example,https://wegweiser.node.example")[0]
+check("Die Variable wird als Liste von Ursprüngen gelesen, Reihenfolge bleibt",
+      app.PLATFORM_HOSTS == ["https://go.plattform.example", "https://go.alias.example", "https://wegweiser.node.example"])
+s, h, b = call("GET", "/api/v1/hosts", USER)
+check("Plattform-Namen sind die Liste, der Hauptname die Vorgabe", s == 200 and j(b)["hosts"] == app.PLATFORM_HOSTS
+      and j(b)["platform"] == app.PLATFORM_HOSTS and j(b)["extra"] == [] and j(b)["default"] == "https://go.plattform.example" and j(b)["configured"], b)
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}", USER)
+check("Link: url unter dem Hauptnamen der Plattform", j(b)["link"]["url"] == f"https://go.plattform.example/{D3['area']}/{D3['key']}")
+s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": ["go.extra.example", "go.alias.example"]})
+check("Ergänzte Adressen kommen dahinter, ein Plattform-Name wird nicht doppelt",
+      s == 200 and j(b)["hosts"] == app.PLATFORM_HOSTS + ["https://go.extra.example"] and j(b)["extra"] == ["https://go.extra.example", "https://go.alias.example"], b)
+s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": ["go.extra.example"], "default": "https://go.extra.example"})
+check("Die Verwaltung wählt eine ergänzte Adresse als Vorgabe", s == 200 and j(b)["default"] == "https://go.extra.example"
+      and j(b)["hosts"][0] == "https://go.extra.example" and "https://go.plattform.example" in j(b)["hosts"], b)
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr", USER)
+check("QR folgt der gewählten Vorgabe", s == 200 and b == qr.png(qr.encode(f"https://go.extra.example/{D3['area']}/{D3['key']}"), 8))
+s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr?host=go.alias.example", USER)
+check("QR unter einem Plattform-Alias", s == 200 and b == qr.png(qr.encode(f"https://go.alias.example/{D3['area']}/{D3['key']}"), 8))
+s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": [], "default": "https://fremd.example"})
+check("Eine Vorgabe außerhalb der Liste: 422", s == 422)
+s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": [], "default": ""})
+check("Keine ergänzten, keine Wahl: Plattform-Liste, Hauptname vorn", s == 200 and j(b)["hosts"] == app.PLATFORM_HOSTS and j(b)["default"] == "https://go.plattform.example")
+s, h, b = call("GET", "/admin", ADMIN)
+check("Verwaltung zeigt die Plattform-Namen zum Lesen und die Vorgabe zur Wahl",
+      s == 200 and b"<code>https://go.plattform.example</code>" in b and b'<select name="default">' in b
+      and b'<option value="https://go.alias.example">' in b and b'<textarea name="hosts"' in b)
+s, h, b = call("POST", "/admin/hosts", ADMIN, form={"hosts": "", "default": "https://go.alias.example"})
+check("Verwaltung: Vorgabe per Formular", s == 303 and j(call("GET", "/api/v1/hosts", USER)[2])["default"] == "https://go.alias.example")
+s, h, b = call("POST", "/admin/hosts", ADMIN, form={"hosts": "", "default": "https://fremd.example"})
+check("Verwaltung: Vorgabe außerhalb der Liste bleibt im Formular, 422", s == 422 and b"Vorgabe: muss" in b)
+s, h, b = call("GET", f"/manage/links/{D3['id']}", USER)
+check("Link-Seite: alle Plattform-Namen wählbar, Vorgabe vorn", s == 200 and b"?host=go.plattform.example" in b
+      and b"?host=wegweiser.node.example" in b and f'id="theurl">https://go.alias.example/{D3["area"]}/{D3["key"]}<'.encode() in b)
+app.PLATFORM_HOSTS = []
+s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": [], "default": ""})
+check("Zurückgesetzt: wieder die Adresse der Anfrage", s == 200 and j(b)["default"] == BASE)
 
 server.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)

@@ -36,13 +36,17 @@ import qr
 import store
 import ui
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "wegweiser.db")
 FILES_DIR = os.path.join(DATA_DIR, "files")
 APP_SECRET = os.environ.get("OAAP_APP_SECRET", "") or "kein-geheimnis-gesetzt"
+# RFC-0043: die Namen, die die Plattform der Instanz mitgibt -- Hauptname zuerst, dann
+# Aliasse, dann die Knoten-Adresse, jeder als Ursprung mit Schema. Fehlt die Variable,
+# ist die Liste leer und es gelten die von der Verwaltung eingetragenen Adressen.
+PLATFORM_HOSTS = store.normalize_hosts(os.environ.get("OAAP_INSTANCE_NAMES", ""))[0]
 
 try:
     MAX_UPLOAD_MB = max(1, int(os.environ.get("WEGWEISER_MAX_UPLOAD_MB") or 512))
@@ -224,6 +228,22 @@ def prepare_link(who, area, data, existing=None):
     return fields, key, pin, errors
 
 
+def all_hosts(default=""):
+    """Plattform-Namen zuerst, dann die ergänzten, ohne Doppelte; `default` (wenn bekannt)
+    nach vorn. Leer, wenn es weder das eine noch das andere gibt."""
+    hosts = list(dict.fromkeys(PLATFORM_HOSTS + store.get_hosts(DB)))
+    if default in hosts:
+        hosts.remove(default)
+        hosts.insert(0, default)
+    return hosts
+
+
+def hosts_json(request_base):
+    hosts = all_hosts(store.get_setting(DB, "default_host", ""))
+    return {"hosts": hosts, "platform": list(PLATFORM_HOSTS), "extra": store.get_hosts(DB),
+            "default": (hosts or [request_base])[0], "configured": bool(hosts)}
+
+
 def link_json(link, bases, area=None):
     """`bases`: die öffentlichen Ursprünge (Handler.bases()); `url` nutzt den ersten, `urls` alle."""
     if isinstance(bases, str):
@@ -280,10 +300,11 @@ class Handler(BaseHTTPRequestHandler):
         return f"{scheme}://{host}"
 
     def bases(self):
-        """Die öffentlichen Ursprünge für Link-Adressen: was die Verwaltung eingetragen hat
-        (erster Eintrag = Vorgabe), sonst der Ursprung der Anfrage. Die Plattform gibt der
-        App die Instanz-Namen nicht mit, darum pflegt die Verwaltung sie in der App."""
-        return store.get_hosts(DB) or [self.base_url()]
+        """Die öffentlichen Ursprünge für Link-Adressen: die Namen der Plattform (RFC-0043,
+        `OAAP_INSTANCE_NAMES`, Hauptname zuerst) plus die von der Verwaltung ergänzten; die
+        Vorgabe steht vorn -- gewählt von der Verwaltung, sonst der erste Plattform-Name.
+        Ohne alles der Ursprung der Anfrage."""
+        return all_hosts(store.get_setting(DB, "default_host", "")) or [self.base_url()]
 
     def pick_base(self, bases, strict=True):
         """?host=… wählt einen der Ursprünge (Hostname oder ganzer Ursprung); ohne Angabe der erste.
@@ -619,17 +640,20 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "hosts" and len(parts) == 1:
             if method == "GET":
-                hosts = store.get_hosts(DB)
-                self.send_json(200, {"hosts": hosts, "default": bases[0], "configured": bool(hosts)})
+                self.send_json(200, hosts_json(self.base_url()))
                 return
             if method == "PUT":
                 self.need_admin(who)
                 data = self.read_json()
-                hosts, errors = store.normalize_hosts(data.get("hosts", []))
+                extra, errors = store.normalize_hosts(data.get("hosts", []))
                 if errors:
                     raise ApiError(422, "; ".join(errors), "validation")
-                store.set_hosts(DB, hosts)
-                self.send_json(200, {"hosts": hosts, "default": (hosts or [self.base_url()])[0], "configured": bool(hosts)})
+                default = str(data.get("default") or "").strip().lower().rstrip("/")
+                if default and default not in PLATFORM_HOSTS + extra:
+                    raise ApiError(422, "default muss eine der Adressen sein", "validation")
+                store.set_hosts(DB, extra)
+                store.set_setting(DB, "default_host", default)
+                self.send_json(200, hosts_json(self.base_url()))
                 return
             raise ApiError(405, "Methode nicht erlaubt", "method")
 
@@ -1211,12 +1235,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parts == ["hosts"] and method == "POST":
             form = self.read_form()
-            hosts, errors = store.normalize_hosts(form.get("hosts", ""))
+            extra, errors = store.normalize_hosts(form.get("hosts", ""))
+            default = form.get("default", "").strip().lower().rstrip("/")
+            if default and default not in PLATFORM_HOSTS + extra:
+                errors.append("Vorgabe: muss eine der Adressen sein")
             if errors:
                 self.send_html(422, self.admin_page(who, errors=errors, hosts_text=form.get("hosts", "")))
                 return
-            store.set_hosts(DB, hosts)
-            self.redirect("/admin?ok=" + urllib.parse.quote("Adressen gespeichert." if hosts else "Keine Adressen eingetragen; es gilt die Adresse der Anfrage."))
+            store.set_hosts(DB, extra)
+            store.set_setting(DB, "default_host", default)
+            self.redirect("/admin?ok=" + urllib.parse.quote(
+                "Adressen gespeichert." if PLATFORM_HOSTS or extra else "Keine Adressen eingetragen; es gilt die Adresse der Anfrage."))
             return
         if parts and parts[0] == "areas":
             if len(parts) == 1 and method == "POST":
@@ -1309,11 +1338,21 @@ class Handler(BaseHTTPRequestHandler):
   <form class="grid" method="post" action="/admin/areas">{self.area_form(data or {}, creating=True)}<div><button type="submit">Anlegen</button></div></form></div>"""
         if hosts_text is None:
             hosts_text = chr(10).join(store.get_hosts(DB))
+        current = store.get_setting(DB, "default_host", "")
+        platform_list = ("<ul class=\"hostlist\">" + "".join(f"<li><code>{esc(h)}</code></li>" for h in PLATFORM_HOSTS) + "</ul>"
+                         if PLATFORM_HOSTS else
+                         "<p class=\"muted\">Die Plattform hat dieser Instanz keine Namen mitgegeben (kein <code>OAAP_INSTANCE_NAMES</code>).</p>")
+        choices = all_hosts()
+        options = '<option value="">erste der Liste</option>' + "".join(
+            f'<option value="{esc(h)}"{" selected" if h == current else ""}>{esc(h)}</option>' for h in choices)
         body += f"""<div class="card"><h2>Öffentliche Adressen</h2>
-  <p class="hint">Die Namen, unter denen diese Instanz erreichbar ist — der Hauptname und die Aliasse der Instanz auf der Plattform, deren DNS auf den Knoten zeigt.
-  Die Plattform gibt sie der App nicht mit, darum stehen sie hier. Eine je Zeile; die erste ist die Vorgabe für Link-Adressen und QR-Codes, jede weitere ist auf der Link-Seite wählbar.
-  Ohne Schema gilt https. Leer: die Adresse, unter der die Verwaltung gerade aufgerufen ist (<code>{esc(self.base_url())}</code>).</p>
-  <form method="post" action="/admin/hosts"><textarea name="hosts" rows="4" placeholder="go.example.org">{esc(hosts_text)}</textarea>
+  <p class="hint">Die Namen, unter denen diese Instanz erreichbar ist. Die Plattform gibt sie der App mit (RFC-0043: Hauptname, Aliasse, Knoten-Adresse); sie stehen hier zum Lesen.
+  Darunter kann die Verwaltung Adressen ergänzen, eine je Zeile, ohne Schema gilt https. Die Vorgabe steht in Link-Adressen und QR-Codes, jede andere ist auf der Link-Seite wählbar.
+  Gibt es gar keine Adresse, gilt die der Anfrage (<code>{esc(self.base_url())}</code>).</p>
+  <h3>Von der Plattform</h3>{platform_list}
+  <form method="post" action="/admin/hosts">
+  <label>Ergänzte Adressen<textarea name="hosts" rows="3" placeholder="go.example.org">{esc(hosts_text)}</textarea></label>
+  <label>Vorgabe<select name="default">{options}</select></label>
   <div style="margin-top:.6rem"><button type="submit">Speichern</button></div></form></div>"""
         body += f"""<div class="card"><h2>REST-API</h2>
   <p class="hint">Basis <code>{esc(self.base_url())}/api/v1</code>, Anmeldung über die Sitzung oder einen API-Schlüssel der Plattform (<code>Authorization: Bearer oaapk_…</code>, RFC-0027).
