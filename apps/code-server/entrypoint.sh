@@ -57,25 +57,53 @@ case "$(echo "${IDE_SUDO:-ja}" | tr '[:upper:]' '[:lower:]')" in
     ;;
 esac
 
-# --- Zusätzliche Erweiterungen aus Open VSX (IDE_EXTENSIONS) -----------
+# --- Zusätzliche Erweiterungen (IDE_EXTENSIONS) ------------------------
 #
 # Eine Liste, auf dem Draht mit ';' getrennt (Runtime 2.8, multiline).
+# Jeder Eintrag ist entweder eine Open-VSX-Kennung (`SAPSE.vscode-cds`)
+# oder die https-Adresse einer .vsix-Datei — für Erweiterungen, die nicht
+# auf Open VSX liegen, aber von ihrem Hersteller selbst verteilt werden
+# (ABAP cleaner: GitHub-Release, Apache-2.0). Eine .vsix wird einmal
+# geholt und installiert; Merkzettel je Adresse, damit ein Neustart sie
+# nicht erneut lädt (131 MB beim ABAP cleaner).
+#
 # Best effort: Kein Netz, keine Erweiterung — aber der Arbeitsplatz
 # startet trotzdem, und die Meldung steht im Container-Log.
+VSIX_CACHE="$HOME_DIR/.cache/oaap-vsix"
 if [ -n "${IDE_EXTENSIONS:-}" ]; then
+  mkdir -p "$VSIX_CACHE"
   IFS=';' read -r -a wanted <<< "$IDE_EXTENSIONS"
   for ext in "${wanted[@]}"; do
     ext="$(echo "$ext" | xargs)"
     [ -n "$ext" ] || continue
-    lc="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
-    if ls -d "$EXT_DIR/$lc"-* >/dev/null 2>&1; then
-      continue
-    fi
-    log "Installiere Erweiterung $ext ..."
-    if ! code-server --extensions-dir "$EXT_DIR" --user-data-dir "$CS_DATA" \
-         --install-extension "$ext" >/tmp/oaap-ext.log 2>&1; then
-      log "WARNUNG: $ext konnte nicht installiert werden:"; tail -n 5 /tmp/oaap-ext.log
-    fi
+    case "$ext" in
+      https://*.vsix|https://*.vsix\?*)
+        mark="$VSIX_CACHE/$(echo -n "$ext" | sha256sum | cut -c1-16).done"
+        [ -f "$mark" ] && continue
+        file="$VSIX_CACHE/$(basename "${ext%%\?*}")"
+        log "Hole $ext ..."
+        if curl -fsSL --retry 2 -o "$file" "$ext" \
+           && code-server --extensions-dir "$EXT_DIR" --user-data-dir "$CS_DATA" \
+                --install-extension "$file" >/tmp/oaap-ext.log 2>&1; then
+          echo "$ext" > "$mark"; rm -f "$file"
+          log "Erweiterung aus $file installiert."
+        else
+          log "WARNUNG: $ext konnte nicht geholt oder installiert werden:"; tail -n 5 /tmp/oaap-ext.log 2>/dev/null
+          rm -f "$file"
+        fi
+        ;;
+      *)
+        lc="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+        if ls -d "$EXT_DIR/$lc"-* >/dev/null 2>&1; then
+          continue
+        fi
+        log "Installiere Erweiterung $ext ..."
+        if ! code-server --extensions-dir "$EXT_DIR" --user-data-dir "$CS_DATA" \
+             --install-extension "$ext" >/tmp/oaap-ext.log 2>&1; then
+          log "WARNUNG: $ext konnte nicht installiert werden:"; tail -n 5 /tmp/oaap-ext.log
+        fi
+        ;;
+    esac
   done
 fi
 

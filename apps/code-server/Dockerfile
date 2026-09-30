@@ -30,9 +30,7 @@ RUN apt-get update \
 # hilft nicht: /home/coder ist ein Storage-Mount und beim ersten Start
 # leer, es würde alles verdecken, was das Abbild dort abgelegt hat.
 COPY seed/ /opt/oaap/seed/
-COPY entrypoint.sh /usr/local/bin/oaap-entrypoint.sh
-RUN chmod 755 /usr/local/bin/oaap-entrypoint.sh \
- && mkdir -p /opt/oaap/seed/extensions \
+RUN mkdir -p /opt/oaap/seed/extensions \
  && chown -R 1000:1000 /opt/oaap/seed
 
 USER 1000
@@ -51,5 +49,13 @@ RUN code-server \
       --install-extension murbani.vscode-abap-remote-fs \
       --install-extension SAPSE.vscode-cds \
  && rm -rf /tmp/oaap-build-userdata
+
+# Der Entrypoint zuletzt: Er ändert sich öfter als die Erweiterungen, und
+# eine Schicht danach würde den teuren Open-VSX-Schritt bei jeder
+# Änderung am Skript wiederholen.
+USER root
+COPY entrypoint.sh /usr/local/bin/oaap-entrypoint.sh
+RUN chmod 755 /usr/local/bin/oaap-entrypoint.sh
+USER 1000
 
 ENTRYPOINT ["/usr/local/bin/oaap-entrypoint.sh"]

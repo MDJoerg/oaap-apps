@@ -54,7 +54,7 @@ Version nutzt das gebaute Abbild.
 
 | Konfiguration | Bedeutung |
 | --- | --- |
-| `IDE_EXTENSIONS` | Weitere Open-VSX-Kennungen, eine je Zeile (z. B. `SAPSE.sap-ux-fiori-tools-extension-pack`). Werden beim Start nachinstalliert, wenn sie fehlen — best effort, das Container-Log sagt, was nicht ging. |
+| `IDE_EXTENSIONS` | Weitere Erweiterungen, eine je Zeile: eine Open-VSX-Kennung (z. B. `SAPSE.sap-ux-fiori-tools-extension-pack`) oder seit 0.1.1 die https-Adresse einer `.vsix`-Datei, die der Hersteller selbst verteilt (ABAP cleaner: `https://github.com/SAP/abap-cleaner/releases/latest/download/abapcleaner-vscode-linux.gtk.x86_64.vsix`). Werden beim Start nachinstalliert, wenn sie fehlen — best effort, das Container-Log sagt, was nicht ging. Eine `.vsix` wird einmal geholt und gemerkt. |
 | `IDE_SUDO` | `ja` (Standard) oder `nein`. Bei `nein` entfernt der Start die sudo-Regel. |
 | `ANTHROPIC_API_KEY` | Optional, geheim. Erreicht Terminal und Claude-Plugin als Umgebungsvariable; leer heißt: der Teilnehmer meldet sich selbst an. |
 | `ANTHROPIC_BASE_URL` | Optional, für ein späteres Anthropic-kompatibles Gateway (RFC-0023). |
@@ -113,3 +113,42 @@ groß, der Container braucht im Leerlauf rund 160 MB RAM.
 Nicht gemessen, weil es einen echten Browser und Menschen braucht: das
 Terminal tippen, das Claude-Plugin anmelden, ABAP Remote FS gegen ein
 SAP-System, und der Weg durch einen Firmen-Proxy.
+
+**Nachtrag 0.1.1 (gleicher Tag):** `IDE_EXTENSIONS` mit der
+GitHub-Adresse des ABAP cleaner gesetzt → Log „Hole …", „… installiert",
+danach `saposs.abap-cleaner-1.29.0` (188 MB, bringt seine Laufzeit im
+Ordner `binary` selbst mit; kein Java im Abbild nötig), Merkzettel in
+`~/.cache/oaap-vsix`, Gesundheit `alive`. Nur x86_64: SAP baut keine
+aarch64-Fassung, auf einem Raspberry Pi bliebe der Eintrag eine Warnung
+im Log.
+
+## Warum das Claude-Plugin über `http://` nicht antwortet
+
+Das Plugin ist aktiv und sein Programm liegt im Container (Log
+„Claude code extension is now active", 240 MB `native-binary/claude`);
+was es dreimal meldet, ist „No authentication found" — die Anmeldung kam
+nie zustande. Der Grund liegt vor dem Plugin: **VS Code im Browser
+braucht einen sicheren Kontext.** Webviews (auch das Claude-Fenster)
+laufen über Service Worker, und die registriert ein Browser nur unter
+`https://` oder `localhost` (code-server-FAQ: „Error loading webview …
+Could not register service workers"). `http://10.10.10.96:8115/` ist
+keins von beiden; die Zwischenablage ist aus demselben Grund
+eingeschränkt.
+
+Drei Wege, geordnet nach Aufwand:
+
+1. **Sofort, zum Testen:** SSH-Tunnel vom Laptop,
+   `ssh -L 8115:localhost:8115 oaap-admin@10.10.10.96`, dann
+   `http://localhost:8115/` — `localhost` gilt als sicher.
+2. **Ein Knoten mit echtem TLS:** eine externe Adresse (`oaap external`)
+   auf oaap-demo oder oaapx01, z. B. `ide.oaap.joomp.de`. So sähen es
+   auch die Teilnehmer.
+3. **LAN-TLS nach RFC-0005** (`*.oaap.internal`, eigene Zertifikatsstelle)
+   — im RFC angenommen, in der Referenz nie gebaut; Vaultwarden wartet
+   seit August auf dasselbe.
+
+Zweite Hürde danach: die Anmeldung des Plugins öffnet eine Anthropic-
+Seite und erwartet den Rücksprung auf `localhost` **des Containers**,
+den der Browser des Teilnehmers nicht erreicht. Die CLI bietet dafür
+den Weg „Code einfügen"; für eine Schulung ist der hinterlegte
+`ANTHROPIC_API_KEY` je Instanz der Weg ohne Anmeldung.

@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: code-server
   name: Code-Server (VS Code im Browser)
-  version: 0.1.0
+  version: 0.1.1
   type: wrapped
   class: frontend
   description: "VS Code im Browser, ein Container je Mensch: Arbeitsplatz für Schulungen und für Teilnehmer, deren Laptop nichts installieren darf. Anmeldung übernimmt das Gateway (code-server läuft ohne eigenes Passwort), Terminal und Erweiterungen liegen in der Ablage der Instanz. Vorinstalliert: Claude Code, ABAP Remote Filesystem, SAP CDS Language Support — weitere Erweiterungen aus Open VSX per Konfiguration."
@@ -43,13 +43,15 @@ storage:
     mount: /home/coder/material
 
 config:
-  # Weitere Erweiterungen aus Open VSX (code-server bezieht von dort,
-  # nicht vom Microsoft-Marktplatz). Eine Kennung je Zeile, z. B.
-  # SAPSE.sap-ux-fiori-tools-extension-pack. Werden bei jedem Start
-  # nachinstalliert, falls sie fehlen — best effort, ein Fehlschlag
-  # verhindert den Start nicht.
+  # Weitere Erweiterungen, eine je Zeile: eine Open-VSX-Kennung
+  # (code-server bezieht von dort, nicht vom Microsoft-Marktplatz), z. B.
+  # SAPSE.sap-ux-fiori-tools-extension-pack — oder die https-Adresse
+  # einer .vsix-Datei, die der Hersteller selbst verteilt (0.1.1; ABAP
+  # cleaner liegt als GitHub-Release vor, nicht auf Open VSX). Werden
+  # beim Start nachinstalliert, falls sie fehlen — best effort, ein
+  # Fehlschlag verhindert den Start nicht.
   - key: IDE_EXTENSIONS
-    label: "Zusätzliche Erweiterungen (Open-VSX-Kennungen, eine je Zeile)"
+    label: "Zusätzliche Erweiterungen (Open-VSX-Kennung oder https-Adresse einer .vsix, eine je Zeile)"
     multiline: true
     default: ""
   # `sudo` im Container: das offizielle Abbild erlaubt es dem Benutzer
