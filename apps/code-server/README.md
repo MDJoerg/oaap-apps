@@ -158,6 +158,38 @@ Entscheidung:** SAP verteilt sie nur über den Microsoft-Marktplatz unter
 SAP-Developer-Lizenz, und dessen Bedingungen erlauben den Bezug nur für
 Microsofts eigene Produkte. Gegen ein SAP-System wurde nicht verbunden.
 
+### ADT: Destinationen und der eingebettete MCP-Server (30.09., oaapx01)
+
+**Destinationen liest ADT aus `~/.adtls/destinations.json`**, nicht aus
+SAP Logon; die Datei legt der Sprachserver beim ersten Start leer an
+(`{"formatVersion":"1.0","destinations":[]}`). Deshalb ist „ABAP: Add
+Destination as Folder to Workspace…" anfangs leer — sie listet nur, was
+schon da ist. Anlegen tut „**ABAP: New Destination…**" (Assistent: RFC
+für On-Premise/Private Cloud, HTTP für BTP/Public Cloud), Bearbeiten
+„**ABAP: Open destinations.json**". Aus den Klassen des Sprachservers
+gelesen (`ILsDestinationData`), nicht aus einer vom Assistenten
+geschriebenen Datei: ein Eintrag hat `id`, `protocol` (`rfc` | `http`)
+und `properties` mit `systemId`, `client`, `user`, `language`,
+`applicationServer`, `systemNumber`, `messageServer`,
+`messageServerPort`, `group`, `gatewayServer`, `gatewayServerPort`,
+`sapRouterString`, `sncType`, `ssoEnabled`, `systemUrl`,
+`authenticationKind`. Für eine Kohorte heißt das: **die Datei wird je
+Teilnehmer gesät** (Material/Vorlage), kein eigenes VSIX nötig; Passwörter
+gehören nicht hinein, die fragt ADT beim Anmelden.
+
+**MCP-Server:** Einstellung `adt.mcpServer.enabled` (Standard aus), Port
+`adt.mcpServer.port` (2236), das Token erzeugt der Server selbst und
+schreibt es in `adt.mcpServer.token`. Technisch ein Jetty-HTTP-Server
+auf `localhost:<port>/mcp` **im Container**, mit Token-Filter und
+DNS-Rebinding-Schutz — erreichbar also für Claude Code im selben
+Container, nicht vom Laptop. Start läuft als LSP-Anfrage
+`adtLs/mcp/startMCPServer` an den Sprachserver; scheitert sie, zeigt die
+Erweiterung den Grund nur als Warnmeldung im Fenster (`PortNotAvailable`
+ist einer der Gründe, die der Kern kennt). Im Fehlerprotokoll des
+Sprachservers stand am 30.09. kein Startversuch, nur „ADT MCP Server is
+not running"; die Einstellung war nicht gesetzt. Sie steht in der
+Instanz `ide` jetzt auf `true`.
+
 ## Warum das Claude-Plugin über `http://` nicht antwortet
 
 Das Plugin ist aktiv und sein Programm liegt im Container (Log
