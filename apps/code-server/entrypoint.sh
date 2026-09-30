@@ -1,0 +1,103 @@
+#!/bin/bash
+# Bereitet das Zuhause des Teilnehmers vor und startet code-server hinter
+# dem OAAP-Gateway. Läuft als Benutzer `coder` (uid 1000); das Zuhause
+# ist ein Storage-Mount der Instanz und beim ersten Start leer.
+set -u
+
+HOME_DIR="${HOME:-/home/coder}"
+SEED=/opt/oaap/seed
+CS_DATA="$HOME_DIR/.local/share/code-server"
+EXT_DIR="$CS_DATA/extensions"
+USER_DIR="$CS_DATA/User"
+PROJECTS="$HOME_DIR/projects"
+
+log() { echo "[oaap-ide] $*"; }
+
+mkdir -p "$EXT_DIR" "$USER_DIR" "$PROJECTS" "$HOME_DIR/.config/code-server" \
+         "$HOME_DIR/material" 2>/dev/null || true
+
+# --- Saat: vorinstallierte Erweiterungen ------------------------------
+#
+# Beim allerersten Start ist das Erweiterungsverzeichnis leer: dann wird
+# die ganze Saat samt ihrer extensions.json übernommen. Später kommt nur
+# nach, was fehlt — eine Erweiterung, die der Teilnehmer selbst entfernt
+# oder aktualisiert hat, bleibt seine Entscheidung.
+if [ -d "$SEED/extensions" ]; then
+  if [ -z "$(ls -A "$EXT_DIR" 2>/dev/null)" ]; then
+    cp -a "$SEED/extensions/." "$EXT_DIR/" && log "Erweiterungen aus der Saat übernommen (erster Start)."
+  else
+    for d in "$SEED"/extensions/*/; do
+      [ -d "$d" ] || continue
+      base="$(basename "$d")"
+      # Kennung ohne Version: "anthropic.claude-code-2.1.285" -> "anthropic.claude-code"
+      ident="${base%-*}"
+      if ! ls -d "$EXT_DIR/$ident"-* >/dev/null 2>&1; then
+        cp -a "$d" "$EXT_DIR/$base" && log "Erweiterung nachgetragen: $base"
+      fi
+    done
+  fi
+fi
+
+# --- Saat: Einstellungen und Begrüßung, nur wenn noch nichts da ist -----
+[ -f "$USER_DIR/settings.json" ] || cp "$SEED/settings.json" "$USER_DIR/settings.json" 2>/dev/null || true
+[ -f "$PROJECTS/README.md" ] || cp "$SEED/README.md" "$PROJECTS/README.md" 2>/dev/null || true
+
+# --- sudo: erlaubt, es sei denn der Betreiber sagt nein ----------------
+#
+# Das offizielle Abbild gibt `coder` passwortloses sudo. Die Regel steht
+# in /etc/sudoers.d/nopasswd; sie zu entfernen ist das Letzte, wofür
+# sudo hier gebraucht wird. Ein Konfigurationswechsel erzeugt den
+# Container neu (Runtime 2.8), also wird das bei jedem Start frisch
+# entschieden.
+case "$(echo "${IDE_SUDO:-ja}" | tr '[:upper:]' '[:lower:]')" in
+  nein|no|false|0|aus|off)
+    if sudo -n true 2>/dev/null; then
+      sudo -n rm -f /etc/sudoers.d/nopasswd && log "sudo abgeschaltet (IDE_SUDO=${IDE_SUDO})."
+    fi
+    ;;
+esac
+
+# --- Zusätzliche Erweiterungen aus Open VSX (IDE_EXTENSIONS) -----------
+#
+# Eine Liste, auf dem Draht mit ';' getrennt (Runtime 2.8, multiline).
+# Best effort: Kein Netz, keine Erweiterung — aber der Arbeitsplatz
+# startet trotzdem, und die Meldung steht im Container-Log.
+if [ -n "${IDE_EXTENSIONS:-}" ]; then
+  IFS=';' read -r -a wanted <<< "$IDE_EXTENSIONS"
+  for ext in "${wanted[@]}"; do
+    ext="$(echo "$ext" | xargs)"
+    [ -n "$ext" ] || continue
+    lc="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+    if ls -d "$EXT_DIR/$lc"-* >/dev/null 2>&1; then
+      continue
+    fi
+    log "Installiere Erweiterung $ext ..."
+    if ! code-server --extensions-dir "$EXT_DIR" --user-data-dir "$CS_DATA" \
+         --install-extension "$ext" >/tmp/oaap-ext.log 2>&1; then
+      log "WARNUNG: $ext konnte nicht installiert werden:"; tail -n 5 /tmp/oaap-ext.log
+    fi
+  done
+fi
+
+# --- Leere Geheimnisse sind keine Geheimnisse ---------------------------
+#
+# Die Plattform reicht jeden deklarierten Schlüssel als Variable durch;
+# ein leerer ANTHROPIC_API_KEY würde von der Claude-CLI aber als
+# gesetzt gelesen und die eigene Anmeldung verhindern.
+[ -n "${ANTHROPIC_API_KEY:-}" ] || unset ANTHROPIC_API_KEY
+[ -n "${ANTHROPIC_BASE_URL:-}" ] || unset ANTHROPIC_BASE_URL
+
+# --- Start -------------------------------------------------------------
+#
+# `--auth none`: die Anmeldung ist das Gateway. code-server selbst hätte
+# nur ein zweites Passwort, das jeder Teilnehmer zusätzlich bräuchte.
+# Der Original-Entrypoint kümmert sich um fixuid, ~/entrypoint.d und
+# dumb-init.
+exec /usr/bin/entrypoint.sh \
+  --bind-addr 0.0.0.0:8080 \
+  --auth none \
+  --disable-telemetry \
+  --disable-update-check \
+  --disable-workspace-trust \
+  --app-name "OAAP IDE" \
+  "$PROJECTS"

@@ -1,0 +1,13 @@
+{
+  "workbench.startupEditor": "readme",
+  "workbench.colorTheme": "Default Dark Modern",
+  "telemetry.telemetryLevel": "off",
+  "update.mode": "none",
+  "extensions.autoUpdate": false,
+  "extensions.autoCheckUpdates": false,
+  "security.workspace.trust.enabled": false,
+  "files.autoSave": "afterDelay",
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "editor.fontSize": 14,
+  "editor.minimap.enabled": false
+}

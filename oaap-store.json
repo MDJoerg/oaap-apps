@@ -351,6 +351,54 @@
       ]
     },
     {
+      "id": "code-server",
+      "name": "Code-Server (VS Code im Browser)",
+      "type": "wrapped",
+      "version": "0.1.0",
+      "released": "2026-09-30",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/code-server"
+      },
+      "roles": [
+        "user",
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "development"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer",
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "vscode",
+        "ide",
+        "schulung",
+        "entwicklung",
+        "claude-code",
+        "abap",
+        "cap"
+      ],
+      "summary": "VS Code im Browser, ein Container je Mensch — Arbeitsplatz fuer Schulungen und fuer Laptops, die nichts installieren duerfen.",
+      "description": "code-server (VS Code im Browser) als gewoehnliche OAAP-App, gebaut ueber dem offiziellen Abbild in festgenagelter Fassung 4.139.1. Die Anmeldung ist das Gateway (code-server laeuft ohne eigenes Passwort, auch der WebSocket des Terminals geht durch die Forward-Auth); wer eine Instanz sieht, entscheidet der Betreiber je Instanz ueber Sichtbarkeitsgruppen — in einer Schulung traegt jeder Teilnehmer seine eigene Gruppe und bekommt seine eigene Instanz. Zwei Storage-Mounts: das ganze Zuhause (Projekte, Einstellungen, Erweiterungen) und getrennt davon ~/material fuer Kursmaterial, das ein Werkzeug fuellen kann, ohne die Arbeit des Teilnehmers anzufassen. Vorinstalliert aus Open VSX (nicht Microsoft-Marktplatz): Claude Code, ABAP Remote Filesystem, SAP CDS Language Support; weitere Erweiterungen je Instanz per Konfiguration, best effort beim Start. Werkzeuge im Abbild: git, Node.js, npm, Python 3, jq, zip. sudo im Container ist erlaubt und abschaltbar; der Container ist kein Weg auf den Knoten (eigenes Instanznetz, kein Docker-Socket). Optional ein Anthropic-API-Schluessel als Instanzgeheimnis, damit Claude Code ohne eigene Anmeldung laeuft. Erster Baustein der Schulungslandschaft (Ideenspeicher 30.09.2026, Kandidat RFC Kohorte).",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/code-server"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/coder/code-server",
+          "label": "code-server (coder/code-server)"
+        }
+      ]
+    },
+    {
       "id": "wegweiser",
       "name": "Wegweiser",
       "type": "native",
