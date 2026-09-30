@@ -354,7 +354,7 @@
       "id": "code-server",
       "name": "Code-Server (VS Code im Browser)",
       "type": "wrapped",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "released": "2026-09-30",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

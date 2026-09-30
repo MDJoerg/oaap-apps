@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: code-server
   name: Code-Server (VS Code im Browser)
-  version: 0.1.1
+  version: 0.1.2
   type: wrapped
   class: frontend
   description: "VS Code im Browser, ein Container je Mensch: Arbeitsplatz für Schulungen und für Teilnehmer, deren Laptop nichts installieren darf. Anmeldung übernimmt das Gateway (code-server läuft ohne eigenes Passwort), Terminal und Erweiterungen liegen in der Ablage der Instanz. Vorinstalliert: Claude Code, ABAP Remote Filesystem, SAP CDS Language Support — weitere Erweiterungen aus Open VSX per Konfiguration."

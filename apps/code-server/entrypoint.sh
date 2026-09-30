@@ -115,6 +115,25 @@ fi
 [ -n "${ANTHROPIC_API_KEY:-}" ] || unset ANTHROPIC_API_KEY
 [ -n "${ANTHROPIC_BASE_URL:-}" ] || unset ANTHROPIC_BASE_URL
 
+# --- SAP-Systemliste für ADT (0.1.2) ------------------------------------
+#
+# ADT for VS Code kennt RFC-Systeme nur aus einer SAP-UI-Landschaftsdatei
+# (das, was SAP GUI unter SAPUILandscape.xml pflegt). Ohne SAP GUI im
+# Container liest der Sprachserver den Pfad aus der Umgebungsvariablen
+# SAPLOGON_LSXML_FILE (gemessen am 30.09.2026 in seinen Klassen:
+# SapUiLandscapeReader.OS_ENV_VAR_SAPLOGON_LSXML_FILE). Vorrang hat das
+# Kursmaterial, dann das Zuhause — beides Orte, die eine Kohorte säen
+# kann, ohne ein Abbild zu bauen.
+if [ -z "${SAPLOGON_LSXML_FILE:-}" ]; then
+  for cand in "$HOME_DIR/material/SAPUILandscape.xml" "$HOME_DIR/.adtls/SAPUILandscape.xml"; do
+    if [ -f "$cand" ]; then
+      export SAPLOGON_LSXML_FILE="$cand"
+      log "SAP-Systemliste für ADT: $cand"
+      break
+    fi
+  done
+fi
+
 # --- Start -------------------------------------------------------------
 #
 # `--auth none`: die Anmeldung ist das Gateway. code-server selbst hätte

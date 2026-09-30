@@ -188,7 +188,65 @@ Erweiterung den Grund nur als Warnmeldung im Fenster (`PortNotAvailable`
 ist einer der Gründe, die der Kern kennt). Im Fehlerprotokoll des
 Sprachservers stand am 30.09. kein Startversuch, nur „ADT MCP Server is
 not running"; die Einstellung war nicht gesetzt. Sie steht in der
-Instanz `ide` jetzt auf `true`.
+Instanz `ide` jetzt auf `true`. *Nachtrag:* Jörg hatte ihn selbst
+eingeschaltet; er lief an, stoppte nach Sekunden — und läuft seit dem
+nächsten Anlauf (Log: „MCP Server started successfully on port 2236",
+20 Werkzeuge). Dazwischen steht zweimal „Invalid host:
+ide.oaap.joomp.de": der DNS-Rebinding-Schutz weist Anfragen ab, die
+nicht mit `Host: localhost` kommen — der Server ist nur für Klienten
+**im Container** gedacht.
+
+**Gemessene Form einer HTTP-Destination** (vom Assistenten geschrieben):
+
+```json
+{"id": "ABAP_CLOUD_TRIAL", "protocol": "http",
+ "properties": {"authenticationKind": "reentranceticket",
+                "systemUrl": "https://<instanz>.abap.<region>.hana.ondemand.com"}}
+```
+
+**„Add Destination as Folder to Workspace" hat funktioniert — nur
+unsichtbar.** VS Code kann einem Ein-Ordner-Fenster keinen zweiten
+Ordner geben, ohne daraus einen **unbenannten Mehr-Ordner-Arbeitsbereich**
+zu machen; der liegt unter `User/Workspaces/Untitled-….code-workspace`
+und enthält `abap:/repotree-v1/ABAP_CLOUD_TRIAL`. Wird das Fenster dann
+mit der Adresse `?folder=/home/coder/projects` neu geladen, ist er weg.
+Abhilfe: Arbeitsbereich speichern (Datei → Arbeitsbereich speichern
+unter…) und über `?workspace=<pfad>` öffnen. In `ide` liegt dafür
+`~/projects/abap-trial.code-workspace`, Adresse
+`https://ide.oaap.joomp.de/?workspace=/home/coder/projects/abap-trial.code-workspace`.
+Für eine Kohorte: der Arbeitsbereich ist Teil der Saat, und die
+Startadresse zeigt auf ihn statt auf den Ordner.
+
+**RFC-Destination: „No system configurations found."** Der Sprachserver
+sagt es im Fehlerprotokoll genauer: *„Local and global SAP UI Landscape
+files not found. Use SAP GUI to configure them or use System Connections
+preferences to set them manually."* ADT kennt RFC-Systeme nur aus der
+Landschaftsdatei von SAP GUI (`SAPUILandscape.xml`); der Assistent
+bietet keine manuelle Eingabe. Zwei Wege ohne SAP GUI, beide aus den
+Klassen des Sprachservers gelesen (`SapUiLandscapeReader`,
+`DestinationModelPreferences`):
+
+1. **Umgebungsvariable `SAPLOGON_LSXML_FILE`** mit dem Pfad der Datei —
+   seit 0.1.2 setzt der Entrypoint sie selbst, wenn
+   `~/material/SAPUILandscape.xml` oder `~/.adtls/SAPUILandscape.xml`
+   existiert. Das ist der Weg für Kohorten: die Datei wird gesät.
+2. **Eclipse-Voreinstellung** des Sprachservers, Knoten
+   `com.sap.adt.destinations.model`: `overrideXmlLocations=true`,
+   `xmlLocalPath=<pfad>`, `xmlGlobalPath=` — als `.prefs`-Datei unter
+   `<adtWorkspace>/.metadata/.plugins/org.eclipse.core.runtime/.settings/`.
+   Das Arbeitsverzeichnis hängt am VS-Code-Arbeitsbereich, also je
+   Arbeitsbereich eine Datei. In `ide` am 30.09. für beide vorhandenen
+   gesetzt, zusammen mit einer Beispiel-Landschaftsdatei
+   (`~/.adtls/SAPUILandscape.xml`, System `A4H`,
+   `a4h.example.invalid:3200`); wirkt nach dem nächsten Start des
+   Sprachservers (Fenster neu laden). **Ob der Assistent das Beispiel
+   dann listet, ist noch nicht gemessen.**
+
+Die Landschaftsdatei ist das Format von SAP GUI 7.40+: `Landscape` →
+`Workspaces/Workspace/Item` (verweist per `serviceid`) und
+`Services/Service type="SAPGUI"` mit `systemid`, `server="host:32NN"`
+(Anwendungsserver) oder `msid` auf einen `Messageservers/Messageserver`
+(Gruppenanmeldung), optional `routerid` auf `Routers/Router`.
 
 ## Warum das Claude-Plugin über `http://` nicht antwortet
 
