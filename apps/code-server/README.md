@@ -122,6 +122,42 @@ Ordner `binary` selbst mit; kein Java im Abbild nötig), Merkzettel in
 aarch64-Fassung, auf einem Raspberry Pi bliebe der Eintrag eine Warnung
 im Log.
 
+## Auf oaapx01 mit echtem TLS (30.09.2026)
+
+Instanz `ide` (Kanal test, Port 8119) aus demselben Paket; der Knoten
+hat ihr nach RFC-0043 von selbst `https://ide.oaap.joomp.de/` gegeben
+(Let's-Encrypt-Zertifikat, ausgestellt beim ersten Aufruf). Ohne
+Sitzung `303 → /auth/login`, WebSocket-Anfrage ohne Sitzung ebenfalls
+303. Das ist die Adresse, an der Webviews (Claude-Fenster, Markdown-
+Vorschau, CDS-Ansichten) im echten Browser zu messen sind.
+
+## SAP-Erweiterungen, die nicht auf Open VSX liegen (gemessen 30.09.)
+
+**ABAP cleaner (`saposs.abap-cleaner`) — im Browser nicht möglich.**
+Sein Manifest sagt `extensionKind: ["ui"]` („nur Desktop"), und der Grund
+steht dahinter: Die Erweiterung startet eine Eclipse-/SWT-Anwendung mit
+eigener Java-Laufzeit (`binary/abapcleaner`, JustJ-JRE 21). Headless im
+Container gestartet: `SWT OS.java Error … Failed to load swt-pi3`, Exit
+13 — sie braucht ein Fenster. Auch die Umschaltung `remote.extensionKind`
+auf `workspace` ändert daran nichts. Alternative für Formatierung ohne
+Fenster wäre ABAP cleaners Kommandozeile in einem eigenen Werkzeug,
+nicht diese Erweiterung.
+
+**ADT for VS Code (`sapse.adt-vscode` 1.1.2) — technisch läuft es.**
+Das Paket ist vom Microsoft-Marktplatz als `linux-x64`-VSIX beziehbar
+(gzip-verpackt, 97 MB). `code-server --install-extension` nimmt es,
+`extensionKind: ["workspace"]` passt zum Server. Beim ersten Befehl
+(„ABAP: New Destination…") startet ein Eclipse-Sprachserver `adt-ls`
+mit **mitgebrachter SapMachine-JRE 21** — kein Java im Abbild nötig —,
+die Statusleiste zeigt „ABAP: Running", der Assistent bietet RFC
+(On-Premise/Private Cloud) oder HTTP (BTP/Public Cloud). Der Sprachserver
+kostet rund 230 MB RSS, der Container mit ADT, CDS und Claude lag bei
+1,9 GB. Die Erweiterung liest `appName`/`uiKind` nur für ihre
+Diagnose, sie verweigert code-server nicht. **Offen und nicht unsere
+Entscheidung:** SAP verteilt sie nur über den Microsoft-Marktplatz unter
+SAP-Developer-Lizenz, und dessen Bedingungen erlauben den Bezug nur für
+Microsofts eigene Produkte. Gegen ein SAP-System wurde nicht verbunden.
+
 ## Warum das Claude-Plugin über `http://` nicht antwortet
 
 Das Plugin ist aktiv und sein Programm liegt im Container (Log
