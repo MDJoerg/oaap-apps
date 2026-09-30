@@ -295,6 +295,21 @@ Die Landschaftsdatei ist das Format von SAP GUI 7.40+: `Landscape` →
 (Anwendungsserver) oder `msid` auf einen `Messageservers/Messageserver`
 (Gruppenanmeldung), optional `routerid` auf `Routers/Router`.
 
+## Erweiterungen aus dem Kursmaterial (0.1.3)
+
+Was nur ein Marktplatz ausliefert (ADT for VS Code steht nicht auf Open
+VSX), legt der Trainer als `.vsix` in `material/vsix/` der Vorlage.
+Beim Start installiert der Entrypoint jede Datei dort **einmal** — ohne
+öffentliche Adresse und ohne Netz. Der Merkzettel je Datei (Name, Größe,
+Änderungszeit) verhindert, dass ein Neustart 100 MB erneut einspielt; eine
+Datei mit neuem Inhalt wird nachinstalliert. Schlägt es fehl, startet der
+Arbeitsplatz trotzdem, und das Container-Log nennt den Grund. In der
+Kohortenvorlage (`oaap cohort`) ist es die Zeile
+`material: material/` mit einem Unterordner `vsix/`.
+
+**Lizenz:** Ob der Marktplatz die Weitergabe erlaubt, ist Sache des
+Betreibers; die App prüft und verbietet nichts.
+
 ## Warum das Claude-Plugin über `http://` nicht antwortet
 
 Das Plugin ist aktiv und sein Programm liegt im Container (Log

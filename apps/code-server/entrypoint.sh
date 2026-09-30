@@ -107,6 +107,31 @@ if [ -n "${IDE_EXTENSIONS:-}" ]; then
   done
 fi
 
+# --- Erweiterungen aus dem Kursmaterial (~/material/vsix/*.vsix) --------
+#
+# Eine .vsix, die der Trainer ins Material legt, wird beim Start einmal
+# installiert: ohne öffentliche Adresse, ohne Netz, und die Datei liegt
+# nur in der Vorlage des Kurses. Gedacht für Erweiterungen, die nur ein
+# Marktplatz ausliefert (ADT for VS Code). Merkzettel je Datei (Name,
+# Größe, Änderungszeit), damit ein Neustart nicht 100 MB erneut
+# einspielt; eine neue Fassung unter neuem Namen oder mit neuem Inhalt
+# wird nachinstalliert. Best effort wie oben.
+MATERIAL_VSIX="$HOME_DIR/material/vsix"
+if [ -d "$MATERIAL_VSIX" ]; then
+  mkdir -p "$VSIX_CACHE"
+  for file in "$MATERIAL_VSIX"/*.vsix; do
+    [ -f "$file" ] || continue
+    mark="$VSIX_CACHE/local-$(echo -n "$(basename "$file")|$(stat -c '%s:%Y' "$file")" | sha256sum | cut -c1-16).done"
+    [ -f "$mark" ] && continue
+    log "Installiere $(basename "$file") aus dem Kursmaterial ..."
+    if code-server --extensions-dir "$EXT_DIR" --user-data-dir "$CS_DATA"          --install-extension "$file" >/tmp/oaap-ext.log 2>&1; then
+      touch "$mark"; log "Erweiterung aus dem Material installiert: $(basename "$file")"
+    else
+      log "WARNUNG: $(basename "$file") konnte nicht installiert werden:"; tail -n 5 /tmp/oaap-ext.log 2>/dev/null
+    fi
+  done
+fi
+
 # --- Leere Geheimnisse sind keine Geheimnisse ---------------------------
 #
 # Die Plattform reicht jeden deklarierten Schlüssel als Variable durch;
