@@ -242,6 +242,53 @@ Klassen des Sprachservers gelesen (`SapUiLandscapeReader`,
    Sprachservers (Fenster neu laden). **Ob der Assistent das Beispiel
    dann listet, ist noch nicht gemessen.**
 
+*Nachtrag:* Jörg meldet den RFC-Weg als funktionierend; jeder neue
+VS-Code-Arbeitsbereich bekommt ein neues Sprachserver-Arbeitsverzeichnis
+und braucht die `.prefs`-Datei erneut (am 30.09. ein drittes Mal
+nachgetragen) — genau der Grund, warum 0.1.2 die Umgebungsvariable nimmt.
+
+**HTTP-Anmeldung (Reentrance-Ticket) über die Browser-Schranke.** Die
+Anmeldung an einer ABAP-Cloud-Instanz läuft so: Der Sprachserver startet
+im Container einen kleinen Jetty-Server auf `localhost:<zufälliger
+Port>` (`AdtLogonHttpServer`), schickt den Browser zu
+`…/sap/bc/adt/core/http/reentranceticket?redirect-url=http://localhost:<port>/adt/redirect`
+und wartet („Waiting for logon in external browser…"). Nach der
+Anmeldung leitet das SAP-System den Browser auf diese
+`localhost`-Adresse mit `?reentrance-ticket=…` um — auf dem Laptop des
+Teilnehmers ins Leere, denn der Server läuft im Container. Eine
+Einstellung für einen anderen Rücksprung-Host gibt es nicht, und die
+Erweiterung nutzt nicht `vscode.env.asExternalUri` (die VS-Code-API, die
+genau diesen Fall für entfernte Umgebungen löst — das wäre die Rückmeldung
+an SAP).
+
+Die Brücke ist code-servers eigener Port-Proxy: `/proxy/<port>/…`
+derselben Adresse wird im Container an `127.0.0.1:<port>` weitergereicht,
+das Präfix wird entfernt, die Abfrageparameter bleiben. **Gemessen im
+Container am 30.09.:** Horcher auf `127.0.0.1:36511`, Aufruf
+`http://localhost:8080/proxy/36511/adt/redirect?reentrance-ticket=T1` →
+`200`, der Horcher sah `/adt/redirect?reentrance-ticket=T1`; ein Horcher
+nur auf `::1` wird nicht erreicht (`ECONNREFUSED`, 500). Von außen
+schützt die Gateway-Sitzung den Weg. Zwei Handgriffe, beide ungemessen
+gegen ein echtes SAP-System:
+
+1. **Vorher:** in der kopierten Anmelde-Adresse den Wert von
+   `redirect-url` von `http%3A%2F%2Flocalhost%3A<port>%2Fadt%2Fredirect`
+   auf `https%3A%2F%2Fide.oaap.joomp.de%2Fproxy%2F<port>%2Fadt%2Fredirect`
+   ändern — wenn das SAP-System einen fremden Rücksprung-Host zulässt,
+   läuft alles durch.
+2. **Nachher, geht immer:** die Anmeldung bis zur scheiternden
+   `localhost`-Seite laufen lassen, dann in der Adresszeile
+   `http://localhost:<port>` durch `https://ide.oaap.joomp.de/proxy/<port>`
+   ersetzen und Enter. Das Ticket ist kurzlebig, also zügig.
+
+Ersatzweg ohne Browser-Kunststück: die scheiternde `localhost`-Adresse
+kopieren und im Terminal der IDE mit `curl` aufrufen — der Sprachserver
+bekommt das Ticket ebenso.
+
+Für die Kohorte bleibt das ein Reibungspunkt, kein Blocker: eine
+Lesezeichen-Schaltfläche für Teilnehmer oder eine kleine Hilfsseite in
+der IDE, die den Tausch vornimmt; die saubere Lösung liegt bei SAP.
+
 Die Landschaftsdatei ist das Format von SAP GUI 7.40+: `Landscape` →
 `Workspaces/Workspace/Item` (verweist per `serviceid`) und
 `Services/Service type="SAPGUI"` mit `systemid`, `server="host:32NN"`
