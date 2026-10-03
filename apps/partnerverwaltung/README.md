@@ -35,6 +35,20 @@ statt der alten eigenen Marke -- ein Beispiel fuer D6 ("Bestand zieht
 mit, wenn er ohnehin veraendert wird"), nicht ein separater Umbau nur
 fuers Aussehen.
 
+## Fachrechte (RFC-0045, seit 0.1.3)
+
+Die App erklaert im Manifest (0.6), was man in ihr erlauben kann: die
+Objekte `firma` und `kontaktperson` mit den Aktivitaeten `read`, `create`,
+`change`, dazu die Vorlagen `sachbearbeiter` und `leser`. Ein Mandant baut
+daraus Rollen und Sammlungen und ordnet sie Personen zu
+(`oaap authz ...`); die App kann ihre Rechte mit dem eigenen Schluessel
+unter `OAAP_AUTHZ_URL` abfragen.
+
+**Noch nicht:** die App prueft nichts. Solange kein Mandant Rollen vergeben
+hat, wuerde jede Pruefung allen Benutzern die Pflege nehmen -- ob `user`
+das weiter darf oder ob die App erst bei vorhandenen Rollen pruefen soll,
+ist die Entscheidung der naechsten Stufe.
+
 ## Warum es diese App gibt
 
 `oaap.data.twin` 0.1 baut RFC-0031 SS9's eigenes Minimum (Schritte 1-3),

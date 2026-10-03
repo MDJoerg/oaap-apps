@@ -1,9 +1,9 @@
-oaap_manifest: "0.3"
+oaap_manifest: "0.6"
 
 app:
   id: partnerverwaltung
   name: OAAP Partnerverwaltung
-  version: 0.1.2
+  version: 0.1.3
   type: native
   class: frontend
   description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Firma und Kontaktperson, verknuepft sie mit isContactOf, legt eigene Projekt-Instanzen an"
@@ -100,6 +100,41 @@ contributes:
   # eine gemeinsame Typdefinition -- der geteilte digitale Zwilling.
   - type: Projekt
     role: owner
+
+# RFC-0045 / oaap.core.authorization 0.1 (Manifest 0.6): was man in dieser
+# App ERLAUBEN kann -- getrennt von den Plattformrollen, die nur den
+# Zutritt regeln. Die App erklaert, der Mandant vergibt (`oaap authz`),
+# die App fragt `/authz/effective` mit ihrem eigenen Schluessel. Die
+# Objekte heissen wie die Zwillingstypen, deren Pflege sie schuetzen.
+#
+# Erster Abnehmer der Faehigkeit: Die Erklaerung wird hier gemacht und von
+# der Plattform registriert. Die App PRUEFT noch nichts -- ohne vergebene
+# Rollen wuerde jede Pruefung allen Benutzern die Pflege nehmen, und ob
+# `user` das weiter darf, ist eine Entscheidung fuer die naechste Stufe
+# (siehe README, "Fachrechte").
+authorization:
+  objects:
+    - key: firma
+      title: Firma
+      activities: [read, create, change]
+    - key: kontaktperson
+      title: Kontaktperson
+      activities: [read, create, change]
+  role_templates:
+    - key: sachbearbeiter
+      title: Sachbearbeiter/in
+      grants:
+        - object: firma
+          activities: [read, create, change]
+        - object: kontaktperson
+          activities: [read, create, change]
+    - key: leser
+      title: Leser/in
+      grants:
+        - object: firma
+          activities: [read]
+        - object: kontaktperson
+          activities: [read]
 
 health:
   path: /healthz
