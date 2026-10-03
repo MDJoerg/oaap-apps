@@ -1,0 +1,37 @@
+oaap_manifest: "0.6"
+
+app:
+  id: rollen-rechte
+  name: Rollen & Rechte
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Werkzeug des Mandanten-Admins fuer fachliche Berechtigungen (RFC-0045 A7): wer darf was in welcher App -- Personen, Rollen, Rollensammlungen, Zuordnungen, Gruppen des Anmeldedienstes, Protokoll. Privilegiert: verwaltet die Rechte EINES Mandanten, nie Plattformrollen"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+# Wer die Seite SIEHT, regelt die Plattform (Rollen der Route, Sichtbarkeit
+# der Instanz). Wer hier etwas AENDERN darf, regelt sie NICHT: die
+# Plattformrolle tenant_admin wird Apps nie weitergegeben (oaap.core.identity
+# 2.3), also kann die App sie nicht lesen. Jeder Aufruf nennt deshalb die
+# Person, und der Identity-Dienst prueft sie selbst (oaap.core.authorization
+# 0.3 §2.10). Wer kein Admin ist, sieht eine Seite, die das sagt.
+routes:
+  - path: /
+    roles: [user]
+
+# Nichts Eigenes. Alles Wissen liegt im Identity-Dienst; diese App haelt
+# keine Kopie. (Der Gesundheitspfad braucht kein Verzeichnis.)
+
+# oaap.core.authorization 0.3: diese App erklaert keine Rechte -- sie
+# VERWALTET die der anderen. `administer: true` ist die Bitte um den
+# Verwaltungsschluessel; der Betreiber bestaetigt sie beim Installieren
+# (--confirm-administer), sonst wird nichts gebaut.
+authorization:
+  administer: true
+
+health:
+  path: /healthz
