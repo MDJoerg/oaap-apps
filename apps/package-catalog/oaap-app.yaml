@@ -1,0 +1,41 @@
+oaap_manifest: "0.2"
+
+app:
+  id: package-catalog
+  name: Paketkatalog
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050)."
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Nur der Betreiber. Ein Paket ist Code, den ein Knoten baut und ausführt:
+  # wer hier hochlädt und freigibt, bestimmt, was Mandanten installieren
+  # können (RFC-0050 §2, Entscheidung 1). Das Gateway erzwingt die Rolle, die
+  # App prüft sie noch einmal.
+  - path: /
+    roles: [admin]
+
+storage:
+  # Pakete (packages/), Zustand (state.json) und die Liste (store.json).
+  # Der Knoten liest store.json und die Pakete direkt aus diesem Verzeichnis
+  # -- darum heißt der Speicher `data` und darf nicht umbenannt werden.
+  - name: data
+    mount: /data
+
+config:
+  - key: CATALOG_MAX_PACKAGE_MB
+    label: "Größtes Paket in MB (der Knoten nimmt höchstens 256 MB an)"
+    default: "256"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15
+
+launchpad:
+  group: Werkzeuge

@@ -448,6 +448,47 @@
           "label": "README mit REST-API"
         }
       ]
+    },
+    {
+      "id": "package-catalog",
+      "name": "Paketkatalog",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-10-04",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/package-catalog"
+      },
+      "roles": [
+        "admin"
+      ],
+      "categories": [
+        "tools",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "pakete",
+        "zip",
+        "katalog",
+        "freigabe",
+        "versionen",
+        "store-quelle",
+        "betreiber"
+      ],
+      "summary": "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens.",
+      "description": "Der Betreiber lädt Pakete (ZIP) hoch, gibt Versionen frei und kann jede gespeicherte ZIP wieder herunterladen. Die App liest nur das Manifest, entpackt nichts und führt nie Code aus. Freigegebene Pakete macht der Knoten zur Store-Quelle (`oaap store add-catalog`): Mandanten-Administratoren sehen sie im Store, installieren und aktualisieren wie bei jeder Quelle, wahlweise mit Test-Instanz. Der Knoten liest die Liste direkt aus dem Speicher der Instanz — ohne Netz, ohne Schlüssel — und prüft Größe, SHA-256 und die Angaben im Manifest an einer Kopie, bevor er etwas entpackt. Eine Version wird nie überschrieben; eine freigegebene zu löschen verlangt einen Grund. Nur für den Betreiber (Rolle admin): ein Paket ist Code, den ein Knoten baut und ausführt.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/package-catalog"
+        }
+      ]
     }
   ]
 }
