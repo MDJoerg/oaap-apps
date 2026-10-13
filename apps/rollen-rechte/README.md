@@ -6,10 +6,10 @@ App, und warum.* Ein Vereinsvorstand, nicht die Technik, bedient diese Seite.
 
 | Reiter | Was man dort tut |
 |---|---|
-| **Personen** | Personen des Mandanten; je Person: was sie **zur Zeit** darf, **woher** (Sammlung, von Hand oder über eine Gruppe, von wem, bis wann), Zuordnungen geben und beenden |
+| **Personen** | Personen des Mandanten; je Person: was sie **zur Zeit** darf, **woher** (Berechtigungspaket, von Hand oder über eine Gruppe, von wem, bis wann), Zuordnungen geben und beenden |
 | **Rollen** | Rollen aus den Vorlagen der installierten Apps anlegen (mit den Werten, die der Mandant einsetzt), ausblenden |
-| **Sammlungen** | Rollen zu einer Sammlung bündeln (auch über mehrere Apps), ausblenden |
-| **Gruppen** | Eine Gruppe des Anmeldedienstes (Pfad, z. B. `Verein/Hallenwart`) gibt eine Sammlung — bei **jeder Anmeldung** neu gelesen |
+| **Berechtigungspakete** | Rollen zu einem Paket bündeln (auch über mehrere Apps), ausblenden |
+| **Gruppen → Paket** | Eine Gruppe des Anmeldedienstes (Pfad, z. B. `Verein/Hallenwart`) gibt ein Berechtigungspaket — bei **jeder Anmeldung** neu gelesen |
 | **Protokoll** | Wer hat wann was geändert |
 
 ## Was diese App ist — und was nicht
@@ -27,9 +27,9 @@ App, und warum.* Ein Vereinsvorstand, nicht die Technik, bedient diese Seite.
   (`X-OAAP-User-Id`), und der **Identity-Dienst prüft sie selbst**. Die
   Plattformrolle `tenant_admin` bekommt eine App nie zu sehen — sie könnte es
   gar nicht lesen. Wer kein Admin ist, sieht „Kein Zugriff" und keine Namen.
-- **Ausblenden statt Löschen.** Nichts wird gelöscht. Eine Sammlung lässt sich
+- **Ausblenden statt Löschen.** Nichts wird gelöscht. Ein Berechtigungspaket lässt sich
   nur ausblenden, wenn keine gültige Zuordnung und keine Gruppe mehr darauf
-  steht; eine Rolle erst, wenn keine sichtbare Sammlung sie mehr enthält. Der
+  steht; eine Rolle erst, wenn kein sichtbares Paket sie mehr enthält. Der
   Dienst sagt, was im Weg steht.
 - **Formulare nur von dieser Seite.** Eine Anfrage ohne Herkunft oder von einer
   fremden Seite wird nicht ausgeführt (der Sitzungskeks würde sonst von jeder
@@ -72,5 +72,5 @@ python3 oaap-reference/test/test_rollen_rechte_app.py
 python3 oaap-reference/test/test_authorization_admin_door.py
 ```
 
-Nicht gemessen: ob Vereinsadmins die Begriffe (Rolle, Sammlung, Kontext)
+Nicht gemessen: ob Vereinsadmins die Begriffe (Rolle, Berechtigungspaket, Gilt für)
 verstehen — das braucht einen echten Menschen.

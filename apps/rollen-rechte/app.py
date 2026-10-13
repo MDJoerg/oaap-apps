@@ -7,11 +7,12 @@ der Plattform, hier in der Sprache des Alltags:
 
 - **Rolle**: eine Vorlage, die eine App erklaert hat ("Trainer/in"), mit
   den Werten, die der Mandant einsetzt ("Bereich: News");
-- **Rollensammlung**: ein Buendel von Rollen, das man EINER Person gibt;
-- **Zuordnung**: Person + Sammlung, mit Gueltigkeit und, wo die Rolle es
-  verlangt, einem Kontext ("fuer Mannschaft mB");
+- **Berechtigungspaket**: ein Buendel von Rollen, das man EINER Person gibt
+  (in Spec und API heisst es `collection`);
+- **Zuordnung**: Person + Berechtigungspaket, mit Gueltigkeit und, wo die
+  Rolle es verlangt, "Gilt fuer" (ein Kontext: "Mannschaft mB");
 - **Gruppe des Anmeldedienstes**: eine Gruppe im Realm des Mandanten, die
-  eine Sammlung gibt -- bei JEDER Anmeldung neu gelesen.
+  ein Berechtigungspaket gibt -- bei JEDER Anmeldung neu gelesen.
 
 Was diese App NICHT ist: eine zweite Wahrheit. Sie haelt nichts. Jede Seite
 fragt den Identity-Dienst frisch; ohne ihn zeigt sie nichts. Und sie
@@ -36,7 +37,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import door
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 PORT = 8000
 
 esc = html.escape
@@ -80,7 +81,7 @@ def value_fields(decls, app, template):
 
 
 def context_fields(decls, roles_by_id, collection):
-    """[(feld, objekttyp)] die eine Zuordnung dieser Sammlung ausfuellt."""
+    """[(feld, objekttyp)] die eine Zuordnung dieses Pakets ausfuellt."""
     out = []
     for rid in collection.get("roles") or ():
         r = roles_by_id.get(rid) or {}
@@ -180,13 +181,13 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox
 BACK_TO_PORTAL = ('href="/" onclick="location.href=location.protocol+\'//\'+'
                   "location.hostname+'/';return false;\"")
 
-TABS = [("/", "Personen"), ("/roles", "Rollen"), ("/collections", "Sammlungen"),
-        ("/mappings", "Gruppen"), ("/log", "Protokoll")]
+TABS = [("/", "Personen"), ("/roles", "Rollen"), ("/collections", "Berechtigungspakete"),
+        ("/mappings", "Gruppen → Paket"), ("/log", "Protokoll")]
 
 NOTICES = {
     "role-add": "Rolle angelegt.", "role-retire": "Rolle ausgeblendet.",
-    "collection-add": "Sammlung angelegt.",
-    "collection-retire": "Sammlung ausgeblendet.",
+    "collection-add": "Berechtigungspaket angelegt.",
+    "collection-retire": "Berechtigungspaket ausgeblendet.",
     "assign": "Zugeordnet.", "revoke": "Zuordnung beendet.",
     "map-add": "Gruppe zugeordnet -- wird bei jeder Anmeldung neu gelesen.",
     "map-remove": "Abbildung entfernt; was sie gab, ist beendet.",
@@ -293,7 +294,7 @@ def render_person(uid, eff, collections, roles, decls, back):
             f"<td>{ctx or '-'}</td><td>{span}</td><td>{_source(a)}<br>"
             f"<span class='muted'>gegeben von {esc(a['granted_by'])}</span></td>"
             f"<td>{state}</td><td>{end}</td></tr>")
-    table = (f"<table><tr><th>Sammlung</th><th>Kontext</th><th>Zeitraum</th>"
+    table = (f"<table><tr><th>Berechtigungspaket</th><th>Gilt für</th><th>Zeitraum</th>"
              f"<th>Woher</th><th></th><th></th></tr>{''.join(rows)}</table>"
              if rows else "<p class='muted' style='margin:0'>Noch keine Zuordnung.</p>")
     give = []
@@ -316,12 +317,13 @@ def render_person(uid, eff, collections, roles, decls, back):
     return f"""<div class="card"><h2>{esc(eff.get('username') or uid)} darf zur Zeit</h2>
 {grants_html}</div>
 <div class="card"><h2>Zuordnungen</h2>{table}</div>
-<div class="card"><h2>Eine Sammlung zuordnen</h2>
-<p class="hint">Ein Kontext sagt, WOFUER das Recht gilt (zum Beispiel eine
-Mannschaft). Er wird als ID des Objekts im Zwilling eingetragen.</p>
-<table>{''.join(give) or "<tr><td class=muted>Es gibt noch keine Sammlung -- "
+<div class="card"><h2>Ein Berechtigungspaket zuordnen</h2>
+<p class="hint">Ein Paket buendelt Rollen. Wo eine Rolle es verlangt, sagt
+&bdquo;Gilt für&ldquo;, WOFUER das Recht gilt (zum Beispiel eine Mannschaft).
+Es wird als ID des Objekts im Zwilling eingetragen.</p>
+<table>{''.join(give) or "<tr><td class=muted>Es gibt noch kein Berechtigungspaket -- "
 "zuerst unter <a href='/roles'>Rollen</a> und "
-"<a href='/collections'>Sammlungen</a> anlegen.</td></tr>"}</table></div>"""
+"<a href='/collections'>Berechtigungspakete</a> anlegen.</td></tr>"}</table></div>"""
 
 
 def render_roles(decls, roles, collections, show_all, back):
@@ -364,10 +366,10 @@ def render_roles(decls, roles, collections, show_all, back):
     all_link = ("" if show_all else "<p class='hint'><a href='/roles?alle=1'>"
                 "auch ausgeblendete zeigen</a></p>")
     return f"""<div class="card"><h2>Rollen</h2>
-<p class="hint">Eine Rolle ist eine Vorlage einer App mit den Werten, die dieser
-Mandant einsetzt. Sie gibt nichts, bis eine Sammlung mit ihr einer Person
-zugeordnet ist.</p>
-<table><tr><th>Name</th><th>Vorlage</th><th>Werte</th><th>in Sammlungen</th><th></th></tr>
+<p class="hint">Eine Rolle ist eine fachliche Rolle, die eine App vorgibt, mit
+den Werten, die dieser Mandant einsetzt. Sie gibt nichts, bis ein
+Berechtigungspaket mit ihr einer Person zugeordnet ist.</p>
+<table><tr><th>Name</th><th>Vorlage</th><th>Werte</th><th>in Paketen</th><th></th></tr>
 {''.join(rows) or "<tr><td colspan=5 class=muted>Noch keine Rolle.</td></tr>"}</table>
 {all_link}</div>
 <h2 style="margin:1.4rem 0 .8rem">Neue Rolle aus einer Vorlage</h2>
@@ -391,19 +393,20 @@ def render_collections(roles, collections, show_all, back):
                    for r in roles if not r.get("retired"))
     all_link = ("" if show_all else "<p class='hint'><a href='/collections?alle=1'>"
                 "auch ausgeblendete zeigen</a></p>")
-    return f"""<div class="card"><h2>Rollensammlungen</h2>
-<p class="hint">Eine Sammlung buendelt Rollen -- auch ueber mehrere Apps. Nur
-Sammlungen werden Personen zugeordnet. Ausblenden loescht nichts und geht
-nur, wenn keine gueltige Zuordnung und keine Gruppe mehr darauf steht.</p>
+    return f"""<div class="card"><h2>Berechtigungspakete</h2>
+<p class="hint">Ein Berechtigungspaket buendelt Rollen -- auch ueber mehrere
+Apps. Nur Pakete werden Personen zugeordnet, nie einzelne Rollen.
+Ausblenden loescht nichts und geht nur, wenn keine gueltige Zuordnung und
+keine Gruppe mehr darauf steht.</p>
 <table><tr><th>Name</th><th>Rollen</th><th></th></tr>
-{''.join(rows) or "<tr><td colspan=3 class=muted>Noch keine Sammlung.</td></tr>"}</table>
+{''.join(rows) or "<tr><td colspan=3 class=muted>Noch kein Berechtigungspaket.</td></tr>"}</table>
 {all_link}</div>
-<div class="card"><h2>Neue Sammlung</h2>
+<div class="card"><h2>Neues Berechtigungspaket</h2>
 {post_form("/do/collection-add",
            "<label>Name</label><input type='text' name='name' required maxlength='80'>"
            "<label>Rollen</label><div class='checks'>"
            + (pick or "<span class='muted'>Zuerst eine Rolle anlegen.</span>")
-           + "</div>", "Sammlung anlegen", back)}</div>"""
+           + "</div>", "Berechtigungspaket anlegen", back)}</div>"""
 
 
 def render_mappings(mappings, collections, back):
@@ -414,20 +417,23 @@ def render_mappings(mappings, collections, back):
                     cls="inline", quiet=True) + "</td></tr>" for m in mappings)
     opts = "".join(f"<option value='{esc(c['id'])}'>{esc(c['name'])}</option>"
                    for c in collections if not c.get("retired"))
-    return f"""<div class="card"><h2>Gruppen des Anmeldedienstes</h2>
-<p class="hint">Eine Gruppe im Realm dieses Mandanten kann eine Sammlung geben.
+    return f"""<div class="card"><h2>Automatisch über Gruppen des Anmeldedienstes</h2>
+<p class="hint">Die Gruppen selbst pflegt der Anmeldedienst, nicht diese Seite;
+eine Person kann in mehreren sein. Hier legen Sie nur fest, welches
+Berechtigungspaket eine Gruppe gibt.
 Das Token traegt den <b>Pfad</b> der Gruppe (<code>Verein/Hallenwart</code>);
 eine umbenannte Gruppe gibt deshalb nichts mehr. Gelesen wird bei jeder
 Anmeldung -- eine Aenderung wirkt also beim naechsten Login der Person, nicht
-sofort. Entfernt man die Abbildung, endet sofort, was sie gab. Sammlungen mit
-Kontext lassen sich nicht ueber eine Gruppe geben.</p>
-<table><tr><th>Gruppe</th><th>gibt Sammlung</th><th></th></tr>
+sofort. Entfernt man die Abbildung, endet sofort, was sie gab. Pakete, bei
+denen &bdquo;Gilt für&ldquo; auszufüllen ist, lassen sich nicht über eine
+Gruppe geben.</p>
+<table><tr><th>Gruppe</th><th>gibt Berechtigungspaket</th><th></th></tr>
 {rows or "<tr><td colspan=3 class=muted>Noch keine Abbildung.</td></tr>"}</table></div>
 <div class="card"><h2>Neue Abbildung</h2>
 {post_form("/do/map-add",
            "<label>Pfad der Gruppe</label><input type='text' name='group' "
            "required placeholder='Verein/Hallenwart'>"
-           "<label>Sammlung</label><select name='collection'>" + opts + "</select>",
+           "<label>Berechtigungspaket</label><select name='collection'>" + opts + "</select>",
            "Zuordnen", back)}</div>"""
 
 
@@ -438,7 +444,7 @@ def render_log(rows):
         f"<td>{esc(str(e.get('subject', '')))}</td>"
         f"<td class='muted'>{esc(e.get('detail', ''))}</td></tr>" for e in rows)
     return f"""<div class="card"><h2>Protokoll der Rechte</h2>
-<p class="hint">Die letzten Aenderungen an Rollen, Sammlungen, Zuordnungen und
+<p class="hint">Die letzten Aenderungen an Rollen, Berechtigungspaketen, Zuordnungen und
 Abbildungen dieses Mandanten -- mit der Person, die sie gemacht hat.</p>
 <table><tr><th>Wann (UTC)</th><th>Wer</th><th>Was</th><th>Betrifft</th><th>Einzelheiten</th></tr>
 {body or "<tr><td colspan=5 class=muted>Noch nichts.</td></tr>"}</table></div>"""
