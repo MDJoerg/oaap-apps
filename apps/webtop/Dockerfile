@@ -172,7 +172,8 @@ COPY init/50-oaap-init /custom-cont-init.d/50-oaap-init
 COPY bin/ /usr/local/bin/
 RUN chmod +x /custom-cont-init.d/50-oaap-init /usr/local/bin/code /usr/local/bin/claude-desktop \
          /usr/local/bin/google-chrome /usr/local/bin/oaap-keyring /usr/local/bin/oaap-arc1 \
-         /usr/local/bin/goose-desktop \
+         /usr/local/bin/goose-desktop /usr/local/bin/opencode-desktop \
+         /usr/local/bin/oaap-trust-launchers \
     && chmod -R a+rX /defaults/oaap-skel /defaults/oaap-projekte \
     && sed -i 's/^WebBrowser=.*/WebBrowser=google-chrome/' /etc/xdg/xfce4/helpers.rc \
     && for a in x-www-browser gnome-www-browser; do \
