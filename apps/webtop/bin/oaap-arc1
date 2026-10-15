@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# ARC-1 (SAP-ADT-MCP-Server) — Hilfsskript für 50-oaap-init, läuft als root.
+#
+#   oaap-arc1 global-entfernen
+#       Entfernt arc-1-btp und arc-1-server EINMAL aus ~/.claude.json und
+#       ~/.config/Claude/claude_desktop_config.json (Merkdatei ~/.oaap-arc1-global-entfernt).
+#       Bis v4 standen sie dort; ARC-1 gehört seit 12.10.2026 nur noch ins Projekt
+#       ~/projekte/abap-exercises/.mcp.json (Claude Code / Code-Tab). Der Chat von Claude Desktop
+#       startet MCP-Server ohne DISPLAY, dort konnte ARC-1 den Browser für die BTP-Anmeldung
+#       nicht öffnen (UEBERGABE §7.29). Was jemand danach selbst einträgt, bleibt stehen.
+#
+#   oaap-arc1 fuellen <.mcp.json>
+#       Ersetzt die Platzhalter __ABAP_URL__, __ABAP_CLIENT__, __ABAP_INSECURE__ aus
+#       ABAP_HOST/ABAP_PORT/ABAP_CLIENT/ABAP_INSECURE (Compose bzw. Dockerfile).
+set -euo pipefail
+
+HOME_DIR=${HOME_DIR:-/config}
+
+global_entfernen() {
+  local merk="$HOME_DIR/.oaap-arc1-global-entfernt" datei tmp
+  [ -f "$merk" ] && return 0
+  for datei in "$HOME_DIR/.claude.json" "$HOME_DIR/.config/Claude/claude_desktop_config.json"; do
+    [ -s "$datei" ] || continue
+    if ! jq -e . "$datei" >/dev/null 2>&1; then
+      echo "[oaap-arc1] $datei ist kein gültiges JSON, unverändert gelassen"
+      continue
+    fi
+    jq -e '.mcpServers // {} | has("arc-1-btp") or has("arc-1-server")' "$datei" >/dev/null || continue
+    tmp=$(mktemp)
+    jq 'if .mcpServers then .mcpServers |= del(.["arc-1-btp"], .["arc-1-server"]) else . end' "$datei" > "$tmp" \
+      && cat "$tmp" > "$datei"
+    rm -f "$tmp"
+    echo "[oaap-arc1] arc-1-btp/arc-1-server aus $datei entfernt"
+  done
+  touch "$merk"
+}
+
+fuellen() {
+  local datei=$1 tmp
+  [ -f "$datei" ] || return 0
+  tmp=$(mktemp)
+  jq \
+    --arg url "https://${ABAP_HOST:-sap.example.invalid}:${ABAP_PORT:-44300}" \
+    --arg client "${ABAP_CLIENT:-001}" \
+    --arg insecure "${ABAP_INSECURE:-false}" \
+    'walk(if type == "string" then gsub("__ABAP_URL__"; $url) | gsub("__ABAP_CLIENT__"; $client)
+       | gsub("__ABAP_INSECURE__"; $insecure) else . end)' \
+    "$datei" > "$tmp" && cat "$tmp" > "$datei"
+  rm -f "$tmp"
+}
+
+case "${1:-}" in
+  global-entfernen) global_entfernen ;;
+  fuellen)          fuellen "${2:?Datei fehlt}" ;;
+  *) echo "Aufruf: oaap-arc1 global-entfernen | fuellen <.mcp.json>" >&2; exit 2 ;;
+esac

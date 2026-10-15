@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Startet den GNOME-Schlüsselbund (Autostart). Claude Desktop und VS Code speichern dort ihre
+# Anmeldung. Der Schlüsselbund "login" kommt UNVERSCHLÜSSELT aus dem Skeleton: im Webtop gibt
+# es keine PAM-Anmeldung, die einen verschlüsselten öffnen würde. Folge: Anmeldedaten liegen
+# im Klartext im Home-Mount — und damit in der Sicherung (Bauplan C.2).
+chmod 700 "$HOME/.local/share/keyrings" 2>/dev/null
+exec gnome-keyring-daemon --replace --foreground --components=secrets,pkcs11

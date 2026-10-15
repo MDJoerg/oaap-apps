@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Google Chrome ohne Sandbox und ohne /dev/shm (Begründung in bin/code).
+# --test-type unterdrückt den gelben Warnbalken zu --no-sandbox.
+exec /usr/bin/google-chrome-stable --no-first-run --no-default-browser-check --no-sandbox --disable-dev-shm-usage --test-type "$@"

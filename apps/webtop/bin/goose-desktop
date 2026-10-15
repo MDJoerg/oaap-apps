@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# goose Desktop (Electron) ohne Chromium-Sandbox und ohne /dev/shm (Begründung in bin/code).
+# Das .deb legt die App als /usr/lib/goose/Goose ab (/usr/bin/goose zeigt darauf);
+# die CLI liegt unter /usr/lib/goose/resources/bin/goose (hier als goose-cli verlinkt).
+exec /usr/lib/goose/Goose --no-sandbox --disable-dev-shm-usage "$@"

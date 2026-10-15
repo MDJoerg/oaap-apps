@@ -1,0 +1,5 @@
+[Desktop Entry]
+Type=Application
+Name=Schlüsselbund entsperren
+Exec=/usr/local/bin/oaap-keyring
+NoDisplay=true

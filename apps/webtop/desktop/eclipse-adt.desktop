@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Eclipse ADT
+Comment=ABAP Development Tools
+Exec=env GTK_THEME=Adwaita /opt/eclipse/eclipse -data /config/workspace
+Icon=/opt/eclipse/icon.xpm
+Terminal=false
+StartupNotify=true
+StartupWMClass=Eclipse
+Categories=Development;IDE;

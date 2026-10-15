@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=goose
+Comment=KI-Agent (Block), Desktop-App
+Exec=/usr/local/bin/goose-desktop
+Terminal=false
+Categories=Development;

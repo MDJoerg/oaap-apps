@@ -1,0 +1,30 @@
+OAAP - Desktop im Browser
+=========================
+
+Dein Benutzer auf diesem Desktop: __USER__
+
+Werkzeuge
+  Eclipse ADT      Verknüpfung auf dem Desktop, Workspace: ~/workspace
+                   mit ABAP Cleaner; Strg+F3 aktiviert (Arbeitsfläche wechseln: Strg+Alt+Pfeil)
+  VS Code          Verknüpfung auf dem Desktop oder "code" im Terminal
+  Claude Code      im Terminal: "claude" (Anmeldung mit deinem Konto oder per Schlüssel der Instanz),
+                   in VS Code als Erweiterung (Claude-Symbol in der Seitenleiste)
+  Claude Desktop   Verknüpfung auf dem Desktop (Anmeldung mit claude.ai-Konto, der Browser läuft hier drinnen)
+  ARC-1 (SAP)      MCP-Server im Projekt ~/projekte/abap-exercises, nur lesend vorkonfiguriert
+  goose            Verknüpfung auf dem Desktop (KI-Agent von Block; Anbieter in der App wählen), "goose" im Terminal
+  opencode         im Terminal: "opencode" (KI-Agent von SST; Anbieter in ~/.config/opencode/opencode.json)
+  Google Chrome    Standardbrowser, z. B. für die eigene Web-App: http://localhost:5173
+  Firefox          Verknüpfung auf dem Desktop
+  Projekte         ~/projekte
+  Material         Ordner "Material" auf dem Desktop - vom Betreiber bereitgestellt
+
+SAP-System für Eclipse ADT (aus der Instanzkonfiguration)
+  Verbindung anlegen: File > New > ABAP Project > New System Connection
+  Hostname:  __ABAP_HOST__
+  Port:      __ABAP_PORT__ (HTTPS)
+  Mandant:   __ABAP_CLIENT__
+
+Hinweise
+  Die Sitzung läuft im Container weiter, wenn du den Browser schließt - beim nächsten Öffnen stehen die Fenster noch.
+  Alles unter /config (dein Home) bleibt erhalten und liegt in der Sicherung der Instanz.
+  Port 3000 und 3001 sind vom Desktop belegt; eigene Dev-Server auf 5173 oder 8080.

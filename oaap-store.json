@@ -399,6 +399,57 @@
       ]
     },
     {
+      "id": "webtop",
+      "name": "Desktop im Browser (Webtop)",
+      "type": "wrapped",
+      "version": "0.1.1",
+      "released": "2026-10-15",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/webtop"
+      },
+      "roles": [
+        "user",
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "development"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer",
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "desktop",
+        "xfce",
+        "eclipse",
+        "adt",
+        "schulung",
+        "claude-code",
+        "claude-desktop",
+        "goose",
+        "opencode",
+        "abap"
+      ],
+      "summary": "Ein ganzer Linux-Desktop im Browser, ein Container je Mensch — Eclipse mit ADT, VS Code, Claude Desktop, goose, opencode und Chrome; die Sitzung lebt weiter, wenn der Browser zugeht.",
+      "description": "Linux-Desktop (XFCE) im Browser auf dem linuxserver-Webtop-Abbild, Bildübertragung per WebSocket (Selkies), ein Container je Mensch. Die Anmeldung ist das Gateway (Webtop läuft ohne eigenes Passwort). Im Abbild: Eclipse 2026-06 mit SAP ADT und ABAP Cleaner, VS Code mit Claude-Code-Erweiterung, Claude Desktop, goose (Desktop und CLI), opencode, Claude Code, ARC-1 (SAP-ADT-MCP-Server), Chrome und Firefox. Braucht /dev/shm ab 1 GB (Manifest 0.7, `shm`, Runtime ab 0.1.196). Zwei Storage-Mounts: Zuhause (/config) und getrennt davon das Material. 4 bis 6 GB je Platz — der schwere Bruder der Code-Server-App.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/webtop"
+        },
+        {
+          "rel": "docs",
+          "url": "https://docs.linuxserver.io/images/docker-webtop/",
+          "label": "linuxserver/webtop"
+        }
+      ]
+    },
+    {
       "id": "wegweiser",
       "name": "Wegweiser",
       "type": "native",

@@ -1,0 +1,114 @@
+oaap_manifest: "0.7"
+
+# Gebaut und auf oaap-test gemessen (15.10.2026) — siehe README und
+# program/schulungsarbeitsplatz-webtop-2026-10-14.md (Bauplan Stufe 1).
+
+app:
+  id: webtop
+  name: Desktop im Browser (Webtop)
+  version: 0.1.1
+  type: wrapped
+  class: frontend
+  description: "Ein ganzer Linux-Desktop (XFCE) im Browser, ein Container je Mensch: für Werkzeuge, die ein Fenster brauchen — Eclipse mit ABAP Development Tools und ABAP Cleaner, Claude Desktop, VS Code, Chrome und Firefox. Anmeldung übernimmt das Gateway (Webtop läuft ohne eigenes Passwort), die Sitzung lebt im Container weiter, wenn der Browser zugeht. Der schwere Bruder der code-server-App: 4 bis 6 GB je Platz. Zweite Arbeitsplatz-App der Schulungslandschaft (RFC-0046) und Arbeitsumgebung für alle, deren Laptop nichts installieren darf."
+
+# Ein Container über dem linuxserver-Webtop-Abbild (XFCE, Ubuntu). Die
+# Bildübertragung (Selkies) läuft über WebSocket auf Port 3000 — kein
+# UDP, kein zweiter Port. Zu messen: Forward-Auth und WebSocket-Upgrade
+# durch das Gateway wie bei code-server (RFC-0010).
+#
+# Chromium/Electron brauchen /dev/shm von ~1 GB; Docker gibt 64 MB.
+# Seit Manifest 0.7 / Runtime 0.2.39 (Bauplan Stufe 0, 14.10.2026) erklärt
+# der Dienst das selbst; ein älterer Knoten ignoriert das Feld und startet
+# mit 64 MB. Die drei Chromium-Starter in bin/ tragen zusätzlich
+# --disable-dev-shm-usage, bis die erste Messung sagt, ob eins von beiden reicht.
+services:
+  desktop:
+    build: .
+    port: 3000
+    shm: 1g
+
+# Eine Route, angemeldet. Webtop prüft ohne PASSWORD nichts selbst — die
+# Tür ist das Gateway; wer die Instanz sieht, entscheidet der Betreiber
+# über Sichtbarkeitsgruppen (Runtime 2.7): ein Platz, eine Gruppe.
+routes:
+  - path: /
+    roles: [user, keyuser, admin]
+
+storage:
+  # Das ganze Zuhause des Benutzers `abc` (linuxserver: /config): Projekte,
+  # Eclipse-Workspace, Einstellungen, Erweiterungen, Schlüsselbund.
+  # `--purge` löscht genau das. ACHTUNG für den Standalone-Betrieb: was
+  # hier liegt, liegt in der nächtlichen Sicherung (Bauplan C.2).
+  - name: home
+    mount: /config
+  # Material, getrennt vom Zuhause, im Desktop als ~/Desktop/Material.
+  # Die Kohorte füllt oder tauscht es, ohne die Arbeit anzufassen.
+  # (Nur lesbar und für mehrere Plätze gemeinsam: Bauplan Stufe 3.)
+  - name: material
+    mount: /schulung
+
+config:
+  - key: DESKTOP_TITLE
+    label: "Titel der Browser-Seite"
+    default: "OAAP Desktop"
+  - key: DESKTOP_LANG
+    label: "Sprache des Desktops (de oder en)"
+    default: "de"
+  # `abc` hat im linuxserver-Abbild sudo ohne Passwort. Für eine Schulung
+  # ist das der Punkt (apt install); wer es nicht will, schaltet es ab.
+  - key: DESKTOP_SUDO
+    label: "sudo im Container erlauben (ja/nein)"
+    default: "ja"
+  # Diese vier füllen die Infodatei auf dem Desktop und die .mcp.json des
+  # Übungsprojekts (ARC-1). Für die Kohorte besser als Saat je Platz.
+  - key: ABAP_HOST
+    label: "SAP-System für ADT und ARC-1: Host (optional)"
+    default: ""
+  - key: ABAP_PORT
+    label: "SAP-System: HTTPS-Port"
+    default: "44300"
+  - key: ABAP_CLIENT
+    label: "SAP-System: Mandant"
+    default: "001"
+  - key: ABAP_INSECURE
+    label: "SAP-System: Zertifikat nicht prüfen (true/false)"
+    default: "false"
+  - key: KURS_REPO
+    label: "Git-Repository, das beim ersten Start nach ~/projekte/kurs geklont wird (optional)"
+    default: ""
+  # Bildqualität (Werte von Brandeis, gemessen gegen unscharfen Text):
+  # 4:4:4, CRF-Startwert und Bereich, ruhiges Bild wird scharf nachgezeichnet.
+  - key: SELKIES_VIDEO_CRF
+    label: "Bildqualität: CRF (Startwert,Min-Max)"
+    default: "22,15-28"
+  - key: SELKIES_FRAMERATE
+    label: "Bildrate (Startwert,Min-Max)"
+    default: "30,15-60"
+  # Claude: im Desktop läuft der Browser drinnen, die Konto-Anmeldung
+  # (OAuth) funktioniert — anders als im code-server. Der Schlüssel ist
+  # deshalb optional; die Kohorte gibt ihn als benanntes Geheimnis.
+  - key: ANTHROPIC_API_KEY
+    label: "Anthropic-API-Schlüssel für Claude Code (optional; leer = eigene Anmeldung)"
+    secret: true
+  - key: ANTHROPIC_BASE_URL
+    label: "Anthropic-kompatible Basisadresse (optional, z. B. ein KI-Gateway)"
+    default: ""
+  # goose und opencode (15.10.) sprechen OpenAI-kompatible Endpunkte: damit
+  # erreicht das KI-Gateway (RFC-0023) den Desktop heute schon. Schlüssel als
+  # Geheimnis, Adresse als Wert; beide landen in der Umgebung der Sitzung.
+  - key: OPENAI_API_KEY
+    label: "OpenAI-kompatibler API-Schlüssel für goose/opencode (optional)"
+    secret: true
+  - key: OPENAI_BASE_URL
+    label: "OpenAI-kompatible Basisadresse für goose/opencode (optional, z. B. das KI-Gateway)"
+    default: ""
+  - key: TZ
+    label: "Zeitzone im Container"
+    default: "Europe/Berlin"
+
+health:
+  # Zu messen: linuxserver Webtop liefert ohne PASSWORD auf / die
+  # Selkies-Seite mit 200. Der erste Start kopiert Skeleton und
+  # Erweiterungen und startet XFCE — großzügige Anlaufzeit.
+  path: /
+  startup_grace_seconds: 180

@@ -1,0 +1,2 @@
+# Alles läuft unter Linux — CRLF aus einem Windows-Checkout bricht Shebangs und Heredocs
+* text=auto eol=lf

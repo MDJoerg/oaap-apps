@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Claude Desktop ohne Chromium-Sandbox und ohne /dev/shm (Begründung in bin/code).
+exec /usr/bin/claude-desktop --no-sandbox --disable-dev-shm-usage "$@"

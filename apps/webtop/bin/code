@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# VS Code ohne Chromium-Sandbox (User-Namespaces werden Containern verweigert) und ohne
+# /dev/shm (die Runtime kennt noch kein shm je Dienst — Bauplan Stufe 0; Docker gibt 64 MB).
+exec /usr/share/code/code --no-sandbox --disable-dev-shm-usage "$@"

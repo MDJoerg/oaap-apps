@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Läuft bei jedem Containerstart als root (linuxserver custom-cont-init).
+# Befüllt /config (Home des Benutzers abc) beim ersten Start mit dem Skeleton.
+# ENTWURF 2026-10-14 nach brandeis-consulting/webtop-schulung init/50-kurs-init.
+set -euo pipefail
+
+HOME_DIR=/config
+MARKER="$HOME_DIR/.oaap-init-done"
+SKEL=/defaults/oaap-skel
+
+# Bei jedem Start: Titel aus der Instanzkonfiguration (linuxserver liest TITLE).
+export TITLE="${DESKTOP_TITLE:-${TITLE:-OAAP Desktop}}"
+
+# Bei jedem Start: Verknüpfung zum Material-Mount — Symlink, damit das chown unten
+# nicht in die Ablage läuft.
+if [ -d "$HOME_DIR/Desktop" ] && [ -d /schulung ] && [ ! -e "$HOME_DIR/Desktop/Material" ]; then
+  ln -s /schulung "$HOME_DIR/Desktop/Material" && chown -h abc:abc "$HOME_DIR/Desktop/Material"
+fi
+
+# Bei jedem Start: Claude Desktop ohne Hardwarebeschleunigung. Im Container gibt es
+# keine GPU; mit GPU-Prozess stürzt der Renderer wiederholt ab. Dieselbe Datei trägt
+# auch MCP-Server — nur den einen Schlüssel setzen, Rest unverändert.
+CD_CONF="$HOME_DIR/.config/Claude/claude_desktop_config.json"
+if [ ! -s "$CD_CONF" ]; then
+  mkdir -p "$(dirname "$CD_CONF")"
+  echo '{ "isHardwareAccelerationDisabled": true }' > "$CD_CONF"
+  chown -R abc:abc "$HOME_DIR/.config/Claude"
+elif ! jq -e '.isHardwareAccelerationDisabled == true' "$CD_CONF" >/dev/null 2>&1; then
+  tmp=$(mktemp) && jq '.isHardwareAccelerationDisabled = true' "$CD_CONF" > "$tmp" \
+    && cat "$tmp" > "$CD_CONF" || echo "[oaap-init] $CD_CONF nicht lesbar, unverändert gelassen"
+  rm -f "$tmp"
+fi
+
+# Bei jedem Start: sudo nach Konfiguration. Das linuxserver-Abbild gibt abc
+# passwortloses sudo; ein Konfigurationswechsel erzeugt den Container neu, also wird
+# das bei jedem Start frisch entschieden.
+case "$(echo "${DESKTOP_SUDO:-ja}" | tr '[:upper:]' '[:lower:]')" in
+  nein|no|false|0|aus|off)
+    rm -f /etc/sudoers.d/abc /etc/sudoers.d/nopasswd 2>/dev/null || true
+    echo "[oaap-init] sudo abgeschaltet (DESKTOP_SUDO=${DESKTOP_SUDO})"
+    ;;
+esac
+
+# Bei jedem Start: vorbereitete Übungsprojekte nach ~/projekte, nur wenn der Ordner dort
+# noch fehlt — was der Benutzer schon angelegt oder geändert hat, bleibt unangetastet.
+# Je Projekt ein Git-Repository mit einem ersten Commit.
+if [ -d /defaults/oaap-projekte ]; then
+  mkdir -p "$HOME_DIR/projekte" && chown abc:abc "$HOME_DIR/projekte"
+  for src in /defaults/oaap-projekte/*/; do
+    [ -d "$src" ] || continue
+    name=$(basename "$src") ziel="$HOME_DIR/projekte/$name"
+    [ -e "$ziel" ] && continue
+    cp -a "$src" "$ziel"
+    [ -f "$ziel/.mcp.json" ] && /usr/local/bin/oaap-arc1 fuellen "$ziel/.mcp.json"
+    chown -R abc:abc "$ziel"
+    su -s /bin/bash abc -c "cd '$ziel' && HOME='$HOME_DIR' git init -q -b main && git add -A \
+      && git -c user.name='${OAAP_USER:-Benutzer}' -c user.email='${OAAP_USER:-benutzer}@desktop.local' \
+         commit -q -m 'Ausgangsstand aus der Vorgabe'" \
+      || echo "[oaap-init] Git in $ziel nicht angelegt"
+    echo "[oaap-init] Projekt $name angelegt"
+  done
+fi
+
+if [ -f "$MARKER" ]; then
+  echo "[oaap-init] bereits initialisiert, überspringe"
+  exit 0
+fi
+
+echo "[oaap-init] erster Start, richte Home ein"
+mkdir -p "$HOME_DIR/Desktop" "$HOME_DIR/workspace" "$HOME_DIR/projekte"
+# Nur kopieren, was fehlt: eine Saat der Kohorte (vor dem ersten Start geschrieben)
+# gewinnt gegen das Skeleton.
+cp -an "$SKEL/." "$HOME_DIR/"
+[ -d /schulung ] && ln -sfn /schulung "$HOME_DIR/Desktop/Material"
+
+# Desktop-Verknüpfungen (com.anthropic.Claude = Claude Desktop)
+for src in /usr/share/applications/{eclipse-adt,com.microsoft.VSCode,com.anthropic.Claude,goose,opencode,firefox,google-chrome,xfce4-terminal}.desktop; do
+  [ -f "$src" ] && cp "$src" "$HOME_DIR/Desktop/" && chmod +x "$HOME_DIR/Desktop/$(basename "$src")"
+done
+
+# VS-Code-Erweiterungen aus dem Image (Claude Code, Sprachpaket)
+if [ -d /defaults/oaap-vscode-extensions ] && [ ! -d "$HOME_DIR/.vscode/extensions" ]; then
+  mkdir -p "$HOME_DIR/.vscode"
+  cp -a /defaults/oaap-vscode-extensions "$HOME_DIR/.vscode/extensions"
+fi
+if [ -f /defaults/oaap-vscode-languagepacks.json ] && [ ! -f "$HOME_DIR/.config/Code/languagepacks.json" ]; then
+  mkdir -p "$HOME_DIR/.config/Code"
+  cp /defaults/oaap-vscode-languagepacks.json "$HOME_DIR/.config/Code/languagepacks.json"
+fi
+
+# Infodatei füllen. Die Adresse der Instanz kennt die Plattform (RFC-0043), der
+# Container nicht — sie steht auf der Kachel, nicht hier.
+if [ -f "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt" ]; then
+  sed -i \
+    -e "s|__ABAP_HOST__|${ABAP_HOST:-(nicht konfiguriert)}|g" \
+    -e "s|__ABAP_PORT__|${ABAP_PORT:-}|g" \
+    -e "s|__ABAP_CLIENT__|${ABAP_CLIENT:-}|g" \
+    -e "s|__USER__|${OAAP_USER:-abc}|g" \
+    "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt"
+fi
+
+# Git-Grundeinstellungen, nur wenn noch keine da sind
+if [ ! -f "$HOME_DIR/.gitconfig" ]; then
+cat > "$HOME_DIR/.gitconfig" << GITEOF
+[init]
+	defaultBranch = main
+[user]
+	name = ${OAAP_USER:-Benutzer}
+	email = ${OAAP_USER:-benutzer}@desktop.local
+[pull]
+	rebase = false
+GITEOF
+fi
+
+# Kursrepo klonen, falls gesetzt
+if [ -n "${KURS_REPO:-}" ] && [ ! -d "$HOME_DIR/projekte/kurs" ]; then
+  echo "[oaap-init] klone $KURS_REPO"
+  git clone --depth 1 "$KURS_REPO" "$HOME_DIR/projekte/kurs" || echo "[oaap-init] Klonen fehlgeschlagen, weiter ohne Repo"
+fi
+
+chown -R abc:abc "$HOME_DIR"
+touch "$MARKER"
+echo "[oaap-init] fertig"

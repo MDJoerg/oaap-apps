@@ -1,0 +1,51 @@
+{
+  "mcpServers": {
+    "arc-1-btp": {
+      "type": "stdio",
+      "command": "arc1",
+      "args": [],
+      "env": {
+        "SAP_BTP_SERVICE_KEY_FILE": "/config/projekte/abap-exercises/service-key.json",
+        "SAP_SYSTEM_TYPE": "btp",
+        "SAP_LANGUAGE": "DE",
+        "DISPLAY": ":1",
+        "SAP_ALLOW_WRITES": "false",
+        "SAP_ALLOWED_PACKAGES": "$TMP",
+        "SAP_ALLOW_TRANSPORT_WRITES": "false",
+        "SAP_ALLOWED_TRANSPORTS": "",
+        "SAP_ALLOW_GIT_WRITES": "false",
+        "SAP_ALLOW_DATA_PREVIEW": "false",
+        "SAP_ALLOW_FREE_SQL": "false",
+        "SAP_BLOCKED_DATA_SOURCES": "",
+        "SAP_DENY_ACTIONS": "",
+        "SAP_CHECK_BEFORE_WRITE": "false"
+      }
+    },
+    "arc-1-server": {
+      "type": "stdio",
+      "command": "arc1",
+      "args": [],
+      "env": {
+        "SAP_URL": "__ABAP_URL__",
+        "SAP_CLIENT": "__ABAP_CLIENT__",
+        "SAP_LANGUAGE": "DE",
+        "SAP_USER": "",
+        "SAP_PASSWORD": "",
+        "SAP_SYSTEM_TYPE": "onprem",
+        "SAP_INSECURE": "__ABAP_INSECURE__",
+        "SAP_DISABLE_SAML": "false",
+        "DISPLAY": ":1",
+        "SAP_ALLOW_WRITES": "false",
+        "SAP_ALLOWED_PACKAGES": "$TMP",
+        "SAP_ALLOW_TRANSPORT_WRITES": "false",
+        "SAP_ALLOWED_TRANSPORTS": "",
+        "SAP_ALLOW_GIT_WRITES": "false",
+        "SAP_ALLOW_DATA_PREVIEW": "false",
+        "SAP_ALLOW_FREE_SQL": "false",
+        "SAP_BLOCKED_DATA_SOURCES": "",
+        "SAP_DENY_ACTIONS": "",
+        "SAP_CHECK_BEFORE_WRITE": "false"
+      }
+    }
+  }
+}
