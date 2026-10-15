@@ -186,6 +186,7 @@ RUN chmod +x /custom-cont-init.d/50-oaap-init /usr/local/bin/code /usr/local/bin
 ENV LANG="de_DE.UTF-8" \
     LANGUAGE="de_DE:de" \
     TITLE="OAAP Desktop" \
+    OAAP_DESKTOP_VERSION="0.1.7" \
     SELKIES_VIDEO_FULLCOLOR=true \
     SELKIES_VIDEO_STREAMING_MODE=false \
     SELKIES_VIDEO_PAINTOVER_CRF=14 \
