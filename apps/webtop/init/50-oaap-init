@@ -64,7 +64,11 @@ fi
 # Bei jedem Start: Version des Desktops in die Infodatei und, soweit linuxserver TITLE
 # liest, in den Titel der Browser-Seite.
 VER="${OAAP_DESKTOP_VERSION:-unbekannt}"
-[ -f "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt" ] &&   sed -i "s|^Version des Desktops:.*|Version des Desktops: $VER|" "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt"
+INFO="$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt"
+if [ -f "$INFO" ]; then
+  grep -q '^Version des Desktops:' "$INFO" || sed -i '/^Dein Benutzer/a Version des Desktops: (unbekannt)' "$INFO"
+  sed -i "s|^Version des Desktops:.*|Version des Desktops: $VER|" "$INFO"
+fi
 export TITLE="$TITLE (v$VER)"
 
 # Bei jedem Start: Material beschreibbar machen, wenn so konfiguriert. Der Ordner

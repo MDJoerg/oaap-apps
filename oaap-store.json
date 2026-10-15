@@ -402,7 +402,7 @@
       "id": "webtop",
       "name": "Desktop im Browser (Webtop)",
       "type": "wrapped",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "released": "2026-10-15",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
