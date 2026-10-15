@@ -7,7 +7,10 @@
 # Basis: linuxserver.io Webtop (XFCE), Zugriff per Browser über Selkies auf Port 3000.
 FROM lscr.io/linuxserver/webtop:ubuntu-xfce
 
-ARG ECLIPSE_URL="https://www.eclipse.org/downloads/download.php?file=/technology/epp/downloads/release/2026-06/R/eclipse-java-2026-06-R-linux-gtk-x86_64.tar.gz&r=1"
+# Fester Mirror statt download.php: dessen Mirror-Wahl lieferte auf oaap-demo 45-74 KB/s
+# (35 Min ohne Ende), FAU liefert dort 9 MB/s (15.10.2026). Fällt der Mirror aus, steht
+# die Weiterleitung als --build-arg ECLIPSE_URL=... zur Verfügung.
+ARG ECLIPSE_URL="https://ftp.fau.de/eclipse/technology/epp/downloads/release/2026-06/R/eclipse-java-2026-06-R-linux-gtk-x86_64.tar.gz"
 ARG ECLIPSE_RELEASE_SITE="https://download.eclipse.org/releases/2026-06"
 ARG ADT_SITE="https://tools.hana.ondemand.com/latest"
 ARG ABAP_CLEANER_SITE="https://sap.github.io/abap-cleaner/updatesite"
