@@ -1,6 +1,6 @@
 # Kohorten-Vorlage für den Webtop-Desktop (RFC-0046, RFC-0058). Aufruf:
 #   oaap app cohort create <dieses Verzeichnis>
-# (`--dry-run` ist KEIN Probelauf: es legt wirklich an.)
+# (`--dry-run` zeigt nur den Plan und legt nichts an; ab Knoten 0.1.196.)
 # Ohne Geheimnisse: Schlüssel stehen als {secret: name}.
 oaap_cohort: "0.1"
 name: desk-kurs                    # Vorsilbe von Benutzern und Instanzen
