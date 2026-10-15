@@ -2,6 +2,7 @@ OAAP - Desktop im Browser
 =========================
 
 Dein Benutzer auf diesem Desktop: __USER__
+Version des Desktops: (unbekannt)
 
 Werkzeuge
   Eclipse ADT      Verknüpfung auf dem Desktop, Workspace: ~/workspace

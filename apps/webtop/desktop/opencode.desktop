@@ -3,5 +3,6 @@ Type=Application
 Name=opencode
 Comment=KI-Agent (SST), Desktop-App
 Exec=/usr/local/bin/opencode-desktop
+Icon=ai.opencode.desktop
 Terminal=false
 Categories=Development;

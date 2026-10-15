@@ -3,5 +3,6 @@ Type=Application
 Name=goose
 Comment=KI-Agent (Block), Desktop-App
 Exec=/usr/local/bin/goose-desktop
+Icon=/usr/lib/goose/resources/images/icon-512.png
 Terminal=false
 Categories=Development;

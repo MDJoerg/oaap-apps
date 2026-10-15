@@ -61,6 +61,19 @@ if [ -d /defaults/oaap-projekte ]; then
   done
 fi
 
+# Bei jedem Start: Version des Desktops in die Infodatei und, soweit linuxserver TITLE
+# liest, in den Titel der Browser-Seite.
+VER="${OAAP_DESKTOP_VERSION:-unbekannt}"
+[ -f "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt" ] &&   sed -i "s|^Version des Desktops:.*|Version des Desktops: $VER|" "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt"
+export TITLE="$TITLE (v$VER)"
+
+# Bei jedem Start: Material beschreibbar machen, wenn so konfiguriert. Der Ordner
+# gehört beim Anlegen root; nur die Oberste Ebene wird übergeben, nichts darin.
+case "$(echo "${MATERIAL_SCHREIBBAR:-ja}" | tr '[:upper:]' '[:lower:]')" in
+  nein|no|false|0|aus|off) ;;
+  *) [ -d /schulung ] && chown abc:abc /schulung ;;
+esac
+
 # Bei jedem Start (0.1.3): opencode gibt es jetzt als Desktop-App; ein älterer Schreibtisch
 # trägt unter dem Namen noch den Terminal-Starter. Den ersetzen, den Terminal-Eintrag ergänzen.
 if [ -d "$HOME_DIR/Desktop" ]; then
@@ -73,6 +86,15 @@ if [ -d "$HOME_DIR/Desktop" ]; then
   chmod +x "$HOME_DIR/Desktop/"opencode*.desktop 2>/dev/null || true
   chown abc:abc "$HOME_DIR/Desktop/"opencode*.desktop 2>/dev/null || true
 fi
+
+# Bei jedem Start (0.1.5): Starter ohne Symbol aus der Vorgabe erneuern (goose, opencode
+# hatten bis 0.1.4 keins). Eigene Änderungen am Starter bleiben, sobald er ein Symbol hat.
+for n in goose opencode opencode-terminal; do
+  d="$HOME_DIR/Desktop/$n.desktop" src="/usr/share/applications/$n.desktop"
+  if [ -f "$d" ] && [ -f "$src" ] && ! grep -q '^Icon=' "$d" && grep -q '^Icon=' "$src"; then
+    cp "$src" "$d" && chmod +x "$d" && chown abc:abc "$d"
+  fi
+done
 
 # Bei jedem Start: Starter auf dem Schreibtisch als vertrauenswürdig kennzeichnen.
 if [ -d "$HOME_DIR/Desktop" ]; then

@@ -3,5 +3,6 @@ Type=Application
 Name=opencode (Terminal)
 Comment=KI-Agent (SST) im Terminal
 Exec=xfce4-terminal --working-directory=/config/projekte -e opencode
+Icon=ai.opencode.desktop
 Terminal=false
 Categories=Development;
