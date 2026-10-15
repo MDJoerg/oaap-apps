@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=opencode
-Comment=KI-Agent (SST) im Terminal
-Exec=xfce4-terminal --working-directory=/config/projekte -e opencode
+Comment=KI-Agent (SST), Desktop-App
+Exec=/usr/local/bin/opencode-desktop
 Terminal=false
 Categories=Development;

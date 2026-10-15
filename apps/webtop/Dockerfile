@@ -5,7 +5,7 @@
 # zu ADT, inotify-Limits des Knotens, Chromium ohne Sandbox.
 #
 # Basis: linuxserver.io Webtop (XFCE), Zugriff per Browser über Selkies auf Port 3000.
-FROM lscr.io/linuxserver/webtop:ubuntu-xfce
+FROM ghcr.io/linuxserver/webtop:ubuntu-xfce
 
 # Fester Mirror statt download.php: dessen Mirror-Wahl lieferte auf oaap-demo 45-74 KB/s
 # (35 Min ohne Ende), FAU liefert dort 9 MB/s (15.10.2026). Fällt der Mirror aus, steht
@@ -144,9 +144,11 @@ RUN npm install -g "arc-1@${ARC1_VERSION}" --no-fund --no-audit \
 # (github.com/block/goose leitet um), das .deb installiert die Electron-App als
 # /usr/lib/goose/Goose; die CLI steckt in resources/bin. Versionen als Build-Args,
 # damit nichts still wandert. Start ohne Sandbox über bin/goose-desktop.
-# opencode: CLI/TUI per npm `opencode-ai`; eine Linux-Desktop-Fassung ist nicht eingebaut.
+# opencode: CLI/TUI per npm `opencode-ai`, dazu die Desktop-App aus dem Release
+# (opencode-desktop-linux-amd64.deb, Electron unter /opt/OpenCode; Wunsch Jörg 15.10.).
 ARG GOOSE_DEB_URL="https://github.com/aaif-goose/goose/releases/download/v1.54.0/goose_1.54.0_amd64.deb"
 ARG OPENCODE_VERSION="1.19.0"
+ARG OPENCODE_DESKTOP_DEB_URL="https://github.com/anomalyco/opencode/releases/download/v1.19.0/opencode-desktop-linux-amd64.deb"
 RUN if [ -n "$GOOSE_DEB_URL" ]; then \
       curl -fsSL "$GOOSE_DEB_URL" -o /tmp/goose.deb \
       && apt-get update && apt-get install -y --no-install-recommends /tmp/goose.deb \
@@ -158,6 +160,7 @@ RUN if [ -n "$OPENCODE_VERSION" ]; then \
       npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-fund --no-audit \
       && npm cache clean --force && opencode --version ; \
     else echo "opencode: OPENCODE_VERSION leer, übersprungen (Entwurf)"; fi
+RUN if [ -n "$OPENCODE_DESKTOP_DEB_URL" ]; then       curl -fsSL "$OPENCODE_DESKTOP_DEB_URL" -o /tmp/ocd.deb       && apt-get update && apt-get install -y --no-install-recommends /tmp/ocd.deb       && rm -rf /var/lib/apt/lists/* /tmp/ocd.deb       && test -x /opt/OpenCode/ai.opencode.desktop       && rm -f /usr/share/applications/opencode-desktop.desktop /usr/share/applications/ai.opencode.desktop.desktop ;     else echo "opencode-desktop: URL leer, übersprungen"; fi
 
 # ---------- Desktop-Einträge, Skeleton, Init-Skript ----------
 # Standardbrowser Chrome an allen drei Stellen, die Programme abfragen (mimeapps.list,

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec /opt/OpenCode/ai.opencode.desktop --no-sandbox --disable-dev-shm-usage "$@"

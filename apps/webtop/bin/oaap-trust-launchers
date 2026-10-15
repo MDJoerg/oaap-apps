@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Kennzeichnet die Starter auf dem Schreibtisch als vertrauenswürdig (XFCE fragt sonst
+# beim ersten Start jedes Programms). Läuft als Benutzer abc in einer eigenen
+# Sitzungs-Bus-Instanz; das Merkmal landet in den gvfs-Metadaten im Home.
+export HOME=/config
+unset DBUS_SESSION_BUS_ADDRESS
+exec dbus-run-session -- bash -c '
+  for f in /config/Desktop/*.desktop; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    gio set -t string "$f" metadata::xfce-exe-checksum "$(sha256sum "$f" | cut -d" " -f1)"
+  done
+  sleep 1'
