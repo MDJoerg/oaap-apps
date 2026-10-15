@@ -1,23 +1,31 @@
-# Kohorten-Vorlage für den Webtop-Desktop (RFC-0046). Aufruf:
-#   oaap app cohort create <dieses Verzeichnis> --dry-run   (zuerst lesen, nichts anlegen)
+# Kohorten-Vorlage für den Webtop-Desktop (RFC-0046, RFC-0058). Aufruf:
 #   oaap app cohort create <dieses Verzeichnis>
+# (`--dry-run` ist KEIN Probelauf: es legt wirklich an.)
 # Ohne Geheimnisse: Schlüssel stehen als {secret: name}.
 oaap_cohort: "0.1"
 name: desk-kurs                    # Vorsilbe von Benutzern und Instanzen
-seats: 2                           # Plätze; oder `participants:` mit Namen
+seats: 2                           # Teilnehmer; oder `participants:` mit Namen
+trainers: 1                        # Trainer-Plätze t01…: beschreiben alles, sehen alle Plätze
 resources:
   memory: 6g                       # gemessen: ein Platz mit allen Werkzeugen ~3,2 GiB
   cpus: 2
+# Geteilte Ordner gehören der Kohorte, nicht einem Platz (RFC-0058).
+shared_storage:
+  - name: schulung                 # Kursmaterial: Teilnehmer lesen, Trainer pflegen
+    mount: /schulung               # ersetzt den eigenen Material-Speicher des Platzes
+    access: ro                     # für Teilnehmer; Trainer-Plätze schreiben
+    source: material/              # Anfangsinhalt, einmal beim Anlegen
+  - name: gemeinsam                # Arbeitsordner, alle schreiben
+    mount: /gemeinsam
+    access: rw
 apps:
   - git: https://github.com/MDJoerg/oaap-apps
     path: apps/webtop
-    name: desk                     # -> Instanz desk-kurs-desk-01
+    name: desk                     # -> Instanz desk-kurs-desk-01 (Trainer: …-desk-t01)
     channel: test
     config:
       DESKTOP_TITLE: "Schulungs-Desktop"
-      MATERIAL_SCHREIBBAR: "nein"  # Teilnehmer ändern das Material nicht
       DESKTOP_SUDO: "ja"
-    material: material/            # Verzeichnis neben der Vorlage -> Mount /schulung
 users:
   prefix: tn
   roles: [user]

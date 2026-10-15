@@ -17,6 +17,15 @@ if [ -d "$HOME_DIR/Desktop" ] && [ -d /schulung ] && [ ! -e "$HOME_DIR/Desktop/M
   ln -s /schulung "$HOME_DIR/Desktop/Material" && chown -h abc:abc "$HOME_DIR/Desktop/Material"
 fi
 
+# Bei jedem Start (0.1.9): geteilter Arbeitsordner der Kohorte (RFC-0058). Der Mount
+# gehört beim Anlegen root; beschreibbar machen und auf den Schreibtisch verknüpfen.
+if [ -d /gemeinsam ]; then
+  chown abc:abc /gemeinsam 2>/dev/null || echo "[oaap-init] /gemeinsam nur lesbar, Besitzer unverändert"
+  if [ -d "$HOME_DIR/Desktop" ] && [ ! -e "$HOME_DIR/Desktop/Gemeinsam" ]; then
+    ln -s /gemeinsam "$HOME_DIR/Desktop/Gemeinsam" && chown -h abc:abc "$HOME_DIR/Desktop/Gemeinsam"
+  fi
+fi
+
 # Bei jedem Start: Claude Desktop ohne Hardwarebeschleunigung. Im Container gibt es
 # keine GPU; mit GPU-Prozess stürzt der Renderer wiederholt ab. Dieselbe Datei trägt
 # auch MCP-Server — nur den einen Schlüssel setzen, Rest unverändert.
@@ -75,7 +84,7 @@ export TITLE="$TITLE (v$VER)"
 # gehört beim Anlegen root; nur die Oberste Ebene wird übergeben, nichts darin.
 case "$(echo "${MATERIAL_SCHREIBBAR:-ja}" | tr '[:upper:]' '[:lower:]')" in
   nein|no|false|0|aus|off) ;;
-  *) [ -d /schulung ] && chown abc:abc /schulung ;;
+  *) [ -d /schulung ] && { chown abc:abc /schulung 2>/dev/null || echo "[oaap-init] /schulung nur lesbar, Besitzer unverändert"; } ;;
 esac
 
 # Bei jedem Start (0.1.3): opencode gibt es jetzt als Desktop-App; ein älterer Schreibtisch

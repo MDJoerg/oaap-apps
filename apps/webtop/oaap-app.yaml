@@ -6,7 +6,7 @@ oaap_manifest: "0.7"
 app:
   id: webtop
   name: Desktop im Browser (Webtop)
-  version: 0.1.8
+  version: 0.1.9
   type: wrapped
   class: frontend
   description: "Ein ganzer Linux-Desktop (XFCE) im Browser, ein Container je Mensch: für Werkzeuge, die ein Fenster brauchen — Eclipse mit ABAP Development Tools und ABAP Cleaner, Claude Desktop, VS Code, Chrome und Firefox. Anmeldung übernimmt das Gateway (Webtop läuft ohne eigenes Passwort), die Sitzung lebt im Container weiter, wenn der Browser zugeht. Der schwere Bruder der code-server-App: 4 bis 6 GB je Platz. Zweite Arbeitsplatz-App der Schulungslandschaft (RFC-0046) und Arbeitsumgebung für alle, deren Laptop nichts installieren darf."
