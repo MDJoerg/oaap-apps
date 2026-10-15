@@ -140,6 +140,7 @@ if [ -f "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt" ]; then
     -e "s|__ABAP_PORT__|${ABAP_PORT:-}|g" \
     -e "s|__ABAP_CLIENT__|${ABAP_CLIENT:-}|g" \
     -e "s|__USER__|${OAAP_USER:-abc}|g" \
+    -e "s|^Version des Desktops:.*|Version des Desktops: ${OAAP_DESKTOP_VERSION:-unbekannt}|" \
     "$HOME_DIR/Desktop/ARBEITSPLATZ-INFO.txt"
 fi
 

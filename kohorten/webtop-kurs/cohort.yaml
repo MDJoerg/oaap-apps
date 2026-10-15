@@ -1,0 +1,26 @@
+# Kohorten-Vorlage für den Webtop-Desktop (RFC-0046). Aufruf:
+#   oaap app cohort create <dieses Verzeichnis> --dry-run   (zuerst lesen, nichts anlegen)
+#   oaap app cohort create <dieses Verzeichnis>
+# Ohne Geheimnisse: Schlüssel stehen als {secret: name}.
+oaap_cohort: "0.1"
+name: desk-kurs                    # Vorsilbe von Benutzern und Instanzen
+seats: 2                           # Plätze; oder `participants:` mit Namen
+resources:
+  memory: 6g                       # gemessen: ein Platz mit allen Werkzeugen ~3,2 GiB
+  cpus: 2
+apps:
+  - git: https://github.com/MDJoerg/oaap-apps
+    path: apps/webtop
+    name: desk                     # -> Instanz desk-kurs-desk-01
+    channel: test
+    config:
+      DESKTOP_TITLE: "Schulungs-Desktop"
+      MATERIAL_SCHREIBBAR: "nein"  # Teilnehmer ändern das Material nicht
+      DESKTOP_SUDO: "ja"
+    material: material/            # Verzeichnis neben der Vorlage -> Mount /schulung
+users:
+  prefix: tn
+  roles: [user]
+  display_name: "Teilnehmer {nn}"
+  first_login: change_password
+handout: desk-kurs-handout.csv
