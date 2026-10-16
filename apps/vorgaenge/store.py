@@ -42,6 +42,12 @@ NEXT = {
     "reopened":    ("triage", "in_progress", "answered", "rejected"),
 }
 OPEN = ("new", "triage", "in_progress", "answered", "reopened")
+ENDED = ("closed", "rejected")
+
+# Q6: wer die meldende Person war, nachdem die Frist abgelaufen ist
+REMOVED = "removed"
+REMOVED_NAME = "entfernt"
+RETENTION_MONTHS = 12
 
 DEFAULT_QUEUE = "eingang"
 QUEUE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
@@ -61,6 +67,18 @@ class Refused(Exception):
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _months_before(ts, months):
+    """Derselbe Zeitpunkt `months` Kalendermonate frueher, als ISO-Zeit.
+    Ein Tag, den es im Zielmonat nicht gibt (31.), wird der letzte."""
+    t = time.gmtime(ts)
+    y, mo = divmod(t.tm_year * 12 + (t.tm_mon - 1) - months, 12)
+    mo += 1
+    last = [31, 29 if (y % 4 == 0 and y % 100 != 0) or y % 400 == 0 else 28,
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]
+    return (f"{y:04d}-{mo:02d}-{min(t.tm_mday, last):02d}T"
+            f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}Z")
 
 
 def _clip(v, n):
@@ -104,6 +122,19 @@ class Store:
             # RFC-0061 §2.2: jeder Mandant hat einen Eingang, ab Installation
             self.db.execute("INSERT OR IGNORE INTO queues VALUES (?,?,?)",
                             (DEFAULT_QUEUE, "Eingang", _now()))
+            # 0.1.1 (Q6): wann ein Vorgang endete, und wann seine
+            # Personendaten entfernt wurden. Eine Ablage aus 0.1.0 bekommt
+            # die Spalten hier; `ended` leitet sich aus dem letzten
+            # Statuseintrag ab, damit die Frist auch fuer sie laeuft.
+            have = {r[1] for r in self.db.execute("PRAGMA table_info(cases)")}
+            if "ended" not in have:
+                self.db.execute("ALTER TABLE cases ADD COLUMN ended TEXT NOT NULL DEFAULT ''")
+                self.db.execute(
+                    "UPDATE cases SET ended = COALESCE((SELECT MAX(at) FROM entries "
+                    "WHERE entries.case_id = cases.id AND type = 'status'), updated) "
+                    "WHERE status IN ('closed', 'rejected')")
+            if "scrubbed" not in have:
+                self.db.execute("ALTER TABLE cases ADD COLUMN scrubbed TEXT NOT NULL DEFAULT ''")
 
     # ------------------------------------------------------------ Bereiche
     def queues(self):
@@ -178,7 +209,10 @@ class Store:
                 queue = DEFAULT_QUEUE
             number = self._number()
             self.db.execute(
-                "INSERT INTO cases VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO cases (id, number, kind, title, body, status, queue, "
+                "reporter, reporter_name, object_kind, object_id, source_instance, "
+                "source_app, tech, created, updated) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (cid, number, kind, title, body or "", "new", queue,
                  reporter, _clip(reporter_name, 120), ok_kind, ok_id,
                  _clip((attested or {}).get("instance"), 80),
@@ -250,8 +284,11 @@ class Store:
         if new == "rejected" and not text:
             raise Refused("Eine Ablehnung braucht eine Begründung.")
         with self.lock, self.db:
-            if not self.db.execute("UPDATE cases SET status=? WHERE id=? AND status=?",
-                                   (new, c["id"], c["status"])).rowcount:
+            # Q6: die Frist laeuft ab dem Abschluss, und ein Wiederoeffnen
+            # haelt sie an
+            ended = _now() if new in ENDED else ""
+            if not self.db.execute("UPDATE cases SET status=?, ended=? WHERE id=? AND status=?",
+                                   (new, ended, c["id"], c["status"])).rowcount:
                 raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
             self._entry(c["id"], actor, actor_name, "status", text,
                         {"from": c["status"], "to": new})
@@ -272,6 +309,42 @@ class Store:
                             (c["id"], target))
             self._entry(c["id"], actor, actor_name, "move", (text or "").strip(),
                         {"from": c["queue"], "to": target})
+
+    def remove_person_data(self, months, now=None):
+        """Q6: Personendaten eines Vorgangs, der seit `months` Monaten
+        geschlossen oder abgelehnt ist, entfernen. Der Vorgang bleibt; die
+        meldende Person wird zu „entfernt“ -- im Vorgang, in ihren eigenen
+        Eintraegen und in den technischen Angaben (Benutzer-ID, Rollen,
+        alles aus dem Browser). Was Bearbeitende geschrieben haben, bleibt.
+        Gibt die Nummern zurueck."""
+        now = now or time.time()
+        cutoff = _months_before(now, months)
+        done = []
+        with self.lock, self.db:
+            rows = self.db.execute(
+                "SELECT id, number, reporter, tech FROM cases WHERE scrubbed = '' "
+                f"AND status IN ({','.join('?' * len(ENDED))}) AND ended != '' AND ended <= ?",
+                (*ENDED, cutoff)).fetchall()
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+            for r in rows:
+                tech = json.loads(r["tech"] or "{}")
+                att = dict(tech.get("attested") or {})
+                att.pop("user_id", None)
+                att.pop("roles", None)
+                tech = {"attested": att}
+                self.db.execute(
+                    "UPDATE cases SET reporter=?, reporter_name=?, tech=?, scrubbed=? "
+                    "WHERE id=?",
+                    (REMOVED, REMOVED_NAME, json.dumps(tech, ensure_ascii=False),
+                     stamp, r["id"]))
+                self.db.execute("UPDATE entries SET actor=?, actor_name=? "
+                                "WHERE case_id=? AND actor=?",
+                                (REMOVED, REMOVED_NAME, r["id"], r["reporter"]))
+                self._entry(r["id"], "system", "Löschfrist", "retention",
+                            f"Personendaten der meldenden Person nach {months} "
+                            f"Monaten entfernt.", {"months": months})
+                done.append(r["number"])
+        return done
 
     def recent_by(self, reporter, seconds):
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - seconds))

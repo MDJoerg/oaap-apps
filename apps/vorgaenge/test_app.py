@@ -208,6 +208,84 @@ app.REPORTS_PER_HOUR = 3
 codes = [report("u-spam")[0] for _ in range(4)]
 ok("Drosselung je Person: die vierte Meldung in der Stunde 429", codes == [201, 201, 201, 429], codes)
 
+# --- 7b. Loeschfrist (Q6, 0.1.1)
+import sqlite3  # noqa: E402
+import time as _t  # noqa: E402
+app.REPORTS_PER_HOUR = 100
+DAY = 86400
+st, b, _ = report("u-ret", title="Alt und geschlossen")
+old = json.loads(b)["number"]
+st, b, _ = report("u-ret", title="Noch offen")
+still_open = json.loads(b)["number"]
+call("POST", f"/v/{old}/comment", {**user("u-ret"), **ORIGIN}, "text=Nachtrag+der+Meldenden")
+call("POST", f"/v/{old}/comment", {**user("u-admin", "admin", "Hallenwart Admin"), **ORIGIN}, "text=Antwort")
+st, b, _ = call("POST", f"/v/{old}/status", {**user("u-admin", "admin"), **ORIGIN}, "status=rejected&text=doppelt")
+ok("abgelehnt -> Abschlusszeit gesetzt", st == 303 and app.STORE.get(old)["ended"] != "", app.STORE.get(old)["ended"])
+ok("nach 11 Monaten noch nichts entfernt",
+   app.STORE.remove_person_data(12, now=_t.time() + 335 * DAY) == [])
+done = app.STORE.remove_person_data(12, now=_t.time() + 370 * DAY)
+ok("nach 12 Monaten die abgeschlossenen Vorgaenge, kein offener",
+   old in done and still_open not in done
+   and all(app.STORE.get(n)["status"] in ("closed", "rejected") for n in done), done)
+c = app.STORE.get(old)
+ok("meldende Person ersetzt", (c["reporter"], c["reporter_name"]) == ("removed", "entfernt"), c["reporter"])
+ok("Benutzer-ID, Rollen und Browser-Angaben weg",
+   "user_id" not in c["tech"]["attested"] and "roles" not in c["tech"]["attested"]
+   and "browser" not in c["tech"], c["tech"])
+ok("die beglaubigte Herkunft bleibt", c["tech"]["attested"].get("instance") == "hbvp-portal-test")
+actors = [(e["type"], e["actor"], e["actor_name"]) for e in c["entries"]]
+ok("ihre eigenen Eintraege heissen jetzt 'entfernt'",
+   all(a != "u-ret" for _, a, _n in actors) and ("comment", "removed", "entfernt") in actors, actors)
+ok("die Eintraege der Bearbeitenden bleiben", ("comment", "u-admin", "Hallenwart Admin") in actors, actors)
+ok("die Entfernung steht im Verlauf", actors[-1][0] == "retention", actors[-1])
+ok("Betreff und Bezug bleiben", c["title"] == "Alt und geschlossen" and c["object_id"] == "0d6f-venue")
+ok("der offene Vorgang derselben Person bleibt unberuehrt",
+   app.STORE.get(still_open)["reporter"] == "u-ret")
+ok("ein zweiter Lauf tut nichts", app.STORE.remove_person_data(12, now=_t.time() + 900 * DAY) == [])
+st, b, _ = call("GET", f"/v/{old}", user("u-ret"))
+ok("die fruehere Meldende sieht den Vorgang nicht mehr", st == 404, st)
+st, b, _ = call("GET", f"/v/{old}", user("u-admin", "admin"))
+ok("der Eingang zeigt 'entfernt' und den Eintrag Loeschfrist",
+   st == 200 and "entfernt" in b and "Löschfrist" in b and "u-ret" not in b, st)
+# Wiederoeffnen haelt die Frist an
+st, b, _ = report("u-re", title="Wird wieder geoeffnet")
+re_n = json.loads(b)["number"]
+for s_ in ("rejected&text=nein", "reopened"):
+    call("POST", f"/v/{re_n}/status", {**user("u-admin", "admin"), **ORIGIN}, "status=" + s_)
+ok("wieder geoeffnet: keine Abschlusszeit, keine Entfernung",
+   app.STORE.get(re_n)["ended"] == ""
+   and re_n not in app.STORE.remove_person_data(12, now=_t.time() + 900 * DAY))
+# eine Ablage aus 0.1.0 (ohne die neuen Spalten) bekommt ihre Frist
+oldp = os.path.join(DATA, "v010.db")
+d = sqlite3.connect(oldp)
+d.executescript("""
+CREATE TABLE cases (id TEXT PRIMARY KEY, number TEXT UNIQUE NOT NULL, kind TEXT NOT NULL,
+  title TEXT NOT NULL, body TEXT NOT NULL, status TEXT NOT NULL, queue TEXT NOT NULL,
+  reporter TEXT NOT NULL, reporter_name TEXT NOT NULL, object_kind TEXT NOT NULL DEFAULT '',
+  object_id TEXT NOT NULL DEFAULT '', source_instance TEXT NOT NULL DEFAULT '',
+  source_app TEXT NOT NULL DEFAULT '', tech TEXT NOT NULL DEFAULT '{}',
+  created TEXT NOT NULL, updated TEXT NOT NULL);
+CREATE TABLE entries (seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL,
+  at TEXT NOT NULL, actor TEXT NOT NULL, actor_name TEXT NOT NULL, type TEXT NOT NULL,
+  text TEXT NOT NULL DEFAULT '', data TEXT NOT NULL DEFAULT '{}');
+INSERT INTO cases VALUES ('c1','V-2025-0001','bug','t','b','closed','eingang','u-x','X',
+  '','','','','{"attested":{"user_id":"u-x"}}','2025-01-01T00:00:00Z','2025-03-01T00:00:00Z');
+INSERT INTO entries (case_id, at, actor, actor_name, type) VALUES
+  ('c1','2025-02-01T00:00:00Z','u-adm','A','status');
+""")
+d.commit()
+d.close()
+s010 = store.Store(oldp)
+ok("0.1.0-Ablage: Abschlusszeit aus dem letzten Statuseintrag",
+   s010.get("V-2025-0001")["ended"] == "2025-02-01T00:00:00Z", s010.get("V-2025-0001")["ended"])
+ok("0.1.0-Ablage: die Frist greift", s010.remove_person_data(12) == ["V-2025-0001"])
+# Einstellung und Kalender
+ok("Frist: '6' -> 6, '0'/'abc'/'' -> 12",
+   [app.retention_months(x) for x in ("6", "0", "abc", "")] == [6, 12, 12, 12])
+ok("31. Maerz minus ein Monat ist der 29. Februar (Schaltjahr)",
+   store._months_before(_t.mktime((2024, 3, 31, 12, 0, 0, 0, 0, 0)) - _t.timezone, 1)
+   .startswith("2024-02-29"))
+
 # --- 8. Ohne Anmeldung nichts
 st, b, _ = call("GET", "/")
 ok("ohne X-OAAP-User-Id 401", st == 401, st)

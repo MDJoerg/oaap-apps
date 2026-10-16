@@ -75,9 +75,26 @@ Statuswerte in Stufe 1:
 
 - **Keine Übergabe** an einen anderen Mandanten oder Knoten (Stufe 2).
 - **Keine Benachrichtigung.** Der Posteingang ist die Übersicht.
-- **Keine Löschfrist** für Personendaten (Q6: 12 Monate nach Schließen).
-  Sie gehört vor den ersten echten Mandanten.
 - **Keine Vorgänge aus dem Backend einer App** (§3.2, Stufe 2).
+
+## Löschfrist (Q6, seit 0.1.1)
+
+Ist ein Vorgang seit **12 Monaten** geschlossen oder abgelehnt, entfernt
+die App die meldende Person daraus. Der Vorgang selbst bleibt.
+
+- **Was entfernt wird:** die Person im Vorgang und in ihren eigenen
+  Einträgen (sie heißt danach „entfernt“), ihre Benutzer-ID und Rollen in
+  den technischen Angaben und alles, was der Browser mitgeschickt hat.
+- **Was bleibt:** Herkunft (App, Instanz, Version), Bezug, Betreff,
+  Beschreibung und was Bearbeitende geschrieben haben.
+- **Freitext:** Steht ein Name im Text, entfernt ihn die Frist nicht.
+- **Verlauf:** Die Entfernung steht als Eintrag „Löschfrist“ im Verlauf.
+- **Wiederöffnen:** Ein wieder geöffneter Vorgang hält die Frist an. Sie
+  läuft ab dem nächsten Abschluss neu.
+
+Die Frist ist je Instanz einstellbar, also je Mandant:
+`VORGAENGE_RETENTION_MONTHS`, ganze Monate ab 1, Vorgabe 12. Die App prüft
+beim Start und alle sechs Stunden.
 
 ## Ablage
 

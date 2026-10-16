@@ -31,14 +31,16 @@ import html
 import json
 import os
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
 import authz_client
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, NEXT,
-                   STATUS_LABEL, Refused, Store)
+                   RETENTION_MONTHS, STATUS_LABEL, Refused, Store)
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -47,9 +49,44 @@ DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
 # Routen; diese ist angemeldet, also zaehlt die App selbst.
 REPORTS_PER_HOUR = 20
 
+# RFC-0061 Q6: Personendaten eines abgeschlossenen Vorgangs werden nach so
+# vielen Monaten entfernt. Eine Instanz je Mandant, also ist das die
+# Einstellung des Mandanten. Wie oft nachgesehen wird: alle sechs Stunden
+# und beim Start -- ein Tag Verspaetung ist bei Monaten kein Verzug.
+RETENTION_CHECK_SECONDS = 6 * 3600
+
+
+def retention_months(raw=None):
+    """Die eingestellte Frist, ganze Monate ab 1; alles andere ist die
+    Vorgabe, und das wird gesagt statt geschluckt."""
+    raw = os.environ.get("VORGAENGE_RETENTION_MONTHS", "") if raw is None else raw
+    try:
+        n = int(str(raw).strip())
+        if n >= 1:
+            return n
+    except ValueError:
+        pass
+    if str(raw).strip():
+        print(f"VORGAENGE_RETENTION_MONTHS={raw!r} ist keine ganze Zahl ab 1 -- "
+              f"es gelten {RETENTION_MONTHS} Monate.", flush=True)
+    return RETENTION_MONTHS
+
+
+def retention_loop(months):
+    while True:
+        try:
+            done = STORE.remove_person_data(months)
+            if done:
+                print(f"Löschfrist: Personendaten in {len(done)} Vorgang/Vorgängen "
+                      f"entfernt ({', '.join(done)})", flush=True)
+        except Exception as e:      # der Lauf darf die App nie anhalten
+            print(f"Löschfrist: Lauf fehlgeschlagen: {e}", flush=True)
+        time.sleep(RETENTION_CHECK_SECONDS)
+
 esc = html.escape
 STORE = None
 AUTHZ = None
+RETENTION = RETENTION_MONTHS
 
 
 # ------------------------------------------------------------------ Rechte
@@ -375,6 +412,9 @@ class Handler(BaseHTTPRequestHandler):
                 f"App <i>Vorgänge</i>, Rollenvorlage <i>Bearbeiter/in</i> oder <i>Clearing</i>, "
                 f"und als Kontext <b>Zuständigkeitsbereich</b> die Kennung aus der ersten Spalte. "
                 f"Den Bereich <code>{DEFAULT_QUEUE}</code> sehen außerdem die Admins des Mandanten.</p>"
+                f"<p class=muted>Löschfrist: {RETENTION} Monate nach dem Schließen oder Ablehnen "
+                f"wird die meldende Person aus einem Vorgang entfernt "
+                f"(Einstellung <code>VORGAENGE_RETENTION_MONTHS</code> dieser Instanz).</p>"
                 f"<table><tr><th>Kennung</th><th>Titel</th><th>Ich sehe ihn</th></tr>{rows}</table>")
         if who.admin:
             body += """<h2>Bereich anlegen</h2>
@@ -424,6 +464,8 @@ class Handler(BaseHTTPRequestHandler):
             elif e["type"] == "move":
                 head = (f"verschoben {esc(qt.get(d.get('from'), d.get('from', '')))} → "
                         f"{esc(qt.get(d.get('to'), d.get('to', '')))}")
+            elif e["type"] == "retention":
+                head = "Löschfrist"
             else:
                 head = "Kommentar"
             text = f"<div class=body>{esc(e['text'])}</div>" if e["text"] else ""
@@ -482,9 +524,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE, AUTHZ
+    global STORE, AUTHZ, RETENTION
     os.makedirs(DATA_DIR, exist_ok=True)
     STORE = Store(os.path.join(DATA_DIR, "vorgaenge.db"))
+    RETENTION = retention_months()
+    print(f"Löschfrist: {RETENTION} Monate nach Abschluss", flush=True)
+    threading.Thread(target=retention_loop, args=(RETENTION,), daemon=True).start()
     AUTHZ = authz_client.Authz(app=None)
     if not AUTHZ.url:
         print("OAAP_AUTHZ_URL fehlt: nur die Admins sehen den Eingang, "
