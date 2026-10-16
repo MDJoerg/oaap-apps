@@ -3,7 +3,7 @@ oaap_manifest: "0.6"
 app:
   id: vorgaenge
   name: Vorgänge
-  version: 0.1.1
+  version: 0.2.0
   type: native
   class: frontend
   description: "Melden und Klären im Mandanten (RFC-0061 Stufe 1): nimmt die Meldungen des Feedback-Knopfs der Plattform an (/platform/feedback.js in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Eine Instanz je Mandant; Plattform ab 0.1.199"
