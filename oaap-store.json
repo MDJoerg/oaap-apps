@@ -540,6 +540,44 @@
           "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/package-catalog"
         }
       ]
+    },
+    {
+      "id": "vpn-client",
+      "name": "VPN-Client",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-10-16",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/vpn-client"
+      },
+      "roles": [
+        "admin"
+      ],
+      "categories": [
+        "infrastructure"
+      ],
+      "app_class": "service",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "vpn",
+        "openvpn",
+        "tunnel",
+        "destination",
+        "through"
+      ],
+      "summary": "Erreicht ein System hinter einem fremden OpenVPN: der Tunnel lebt in einem Container, was dahinter liegt, wird zur Destination (through:<instanz>/<name>).",
+      "description": "Ein Tunnel als App (RFC-0060). Hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container (Laufzeit 2.23: nur /dev/net/tun und NET_ADMIN, Manifest 0.8, Plattform ab 0.1.197) und bedient benannte Ziele unter /t/<name>/ als Reverse-Proxy mit Streaming. Traut der Gegenseite nichts: geschobene Routen, DNS und Skripte werden verworfen, ein Paketfilter lässt aus dem Tunnel nur Antworten herein und leitet nichts weiter. Den Schlüssel des Ziels trägt die Destination der Plattform (Zielart through, Plattform ab 0.1.198), nie die App. Installation nur durch den Betreiber an der Kommandozeile mit --confirm-tun; keine Generalprobe mit Tunnel.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/vpn-client"
+        }
+      ]
     }
   ]
 }

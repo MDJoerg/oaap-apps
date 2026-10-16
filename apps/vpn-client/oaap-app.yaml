@@ -1,0 +1,58 @@
+oaap_manifest: "0.8"
+
+app:
+  id: vpn-client
+  name: VPN-Client
+  version: 0.1.0
+  type: native
+  class: service
+  description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
+
+services:
+  vpn:
+    build: .
+    port: 8080
+    # Laufzeit 2.23: /dev/net/tun und NET_ADMIN für genau diesen Container.
+    # Installieren kann das nur der Betreiber an der Kommandozeile:
+    #   sudo oaap app install <paket> --name vpn --confirm-tun
+    tun: true
+
+routes:
+  # Die Zustandsseite. Die Ziele unter /t/<name>/ sind über diese Route
+  # NICHT erreichbar (die App weist Anfragen mit Anmelde-Kopfzeilen ab) --
+  # nur über eine Destination der Plattform, die den Schlüssel ergänzt.
+  - path: /
+    roles: [admin]
+
+config:
+  # Die .ovpn-Datei der Gegenstelle, als EINE Zeile base64 -- die Plattform
+  # trägt Konfigurationswerte einzeilig, eine .ovpn-Datei hat Zeilen,
+  # ;-Kommentare und Zertifikate:
+  #   sudo oaap app config set vpn VPN_CONFIG "$(base64 -w0 client.ovpn)"
+  - key: VPN_CONFIG
+    label: "OpenVPN-Datei (.ovpn) als base64, eine Zeile"
+    secret: true
+  # Benutzer und Passwort, falls die Gegenstelle sie verlangt.
+  - key: VPN_AUTH
+    label: "Zugang zur Gegenstelle (benutzer:passwort), falls verlangt"
+    secret: true
+  # Was hinter dem Tunnel erreichbar sein soll, ein Ziel je Zeile:
+  #   gaming = http://10.8.0.5:11434
+  # Die Adresse ist kein Geheimnis (nur aus diesem Container erreichbar);
+  # den Schlüssel des Ziels trägt die Destination (RFC-0060 D5). Für jede
+  # IP-Adresse legt die App genau eine Route in den Tunnel.
+  - key: VPN_TARGETS
+    label: "Ziele hinter dem Tunnel (name = http://adresse), eines je Zeile"
+    multiline: true
+    default: ""
+  - key: VPN_KIND
+    label: "Art des Tunnels (diese Version: openvpn)"
+    default: "openvpn"
+  - key: VPN_TIMEOUT_SECONDS
+    label: "Geduld gegenüber dem Ziel in Sekunden (10–3600)"
+    default: "600"
+
+health:
+  # 200 nur, solange der Tunnel steht.
+  path: /healthz
+  startup_grace_seconds: 30
