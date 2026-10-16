@@ -45,7 +45,7 @@ import authz_client
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    NEXT, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -315,6 +315,15 @@ class Handler(BaseHTTPRequestHandler):
                 or self.headers.get("X-OAAP-User", "").strip() or uid)
         return Who(uid, name, roles, self.authz.grants(uid))
 
+    def is_partner(self):
+        """Ein Maschinenzugang, den wir einem Partner ausgestellt haben, traegt
+        die Rolle `user` -- das Gateway liesse ihn also auf jede Seite dieser
+        App. Gemessen auf oaap-test (16.10.): 200 auf `/`. Er bekommt hier
+        `/handover` und sonst nichts: weder die Namen unserer Bereiche noch
+        das Formular fuer einen neuen Vorgang. `Origin` schuetzt dort nur vor
+        einem Browser, nicht vor einem Skript mit Schluessel."""
+        return bool(self.store.partner_by_principal(self.headers.get("X-OAAP-User", "").strip()))
+
     def same_origin(self):
         """Ein POST muss von dieser Seite kommen. Der Browser schickt Origin
         bei jedem POST mit; fehlt er, war es kein Browser-Formular."""
@@ -358,6 +367,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "ok", "text/plain")
         if p == "/platform/feedback/session":
             return self.feedback_session()
+        if self.is_partner():
+            return self.send(403, page("Nur Übergaben", "<p>Dieser Zugang liefert Übergaben, sonst nichts.</p>"))
         who = self.who()
         if not who:
             return self.send(401, page("Nicht angemeldet", "<p>Bitte über die Plattform anmelden.</p>"))
@@ -387,6 +398,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.backend_submit()
         if p == "/handover":
             return self.handover_in()
+        if self.is_partner():
+            return self.json(403, {"error": "Dieser Zugang liefert Übergaben, sonst nichts."})
         who = self.who()
         if not who:
             return self.send(401, "")

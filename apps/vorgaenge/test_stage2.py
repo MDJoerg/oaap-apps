@@ -238,6 +238,14 @@ st, b, _ = call(URL_B, "POST", "/handover", {**ADMIN_B, **origin(URL_B)}, raw.en
                 "application/json")
 ok("eine Sitzung im Browser ist kein Partner", st in (401, 403), st)
 
+PARTNER_KEY = {"Authorization": "Bearer key-a2b", "X-OAAP-User": "m-hbvp-to-dev",
+               "X-OAAP-User-Id": "55555555-5555-4555-8555-555555555555", "X-OAAP-Roles": "user"}
+st, b, _ = call(URL_B, "GET", "/bereiche", PARTNER_KEY)
+ok("der Zugang des Partners sieht keine Seite (Bereiche): 403", st == 403, st)
+st, b, _ = call(URL_B, "POST", "/neu", {**PARTNER_KEY, **origin(URL_B)},
+                "kind=internal&queue=eingang&title=von+aussen")
+ok("… und legt ueber /neu keinen Vorgang an, auch mit passendem Origin: 403", st == 403, st)
+
 print("")
 print("4. Antwort zurueck")
 st, b, _ = call(URL_B, "GET", f"/v/{cb['number']}", ADMIN_B)
