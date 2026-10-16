@@ -1,0 +1,63 @@
+oaap_manifest: "0.6"
+
+app:
+  id: vorgaenge
+  name: Vorgänge
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Melden und Klären im Mandanten (RFC-0061 Stufe 1): nimmt die Meldungen des Feedback-Knopfs der Plattform an (/platform/feedback.js in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Eine Instanz je Mandant; Plattform ab 0.1.199"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+# Wer die App öffnet, sieht seine eigenen Meldungen. Was er in einem
+# Bereich tun darf, sagt die Erklärung unten, nicht die Plattformrolle.
+# Die Meldungen des Knopfs kommen NICHT über diese Route, sondern über
+# /platform/feedback auf dem Ursprung der meldenden App; das Gateway
+# leitet sie hierher (Pfad /feedback) und setzt die Herkunft.
+routes:
+  - path: /
+    roles: [admin, keyuser, user]
+
+# RFC-0061 Q4: die Vorgänge liegen in der eigenen Ablage (SQLite), nicht
+# im Zwilling -- der kann in 0.1 weder auflisten noch suchen.
+storage:
+  - name: data
+    mount: /data
+
+# RFC-0061 §2.1: ein Bereich (Queue) ist ein Kontext. Der Mandant legt in
+# dieser App Bereiche an und vergibt sie in „Rollen & Rechte“ mit diesen
+# Vorlagen; die Kennung des Bereichs ist der Kontext.
+authorization:
+  objects:
+    - key: case
+      title: Vorgang
+      activities: [read, comment, triage, move, hand_over, close, vote]
+      fields:
+        - key: queue
+          context: Zuständigkeitsbereich
+  role_templates:
+    - key: case_handler
+      title: Bearbeiter/in
+      grants:
+        - object: case
+          activities: [read, comment, triage, move, close]
+          queue: $context
+    - key: case_clearing
+      title: Clearing
+      grants:
+        - object: case
+          activities: [read, comment, triage, move, hand_over, close]
+          queue: $context
+    - key: case_voter
+      title: Ideen bewerten
+      grants:
+        - object: case
+          activities: [read, vote]
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10
