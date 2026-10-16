@@ -27,6 +27,7 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 STATE_LABELS = {
     "ok": "Gesund", "warn": "Auffällig", "error": "Gestört",
     "unknown": "Unbekannt", "unreachable": "Nicht erreichbar",
+    "standby": "Standby",
 }
 
 ATTENTION_LABELS = {
@@ -167,7 +168,9 @@ def _age_seconds(fetched_iso, now):
 
 def _doc_state(doc):
     """Gesamtzustand aus dem Dokument: schlechtester Einzelzustand."""
-    rank = {"ok": 0, "unknown": 1, "warn": 2, "error": 3}
+    # schema 0.4: an instance asleep on purpose ("standby") is no fault and
+    # does not worsen the node; it ranks with ok and is never the worst
+    rank = {"ok": 0, "standby": 0, "unknown": 1, "warn": 2, "error": 3}
     worst = "ok"
     for row in list(doc.get("core") or []) + list(doc.get("instances") or []):
         s = row.get("state", "unknown")
@@ -200,6 +203,7 @@ def node_rows(nodes, state, now=None, interval=60):
             "instances": insts,
             "inst_total": len(insts),
             "inst_ok": sum(1 for i in insts if i.get("state") == "ok"),
+            "inst_standby": sum(1 for i in insts if i.get("state") == "standby"),
             "attention": list((doc or {}).get("attention") or []),
             # Schema 0.2 (oaap.fleet.status): veröffentlichte Namen mit
             # den DNS-Urteilen des Knotens + seine öffentliche Adresse.

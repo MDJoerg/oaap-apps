@@ -181,5 +181,19 @@ check("Datei enthält den Schlüssel nicht",
       SECRET not in open(tmp, encoding="utf-8").read())
 check("kaputte Datei lädt als leer", fleet.load_state(tmp + ".nix") == {})
 
+print("\nStandby (Schema 0.4): schlafende Instanzen sind keine Stoerung")
+doc_sb = {"core": [{"name": "gateway", "state": "ok"}],
+          "instances": [{"instance": "a", "state": "ok"},
+                        {"instance": "b", "state": "standby"}]}
+check("ein Knoten mit schlafender Instanz bleibt gesund", fleet._doc_state(doc_sb) == "ok")
+doc_sb["instances"].append({"instance": "c", "state": "warn"})
+check("und ein echter Befund schlaegt trotzdem durch", fleet._doc_state(doc_sb) == "warn")
+rows_sb = fleet.node_rows([{"name": "n", "url": "http://n"}],
+                          {"n": {"url": "http://n", "doc": doc_sb, "error": "",
+                                 "fetched": "2026-10-16T10:00:00Z"}})
+check("die Zeile zaehlt Standby getrennt", rows_sb[0]["inst_standby"] == 1
+      and rows_sb[0]["inst_ok"] == 1 and rows_sb[0]["inst_total"] == 3)
+check("Standby hat ein Etikett", fleet.STATE_LABELS["standby"] == "Standby")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

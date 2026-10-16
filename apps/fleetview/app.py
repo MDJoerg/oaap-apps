@@ -195,7 +195,7 @@ def page(title, body, user, roles):
 
 
 STATE_BADGE = {"ok": "ok", "warn": "warn", "error": "err",
-               "unknown": "off", "unreachable": "err"}
+               "unknown": "off", "unreachable": "err", "standby": "off"}
 
 
 def badge(state, extra=""):
@@ -282,7 +282,8 @@ def overview(user, roles):
                 f'<td><a href="node/{esc(r["name"])}">{esc(r["name"])}</a></td>'
                 f'<td>{badge(r["state"], extra)}</td>'
                 f'<td>{esc(r["version"])}</td>'
-                f'<td>{r["inst_ok"]}/{r["inst_total"]}</td>'
+                f'<td>{r["inst_ok"]}/{r["inst_total"]}'
+                f'{" · " + str(r["inst_standby"]) + " Standby" if r["inst_standby"] else ""}</td>'
                 f'<td>{fmt_age(r)}</td>'
                 f'<td><a href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a></td>'
                 "</tr>")
