@@ -165,10 +165,15 @@ app.TARGETS = vpnconf.parse_targets(f"gaming = http://127.0.0.1:{tport}/base")
 
 def call(method, path, headers=None, body=None):
     c = http.client.HTTPConnection("127.0.0.1", aport, timeout=10)
-    c.request(method, path, body=body, headers=headers or {})
-    r = c.getresponse()
-    data = r.read()
-    c.close()
+    try:
+        c.request(method, path, body=body, headers=headers or {})
+        r = c.getresponse()
+        data = r.read()
+    except OSError as e:
+        # the verdict is the caller's: no answer in 10 s is status 0
+        return 0, repr(e).encode(), {}
+    finally:
+        c.close()
     return r.status, data, dict(r.getheaders())
 
 
@@ -224,6 +229,33 @@ st, data, _ = call("GET", "/")
 ok("die Seite zeigt Zustand und Ziel, keinen Schluessel",
    st == 200 and "verbunden" in data.decode() and "gaming" in data.decode()
    and "k3" not in data.decode())
+
+print("")
+print("Ein toter Tunnel (gemessen an oaap-test: OpenVPN startet sich IM Prozess neu)")
+ok("die eigene Datei erkennt einen toten Tunnel selbst (keepalive)",
+   "keepalive 10 60" in vpnconf.sanitize_config(OVPN, {}, "")[0].splitlines())
+ok("ein keepalive/ping der fremden Datei wird durch unseres ersetzt",
+   "keepalive" in vpnconf.sanitize_config("client\nkeepalive 600 6000\n", {}, "")[1])
+app.say(state="verbunden")
+app.on_line("2026-10-16 10:18:59 [server] Inactivity timeout (--ping-restart), restarting")
+app.on_line("2026-10-16 10:18:59 SIGUSR1[soft,ping-restart] received, process restarting")
+ok("nach 'process restarting' ist der Tunnel NICHT mehr verbunden",
+   app.STATE["state"] == "verbindet" and "restarting" in app.STATE["error"], app.STATE)
+n = len(SEEN)
+st, data, _ = call("GET", "/t/gaming/v1/models")
+ok("... und der Proxy antwortet sofort 502, statt in den toten Tunnel zu schicken",
+   st == 502 and len(SEEN) == n, (st, data))
+ok("'Initialization Sequence Completed' bringt ihn zurueck",
+   app.on_line("x Initialization Sequence Completed") and app.STATE["state"] == "verbunden")
+
+# Ein Ziel, das die Verbindung nie annimmt: kurz warten, nicht TIMEOUT lang.
+app.TARGETS = vpnconf.parse_targets("dead = http://10.255.255.1:9")
+app.CONNECT_TIMEOUT = 1
+t0 = time.monotonic()
+st, data, _ = call("GET", "/t/dead/x")
+took = time.monotonic() - t0
+ok("ein Ziel ohne Antwort: 502 nach der kurzen Verbindungsfrist, nicht nach 600 s",
+   st == 502 and took < 5, (st, round(took, 1), data))
 
 print("")
 print("FAIL" if fails else "OK", f"-- {fails} Fehler" if fails else "")

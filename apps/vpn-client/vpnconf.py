@@ -38,7 +38,8 @@ DROPPED = {
     "plugin", "management", "management-client", "management-hold",
     "management-query-passwords", "log", "log-append", "status", "daemon",
     "writepid", "cd", "chroot", "setenv", "setenv-safe", "pull-filter",
-    "route-nopull", "auth-user-pass", "askpass", "config",
+    "route-nopull", "auth-user-pass", "askpass", "config", "keepalive",
+    "ping", "ping-restart", "ping-exit",
 }
 
 # Inline-Bloecke (<ca> ... </ca>) werden unveraendert uebernommen.
@@ -144,6 +145,9 @@ def sanitize_config(text, targets, auth_file=""):
         'pull-filter ignore "dhcp-option"',
         'pull-filter ignore "block-outside-dns"',
         "script-security 1",
+        # einen toten Tunnel selbst erkennen, nicht auf ein geschobenes
+        # ping-restart der Gegenseite warten (das kann fehlen)
+        "keepalive 10 60",
     ]
     if auth_file:
         keep.append(f"auth-user-pass {auth_file}")

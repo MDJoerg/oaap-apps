@@ -66,7 +66,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
 | [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.3   |
 | [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.9   |
-| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.0   |
+| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.1   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.3   |
 | [Rollen & Rechte](apps/rollen-rechte/) | Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen (RFC-0045 A7); privilegiert, Installation nur mit `--confirm-administer` | 0.1.1   |
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.1   |

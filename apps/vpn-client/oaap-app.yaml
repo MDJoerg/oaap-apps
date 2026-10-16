@@ -3,7 +3,7 @@ oaap_manifest: "0.8"
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.1.0
+  version: 0.1.1
   type: native
   class: service
   description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."

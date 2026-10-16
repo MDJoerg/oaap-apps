@@ -45,12 +45,14 @@ IDENTITY_PREFIX = "x-oaap-"
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host",
        "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded"}
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 try:
     TIMEOUT = max(10, min(3600, int(os.environ.get("VPN_TIMEOUT_SECONDS") or 600)))
 except ValueError:
     TIMEOUT = 600
+
+CONNECT_TIMEOUT = 10
 
 LOCK = threading.Lock()
 STATE = {"state": "startet", "since": "", "remote": "", "tunnel_ip": "",
@@ -77,7 +79,11 @@ def up():
 
 # ---------------------------------------------------------------- Filter
 def _run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        # ein fehlendes Werkzeug ist ein Fehler mit Satz, kein Absturz
+        return 127, f"{cmd[0]}: {e}"
     return r.returncode, (r.stderr or r.stdout or "").strip()
 
 
@@ -162,6 +168,31 @@ def prepare():
     return path, ""
 
 
+def on_line(line):
+    """Eine Zeile von OpenVPN -> Zustand. True, wenn der Tunnel (wieder) steht.
+
+    OpenVPN startet sich bei einem toten Tunnel INNERHALB des Prozesses neu
+    (`SIGUSR1[soft,ping-restart] ... restarting`) -- der Prozess endet nicht.
+    Am Prozessende allein erkannt (0.1.0), blieb der Zustand `verbunden`
+    stehen und der Proxy schickte Anfragen in einen toten Tunnel (gemessen
+    an oaap-test, 2026-10-16). Der Zustand haengt deshalb an diesen Zeilen.
+    """
+    LOG.append(line)
+    if "Peer Connection Initiated with" in line:
+        say(remote=line.split("with", 1)[1].strip())
+    if "Initialization Sequence Completed" in line:
+        say(state="verbunden", since=now(), tunnel_ip=tunnel_ip(), error="")
+        return True
+    if "process restarting" in line or "Inactivity timeout" in line:
+        with LOCK:
+            was = STATE["state"]
+        say(state="verbindet", tunnel_ip="", error=line,
+            **({"since": now()} if was == "verbunden" else {}))
+    if "AUTH_FAILED" in line or "Exiting due to fatal error" in line:
+        say(error=line)
+    return False
+
+
 def supervise():
     """Haelt OpenVPN am Leben. Ohne Tunnelgeraet wird nicht wiederholt
     (RFC-0060 D6): das ist eine Generalprobe oder eine Installation ohne
@@ -193,15 +224,8 @@ def supervise():
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
         for line in proc.stdout:
-            line = line.rstrip()
-            LOG.append(line)
-            if "Peer Connection Initiated with" in line:
-                say(remote=line.split("with", 1)[1].strip())
-            if "Initialization Sequence Completed" in line:
-                say(state="verbunden", since=now(), tunnel_ip=tunnel_ip(), error="")
+            if on_line(line.rstrip()):
                 pause = 5
-            if "AUTH_FAILED" in line or "Exiting due to fatal error" in line:
-                say(error=line)
         rc = proc.wait()
         say(state="getrennt", since=now(), tunnel_ip="",
             error=STATE["error"] or f"openvpn endete mit {rc}")
@@ -285,11 +309,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         headers["Host"] = t["host"] if t["port"] == default else f"{t['host']}:{t['port']}"
         try:
             body = self._body()
+            # Verbinden darf kurz dauern, Antworten lange (ein grosses Modell
+            # denkt Minuten): ein Ziel, das gar nicht antwortet, soll nicht
+            # TIMEOUT Sekunden lang wie ein langsames aussehen.
             if t["scheme"] == "https":
-                conn = http.client.HTTPSConnection(t["host"], t["port"], timeout=TIMEOUT,
+                conn = http.client.HTTPSConnection(t["host"], t["port"], timeout=CONNECT_TIMEOUT,
                                                    context=ssl.create_default_context())
             else:
-                conn = http.client.HTTPConnection(t["host"], t["port"], timeout=TIMEOUT)
+                conn = http.client.HTTPConnection(t["host"], t["port"], timeout=CONNECT_TIMEOUT)
+            conn.connect()
+            conn.sock.settimeout(TIMEOUT)
             conn.request(self.command, upstream, body=body, headers=headers)
             resp = conn.getresponse()
         except (OSError, http.client.HTTPException) as e:

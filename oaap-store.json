@@ -545,7 +545,7 @@
       "id": "vpn-client",
       "name": "VPN-Client",
       "type": "native",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "released": "2026-10-16",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
