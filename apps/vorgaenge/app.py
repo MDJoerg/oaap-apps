@@ -5,11 +5,11 @@ Eine Instanz je Mandant. Sie nimmt zweierlei an:
 1. **Meldungen ueber den Feedback-Knopf** der Plattform. Jede App, die
    `<script src="/platform/feedback.js" defer>` einbindet, schickt ihr
    Formular an `/platform/feedback` auf ihrem EIGENEN Ursprung; das
-   Gateway leitet es an diese Instanz weiter (Pfad `/feedback`) und setzt
+   Gateway leitet es unveraendert an diese Instanz weiter und setzt
    dabei, was nur es weiss: wer fragt (`X-OAAP-User-Id`, `X-OAAP-Roles`)
    und woher (`X-OAAP-Source-Instance`, `-App`, `-Version`, `-Tenant`).
    Diese Kopfzeilen streicht das Gateway auf JEDER anderen Anfrage --
-   fehlen sie, kam die Anfrage nicht ueber den Knopf, und `/feedback`
+   fehlen sie, kam die Anfrage nicht ueber den Knopf, und `/platform/feedback`
    lehnt ab. Das ist die ganze Beglaubigung (RFC-0061 §3.1, Q1).
 2. **Interne Vorgaenge**, in dieser App selbst angelegt.
 
@@ -241,7 +241,7 @@ class Handler(BaseHTTPRequestHandler):
         p = u.path
         if p == "/healthz":
             return self.send(200, "ok", "text/plain")
-        if p == "/feedback/session":
+        if p == "/platform/feedback/session":
             return self.feedback_session()
         who = self.who()
         if not who:
@@ -261,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         if not self.read_body():
             return self.send(413, "")
-        if p == "/feedback":
+        if p == "/platform/feedback":
             return self.feedback_post()
         who = self.who()
         if not who:

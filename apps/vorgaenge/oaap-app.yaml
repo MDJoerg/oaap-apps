@@ -17,7 +17,7 @@ services:
 # Bereich tun darf, sagt die Erklärung unten, nicht die Plattformrolle.
 # Die Meldungen des Knopfs kommen NICHT über diese Route, sondern über
 # /platform/feedback auf dem Ursprung der meldenden App; das Gateway
-# leitet sie hierher (Pfad /feedback) und setzt die Herkunft.
+# leitet sie unverändert hierher und setzt die Herkunft.
 routes:
   - path: /
     roles: [admin, keyuser, user]

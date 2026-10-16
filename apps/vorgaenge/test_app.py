@@ -91,29 +91,29 @@ def report(uid="u-anna", **over):
                        "cookie": "SECRET", "user_id": "u-mallory"},
            "attested": {"instance": "faked", "user_id": "u-mallory"}}
     doc.update(over)
-    return call("POST", "/feedback", {**SOURCE, **user(uid), **ORIGIN}, doc, "application/json")
+    return call("POST", "/platform/feedback", {**SOURCE, **user(uid), **ORIGIN}, doc, "application/json")
 
 
 # --- 1. Der Knopf zeigt sich nur mit Sitzung UND ueber das Gateway
-st, _, _ = call("GET", "/feedback/session", user("u-anna"))
+st, _, _ = call("GET", "/platform/feedback/session", user("u-anna"))
 ok("session: ohne Herkunftszeilen 404 (nicht über das Gateway gekommen)", st == 404, st)
-st, _, _ = call("GET", "/feedback/session", SOURCE)
+st, _, _ = call("GET", "/platform/feedback/session", SOURCE)
 ok("session: ohne angemeldete Person 404", st == 404, st)
-st, b, _ = call("GET", "/feedback/session", {**SOURCE, **user("u-anna")})
+st, b, _ = call("GET", "/platform/feedback/session", {**SOURCE, **user("u-anna")})
 ok("session: mit beidem 200 und ok", st == 200 and json.loads(b).get("ok") is True, (st, b))
 ok("session: der Knopf bietet `internal` nicht an", "internal" not in json.loads(b)["kinds"])
 
 # --- 2. Melden
-st, b, _ = call("POST", "/feedback", {**user("u-anna"), **ORIGIN},
+st, b, _ = call("POST", "/platform/feedback", {**user("u-anna"), **ORIGIN},
                 {"kind": "bug", "title": "x"}, "application/json")
 ok("feedback: ohne Herkunft abgelehnt (404)", st == 404, st)
-st, b, _ = call("POST", "/feedback", {**SOURCE, **user("u-anna")},
+st, b, _ = call("POST", "/platform/feedback", {**SOURCE, **user("u-anna")},
                 {"kind": "bug", "title": "x"}, "application/json")
 ok("feedback: ohne Origin abgelehnt (403)", st == 403, st)
-st, b, _ = call("POST", "/feedback", {**SOURCE, **user("u-anna"), "Origin": "https://evil.example"},
+st, b, _ = call("POST", "/platform/feedback", {**SOURCE, **user("u-anna"), "Origin": "https://evil.example"},
                 {"kind": "bug", "title": "x"}, "application/json")
 ok("feedback: fremder Origin abgelehnt (403)", st == 403, st)
-st, b, _ = call("POST", "/feedback", {**SOURCE, **user("u-anna"), **ORIGIN},
+st, b, _ = call("POST", "/platform/feedback", {**SOURCE, **user("u-anna"), **ORIGIN},
                 "kind=bug&title=x", "application/x-www-form-urlencoded")
 ok("feedback: kein JSON -> 415", st == 415, st)
 st, b, _ = report(kind="internal")

@@ -16,8 +16,8 @@ jeder Instanz und leitet `/platform/feedback` hierher weiter.
    Das Script kommt vom Gateway, nicht von der App. Es fragt zuerst
    `/platform/feedback/session`; ohne Sitzung oder ohne `vorgaenge` im
    Mandanten zeigt es nichts. Sein Formular geht an `/platform/feedback`
-   auf dem Ursprung der App. Das Gateway leitet es an diese Instanz (Pfad
-   `/feedback`) und setzt dabei die **Herkunft**, die die App nicht
+   auf dem Ursprung der App. Das Gateway leitet es unverändert an diese
+   Instanz weiter und setzt dabei die **Herkunft**, die die App nicht
    fälschen kann:
    - `X-OAAP-Source-Instance`
    - `X-OAAP-Source-App`
@@ -25,7 +25,7 @@ jeder Instanz und leitet `/platform/feedback` hierher weiter.
    - `X-OAAP-Source-Tenant`
 
    Auf jeder anderen Anfrage streicht das Gateway diese Kopfzeilen. Fehlen
-   sie, lehnt `/feedback` ab.
+   sie, lehnt die App die Meldung ab.
 2. **Interne Vorgänge**, angelegt unter „Neuer Vorgang“.
 
 Für Apps mit eigener Kopfleiste:
