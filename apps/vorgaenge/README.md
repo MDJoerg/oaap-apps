@@ -1,8 +1,18 @@
-# Vorgänge (RFC-0061 Stufe 1)
+# Vorgänge (RFC-0061 Stufen 1 und 2)
 
-Melden und Klären im Mandanten. **Eine Instanz je Mandant.** Plattform ab
-**0.1.199**: Erst diese Version reserviert `/platform/*` auf den Adressen
-jeder Instanz und leitet `/platform/feedback` hierher weiter.
+Melden, Klären und Übergeben im Mandanten. **Eine Instanz je Mandant.**
+Plattform ab **0.1.199** für den Knopf: Erst diese Version reserviert
+`/platform/*` auf den Adressen jeder Instanz und leitet `/platform/feedback`
+hierher weiter. Für die Backend-Tür ab **0.1.201**, empfohlen **0.1.202**
+(der Schlüssel der Tür wird dort selbst erneuert und beim Entfernen
+zurückgezogen, RFC-0062).
+
+Schritt-für-Schritt für Betreiber und Mandanten:
+[Szenario „Vorgänge im Mandanten“](https://github.com/MDJoerg/oaap-docs/blob/main/szenarien/vorgaenge-im-mandanten.md).
+
+**Eingang je Kanal:** Eine App meldet in den Eingang ihres eigenen Kanals.
+Eine Test-App fällt ersatzweise auf den Produktions-Eingang zurück, eine
+Produktions-App nie auf einen Test-Eingang.
 
 ## Was die App annimmt
 
