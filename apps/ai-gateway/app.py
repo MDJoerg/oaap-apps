@@ -1,4 +1,4 @@
-"""OAAP KI-Gateway 0.3 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
+"""OAAP KI-Gateway 0.4 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
 Umsetzung der Capability `oaap.ai.gateway` 0.3 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
@@ -35,11 +35,13 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import catalog
 import relay
 import store
 import supply
+import vault
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -52,11 +54,6 @@ esc = html.escape
 
 # ------------------------------------------------------------- Konfiguration
 
-SUPPLIERS, SUPPLIER_ERRORS = supply.parse_suppliers(
-    os.environ.get("AIGW_SUPPLIERS", ""), os.environ.get("AIGW_SUPPLIER_KEYS", ""))
-ALIASES, ALIAS_ERRORS = supply.parse_aliases(os.environ.get("AIGW_ALIASES", ""), SUPPLIERS)
-CONFIG_ERRORS = SUPPLIER_ERRORS + ALIAS_ERRORS
-
 try:
     TIMEOUT = max(10, min(3600, int(os.environ.get("AIGW_TIMEOUT_SECONDS") or relay.READ_TIMEOUT)))
 except ValueError:
@@ -64,6 +61,38 @@ except ValueError:
 
 DB = store.connect(DB_PATH)
 LIMITER = store.RateLimiter()
+
+# Bezugsquellen und Modellnamen (RFC-0064 Stufe 2): Die Datenbank ist die
+# Wahrheit; die drei alten Variablen werden beim ersten Start einmal
+# übernommen. Nur solange die Übernahme wartet (Zugangsdaten da, aber
+# kein AIGW_MASTER_KEY), gilt die Konfiguration wie bisher — dann sind
+# die Formulare gesperrt, damit es nicht zwei Wahrheiten gibt.
+MASTER = os.environ.get("AIGW_MASTER_KEY", "")
+IMPORT_STATE, IMPORT_NOTES = catalog.import_config(DB, os.environ, MASTER)
+MODE = "config" if IMPORT_STATE == "blocked" else "app"
+SUPPLIERS, ALIASES, CONFIG_ERRORS = {}, {}, []
+_SUPPLY_LOCK = threading.Lock()
+
+
+def reload_supply():
+    """Baut SUPPLIERS/ALIASES neu — beim Start und nach jeder Änderung.
+
+    Die drei Namen werden jeweils als Ganzes ersetzt, nie verändert: Eine
+    Anfrage, die gerade läuft, behält die Fassung, mit der sie begann.
+    """
+    global SUPPLIERS, ALIASES, CONFIG_ERRORS
+    with _SUPPLY_LOCK:
+        if MODE == "config":
+            suppliers, s_errors = supply.parse_suppliers(
+                os.environ.get("AIGW_SUPPLIERS", ""), os.environ.get("AIGW_SUPPLIER_KEYS", ""))
+            aliases, a_errors = supply.parse_aliases(os.environ.get("AIGW_ALIASES", ""), suppliers)
+            errors = s_errors + a_errors
+        else:
+            suppliers, aliases, errors = catalog.load(DB, MASTER)
+        SUPPLIERS, ALIASES, CONFIG_ERRORS = suppliers, aliases, errors
+
+
+reload_supply()
 
 # Eine zweite, kleine Bremse gegen das Raten von Schlüsseln. Die große
 # steht in der Plattform (RFC-0010) und gilt je Client-Adresse für alle
@@ -282,6 +311,191 @@ def context_inputs(row=None, prefix=""):
     return "".join(out)
 
 
+def light_radios(current, prefix):
+    out = []
+    for light in ("green", "yellow", "red"):
+        checked = " checked" if light == current else ""
+        out.append(f'<label><input type="radio" name="light" value="{light}"{checked}> '
+                   f'{esc(supply.LIGHT_LABELS[light].split(" — ")[0])}</label>')
+    return (f'<div><fieldset><legend>Ampel — was mit den Daten geschehen kann</legend>'
+            f'{"".join(out)}</fieldset></div>')
+
+
+def supply_notes():
+    """Woher die Bezugsquellen kommen — und was mit den alten Variablen ist."""
+    old_set = any(os.environ.get(k, "").strip()
+                  for k in ("AIGW_SUPPLIERS", "AIGW_SUPPLIER_KEYS", "AIGW_ALIASES"))
+    if MODE == "config":
+        reasons = "".join(f"<li>{esc(n)}</li>" for n in IMPORT_NOTES)
+        return [f"""<div class="card attention">
+  <h2>Noch nicht in die App übernommen</h2>
+  <p class="hint">Bezugsquellen und Modellnamen kommen noch aus der Instanz-Konfiguration,
+    und die Formulare unten sind gesperrt — sonst gäbe es zwei Wahrheiten.</p>
+  <ul>{reasons}</ul>
+  <p class="hint">Abhilfe: Portal → Instanz → Konfiguration → <code>AIGW_MASTER_KEY</code>
+    erzeugen und speichern. Beim Neustart übernimmt die App alles einmal und
+    verschlüsselt die Zugangsdaten.</p>
+</div>"""]
+    out = []
+    if IMPORT_STATE == "imported":
+        skipped = "".join(f"<li>{esc(n)}</li>" for n in IMPORT_NOTES)
+        out.append(f"""<div class="card attention">
+  <h2>Aus der Konfiguration übernommen</h2>
+  <p class="hint">Bezugsquellen und Modellnamen werden ab jetzt <b>hier</b> gepflegt.
+    Die Variablen <code>AIGW_SUPPLIERS</code>, <code>AIGW_SUPPLIER_KEYS</code> und
+    <code>AIGW_ALIASES</code> werden nicht mehr gelesen und können geleert werden.</p>
+  {f"<p class='hint'>Nicht übernommen, weil nicht verständlich:</p><ul>{skipped}</ul>" if skipped else ""}
+</div>""")
+    elif old_set:
+        since = catalog.meta(DB, "imported_at")
+        out.append(f"""<div class="card attention">
+  <p style="margin:0">Die Variablen <code>AIGW_SUPPLIERS</code>, <code>AIGW_SUPPLIER_KEYS</code>
+    und <code>AIGW_ALIASES</code> sind noch gesetzt, werden aber
+    {f"seit {esc(since)} " if since else ""}nicht gelesen — gepflegt wird hier.
+    Sie können geleert werden.</p>
+</div>""")
+    if not vault.usable(MASTER):
+        out.append("""<div class="card attention">
+  <p style="margin:0"><code>AIGW_MASTER_KEY</code> fehlt. Quellen <b>ohne</b> Zugangsdaten
+    (z. B. ein lokales Ollama) lassen sich pflegen; Zugangsdaten speichert die App
+    erst, wenn der Schlüssel gesetzt ist (Portal → Instanz → Konfiguration, „erzeugen“).</p>
+</div>""")
+    return out
+
+
+def aliases_card():
+    editable = MODE == "app"
+    rows = []
+    stored = {r["name"]: r for r in catalog.alias_rows(DB)} if editable else {}
+    names = sorted(set(ALIASES) | set(stored))
+    for name in names:
+        alias = ALIASES.get(name)
+        if alias:
+            targets = []
+            for target in alias["targets"]:
+                src = SUPPLIERS.get(target["supplier"])
+                if src is None:          # zwischen zwei Neuladungen gelesen
+                    continue
+                targets.append(f'{light_badge(src["light"], short=True)} '
+                               f'<code>{esc(src["name"])} · {esc(target["model"])}</code>')
+            # Die Farbe eines Alias ist die schlechteste seiner Ziele — einer,
+            # der auf einen roten Anbieter ausweichen kann, ist nicht grün,
+            # auch wenn sein erstes Ziel es ist.
+            worst = light_badge(supply.alias_light(alias, SUPPLIERS, "red"))
+            order_listed = alias["order_listed"]
+            text = supply.targets_text(alias)
+        else:
+            targets = [f'<code>{esc(stored[name]["targets"])}</code>']
+            worst = '<span class="badge err">unbenutzbar</span>'
+            order_listed = bool(stored[name]["order_listed"])
+            text = stored[name]["targets"]
+        action = ""
+        if editable:
+            action = (f'<details><summary class="muted">ändern</summary>'
+                      f'<form class="grid" method="post" action="alias" style="margin-top:.6rem">'
+                      f'<input type="hidden" name="name" value="{esc(name)}">'
+                      f'<div><label>Ziele (quelle:modell, …)</label>'
+                      f'<input name="targets" type="text" value="{esc(text)}"></div>'
+                      f'<div><fieldset><legend>Reihenfolge</legend><label>'
+                      f'<input type="checkbox" name="order_listed" value="1"'
+                      f'{" checked" if order_listed else ""}> wie aufgeführt</label></fieldset></div>'
+                      f'<div><button class="quiet" type="submit">speichern</button></div></form>'
+                      f'<form method="post" action="alias-delete" style="margin:.4rem 0 0">'
+                      f'<input type="hidden" name="name" value="{esc(name)}">'
+                      f'<button class="quiet" type="submit">löschen</button></form></details>')
+        order = "wie aufgeführt" if order_listed else "grün vor gelb vor rot"
+        rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{worst}</td>'
+                    f'<td>{"<br>".join(targets)}</td><td class="muted">{esc(order)}</td>'
+                    f'<td>{action}</td></tr>')
+    table = (f'<table><tr><th>Modellname</th><th>Ampel</th><th>Bezugsquellen</th>'
+             f'<th>Reihenfolge</th><th></th></tr>{"".join(rows)}</table>' if rows else
+             '<p class="muted">Noch kein Modellname — ohne ihn kann kein Verbraucher etwas anfragen.</p>')
+    form = ""
+    if editable:
+        known = ", ".join(sorted(r["name"] for r in catalog.supplier_rows(DB))) or "—"
+        form = f"""<h2 style="margin-top:1.2rem">Modellname anlegen</h2>
+  <form class="grid" method="post" action="alias">
+    <div><label for="alias-name">Modellname (das, was ein Client eintippt)</label>
+      <input id="alias-name" name="name" type="text" required placeholder="chat-default"></div>
+    <div><label for="alias-targets">Ziele: quelle:modell, … (Quellen: {esc(known)})</label>
+      <input id="alias-targets" name="targets" type="text" required
+        placeholder="tsystems:llama-3.3-70b, groq:llama-3.3-70b-versatile"></div>
+    <div><fieldset><legend>Reihenfolge</legend><label>
+      <input type="checkbox" name="order_listed" value="1"> wie aufgeführt</label></fieldset></div>
+    <div><button type="submit">Anlegen</button></div>
+  </form>"""
+    return f"""<div class="card">
+  <h2>Modellnamen</h2>
+  <p class="hint">Ein Verbraucher fragt nach einem Namen von uns, nie nach dem Modell des
+    Anbieters. Ausgewichen wird nur innerhalb der hier erklärten Gruppe — und die Ampel
+    eines Modellnamens ist die <b>schlechteste</b> seiner Ziele.</p>
+  {table}{form}
+</div>"""
+
+
+def suppliers_card():
+    editable = MODE == "app"
+    rows = []
+    if editable:
+        entries = [(r["name"], r["url"], r["light"], bool(r["credential"]),
+                    r["name"] in SUPPLIERS) for r in catalog.supplier_rows(DB)]
+    else:
+        entries = [(n, s["url"], s["light"], bool(s["credential"]), True)
+                   for n, s in sorted(SUPPLIERS.items())]
+    for name, url, light, has_cred, usable in entries:
+        cred = ("hinterlegt" if has_cred else '<span class="muted">keine (z. B. lokal)</span>')
+        if not usable:
+            cred = '<span class="badge err">nicht lesbar</span>'
+        action = ""
+        if editable:
+            action = (f'<details><summary class="muted">ändern</summary>'
+                      f'<form class="grid" method="post" action="supplier" style="margin-top:.6rem">'
+                      f'<input type="hidden" name="name" value="{esc(name)}">'
+                      f'<div><label>Adresse</label>'
+                      f'<input name="url" type="text" value="{esc(url)}"></div>'
+                      f'{light_radios(light, name)}'
+                      f'<div><label>Neue Zugangsdaten (leer = unverändert)</label>'
+                      f'<input name="credential" type="password" autocomplete="new-password"></div>'
+                      f'<div><fieldset><legend>Zugangsdaten</legend><label>'
+                      f'<input type="checkbox" name="drop_credential" value="1"> entfernen'
+                      f'</label></fieldset></div>'
+                      f'<div><button class="quiet" type="submit">speichern</button></div></form>'
+                      f'<form method="post" action="supplier-delete" style="margin:.4rem 0 0">'
+                      f'<input type="hidden" name="name" value="{esc(name)}">'
+                      f'<button class="quiet" type="submit">löschen</button></form></details>')
+        rows.append(f'<tr><td><code>{esc(name)}</code></td>'
+                    f'<td>{light_badge(light)}<br>'
+                    f'<span class="muted">{esc(supply.LIGHT_RULES.get(light, ""))}</span></td>'
+                    f'<td><code>{esc(url)}</code></td><td>{cred}</td><td>{action}</td></tr>')
+    table = (f'<table><tr><th>Name</th><th>Ampel</th><th>Adresse</th><th>Zugangsdaten</th>'
+             f'<th></th></tr>{"".join(rows)}</table>' if rows else
+             '<p class="muted">Noch keine Bezugsquelle.</p>')
+    form = ""
+    if editable:
+        form = f"""<h2 style="margin-top:1.2rem">Bezugsquelle anlegen</h2>
+  <form class="grid" method="post" action="supplier">
+    <div><label for="src-name">Name</label>
+      <input id="src-name" name="name" type="text" required placeholder="groq"></div>
+    <div><label for="src-url">Adresse (OpenAI-kompatibel, bis /v1)</label>
+      <input id="src-url" name="url" type="text" required
+        placeholder="https://api.groq.com/openai/v1"></div>
+    {light_radios("red", "neu")}
+    <div><label for="src-cred">Zugangsdaten (API-Key des Anbieters)</label>
+      <input id="src-cred" name="credential" type="password" autocomplete="new-password"></div>
+    <div><button type="submit">Anlegen</button></div>
+  </form>
+  <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <b>rot</b> — unbekannte Herkunft
+    ist nicht souverän. Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
+    erreichbar (<code>oaap app link add</code>).</p>"""
+    return f"""<div class="card">
+  <h2>Bezugsquellen</h2>
+  <p class="hint">Zugangsdaten werden nur verschlüsselt gespeichert, lassen sich setzen
+    oder ersetzen, aber <b>nie wieder anzeigen</b> — weder hier noch in einer Messzeile,
+    Fehlermeldung oder der Prüfspur.</p>
+  {table}{form}
+</div>"""
+
+
 # ------------------------------------------------------------ Betreiber-Seite
 
 def admin_page(user, roles, host, notice="", secret=None):
@@ -301,68 +515,19 @@ def admin_page(user, roles, host, notice="", secret=None):
     if notice:
         parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
 
+    parts.extend(supply_notes())
+
     if CONFIG_ERRORS:
         items = "".join(f"<li>{esc(e)}</li>" for e in CONFIG_ERRORS)
         parts.append(f"""<div class="card attention">
-  <h2>Die Konfiguration hat Stellen, die ich nicht verstanden habe</h2>
+  <h2>Stellen, die ich nicht verwenden kann</h2>
   <p class="hint">Alles andere läuft weiter — was hier steht, ist wirkungslos,
     nicht kaputt.</p>
   <ul>{items}</ul>
 </div>""")
 
-    # --- Aliasse
-    if ALIASES:
-        rows = []
-        for name, alias in sorted(ALIASES.items()):
-            targets = []
-            for target in alias["targets"]:
-                src = SUPPLIERS[target["supplier"]]
-                targets.append(f'{light_badge(src["light"], short=True)} '
-                               f'<code>{esc(src["name"])} · {esc(target["model"])}</code>')
-            # Die Farbe eines Alias ist die schlechteste seiner Ziele — einer,
-            # der auf einen roten Anbieter ausweichen kann, ist nicht grün,
-            # auch wenn sein erstes Ziel es ist.
-            worst = supply.alias_light(alias, SUPPLIERS, "red")
-            order = ("wie aufgeführt" if alias["order_listed"] else "grün vor gelb vor rot")
-            rows.append(f'<tr><td><code>{esc(name)}</code></td>'
-                        f'<td>{light_badge(worst)}</td>'
-                        f'<td>{"<br>".join(targets)}</td>'
-                        f'<td class="muted">{esc(order)}</td></tr>')
-        parts.append(f"""<div class="card">
-  <h2>Aliasse</h2>
-  <p class="hint">Ein Verbraucher fragt nach dem Zweck, nie nach dem Modell.
-    Ausgewichen wird nur innerhalb der hier erklärten Gruppe — und die Ampel
-    eines Alias ist die <b>schlechteste</b> seiner Ziele.</p>
-  <table><tr><th>Alias</th><th>Ampel</th><th>Bezugsquellen</th><th>Reihenfolge</th></tr>
-  {"".join(rows)}</table>
-</div>""")
-    else:
-        parts.append("""<div class="card attention">
-  <h2>Noch kein Alias eingerichtet</h2>
-  <p class="hint">Ohne Alias kann kein Verbraucher etwas anfragen. Einzutragen
-    als Konfiguration <code>AIGW_SUPPLIERS</code> und <code>AIGW_ALIASES</code>
-    bei dieser Instanz (Portal → Instanz → Konfiguration).</p>
-</div>""")
-
-    # --- Bezugsquellen
-    if SUPPLIERS:
-        rows = []
-        for name, src in sorted(SUPPLIERS.items()):
-            cred = ("hinterlegt" if src["credential"]
-                    else '<span class="muted">keine (z. B. lokal)</span>')
-            rows.append(f'<tr><td><code>{esc(name)}</code></td>'
-                        f'<td>{light_badge(src["light"])}<br>'
-                        f'<span class="muted">{esc(supply.LIGHT_RULES[src["light"]])}</span></td>'
-                        f'<td><code>{esc(src["url"])}</code></td>'
-                        f'<td>{cred}</td></tr>')
-        parts.append(f"""<div class="card">
-  <h2>Bezugsquellen</h2>
-  <p class="hint">Zugangsdaten stehen ausschließlich in der geheimen
-    Konfiguration und erscheinen weder hier noch in einer Messzeile oder
-    Fehlermeldung.</p>
-  <table><tr><th>Name</th><th>Ampel</th><th>Adresse</th><th>Zugangsdaten</th></tr>
-  {"".join(rows)}</table>
-</div>""")
+    parts.append(aliases_card())
+    parts.append(suppliers_card())
 
     # --- Schlüssel
     totals = store.totals(DB)
@@ -599,7 +764,8 @@ class Handler(BaseHTTPRequestHandler):
                 # dieser Schlüssel erreichen darf. Ein Alias, der auf einen
                 # roten Anbieter ausweichen kann, ist nicht grün — sonst
                 # wäre die Ampel eine Beruhigung statt einer Auskunft.
-                light = supply.alias_light(ALIASES[name], SUPPLIERS, ceiling, pbd)
+                alias = ALIASES.get(name)
+                light = supply.alias_light(alias, SUPPLIERS, ceiling, pbd) if alias else ""
                 if not light:
                     # Für diesen Schlüssel gibt es kein erreichbares Ziel.
                     # Ihn trotzdem anzubieten hieße, dem Client eine Wahl
@@ -657,7 +823,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/v1/chat/completions", "/v1/embeddings"):
             self.handle_inference(path)
             return
-        if path in ("/issue", "/revoke", "/context"):
+        if path in ("/issue", "/revoke", "/context", "/supplier", "/supplier-delete",
+                    "/alias", "/alias-delete"):
             self.handle_admin_post(path)
             return
         self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
@@ -665,13 +832,17 @@ class Handler(BaseHTTPRequestHandler):
     # ---- Betreiber-Handlungen
 
     def handle_admin_post(self, path):
+        # Der Rumpf wird gelesen, BEVOR abgelehnt wird: Ein ungelesener Rest
+        # bliebe auf der Keep-Alive-Verbindung liegen und würde als nächste
+        # Anfrage gelesen — oder die Verbindung endet mit einem Reset, und
+        # der Aufrufer sieht statt der 403 einen Abbruch.
+        raw = self.read_body() or b""
         if not self.is_admin():
             self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Nicht erlaubt.</p>'
                                      '</div>', "", ""))
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
-        raw = self.read_body() or b""
         form = {}
         multi = {}
         for pair in raw.decode("utf-8", "replace").split("&"):
@@ -705,6 +876,8 @@ class Handler(BaseHTTPRequestHandler):
                     secret = {"label": form.get("label", ""), "value": value}
                 except ValueError as exc:
                     notice = str(exc)
+        elif path in ("/supplier", "/supplier-delete", "/alias", "/alias-delete"):
+            notice = self.change_supply(path, form, user)
         elif path == "/context":
             label = form.get("label", "")
             try:
@@ -722,6 +895,38 @@ class Handler(BaseHTTPRequestHandler):
                       if store.revoke(DB, label, user)
                       else f"Nichts zu widerrufen: „{label}“ ist unbekannt oder schon widerrufen.")
         self.send_html(200, admin_page(user, roles, host, notice=notice, secret=secret))
+
+    def change_supply(self, path, form, user):
+        """Bezugsquellen und Modellnamen ändern — wirksam ohne Neustart."""
+        if MODE != "app":
+            return ("Gesperrt, solange die Übernahme aus der Konfiguration wartet "
+                    "(AIGW_MASTER_KEY fehlt).")
+        name = form.get("name", "").strip()
+        try:
+            if path == "/supplier":
+                done = catalog.set_supplier(
+                    DB, user, MASTER, name, form.get("url", ""),
+                    form.get("light") or supply.DEFAULT_LIGHT,
+                    credential=form.get("credential", ""),
+                    drop_credential=form.get("drop_credential") == "1")
+                notice = f"Bezugsquelle „{name}“ {done}."
+            elif path == "/supplier-delete":
+                catalog.delete_supplier(DB, user, name)
+                notice = f"Bezugsquelle „{name}“ gelöscht."
+            elif path == "/alias":
+                done = catalog.set_alias(DB, user, name, form.get("targets", ""),
+                                         form.get("order_listed") == "1")
+                notice = f"Modellname „{name}“ {done}."
+            else:
+                affected = catalog.delete_alias(DB, user, name)
+                notice = f"Modellname „{name}“ gelöscht."
+                if affected:
+                    notice += (" Diese Schlüssel waren auf ihn beschränkt und erreichen ihn "
+                               "nicht mehr: " + ", ".join(affected) + ".")
+        except ValueError as exc:
+            return str(exc)
+        reload_supply()
+        return notice
 
     # ---- Der eigentliche Dienst
 
@@ -771,7 +976,12 @@ class Handler(BaseHTTPRequestHandler):
                          "Der Betreiber kann es erhöhen.", "budget_exhausted")
                 return
 
-        alias = ALIASES[alias_name]
+        # Seit Stufe 2 kann ein Modellname zwischen Prüfung und Gebrauch
+        # gelöscht werden; dann ist er so unbekannt wie jeder andere.
+        alias = ALIASES.get(alias_name)
+        if alias is None:
+            self.send_error_doc(400, f"„{alias_name}“ gibt es nicht mehr.", "unknown_model")
+            return
         ceiling, pbd = ceiling_of(row), pbd_of(row)
         targets = supply.candidates(alias, SUPPLIERS, ceiling, pbd)
         if not targets:

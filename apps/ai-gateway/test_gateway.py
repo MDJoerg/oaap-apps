@@ -121,8 +121,14 @@ os.environ["AIGW_ALIASES"] = ("chat-default = fern:fern-modell, eusrc:eu-modell\
                               "nur-lokal = lokal:klein\n"
                               "nur-fern = fern:fern-modell")
 os.environ["AIGW_TIMEOUT_SECONDS"] = "20"
+# Mit Hauptschlüssel: Der Lauf spielt den Normalfall nach dem Update auf
+# 0.4 — die Konfiguration wird beim Start einmal übernommen, danach gilt
+# die Datenbank. Den gesperrten Fall prüft test_catalog.py.
+os.environ["AIGW_MASTER_KEY"] = "test-hauptschluessel-0123456789abcdef"
+GEHEIM2 = "zweites-geheimnis-aus-dem-formular"
 
 import app  # noqa: E402  (liest die Konfiguration beim Import)
+import catalog  # noqa: E402
 import store  # noqa: E402
 
 gw = start(app.Handler)
@@ -485,6 +491,88 @@ check("ein zweiter Start trägt nichts noch einmal nach",
 db_alt.close()
 shutil.rmtree(os.path.dirname(ALT), ignore_errors=True)
 
+print("\n-- RFC-0064 Stufe 2: die Konfiguration wurde einmal übernommen")
+check("die App pflegt selbst", (app.MODE, app.IMPORT_STATE) == ("app", "imported"),
+      (app.MODE, app.IMPORT_STATE))
+rows = {r["name"]: r for r in catalog.supplier_rows(app.DB)}
+check("drei Quellen und drei Modellnamen in der Datenbank",
+      sorted(rows) == ["eusrc", "fern", "lokal"] and len(catalog.alias_rows(app.DB)) == 3,
+      (sorted(rows), len(catalog.alias_rows(app.DB))))
+check("die Zugangsdaten liegen verschlüsselt, nicht im Klartext",
+      rows["fern"]["credential"].startswith("v1:") and GEHEIM not in rows["fern"]["credential"],
+      rows["fern"]["credential"][:12])
+check("die Übernahme steht in der Prüfspur",
+      any(r["action"] == "config.import" for r in store.audit(app.DB)))
+_, body, _ = call("/", admin=True)
+check("die Seite sagt, dass die Variablen nicht mehr gelesen werden",
+      "Aus der Konfiguration übernommen" in body.decode("utf-8"))
+
+print("\n-- RFC-0064 Stufe 2: Quelle und Modellname im Formular, wirksam ohne Neustart")
+status, body, _ = call("/supplier", "POST", admin=True,
+                       form=f"name=neu2&url={FAKE_URL}&light=green&credential={GEHEIM2}")
+check("Quelle angelegt", "„neu2“ angelegt" in body.decode("utf-8"), body.decode("utf-8")[:0])
+check("die Seite zeigt die neuen Zugangsdaten nicht", GEHEIM2 not in body.decode("utf-8"))
+status, body, _ = call("/alias", "POST", admin=True,
+                       form="name=eigener-name&targets=neu2%3Aklein-2")
+check("Modellname angelegt", "„eigener-name“ angelegt" in body.decode("utf-8"))
+key_neu, _ = store.issue(app.DB, "neu-nutzer", "test", aliases=["eigener-name"])
+_, body, _ = call("/v1/models", key=key_neu)
+check("der neue Name steht sofort in /v1/models",
+      [m["id"] for m in json.loads(body)["data"]] == ["eigener-name"], body)
+Fake.calls.clear()
+status, body, _ = call("/v1/chat/completions", "POST", key=key_neu,
+                       body={"model": "eigener-name", "messages": []})
+check("und antwortet über die neue Quelle", status == 200 and
+      Fake.calls[-1]["body"]["model"] == "klein-2", (status, Fake.calls[-1:]))
+check("mit den im Formular gesetzten Zugangsdaten",
+      Fake.calls[-1]["auth"] == "Bearer " + GEHEIM2, Fake.calls[-1]["auth"])
+
+print("\n-- RFC-0064 Stufe 2: leeres Feld heißt unverändert, Entfernen ist ein Häkchen")
+call("/supplier", "POST", admin=True, form=f"name=neu2&url={FAKE_URL}&light=green&credential=")
+Fake.calls.clear()
+call("/v1/chat/completions", "POST", key=key_neu, body={"model": "eigener-name", "messages": []})
+check("ohne neue Eingabe bleiben die Zugangsdaten", Fake.calls[-1]["auth"] == "Bearer " + GEHEIM2,
+      Fake.calls[-1]["auth"])
+call("/supplier", "POST", admin=True,
+     form=f"name=neu2&url={FAKE_URL}&light=green&drop_credential=1")
+Fake.calls.clear()
+call("/v1/chat/completions", "POST", key=key_neu, body={"model": "eigener-name", "messages": []})
+check("mit Häkchen sind sie weg", Fake.calls[-1]["auth"] == "", Fake.calls[-1]["auth"])
+call("/supplier", "POST", admin=True,
+     form=f"name=neu2&url={FAKE_URL}&light=green&credential={GEHEIM2}")
+eintraege = [dict(r) for r in store.audit(app.DB) if r["action"] == "supplier.set"]
+check("die Prüfspur sagt, was geschah, nie den Wert",
+      [e["detail"].split("zugangsdaten=")[1] for e in eintraege[:4]]
+      == ["neu gesetzt", "entfernt", "unverändert", "neu gesetzt"]
+      and not any(GEHEIM2 in e["detail"] for e in eintraege), eintraege[:4])
+
+print("\n-- RFC-0064 Stufe 2: was abgelehnt wird")
+status, body, _ = call("/supplier-delete", "POST", admin=True, form="name=neu2")
+check("eine benutzte Quelle lässt sich nicht löschen, mit Namen des Nutzers",
+      "eigener-name" in body.decode("utf-8") and "neu2" in {r["name"] for r in catalog.supplier_rows(app.DB)})
+status, body, _ = call("/alias", "POST", admin=True, form="name=kaputt&targets=gibtsnicht%3Ax")
+check("ein Modellname mit unbekannter Quelle wird nicht gespeichert",
+      "nicht konfiguriert" in body.decode("utf-8")
+      and "kaputt" not in {r["name"] for r in catalog.alias_rows(app.DB)})
+status, body, _ = call("/supplier", "POST", admin=True, form="name=mit+leerzeichen&url=https%3A%2F%2Fx")
+check("ein Name mit Leerzeichen wird abgelehnt", "höchstens 40 Zeichen" in body.decode("utf-8"))
+status, body, _ = call("/supplier", "POST", admin=True, form="name=ftp&url=ftp%3A%2F%2Fx&light=green")
+check("eine Adresse ohne http(s) wird abgelehnt", "http://" in body.decode("utf-8")
+      and "ftp" not in {r["name"] for r in catalog.supplier_rows(app.DB)})
+status, _, _ = call("/supplier", "POST", admin=False, form="name=heimlich&url=https%3A%2F%2Fx")
+check("Quellen pflegen bleibt der Serververwaltung vorbehalten",
+      status == 403 and "heimlich" not in {r["name"] for r in catalog.supplier_rows(app.DB)})
+
+print("\n-- RFC-0064 Stufe 2: Löschen eines Modellnamens nennt die betroffenen Schlüssel")
+status, body, _ = call("/alias-delete", "POST", admin=True, form="name=eigener-name")
+check("die Seite nennt den beschränkten Schlüssel", "neu-nutzer" in body.decode("utf-8"))
+status, body, _ = call("/v1/chat/completions", "POST", key=key_neu,
+                       body={"model": "eigener-name", "messages": []})
+check("und der Name ist sofort unbekannt", status == 400, status)
+status, body, _ = call("/supplier-delete", "POST", admin=True, form="name=neu2")
+check("jetzt ist die Quelle frei und gelöscht",
+      "neu2" not in {r["name"] for r in catalog.supplier_rows(app.DB)}, body.decode("utf-8")[:0])
+
 print("\n-- §9.7 die härteste Regel: nirgends ein Prompt")
 found = []
 for root, _dirs, files in os.walk(TMP):
@@ -494,7 +582,7 @@ for root, _dirs, files in os.walk(TMP):
             blob = fh.read()
         if PROMPT.encode() in blob:
             found.append(path)
-        if GEHEIM.encode() in blob:
+        if GEHEIM.encode() in blob or GEHEIM2.encode() in blob:
             found.append(path + " (Zugangsdaten!)")
 check("keine Datei enthält den Prompt oder die Zugangsdaten", found == [], found)
 check("und die Tabelle hat gar keine Spalte dafür — auch keine nachgezogene",

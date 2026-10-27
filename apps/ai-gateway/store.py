@@ -71,6 +71,29 @@ CREATE TABLE IF NOT EXISTS audit (
   subject TEXT NOT NULL,
   detail  TEXT NOT NULL DEFAULT ''
 );
+-- Seit 0.4 (RFC-0064 Stufe 2) die Wahrheit über Bezugsquellen und
+-- Modellnamen; die Konfigurationsvariablen werden einmal übernommen und
+-- danach nicht mehr gelesen. `credential` ist nur verschlüsselt
+-- gespeichert (vault.py), nie im Klartext.
+CREATE TABLE IF NOT EXISTS suppliers (
+  name       TEXT PRIMARY KEY,
+  url        TEXT NOT NULL,
+  light      TEXT NOT NULL,
+  credential TEXT NOT NULL DEFAULT '',
+  created    TEXT NOT NULL,
+  updated    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS aliases (
+  name         TEXT PRIMARY KEY,
+  targets      TEXT NOT NULL,
+  order_listed INTEGER NOT NULL DEFAULT 0,
+  created      TEXT NOT NULL,
+  updated      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta (
+  name  TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 # Spalten, die nach 0.2 dazukamen (RFC-0064). Sie werden bei jedem Start

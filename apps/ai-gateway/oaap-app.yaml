@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.3.0
+  version: 0.4.0
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -39,6 +39,21 @@ storage:
     mount: /data
 
 config:
+  # Der Schlüssel zum Tresor der App (RFC-0064 D2). Seit 0.4 werden
+  # Bezugsquellen und Modellnamen in der App gepflegt; die API-Keys der
+  # Anbieter liegen dann verschlüsselt unter /data. Dieser Wert kommt
+  # bewusst aus einer ANDEREN Quelle als /data, damit eine Sicherung von
+  # /data allein sie nicht preisgibt. Wird er geändert, sind gespeicherte
+  # Zugangsdaten nicht mehr lesbar und müssen neu eingetragen werden.
+  - key: AIGW_MASTER_KEY
+    label: "Tresorschlüssel für die Zugangsdaten der Anbieter (einmal erzeugen, danach nicht ändern)"
+    secret: true
+    generate: token
+  # --- Die drei folgenden Variablen werden seit 0.4 nur noch EINMAL
+  # gelesen: beim ersten Start übernimmt die App sie in ihre Datenbank,
+  # danach wird auf der Betreiber-Seite gepflegt. Sie bleiben deklariert,
+  # damit ein Update von 0.3 sie noch vorfindet.
+  #
   # Bezugsquellen, eine je Zeile: `name=<adresse> [light=green|yellow|red]`
   # Die Ampel sagt, was mit den Daten geschehen kann — nicht, wo ein
   # Rechner steht: grün = verlassen das Unternehmen nicht; gelb = vielleicht,
@@ -51,14 +66,14 @@ config:
   # Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
   # erreichbar (RFC-0016): `sudo oaap app link add <diese-instanz> <ollama>`.
   - key: AIGW_SUPPLIERS
-    label: "Bezugsquellen (name=adresse [light=...]), eine je Zeile"
+    label: "Nur für die einmalige Übernahme (seit 0.4 in der App gepflegt): Bezugsquellen"
     multiline: true
     default: ""
   # Zugangsdaten je Bezugsquelle: `name=<schlüssel>`, eine je Zeile.
   # Geheim: wird nie zurückgezeigt und erscheint in keiner Antwort, keiner
   # Fehlermeldung und keiner Messzeile.
   - key: AIGW_SUPPLIER_KEYS
-    label: "Zugangsdaten je Bezugsquelle (name=schlüssel), eine je Zeile"
+    label: "Nur für die einmalige Übernahme (seit 0.4 in der App gepflegt): Zugangsdaten"
     multiline: true
     secret: true
   # Aliasse nach ZWECK, eine je Zeile:
@@ -70,7 +85,7 @@ config:
   # die SCHLECHTESTE seiner Ziele: Wer von grün nach rot ausweichen kann,
   # ist nicht grün.
   - key: AIGW_ALIASES
-    label: "Aliasse (zweck=quelle:modell, ...), eine je Zeile"
+    label: "Nur für die einmalige Übernahme (seit 0.4 in der App gepflegt): Aliasse"
     multiline: true
     default: ""
   # Wie lange auf ein Modell gewartet wird. Große Modelle mit langem

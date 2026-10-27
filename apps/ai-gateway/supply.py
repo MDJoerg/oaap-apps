@@ -96,20 +96,12 @@ def parse_suppliers(raw, secrets_raw=""):
         if not sep or not name or not url:
             errors.append(f"Bezugsquelle ohne 'name=adresse': {line!r}")
             continue
-        if not url.startswith(("http://", "https://")):
-            errors.append(f"Bezugsquelle {name}: Adresse muss mit http:// oder https:// beginnen")
-            continue
         light = DEFAULT_LIGHT
         bad = False
         for extra in parts[1:]:
             key, sep2, value = extra.partition("=")
             if key == "light" and sep2:
-                if value in LIGHT_RANK:
-                    light = value
-                else:
-                    errors.append(f"Bezugsquelle {name}: unbekannte Ampelfarbe {value!r} "
-                                  f"(erlaubt: {', '.join(LIGHT_RANK)})")
-                    bad = True
+                light = value
             else:
                 errors.append(f"Bezugsquelle {name}: unverstandene Angabe {extra!r}")
                 bad = True
@@ -118,16 +110,30 @@ def parse_suppliers(raw, secrets_raw=""):
         if name in suppliers:
             errors.append(f"Bezugsquelle {name} steht doppelt in der Liste")
             continue
-        suppliers[name] = {
-            "name": name,
-            "url": url.rstrip("/"),
-            "light": light,
-            "credential": creds.get(name, ""),
-        }
+        src, error = make_supplier(name, url, light, creds.get(name, ""))
+        if error:
+            errors.append(error)
+            continue
+        suppliers[name] = src
     for name in creds:
         if name not in suppliers:
             errors.append(f"Zugangsdaten für unbekannte Bezugsquelle {name!r}")
     return suppliers, errors
+
+
+def make_supplier(name, url, light, credential=""):
+    """Eine Bezugsquelle aus ihren Teilen — dieselben Regeln für die
+    Konfigurationszeile und für das Formular der App (RFC-0064 Stufe 2).
+
+    Gibt `(quelle, None)` oder `(None, fehlersatz)` zurück.
+    """
+    if not url.startswith(("http://", "https://")) or any(c.isspace() for c in url):
+        return None, f"Bezugsquelle {name}: Adresse muss mit http:// oder https:// beginnen"
+    if light not in LIGHT_RANK:
+        return None, (f"Bezugsquelle {name}: unbekannte Ampelfarbe {light!r} "
+                      f"(erlaubt: {', '.join(LIGHT_RANK)})")
+    return {"name": name, "url": url.rstrip("/"), "light": light,
+            "credential": credential or ""}, None
 
 
 def parse_aliases(raw, suppliers):
@@ -150,31 +156,49 @@ def parse_aliases(raw, suppliers):
         if body.endswith("order=listed"):
             order_listed = True
             body = body[: -len("order=listed")].strip().rstrip(",")
-        targets, bad = [], False
-        for item in body.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            src, sep2, model = item.partition(":")
-            src, model = src.strip(), model.strip()
-            if not sep2 or not src or not model:
-                errors.append(f"Alias {name}: {item!r} ist kein 'quelle:modell'")
-                bad = True
-                continue
-            if src not in suppliers:
-                errors.append(f"Alias {name}: Bezugsquelle {src!r} ist nicht konfiguriert")
-                bad = True
-                continue
-            targets.append({"supplier": src, "model": model})
-        if bad or not targets:
-            if not targets and not bad:
-                errors.append(f"Alias {name}: keine Bezugsquelle angegeben")
+        alias, alias_errors = make_alias(name, body, order_listed, suppliers)
+        errors.extend(alias_errors)
+        if alias is None:
             continue
         if name in aliases:
             errors.append(f"Alias {name} steht doppelt in der Liste")
             continue
-        aliases[name] = {"name": name, "targets": targets, "order_listed": order_listed}
+        aliases[name] = alias
     return aliases, errors
+
+
+def make_alias(name, targets_text, order_listed, suppliers):
+    """Ein Alias aus `quelle:modell, quelle:modell` — dieselben Regeln
+    für die Konfigurationszeile und für das Formular der App.
+
+    Gibt `(alias, [])` oder `(None, [fehlersätze])` zurück. Ein Ziel mit
+    unbekannter Quelle macht den ganzen Alias ungültig: Eine Gruppe, aus
+    der still ein Mitglied fehlt, ist nicht mehr die erklärte.
+    """
+    targets, errors = [], []
+    for item in (targets_text or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        src, sep, model = item.partition(":")
+        src, model = src.strip(), model.strip()
+        if not sep or not src or not model:
+            errors.append(f"Alias {name}: {item!r} ist kein 'quelle:modell'")
+            continue
+        if src not in suppliers:
+            errors.append(f"Alias {name}: Bezugsquelle {src!r} ist nicht konfiguriert")
+            continue
+        targets.append({"supplier": src, "model": model})
+    if errors:
+        return None, errors
+    if not targets:
+        return None, [f"Alias {name}: keine Bezugsquelle angegeben"]
+    return {"name": name, "targets": targets, "order_listed": bool(order_listed)}, []
+
+
+def targets_text(alias):
+    """Die Ziele eines Alias zurück in die Form, in der man sie eingibt."""
+    return ", ".join(f'{t["supplier"]}:{t["model"]}' for t in alias["targets"])
 
 
 def candidates(alias, suppliers, ceiling, personal_data=False):

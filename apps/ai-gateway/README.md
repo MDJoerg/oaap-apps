@@ -7,7 +7,7 @@ fragt nach einem **Zweck** (`chat-default`, `code`,
 `embedding-default`) und nie nach einem Hersteller.
 
 Umsetzung der Capability [`oaap.ai.gateway`
-0.3](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023, RFC-0064).
+0.3.1](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023, RFC-0064).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -33,9 +33,48 @@ Umsetzung der Capability [`oaap.ai.gateway`
 Beim Installieren fragt die Plattform einmal nach, weil `/v1` ohne
 Login erreichbar wird. Das ist richtig so — und der Grund steht oben.
 
-## Konfiguration
+## Bezugsquellen und Modellnamen (seit 0.4, RFC-0064 Stufe 2)
 
-Alles über deklarierte Variablen (Portal → Instanz → Konfiguration).
+Gepflegt **auf der Betreiber-Seite**, wirksam sofort, ohne Neustart:
+
+- **Bezugsquelle:** Name, Adresse (OpenAI-kompatibel, bis `/v1`), Ampel,
+  Zugangsdaten. Die Zugangsdaten lassen sich setzen, ersetzen oder per
+  Häkchen entfernen — ein leeres Feld heißt *unverändert*. Angezeigt
+  werden sie nie wieder.
+- **Modellname:** der Name, den ein Client eintippt, und seine Ziele
+  `quelle:modell, quelle:modell` — die erklärte Ausweich-Gruppe.
+
+Eine Quelle, die ein Modellname noch benutzt, lässt sich nicht löschen.
+Wird ein Modellname gelöscht, nennt die Seite die Schlüssel, die auf ihn
+beschränkt waren. Jede Änderung steht in der Prüfspur — bei
+Zugangsdaten nur, *was* geschah, nie der Wert.
+
+**Zugangsdaten liegen verschlüsselt unter `/data`.** Den Schlüssel dazu
+liefert die geheime Variable **`AIGW_MASTER_KEY`** (Portal → Instanz →
+Konfiguration, Knopf „erzeugen“). Er kommt bewusst aus einer anderen
+Quelle als `/data`, damit eine Sicherung von `/data` allein die Keys der
+Anbieter nicht preisgibt. Wird er geändert, sind gespeicherte
+Zugangsdaten nicht mehr lesbar: Die Seite benennt die betroffenen
+Quellen, und sie müssen neu eingetragen werden. Ohne `AIGW_MASTER_KEY`
+lassen sich Quellen **ohne** Zugangsdaten (ein lokales Ollama) pflegen,
+Zugangsdaten verweigert die App mit Begründung.
+
+### Update von 0.3: einmalige Übernahme
+
+Bis 0.3 standen Quellen und Aliasse als Zeilen in der Konfiguration
+(unten). Beim ersten Start von 0.4 übernimmt die App sie **einmal** in
+ihre Datenbank; danach werden die Variablen nicht mehr gelesen und
+können geleert werden. Zwei Orte, die beide zählen, wären zwei
+Wahrheiten.
+
+Stehen in der Konfiguration Zugangsdaten, aber `AIGW_MASTER_KEY` fehlt,
+**wartet** die Übernahme: Die Konfiguration gilt weiter wie bisher, die
+Formulare sind gesperrt, und die Seite sagt, was zu tun ist. Also beim
+Update: erst `AIGW_MASTER_KEY` erzeugen und speichern, dann übernimmt
+die App beim Neustart alles. Nichts geht verloren, nichts landet im
+Klartext.
+
+Das alte Zeilenformat, wie es übernommen wird:
 
 ```text
 AIGW_SUPPLIERS          eine Zeile je Bezugsquelle
@@ -195,17 +234,16 @@ Mount danach durchsucht.
 
 ```bash
 python3 apps/ai-gateway/test_supply.py     # Konfiguration und Reihenfolge
+python3 apps/ai-gateway/test_catalog.py    # Tresor, Übernahme, Laden
 python3 apps/ai-gateway/test_gateway.py    # die Konformitätsliste der Spec §9
 ```
 
-Beide laufen ohne Netz, ohne Docker und ohne Modell: Die zweite Datei
+Alle drei laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 
 ## Was noch fehlt
 
-- **RFC-0064 Stufe 2:** Bezugsquellen und Modellnamen in der App
-  pflegen statt als Konfigurationszeilen.
 - **RFC-0064 Stufe 3:** Grafiken auf der Betreiber-Seite und die
   Auswertungs-Schnittstelle `GET /report/v1/usage` für externe
   Rechnungen und Kostenberichte — beide über dieselbe Abfrage.
