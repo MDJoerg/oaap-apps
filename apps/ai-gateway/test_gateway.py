@@ -580,6 +580,76 @@ status, body, _ = call("/supplier-delete", "POST", admin=True, form="name=neu2")
 check("jetzt ist die Quelle frei und gelöscht",
       "neu2" not in {r["name"] for r in catalog.supplier_rows(app.DB)}, body.decode("utf-8")[:0])
 
+print("\n-- RFC-0064 Stufe 3: /report/v1 nur für die Rolle admin")
+from datetime import datetime, timedelta, timezone  # noqa: E402
+HEUTE = datetime.now(timezone.utc).date()
+VON, BIS = (HEUTE - timedelta(days=1)).isoformat(), (HEUTE + timedelta(days=1)).isoformat()
+Q = f"/report/v1/usage?from={VON}&to={BIS}"
+status, body, _ = call(Q)
+check("ohne Rolle: 403 als JSON", status == 403 and json.loads(body)["error"]["code"] == "forbidden",
+      (status, body[:80]))
+status, body, _ = call(Q, key=KEY_KURS)
+check("ein Gateway-Schlüssel öffnet /report nicht", status == 403, status)
+status, body, _ = call("/report/v1/keys", key=KEY_KURS)
+check("auch die Schlüsselliste nicht", status == 403, status)
+
+print("\n-- RFC-0064 Stufe 3: die Schnittstelle")
+status, body, headers = call(Q + "&group_by=key", admin=True)
+doc = json.loads(body)
+check("200, JSON, mit complete_until", status == 200 and "complete_until" in doc
+      and doc["complete"] is False, (status, doc.get("complete_until")))
+per_key = {g["key"]: g for g in doc["groups"]}
+summe = store.totals(app.DB)[kurs["id"]]
+check("die Zahlen von kurs-app stimmen mit den Büchern überein",
+      (per_key["kurs-app"]["calls"], per_key["kurs-app"]["bytes_up"], per_key["kurs-app"]["bytes_down"])
+      == (summe["calls"], summe["bytes_up"], summe["bytes_down"]),
+      (per_key.get("kurs-app"), dict(summe)))
+status, body, _ = call(Q + "&group_by=cost_center&application=webtop", admin=True)
+cc = {g["cost_center"]: g["calls"] for g in json.loads(body)["groups"]}
+check("gruppiert nach der Kostenstelle zur Zeit der Anfrage, nicht der heutigen",
+      set(cc) == {"KS-4711", "KS-9000"} and cc["KS-4711"] == 2, cc)
+status, body, headers = call(Q + "&group_by=cost_center,day&format=csv", admin=True)
+text = body.decode("utf-8")
+check("CSV mit Kopfzeile", status == 200 and "text/csv" in headers.get("Content-Type", "")
+      and text.startswith("cost_center,day,calls,"), (status, text[:60]))
+check("und complete_until im Kopf, weil CSV keinen Platz dafür hat",
+      headers.get("X-OAAP-Complete-Until", "").endswith("Z")
+      and headers.get("X-OAAP-Complete") == "false", headers)
+status, body, _ = call(Q + "&cost_centre=KS-4711", admin=True)
+check("ein vertippter Filter: 400 statt allem", status == 400
+      and "cost_centre" in json.loads(body)["error"]["message"], (status, body[:120]))
+status, body, _ = call("/report/v1/usage?to=" + BIS, admin=True)
+check("ohne from: 400", status == 400, status)
+status, body, _ = call("/report/v1/keys", admin=True)
+liste = json.loads(body)["keys"]
+check("die Schlüsselliste nennt den heutigen Kontext",
+      [k["cost_center"] for k in liste if k["key"] == "kurs-app"] == ["KS-9000"], liste[:1])
+check("ohne Schlüsselwert und ohne Prüfsumme",
+      store.KEY_PREFIX not in body.decode() and kurs["digest"] not in body.decode())
+
+print("\n-- RFC-0064 Stufe 3: die Seite zeigt dieselben Zahlen wie die Schnittstelle")
+status, body, _ = call("/auswertung", admin=True)
+seite = body.decode("utf-8")
+check("die Auswertung antwortet", status == 200 and "<svg" in seite, status)
+_, body, _ = call(f"/report/v1/usage?from={(HEUTE - timedelta(days=29)).isoformat()}"
+                  f"&to={BIS}", admin=True)
+gesamt = json.loads(body)["totals"]["calls"]
+aufrufe = seite.split('<div class="tile"><b>')[1].split("</b>")[0]
+check("die Kachel „Aufrufe“ = totals.calls der Schnittstelle",
+      aufrufe == f"{gesamt:,}".replace(",", "."), (aufrufe, gesamt))
+check("die Seite nennt den Aufruf der Schnittstelle dazu", "/report/v1/usage?from=" in seite)
+status, body, _ = call(f"/auswertung?von={VON}&bis={HEUTE}&nach=application&top=supplier"
+                       f"&mass=bytes_down&application=webtop", admin=True)
+seite = body.decode("utf-8")
+check("mit Filter: nur webtop in der Legende", status == 200 and ">webtop</span>" in seite
+      and ">n8n</span>" not in seite, status)
+status, body, _ = call("/auswertung?von=gestern&nach=preis", admin=True)
+check("Unsinn in der Auswahl wird ersetzt und benannt, kein Absturz",
+      status == 200 and "gestern" in body.decode("utf-8") and "preis" in body.decode("utf-8"),
+      status)
+status, _, _ = call("/auswertung")
+check("die Auswertung bleibt der Serververwaltung vorbehalten", status == 403, status)
+
 print("\n-- §9.7 die härteste Regel: nirgends ein Prompt")
 found = []
 for root, _dirs, files in os.walk(TMP):

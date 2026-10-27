@@ -161,7 +161,7 @@ ehrlich `ok_no_counts`, nie geschätzt) und **Bytes hoch/runter** am
 Verbraucher: der Anfragerumpf, den er schickt, und der Antwortrumpf, den
 er bekommt, im Strom ohne Chunk-Rahmung. Preise, Währungen, Rechnungen
 gibt es hier nicht — die entstehen außerhalb aus diesen Zahlen
-(Auswertungs-Schnittstelle: RFC-0064 Stufe 3).
+(Auswertungs-Schnittstelle, unten).
 
 Messzeilen von vor 0.3 bekommen beim ersten Start einmal den Kontext,
 den ihr Schlüssel **dann** hat, und tragen `ctx_source=backfilled` —
@@ -230,23 +230,63 @@ werden kann, landet auch nicht versehentlich in einer Sicherung.
 durch das Gateway schickt und anschließend **jede Datei** unter dem
 Mount danach durchsucht.
 
+## Auswertung und Schnittstelle (seit 0.5, RFC-0064 Stufe 3)
+
+**Grafiken** unter `/auswertung` (Link auf der Übersicht), nur für die
+Serververwaltung: Verlauf je Tag oder Monat gestapelt nach einer
+Dimension, Rangliste, Anteil der Ausgänge (dort wird `ok_no_counts`
+sichtbar). Filter nach Zeitraum und jeder Dimension. SVG vom Server,
+kein Skript im Browser; unter jeder Grafik dieselben Zahlen als Tabelle.
+
+**Schnittstelle** für ein Abrechnungssystem:
+
+```
+GET /report/v1/usage?from=2026-10-01&to=2026-11-01&group_by=cost_center,month
+                    [&account=…&project=…&model=…][&format=csv]
+GET /report/v1/keys
+```
+
+- `from` einschließlich, `to` ausschließlich, UTC (`2026-10`,
+  `2026-10-01` oder `2026-10-01T00:00:00Z`).
+- Dimensionen zum Gruppieren und Filtern: `account`, `project`,
+  `cost_center`, `application`, `owner`, `key` (Etikett), `model`
+  (Modellname), `supplier`, `outcome`, `day`, `month`. Ein Filter darf
+  mehrfach stehen („einer davon“); leer heißt „ohne Angabe“.
+- Je Gruppe: `calls`, `in_tokens`, `out_tokens`,
+  `calls_without_token_counts`, `bytes_up`, `bytes_down`,
+  `calls_without_bytes`.
+- **`complete_until`** in jeder Antwort (bei CSV als Kopfzeile
+  `X-OAAP-Complete-Until`): bis wann die Zahlen endgültig sind. Eine
+  Messzeile bekommt ihre Zeit am **Ende** der Anfrage; ein Zeitraum ist
+  30 s nach seinem Ende abgeschlossen.
+- Ein **unbekannter Parameter wird mit 400 abgelehnt** — ein vertippter
+  Filter würde sonst still entfallen, und der Bericht zählte alles.
+
+**Zugang:** Grafiken und Schnittstelle lesen über **dieselbe Funktion**
+(`report.usage`). Ein externes System fragt mit einem
+**Plattform-API-Schlüssel** eines Maschinen-Benutzers mit Rolle `admin`
+(Portal → Zugänge, RFC-0027) — nie mit einem Gateway-Schlüssel
+`sk-oaap-…`; der öffnet `/report` nicht.
+
+```bash
+curl -H "Authorization: Bearer $OAAP_API_KEY"   "https://<gateway>/report/v1/usage?from=2026-10&to=2026-11&group_by=cost_center&format=csv"
+```
+
 ## Prüfen
 
 ```bash
 python3 apps/ai-gateway/test_supply.py     # Konfiguration und Reihenfolge
 python3 apps/ai-gateway/test_catalog.py    # Tresor, Übernahme, Laden
+python3 apps/ai-gateway/test_report.py     # die eine Abfrage: Zeitraum, Kontext-Kopie, CSV
 python3 apps/ai-gateway/test_gateway.py    # die Konformitätsliste der Spec §9
 ```
 
-Alle drei laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
+Alle vier laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 
 ## Was noch fehlt
 
-- **RFC-0064 Stufe 3:** Grafiken auf der Betreiber-Seite und die
-  Auswertungs-Schnittstelle `GET /report/v1/usage` für externe
-  Rechnungen und Kostenberichte — beide über dieselbe Abfrage.
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.
 - Verkettung ist möglich (ein Gateway als Bezugsquelle eines anderen),
   aber noch nicht im Betrieb bewiesen — das ist Stufe 3 in RFC-0023.

@@ -1,4 +1,4 @@
-"""OAAP KI-Gateway 0.4 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
+"""OAAP KI-Gateway 0.5 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
 Umsetzung der Capability `oaap.ai.gateway` 0.3 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
@@ -14,7 +14,10 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
   wird hier: **Der API-Schlüssel ist die Identität** — keine Sitzung,
   keine Rollen, kein Kontakt zum Identitätsdienst.
 - `/` ist `admin` — die Betreiber-Sicht: Aliasse, Bezugsquellen,
-  Schlüssel ausstellen und widerrufen, Verbrauch. Die Plattform
+  Schlüssel ausstellen und widerrufen, Verbrauch, Auswertung
+  (`/auswertung`) und die Schnittstelle für externe Berichte
+  (`/report/v1/…`, RFC-0064 §6) — die eine Maschine mit einem
+  Plattform-API-Schlüssel abfragt, nicht mit einem Gateway-Schlüssel. Die Plattform
   liefert die geprüfte Identität als Kopfzeile (App Deployment
   Contract); einen eigenen Login gibt es hier so wenig wie in jeder
   anderen OAAP-App.
@@ -33,15 +36,19 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qsl, urlencode
 
 import catalog
+import charts
 import relay
+import report
 import store
 import supply
 import vault
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -220,7 +227,26 @@ STYLE = """<style>
        font-size:.9rem;color:var(--oaap-text)}
   footer.oaap{max-width:64rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
        color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
-  @media (max-width:640px){ .userbox .who{display:none} }
+  .legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:0 0 .5rem;font-size:.85rem}
+  .lg{display:inline-flex;align-items:center;gap:.35rem}
+  .lg i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}
+  svg.chart{width:100%;height:auto;display:block}
+  svg.chart .ax{font-size:11px;fill:var(--oaap-muted)}
+  .hbar{display:grid;grid-template-columns:minmax(8rem,2fr) 3fr minmax(6rem,auto);gap:.6rem;
+       align-items:center;padding:.3rem 0;font-size:.9rem}
+  .hl{overflow:hidden;text-overflow:ellipsis}
+  .hl code{white-space:nowrap;word-break:normal;font-size:.78rem}
+  .ht{background:#f3f4f6;border-radius:4px;height:.8rem;overflow:hidden}
+  .ht i{display:block;height:100%;border-radius:0 4px 4px 0}
+  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-muted)}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.8rem}
+  .tile b{display:block;font-size:1.35rem}.tile span{font-size:.8rem;color:var(--oaap-muted)}
+  .scroll{overflow-x:auto}td.num{text-align:right;white-space:nowrap}
+  select{width:100%;padding:.5rem .6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
+       font-size:.95rem;min-height:44px;background:#fff}
+  input[type=date]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
+       border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
+  @media (max-width:640px){ .userbox .who{display:none} .hbar{grid-template-columns:1fr 1fr} }
 </style>"""
 
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
@@ -627,6 +653,7 @@ def admin_page(user, roles, host, notice="", secret=None):
     <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher,
     Dauer, Ausgang und der Kontext des Schlüssels zu diesem Zeitpunkt.
     Prompts und Antworten stehen in keiner Zeile und in keiner Datei.</p>
+  <p><a class="btn" href="auswertung">Auswertung: Grafiken und Schnittstelle</a></p>
   <table><tr><th>Zeit</th><th>Schlüssel</th><th>Alias</th><th>Quelle</th>
     <th>Token ein/aus</th><th>Bytes ↑/↓</th><th>Dauer</th><th>Ausgang</th></tr>{"".join(rows) or
     '<tr><td colspan="8" class="muted">Noch keine Anfrage.</td></tr>'}</table>
@@ -648,6 +675,157 @@ curl https://{esc(host)}/v1/chat/completions \\
 </div>""")
 
     return page("Übersicht", "".join(parts), user, roles)
+
+
+# ------------------------------------------------------------ Auswertung
+
+# Wonach gestapelt und gerankt werden kann. Tag und Monat sind die Zeitachse.
+CHART_DIMS = {"cost_center": "Kostenstelle", "account": "Account", "project": "Projekt",
+              "application": "Anwendung", "owner": "Verantwortlich", "key": "Schlüssel",
+              "model": "Modellname", "supplier": "Bezugsquelle", "outcome": "Ausgang"}
+MAX_DAYS = 400
+
+
+def chart_query(params):
+    """Die Auswahl der Seite → Zeitraum, Achsen, Filter; Unbrauchbares mit Hinweis ersetzt."""
+    notes = []
+    today = datetime.now(timezone.utc).date()
+
+    def day(name, default):
+        try:
+            return datetime.strptime(params.get(name, ""), "%Y-%m-%d").date()
+        except ValueError:
+            if params.get(name):
+                notes.append(f"„{params[name]}“ ist kein Datum; genommen: {default}.")
+            return default
+
+    first, last = day("von", today - timedelta(days=29)), day("bis", today)
+    if last < first:
+        notes.append("„bis“ lag vor „von“; vertauscht.")
+        first, last = last, first
+
+    def choice(name, allowed, default):
+        value = params.get(name, default)
+        if value not in allowed:
+            notes.append(f"„{value}“ gibt es für {name} nicht; genommen: {default}.")
+            return default
+        return value
+
+    step = choice("schritt", ("day", "month"), "day")
+    if step == "day" and (last - first).days >= MAX_DAYS:
+        step = "month"
+        notes.append(f"Mehr als {MAX_DAYS} Tage — je Monat gezeichnet.")
+    by = choice("nach", CHART_DIMS, "cost_center")
+    top = choice("top", CHART_DIMS, "key")
+    metric = choice("mass", charts.METRIC_LABELS, "calls")
+    filters = {d: [params[d]] for d in CHART_DIMS if d in params and params[d] != "*"}
+    frm = report.stamp(datetime(first.year, first.month, first.day))
+    to = report.stamp(datetime(last.year, last.month, last.day) + timedelta(days=1))
+    return dict(first=first, last=last, frm=frm, to=to, step=step, by=by, top=top,
+                metric=metric, filters=filters, notes=notes)
+
+
+def options(values, current, labels=None):
+    out = []
+    for value in values:
+        text = (labels or {}).get(value, charts.label(value))
+        out.append(f'<option value="{esc(value)}"{" selected" if value == current else ""}>'
+                   f'{esc(text)}</option>')
+    return "".join(out)
+
+
+def charts_page(user, roles, host, params):
+    q = chart_query(params)
+    frm, to, step, by, top, metric, filters = (q[k] for k in (
+        "frm", "to", "step", "by", "top", "metric", "filters"))
+    # Drei Fragen, eine Abfragefunktion — dieselbe, die /report/v1/usage beantwortet.
+    over_time = report.usage(DB, frm, to, [step, by], filters)
+    ranked = report.usage(DB, frm, to, [top], filters)
+    outcomes = report.usage(DB, frm, to, ["outcome"], filters)
+    t = ranked["totals"]
+
+    selects = []
+    for dim, text in CHART_DIMS.items():
+        current = filters.get(dim, ["*"])[0]
+        values = report.values_of(DB, dim, frm, to)
+        if current != "*" and current not in values:
+            values.append(current)
+        selects.append(f'<div><label for="f-{dim}">{esc(text)}</label>'
+                       f'<select id="f-{dim}" name="{dim}"><option value="*">alle</option>'
+                       f'{options(values, current)}</select></div>')
+    form = f"""<div class="card">
+  <form class="grid" method="get" action="auswertung">
+    <div><label for="von">von (UTC)</label>
+      <input id="von" name="von" type="date" value="{q['first']}"></div>
+    <div><label for="bis">bis einschließlich</label>
+      <input id="bis" name="bis" type="date" value="{q['last']}"></div>
+    <div><label for="schritt">je</label><select id="schritt" name="schritt">
+      {options(["day", "month"], step, {"day": "Tag", "month": "Monat"})}</select></div>
+    <div><label for="mass">Maß</label><select id="mass" name="mass">
+      {options(list(charts.METRIC_LABELS), metric, charts.METRIC_LABELS)}</select></div>
+    <div><label for="nach">gestapelt nach</label><select id="nach" name="nach">
+      {options(list(CHART_DIMS), by, CHART_DIMS)}</select></div>
+    <div><label for="top">Rangliste nach</label><select id="top" name="top">
+      {options(list(CHART_DIMS), top, CHART_DIMS)}</select></div>
+    {"".join(selects)}
+    <div><button type="submit">Anzeigen</button></div>
+  </form>
+</div>"""
+
+    api = {"from": frm, "to": to, "group_by": f"{step},{by}"}
+    api_qs = urlencode(list(api.items()) + [(d, v[0]) for d, v in sorted(filters.items())],
+                       safe=":,")
+    notes = "".join(f"<li>{esc(n)}</li>" for n in q["notes"])
+    complete = ("endgültig" if over_time["complete"] else
+                f"<b>noch nicht endgültig</b> — endgültig bis {esc(over_time['complete_until'])}")
+    gaps = []
+    if t["calls_without_token_counts"]:
+        gaps.append(f"{charts.fmt_num(t['calls_without_token_counts'])} Aufrufe ohne Token-Zahlen "
+                    "(Quelle nannte keine, oder abgewiesen) — sie zählen bei Token als 0")
+    if t["calls_without_bytes"]:
+        gaps.append(f"{charts.fmt_num(t['calls_without_bytes'])} Aufrufe von vor 0.3 ohne Bytes")
+    tiles = "".join(f'<div class="tile"><b>{v}</b><span>{esc(k)}</span></div>' for k, v in (
+        ("Aufrufe", charts.fmt_num(t["calls"])),
+        ("Token ein", charts.fmt_num(t["in_tokens"])),
+        ("Token aus", charts.fmt_num(t["out_tokens"])),
+        ("Bytes hoch", charts.fmt_metric(t["bytes_up"], "bytes_up")),
+        ("Bytes runter", charts.fmt_metric(t["bytes_down"], "bytes_down"))))
+    body = f"""<p><a href="./">← Übersicht</a></p>
+<h1>Auswertung</h1>
+<p class="hint">Nur intern. Volumen, keine Preise. Gruppiert wird nach dem Kontext, den ein
+  Schlüssel <b>zum Zeitpunkt der Anfrage</b> hatte; die Zeit einer Anfrage ist ihr Ende (UTC).</p>
+{form}
+{f'<div class="card attention"><ul>{notes}</ul></div>' if notes else ''}
+<div class="card">
+  <div class="tiles">{tiles}</div>
+  <p class="hint" style="margin-top:.8rem">{q['first']} bis {q['last']} · {complete}
+    {'· ' + esc('; '.join(gaps)) if gaps else ''}</p>
+</div>
+<div class="card">
+  <h2>{esc(charts.METRIC_LABELS[metric])} je {"Tag" if step == "day" else "Monat"},
+    gestapelt nach {esc(CHART_DIMS[by])}</h2>
+  {charts.stacked_bars(over_time, step, by, metric)}
+</div>
+<div class="card">
+  <h2>Rangliste: {esc(CHART_DIMS[top])} nach {esc(charts.METRIC_LABELS[metric])}</h2>
+  {charts.top_list(ranked, top, metric)}
+</div>
+<div class="card">
+  <h2>Ausgänge</h2>
+  <p class="hint">Hier wird sichtbar, wie viel ohne Token-Zahlen beantwortet wurde — und
+    wie viel gar nicht.</p>
+  {charts.outcome_list(outcomes)}
+</div>
+<div class="card">
+  <h2>Dieselben Zahlen für ein Abrechnungssystem</h2>
+  <p class="hint">Die Grafiken oben und diese Schnittstelle lesen über dieselbe Abfrage.
+    Abgefragt wird mit einem Plattform-API-Schlüssel für einen Maschinen-Benutzer mit der
+    Rolle <code>admin</code> (Portal → Zugänge), nicht mit einem Gateway-Schlüssel.
+    <code>to</code> ist ausschließlich; mit <code>format=csv</code> als CSV.</p>
+  <pre>curl -H "Authorization: Bearer $OAAP_API_KEY" \\
+  "https://{esc(host)}/report/v1/usage?{esc(api_qs)}"</pre>
+</div>"""
+    return page("Auswertung", body, user, roles)
 
 
 # --------------------------------------------------------------- HTTP
@@ -806,6 +984,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
             return
 
+        if path.startswith("/report"):
+            self.handle_report(path)
+            return
+
         # Betreiber-Sicht
         if not self.is_admin():
             self.send_html(403, page("Kein Zugriff",
@@ -814,7 +996,54 @@ class Handler(BaseHTTPRequestHandler):
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
+        if path == "/auswertung":
+            query = self.path.partition("?")[2]
+            self.send_html(200, charts_page(user, roles, host,
+                                            dict(parse_qsl(query, keep_blank_values=True))))
+            return
         self.send_html(200, admin_page(user, roles, host))
+
+    def handle_report(self, path):
+        """`/report/v1/…` — für ein Abrechnungssystem, nicht für einen Browser (RFC-0064 §6).
+
+        Die Plattform hat schon geprüft (Route `/`, Rolle `admin`); eine
+        Maschine kommt mit einem Plattform-API-Schlüssel und erscheint
+        hier mit denselben Kopfzeilen wie ein Mensch (RFC-0027). Ein
+        Gateway-Schlüssel (`sk-oaap-…`) öffnet diesen Weg nie: Er wird
+        hier gar nicht gelesen.
+        """
+        if not self.is_admin():
+            self.send_error_doc(403, "Nur für die Rolle admin — ein Abrechnungssystem fragt "
+                                     "mit einem Plattform-API-Schlüssel (Portal → Zugänge).",
+                                "forbidden")
+            return
+        if path == "/report/v1/keys":
+            self.send_json(200, report.keys_doc(DB, lambda raw: json.loads(raw) if raw else {}))
+            return
+        if path != "/report/v1/usage":
+            self.send_error_doc(404, "Bekannt sind /report/v1/usage und /report/v1/keys.",
+                                "unknown_path")
+            return
+        try:
+            frm, to, group_by, filters, fmt = report.parse_query(
+                parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+            doc = report.usage(DB, frm, to, group_by, filters)
+        except ValueError as exc:
+            self.send_error_doc(400, str(exc), "bad_query")
+            return
+        if fmt == "json":
+            self.send_json(200, doc)
+            return
+        body = report.to_csv(doc).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # In CSV gibt es keinen Platz dafür — und ohne diese Angabe wüsste
+        # ein Abrechnungslauf nicht, ob der Zeitraum noch wächst.
+        self.send_header("X-OAAP-Complete-Until", doc["complete_until"])
+        self.send_header("X-OAAP-Complete", "true" if doc["complete"] else "false")
+        self.end_headers()
+        self.wfile.write(body)
 
     # ---- POST
 

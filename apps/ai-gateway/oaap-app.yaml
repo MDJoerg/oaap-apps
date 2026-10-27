@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.4.1
+  version: 0.5.0
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -27,8 +27,11 @@ routes:
   # die gilt für Oberflächen-Apps, und dies ist keine.
   - path: /v1
     roles: [public]
-  # Die Betreiber-Sicht: Aliasse, Bezugsquellen, Schlüssel, Verbrauch.
-  # Ausdrücklich `admin`: Wer Schlüssel ausstellt, vergibt Geld.
+  # Die Betreiber-Sicht: Aliasse, Bezugsquellen, Schlüssel, Verbrauch,
+  # Auswertung. Ausdrücklich `admin`: Wer Schlüssel ausstellt, vergibt Geld.
+  # Darunter liegt auch /report/v1/… für externe Berichte (RFC-0064 §6):
+  # Ein Abrechnungssystem fragt mit einem Plattform-API-Schlüssel eines
+  # Maschinen-Benutzers mit Rolle admin (RFC-0027) — kein neuer Mechanismus.
   - path: /
     roles: [admin]
 
