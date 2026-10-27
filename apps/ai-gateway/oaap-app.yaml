@@ -3,7 +3,7 @@ oaap_manifest: "0.2"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.4.0
+  version: 0.4.1
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"

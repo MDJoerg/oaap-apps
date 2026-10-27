@@ -44,9 +44,24 @@ class Upstream:
                 pass
 
 
+def upstream_url(base, path):
+    """Adresse bei der Quelle: Basis + Pfad, ohne `/v1` doppelt.
+
+    Eine Quelle wird mit ihrer OpenAI-Basis eingetragen, also bis `/v1`
+    (`https://api.groq.com/openai/v1`); der Pfad des Verbrauchers beginnt
+    ebenfalls mit `/v1`. Bis 0.4.0 wurden beide einfach aneinandergehängt
+    — `…/v1/v1/chat/completions`, eine 404 bei jeder echten Quelle, gefunden
+    erst am Knoten (RFC-0064 §12). Eine Basis ohne `/v1` (die Umgehung,
+    die jemand eingetragen haben könnte) bekommt den Pfad unverändert.
+    """
+    if base.endswith("/v1") and path.startswith("/v1/"):
+        return base + path[3:]
+    return base + path
+
+
 def call(supplier, path, payload, timeout=READ_TIMEOUT, stream=False):
     """Eine Anfrage an eine Bezugsquelle. Wirft nicht, sondern berichtet."""
-    url = supplier["url"] + path
+    url = upstream_url(supplier["url"], path)
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "*/*"}
     if supplier.get("credential"):

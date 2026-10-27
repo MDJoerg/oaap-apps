@@ -249,6 +249,13 @@ check("eu wurde gewählt, obwohl fern zuerst aufgeführt war",
       Fake.calls[0]["body"]["model"] == "eu-modell", Fake.calls[0]["body"]["model"])
 check("der Alias wurde durch das Modell der Quelle ersetzt",
       "chat-default" not in json.dumps(Fake.calls[0]["body"]))
+# Die Papier-Quelle nimmt jeden Pfad an — genau deshalb blieb `/v1/v1/…`
+# bis 0.4.0 unentdeckt. Echte Quellen antworten darauf mit 404.
+check("die Quelle wird unter /v1/chat/completions gefragt, nicht /v1/v1/…",
+      Fake.calls[0]["path"] == "/v1/chat/completions", Fake.calls[0]["path"])
+import relay  # noqa: E402
+check("eine Basis ohne /v1 bekommt den Pfad unverändert",
+      relay.upstream_url("http://h:1", "/v1/embeddings") == "http://h:1/v1/embeddings")
 rows = store.recent(app.DB, limit=1)
 check("die Messzeile nennt die tatsächlich benutzte Quelle",
       rows[0]["supplier"] == "eusrc" and rows[0]["model"] == "eu-modell", dict(rows[0]))
