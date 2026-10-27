@@ -7,7 +7,7 @@ fragt nach einem **Zweck** (`chat-default`, `code`,
 `embedding-default`) und nie nach einem Hersteller.
 
 Umsetzung der Capability [`oaap.ai.gateway`
-0.2](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023).
+0.3](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023, RFC-0064).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -88,10 +88,46 @@ Voreingestellt reicht ein Schlüssel bis **gelb**. **Rot ist eine
 bewusste Zusatzerlaubnis** — Souveränität soll das sein, was passiert,
 wenn niemand etwas einstellt.
 
-Dazu je Schlüssel: Etikett, Verantwortliche(r), Kostenstelle, Projekt,
-Aliass-Beschränkung, **Token-Budget** und **Anfragen je Minute**. Die
-beiden letzten sind harte Grenzen — sie schützen vor einer
-davonlaufenden Rechnung, was eine Rechnung hinterher nicht tut.
+Dazu je Schlüssel: Etikett, Aliass-Beschränkung, **Token-Budget** und
+**Anfragen je Minute**. Die beiden letzten sind harte Grenzen — sie
+schützen vor einer davonlaufenden Rechnung, was eine Rechnung hinterher
+nicht tut.
+
+### Kontext am Schlüssel (seit 0.3, RFC-0064)
+
+Wonach ausgewertet und außerhalb verrechnet wird: **Account, Projekt,
+Kostenstelle, Anwendung**, Verantwortliche(r) und bis zu **fünf freie
+Etiketten** `name=wert`. Alles freier Text des Betreibers, leer erlaubt.
+Änderbar jederzeit — auf der Betreiber-Seite („Kontext ändern“) oder an
+der Maschine:
+
+```bash
+sudo docker exec oaap-app-<instanz> python3 /srv/app.py \
+  key issue kurs-app --account acme --project ADT-Kurs \
+  --cost-center KS-4711 --application webtop --labels kurs=adt-2026-11
+sudo docker exec oaap-app-<instanz> python3 /srv/app.py \
+  key context kurs-app --cost-center KS-9000
+```
+
+Jede Änderung steht mit altem und neuem Wert in der Prüfspur und gilt
+**ab der nächsten Anfrage**. Denn jede Messzeile trägt eine **Kopie** des
+Kontexts zum Zeitpunkt der Anfrage — wie ein Beleg die Kontierung behält,
+mit der er gebucht wurde. Eine geänderte Kostenstelle verschiebt keine
+alten Monate.
+
+### Was gezählt wird: Volumen, nie Geld
+
+Je Anfrage: Aufruf, Token ein/aus (wenn die Quelle sie nennt — sonst
+ehrlich `ok_no_counts`, nie geschätzt) und **Bytes hoch/runter** am
+Verbraucher: der Anfragerumpf, den er schickt, und der Antwortrumpf, den
+er bekommt, im Strom ohne Chunk-Rahmung. Preise, Währungen, Rechnungen
+gibt es hier nicht — die entstehen außerhalb aus diesen Zahlen
+(Auswertungs-Schnittstelle: RFC-0064 Stufe 3).
+
+Messzeilen von vor 0.3 bekommen beim ersten Start einmal den Kontext,
+den ihr Schlüssel **dann** hat, und tragen `ctx_source=backfilled` —
+eine Rekonstruktion, die sagt, dass sie eine ist. Ihre Bytes bleiben
+leer (unbekannt), nicht 0.
 
 ## Die Ampel
 
@@ -166,12 +202,17 @@ Beide laufen ohne Netz, ohne Docker und ohne Modell: Die zweite Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 
-## Was noch fehlt (Stufe 1)
+## Was noch fehlt
 
+- **RFC-0064 Stufe 2:** Bezugsquellen und Modellnamen in der App
+  pflegen statt als Konfigurationszeilen.
+- **RFC-0064 Stufe 3:** Grafiken auf der Betreiber-Seite und die
+  Auswertungs-Schnittstelle `GET /report/v1/usage` für externe
+  Rechnungen und Kostenberichte — beide über dieselbe Abfrage.
+- **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.
 - Verkettung ist möglich (ein Gateway als Bezugsquelle eines anderen),
   aber noch nicht im Betrieb bewiesen — das ist Stufe 3 in RFC-0023.
-- Mandanten-Sicht: Schlüssel tragen heute `account=default` und
-  `tenant=default`. Die Felder sind da, gefüllt werden sie mit
-  RFC-0022 Stufe 2.
-- Kein Kostenmodell in Euro, nur Token. Preise gehören zum Vertrag mit
-  der Bezugsquelle, nicht in die Plattform.
+- `tenant` steht auf `default`; gefüllt wird er mit RFC-0022, nicht von
+  Hand.
+- Kein Kostenmodell — mit Absicht (RFC-0064): Das Gateway zählt
+  Volumen, Preise gehören zum Vertrag mit der Bezugsquelle.

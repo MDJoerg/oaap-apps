@@ -346,6 +346,145 @@ check("und auch kein Ausstellen", status == 403, status)
 check("kein Schlüssel entstanden",
       not any(r["label"] == "heimlich" for r in store.keys(app.DB)))
 
+print("\n-- RFC-0064 Kontext am Schlüssel: ausstellen mit allen Feldern")
+status, body, _ = call("/issue", "POST", admin=True,
+                       form="label=kurs-app&owner=Lars&account=acme&project=ADT-Kurs"
+                            "&cost_center=KS-4711&application=webtop"
+                            "&labels=kurs%3Dadt-2026-11%2C+kunde%3Dacme&ceiling=yellow")
+text = body.decode("utf-8")
+KEY_KURS = store.KEY_PREFIX + text.split(store.KEY_PREFIX)[1].split("<")[0].strip()
+kurs = [r for r in store.keys(app.DB) if r["label"] == "kurs-app"][0]
+check("alle vier Dimensionen und der Verantwortliche stehen am Schlüssel",
+      (kurs["account"], kurs["project"], kurs["cost_center"], kurs["application"], kurs["owner"])
+      == ("acme", "ADT-Kurs", "KS-4711", "webtop", "Lars"), dict(kurs))
+check("die freien Etiketten sind gespeichert",
+      json.loads(kurs["labels"]) == {"kurs": "adt-2026-11", "kunde": "acme"}, kurs["labels"])
+
+print("\n-- RFC-0064 Bytes: genau das, was der Verbraucher schickt und bekommt")
+anfrage = {"model": "chat-default", "messages": [{"role": "user", "content": "Bytes zählen"}]}
+status, body, _ = call("/v1/chat/completions", "POST", key=KEY_KURS, body=anfrage)
+rows = store.recent(app.DB, limit=1)
+check("bytes_up = Länge des Anfragerumpfs",
+      rows[0]["bytes_up"] == len(json.dumps(anfrage).encode()), (rows[0]["bytes_up"]))
+check("bytes_down = Länge der Antwort", rows[0]["bytes_down"] == len(body),
+      (rows[0]["bytes_down"], len(body)))
+check("die Zeile trägt die Kopie des Kontexts",
+      (rows[0]["ctx_cost_center"], rows[0]["ctx_application"], rows[0]["ctx_account"],
+       rows[0]["ctx_source"]) == ("KS-4711", "webtop", "acme", "snapshot"), dict(rows[0]))
+ZEILE_VORHER = rows[0]["id"]
+
+stromanfrage = dict(anfrage, stream=True)
+status, body, _ = call("/v1/chat/completions", "POST", key=KEY_KURS, body=stromanfrage)
+rows = store.recent(app.DB, limit=1)
+check("im Strom: bytes_down = was ankam, ohne Chunk-Rahmung",
+      rows[0]["bytes_down"] == len(body) and len(body) > 0, (rows[0]["bytes_down"], len(body)))
+check("im Strom: bytes_up = Anfragerumpf",
+      rows[0]["bytes_up"] == len(json.dumps(stromanfrage).encode()), rows[0]["bytes_up"])
+
+print("\n-- RFC-0064 §3 die Kontext-Kopie: eine Änderung verschiebt keine alten Zeilen")
+status, body, _ = call("/context", "POST", admin=True,
+                       form="label=kurs-app&owner=Lars&account=acme&project=ADT-Kurs"
+                            "&cost_center=KS-9000&application=webtop"
+                            "&labels=kurs%3Dadt-2026-11%2C+kunde%3Dacme")
+check("die Seite bestätigt die Änderung", "geändert" in body.decode("utf-8"), status)
+call("/v1/chat/completions", "POST", key=KEY_KURS, body=anfrage)
+alt = app.DB.execute("SELECT * FROM usage WHERE id=?", (ZEILE_VORHER,)).fetchone()
+neu = store.recent(app.DB, limit=1)[0]
+check("die alte Zeile behält KS-4711", alt["ctx_cost_center"] == "KS-4711", alt["ctx_cost_center"])
+check("die neue Zeile trägt KS-9000", neu["ctx_cost_center"] == "KS-9000", neu["ctx_cost_center"])
+eintrag = [r for r in store.audit(app.DB) if r["action"] == "key.context"]
+check("die Prüfspur nennt alten und neuen Wert",
+      eintrag and "KS-4711" in eintrag[0]["detail"] and "KS-9000" in eintrag[0]["detail"]
+      and eintrag[0]["actor"] == "joerg", [dict(r) for r in eintrag])
+check("und nur das geänderte Feld", eintrag and "application" not in eintrag[0]["detail"],
+      eintrag[0]["detail"] if eintrag else "")
+
+print("\n-- RFC-0064 Etiketten: höchstens fünf, in der Form name=wert")
+zuviel = "%2C".join(f"e{i}%3Dx" for i in range(6))
+status, body, _ = call("/context", "POST", admin=True, form=f"label=kurs-app&labels={zuviel}")
+check("sechs Etiketten werden abgelehnt, mit Grund", "Höchstens 5" in body.decode("utf-8"))
+check("und nichts geändert",
+      json.loads([r for r in store.keys(app.DB) if r["label"] == "kurs-app"][0]["labels"])
+      == {"kurs": "adt-2026-11", "kunde": "acme"})
+try:
+    store.parse_labels("ohne-gleichheitszeichen")
+    check("ein Etikett ohne = wird abgelehnt", False)
+except ValueError:
+    check("ein Etikett ohne = wird abgelehnt", True)
+status, body, _ = call("/context", "POST", admin=True, form="label=gleich-weg&project=x")
+check("ein widerrufener Schlüssel bekommt keinen neuen Kontext",
+      "widerrufen" in body.decode("utf-8"))
+status, _, _ = call("/context", "POST", admin=False, form="label=kurs-app&project=heimlich")
+check("Kontext ändern bleibt der Serververwaltung vorbehalten", status == 403, status)
+
+print("\n-- RFC-0064 auch Ablehnungen tragen Bytes")
+key_eng, _ = store.issue(app.DB, "eng", "test", budget_tokens=1)
+call("/v1/chat/completions", "POST", key=key_eng, body=anfrage)            # verbraucht 16
+status, body, _ = call("/v1/chat/completions", "POST", key=key_eng, body=anfrage)
+rows = store.recent(app.DB, limit=1)
+check("die Budget-Ablehnung zählt ihre Bytes",
+      status == 429 and rows[0]["outcome"] == "budget"
+      and rows[0]["bytes_down"] == len(body) and rows[0]["bytes_up"] > 0, dict(rows[0]))
+
+print("\n-- RFC-0064 Kommandozeile: Kontext setzen und ändern")
+import io, contextlib  # noqa: E401,E402
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    rc1 = app.cli(["key", "issue", "kopflos", "--cost-center", "KS-1", "--application", "n8n",
+                   "--labels", "team=ops"])
+    rc2 = app.cli(["key", "context", "kopflos", "--cost-center", "KS-2"])
+kopflos = [r for r in store.keys(app.DB) if r["label"] == "kopflos"][0]
+check("issue und context über die Kommandozeile",
+      (rc1, rc2, kopflos["cost_center"], kopflos["application"], kopflos["labels"])
+      == (0, 0, "KS-2", "n8n", '{"team": "ops"}'), (rc1, rc2, dict(kopflos)))
+
+print("\n-- RFC-0064 Verbrauchssicht nennt Bytes")
+_, body, _ = call("/v1/usage", key=KEY_KURS)
+mine = json.loads(body)
+check("Summen in Bytes", mine["bytes_up"] > 0 and mine["bytes_down"] > 0, mine)
+
+print("\n-- RFC-0064 Migration: eine 0.2-Datenbank wird nachgezogen")
+import sqlite3  # noqa: E402
+ALT = os.path.join(tempfile.mkdtemp(prefix="aigw-alt-"), "gateway.db")
+roh = sqlite3.connect(ALT)
+roh.executescript("""
+CREATE TABLE keys (id TEXT PRIMARY KEY, label TEXT NOT NULL UNIQUE, digest TEXT NOT NULL UNIQUE,
+  created TEXT NOT NULL, revoked TEXT NOT NULL DEFAULT '', aliases TEXT NOT NULL DEFAULT '',
+  ceiling TEXT NOT NULL DEFAULT 'yellow', personal_data INTEGER NOT NULL DEFAULT 0,
+  budget_tokens INTEGER NOT NULL DEFAULT 0, rate_per_min INTEGER NOT NULL DEFAULT 0,
+  owner TEXT NOT NULL DEFAULT '', cost_center TEXT NOT NULL DEFAULT '',
+  project TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT 'default',
+  tenant TEXT NOT NULL DEFAULT 'default');
+CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL,
+  key_id TEXT NOT NULL, alias TEXT NOT NULL, supplier TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '', in_tokens INTEGER, out_tokens INTEGER,
+  ms INTEGER NOT NULL DEFAULT 0, outcome TEXT NOT NULL DEFAULT 'ok');
+INSERT INTO keys (id,label,digest,created,owner,cost_center,project)
+  VALUES ('k1','laptop@joerg','d1','2026-08-24T10:00:00Z','Jörg','KS-ALT','privat');
+INSERT INTO usage (time,key_id,alias,in_tokens,out_tokens) VALUES
+  ('2026-09-01T10:00:00Z','k1','chat-default',100,20),
+  ('2026-09-02T10:00:00Z','k1','chat-default',50,10);
+""")
+roh.commit()
+roh.close()
+db_alt = store.connect(ALT)
+zeilen = list(db_alt.execute("SELECT * FROM usage ORDER BY id"))
+check("alte Zeilen bekommen den Kontext ihres Schlüssels",
+      all(z["ctx_cost_center"] == "KS-ALT" and z["ctx_project"] == "privat" for z in zeilen),
+      [dict(z) for z in zeilen])
+check("und sagen, dass er nachgetragen ist",
+      all(z["ctx_source"] == "backfilled" for z in zeilen))
+check("ihre Bytes bleiben unbekannt (NULL), nicht null",
+      all(z["bytes_up"] is None and z["bytes_down"] is None for z in zeilen))
+check("die Token-Zahlen sind unberührt", [z["in_tokens"] for z in zeilen] == [100, 50])
+check("die Prüfspur hält die Nachtragung fest",
+      [r["subject"] for r in store.audit(db_alt) if r["action"] == "usage.backfill"] == ["2 Zeilen"])
+db_alt.close()
+db_alt = store.connect(ALT)
+check("ein zweiter Start trägt nichts noch einmal nach",
+      len([r for r in store.audit(db_alt) if r["action"] == "usage.backfill"]) == 1)
+db_alt.close()
+shutil.rmtree(os.path.dirname(ALT), ignore_errors=True)
+
 print("\n-- §9.7 die härteste Regel: nirgends ein Prompt")
 found = []
 for root, _dirs, files in os.walk(TMP):
@@ -358,8 +497,9 @@ for root, _dirs, files in os.walk(TMP):
         if GEHEIM.encode() in blob:
             found.append(path + " (Zugangsdaten!)")
 check("keine Datei enthält den Prompt oder die Zugangsdaten", found == [], found)
-check("und die Tabelle hat gar keine Spalte dafür",
-      not any(col in store.SCHEMA for col in ("prompt", "content", "message", "response")))
+check("und die Tabelle hat gar keine Spalte dafür — auch keine nachgezogene",
+      not any(col in store.SCHEMA or any(col in c for _t, c, _d in store.ADDED_COLUMNS)
+              for col in ("prompt", "content", "message", "response")))
 
 print("\n-- §9.9 Prüfspur: Ausstellen und Widerrufen, keine Anfragen")
 actions = [r["action"] for r in store.audit(app.DB)]

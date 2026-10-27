@@ -1,6 +1,6 @@
-"""OAAP KI-Gateway 0.1 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
+"""OAAP KI-Gateway 0.3 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
-Umsetzung der Capability `oaap.ai.gateway` 0.2 (RFC-0023). Das Gateway
+Umsetzung der Capability `oaap.ai.gateway` 0.3 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
 einer oder mehreren Bezugsquellen: lokales Modell, externer Anbieter,
 Kunden-Endpunkt oder ein anderes Gateway. Der Verbraucher fragt nach
@@ -39,7 +39,7 @@ import relay
 import store
 import supply
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -73,6 +73,11 @@ _FAILS = {}
 _FAILS_LOCK = threading.Lock()
 FAIL_WINDOW = 300
 FAIL_LIMIT = 5
+
+def error_bytes(message, code):
+    return json.dumps({"error": {"message": message, "type": "invalid_request_error",
+                                 "code": code}}, ensure_ascii=False).encode("utf-8")
+
 
 # Dieselbe Antwort für „kein Schlüssel“, „unbekannt“ und „widerrufen“
 # (Spec §8): Wer probiert, soll aus der Antwort nichts lernen.
@@ -235,6 +240,48 @@ def fmt_tokens(value):
     return f"{value:,}".replace(",", ".")
 
 
+def fmt_bytes(value):
+    """Bytes lesbar. None heißt: vor 0.3 gezählt, Bytes unbekannt."""
+    if value is None:
+        return '<span class="muted">—</span>'
+    value = int(value)
+    for unit, size in (("GB", 1 << 30), ("MB", 1 << 20), ("kB", 1 << 10)):
+        if value >= size:
+            return f"{value / size:.1f} {unit}".replace(".", ",")
+    return f"{value} B"
+
+
+def context_line(row):
+    """Der Kontext eines Schlüssels in einer Zeile, Leeres weggelassen."""
+    bits = [row["owner"] or "ohne Verantwortlichen"]
+    for name in ("account", "project", "cost_center", "application"):
+        if row[name] and not (name == "account" and row[name] == "default"):
+            bits.append(f"{CONTEXT_LABELS[name]} {row[name]}")
+    if row["labels"]:
+        bits.append(store.labels_text(row["labels"]))
+    return " · ".join(bits)
+
+
+CONTEXT_LABELS = {"owner": "Verantwortlich", "account": "Account", "project": "Projekt",
+                  "cost_center": "Kostenstelle", "application": "Anwendung",
+                  "labels": "Freie Etiketten"}
+
+
+def context_inputs(row=None, prefix=""):
+    """Eingabefelder für den Kontext — leer beim Ausstellen, gefüllt beim Ändern."""
+    out = []
+    for name in store.CONTEXT_FIELDS:
+        value = ""
+        if row is not None:
+            value = store.labels_text(row[name]) if name == "labels" else row[name]
+        hint = " (name=wert, Komma-getrennt, höchstens 5)" if name == "labels" else ""
+        out.append(f'<div><label for="{prefix}{name}">{CONTEXT_LABELS[name]}{hint}</label>'
+                   f'<input id="{prefix}{name}" name="{name}" type="text" '
+                   f'maxlength="{400 if name == "labels" else store.MAX_TEXT}" '
+                   f'value="{esc(value or "")}"></div>')
+    return "".join(out)
+
+
 # ------------------------------------------------------------ Betreiber-Seite
 
 def admin_page(user, roles, host, notice="", secret=None):
@@ -336,25 +383,33 @@ def admin_page(user, roles, host, notice="", secret=None):
             state = '<span class="badge">gültig</span>'
             action = (f'<form method="post" action="revoke" style="margin:0">'
                       f'<input type="hidden" name="label" value="{esc(row["label"])}">'
-                      f'<button class="quiet" type="submit">widerrufen</button></form>')
+                      f'<button class="quiet" type="submit">widerrufen</button></form>'
+                      f'<details><summary class="muted">Kontext ändern</summary>'
+                      f'<form class="grid" method="post" action="context" style="margin-top:.6rem">'
+                      f'<input type="hidden" name="label" value="{esc(row["label"])}">'
+                      f'{context_inputs(row, prefix=row["id"] + "-")}'
+                      f'<div><button class="quiet" type="submit">speichern</button></div>'
+                      f'</form></details>')
         rows.append(
             f'<tr><td><b>{esc(row["label"])}</b><br>'
-            f'<span class="muted">{esc(row["owner"] or "ohne Verantwortlichen")}'
-            f'{(" · " + esc(row["cost_center"])) if row["cost_center"] else ""}'
-            f'{(" · " + esc(row["project"])) if row["project"] else ""}</span></td>'
+            f'<span class="muted">{esc(context_line(row))}</span></td>'
             f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
             f'<td>{budget}</td>'
             f'<td>{t["calls"] if t else 0}<br><span class="muted">'
             f'{esc(t["last"]) if t else "noch nie"}</span></td>'
+            f'<td>{fmt_bytes(t["bytes_up"] if t else 0)} / '
+            f'{fmt_bytes(t["bytes_down"] if t else 0)}</td>'
             f'<td>{action}</td></tr>')
     parts.append(f"""<div class="card">
   <h2>Schlüssel</h2>
   <p class="hint">Wer ein Gateway betreibt, gibt die Erlaubnis — ein Recht wird
-    gegeben, nicht gehalten. Jedes Ausstellen und jedes Widerrufen steht in der
-    Prüfspur; einzelne Anfragen stehen dort nicht.</p>
-  <table><tr><th>Etikett</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
-    <th>Token</th><th>Aufrufe</th><th></th></tr>{"".join(rows) or
-    '<tr><td colspan="7" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table>
+    gegeben, nicht gehalten. Ausstellen, Widerrufen und jede Änderung am Kontext
+    stehen in der Prüfspur; einzelne Anfragen stehen dort nicht. Ein geänderter
+    Kontext gilt <b>ab der nächsten Anfrage</b> — gezählte Anfragen behalten den,
+    mit dem sie kamen.</p>
+  <table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
+    <th>Token</th><th>Aufrufe</th><th>Daten ↑/↓</th><th></th></tr>{"".join(rows) or
+    '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table>
 </div>""")
 
     alias_hint = ", ".join(sorted(ALIASES)) or "—"
@@ -363,12 +418,7 @@ def admin_page(user, roles, host, notice="", secret=None):
   <form class="grid" method="post" action="issue">
     <div><label for="label">Etikett (eindeutig, benennt den Verbraucher)</label>
       <input id="label" name="label" type="text" required placeholder="laptop@joerg"></div>
-    <div><label for="owner">Verantwortlich</label>
-      <input id="owner" name="owner" type="text" placeholder="Jörg"></div>
-    <div><label for="cost_center">Kostenstelle</label>
-      <input id="cost_center" name="cost_center" type="text"></div>
-    <div><label for="project">Projekt</label>
-      <input id="project" name="project" type="text"></div>
+    {context_inputs()}
     <div><label for="aliases">Aliasse (leer = alle: {esc(alias_hint)})</label>
       <input id="aliases" name="aliases" type="text" placeholder="chat-default,code"></div>
     <div><label for="budget">Budget in Token (0 = ohne)</label>
@@ -404,15 +454,17 @@ def admin_page(user, roles, host, notice="", secret=None):
             f'<td>{esc(row["supplier"] or "—")}<br>'
             f'<span class="muted">{esc(row["model"] or "")}</span></td>'
             f'<td>{fmt_tokens(row["in_tokens"])} / {fmt_tokens(row["out_tokens"])}</td>'
+            f'<td>{fmt_bytes(row["bytes_up"])} / {fmt_bytes(row["bytes_down"])}</td>'
             f'<td>{row["ms"]} ms</td><td>{esc(row["outcome"])}</td></tr>')
     parts.append(f"""<div class="card">
   <h2>Letzte Anfragen</h2>
   <p class="hint">Gezählt wird, nicht mitgeschrieben: Zeit, Schlüssel, Alias,
-    <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Dauer, Ausgang.
+    <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher,
+    Dauer, Ausgang und der Kontext des Schlüssels zu diesem Zeitpunkt.
     Prompts und Antworten stehen in keiner Zeile und in keiner Datei.</p>
   <table><tr><th>Zeit</th><th>Schlüssel</th><th>Alias</th><th>Quelle</th>
-    <th>Token ein/aus</th><th>Dauer</th><th>Ausgang</th></tr>{"".join(rows) or
-    '<tr><td colspan="7" class="muted">Noch keine Anfrage.</td></tr>'}</table>
+    <th>Token ein/aus</th><th>Bytes ↑/↓</th><th>Dauer</th><th>Ausgang</th></tr>{"".join(rows) or
+    '<tr><td colspan="8" class="muted">Noch keine Anfrage.</td></tr>'}</table>
 </div>""")
 
     parts.append(f"""<div class="card">
@@ -472,9 +524,28 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def send_error_doc(self, status, message, code, extra_headers=()):
-        self.send_json(status, {"error": {"message": message,
-                                          "type": "invalid_request_error",
-                                          "code": code}}, extra_headers)
+        self.send_raw_json(status, error_bytes(message, code), extra_headers)
+
+    def send_raw_json(self, status, payload, extra_headers=()):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        for name, value in extra_headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def refuse_counted(self, row, alias, supplier, model, ms, outcome, up_bytes,
+                       status, message, code, extra_headers=()):
+        """Eine Ablehnung, die gezählt wird: erst die Messzeile, dann die Antwort.
+
+        Die Fehlerantwort steht vorher als Bytes fest, damit `bytes_down`
+        genau das ist, was der Verbraucher bekommt.
+        """
+        payload = error_bytes(message, code)
+        store.record(DB, row, alias, supplier, model, None, None, ms, outcome,
+                     up_bytes, len(payload))
+        self.send_raw_json(status, payload, extra_headers)
 
     def read_body(self):
         try:
@@ -551,6 +622,8 @@ class Handler(BaseHTTPRequestHandler):
                 "calls": int(totals["calls"]) if totals else 0,
                 "input_tokens": int(totals["in_tokens"]) if totals else 0,
                 "output_tokens": int(totals["out_tokens"]) if totals else 0,
+                "bytes_up": int(totals["bytes_up"]) if totals else 0,
+                "bytes_down": int(totals["bytes_down"]) if totals else 0,
                 "budget_tokens": int(row["budget_tokens"]),
                 "ceiling": ceiling_of(row),
                 "personal_data_released": pbd_of(row),
@@ -558,6 +631,7 @@ class Handler(BaseHTTPRequestHandler):
                             "supplier": r["supplier"], "model": r["model"],
                             "light": SUPPLIERS.get(r["supplier"], {}).get("light", ""),
                             "input_tokens": r["in_tokens"], "output_tokens": r["out_tokens"],
+                            "bytes_up": r["bytes_up"], "bytes_down": r["bytes_down"],
                             "ms": r["ms"], "outcome": r["outcome"]}
                            for r in store.recent(DB, row["id"], 20)],
             })
@@ -583,7 +657,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/v1/chat/completions", "/v1/embeddings"):
             self.handle_inference(path)
             return
-        if path in ("/issue", "/revoke"):
+        if path in ("/issue", "/revoke", "/context"):
             self.handle_admin_post(path)
             return
         self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
@@ -627,11 +701,21 @@ class Handler(BaseHTTPRequestHandler):
                         ceiling=ceiling, personal_data=personal_data,
                         budget_tokens=_int(form.get("budget")),
                         rate_per_min=_int(form.get("rate")),
-                        owner=form.get("owner", ""), cost_center=form.get("cost_center", ""),
-                        project=form.get("project", ""))
+                        **{name: form.get(name, "") for name in store.CONTEXT_FIELDS})
                     secret = {"label": form.get("label", ""), "value": value}
                 except ValueError as exc:
                     notice = str(exc)
+        elif path == "/context":
+            label = form.get("label", "")
+            try:
+                changed = store.update_context(
+                    DB, label, user,
+                    **{name: form[name] for name in store.CONTEXT_FIELDS if name in form})
+                notice = (f"Kontext von „{label}“ geändert ({', '.join(CONTEXT_LABELS[n] for n in changed)}) "
+                          "— gilt ab der nächsten Anfrage." if changed
+                          else f"Kontext von „{label}“ unverändert.")
+            except ValueError as exc:
+                notice = str(exc)
         else:
             label = form.get("label", "")
             notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."
@@ -681,10 +765,10 @@ class Handler(BaseHTTPRequestHandler):
             if used >= row["budget_tokens"]:
                 # Kein Retry-After: Warten hilft hier nicht, nur ein
                 # neues Budget. Eine Zeitangabe wäre eine Unwahrheit.
-                self.send_error_doc(
+                self.refuse_counted(
+                    row, alias_name, "", "", 0, "budget", len(raw),
                     429, f"Budget erschöpft ({used} von {row['budget_tokens']} Token). "
                          "Der Betreiber kann es erhöhen.", "budget_exhausted")
-                store.record(DB, row["id"], alias_name, "", "", 0, 0, 0, "budget")
                 return
 
         alias = ALIASES[alias_name]
@@ -693,15 +777,15 @@ class Handler(BaseHTTPRequestHandler):
         if not targets:
             reasons = supply.blocked_reasons(alias, SUPPLIERS, ceiling, pbd)
             if reasons:
-                self.send_error_doc(
-                    503, f"Für „{alias_name}“ bleibt jede Quelle gesperrt: "
-                         f"{'; '.join(reasons)}. Der Betreiber kann die Obergrenze "
-                         "heraufsetzen oder eine andere Quelle eintragen.",
-                    "light_not_permitted")
+                message = (f"Für „{alias_name}“ bleibt jede Quelle gesperrt: "
+                           f"{'; '.join(reasons)}. Der Betreiber kann die Obergrenze "
+                           "heraufsetzen oder eine andere Quelle eintragen.")
+                code = "light_not_permitted"
             else:
-                self.send_error_doc(503, f"Für „{alias_name}“ ist keine Bezugsquelle erreichbar.",
-                                    "no_supplier")
-            store.record(DB, row["id"], alias_name, "", "", None, None, 0, "no_supplier")
+                message = f"Für „{alias_name}“ ist keine Bezugsquelle erreichbar."
+                code = "no_supplier"
+            self.refuse_counted(row, alias_name, "", "", 0, "no_supplier", len(raw),
+                                503, message, code)
             return
 
         stream = bool(payload.get("stream"))
@@ -712,9 +796,11 @@ class Handler(BaseHTTPRequestHandler):
             body["model"] = model                      # Alias → Modell der Quelle
             started = time.monotonic()
             if stream:
-                done = self.relay_stream(row, alias_name, src, model, path, body, started)
+                done = self.relay_stream(row, alias_name, src, model, path, body, started,
+                                         len(raw))
             else:
-                done = self.relay_once(row, alias_name, src, model, path, body, started)
+                done = self.relay_once(row, alias_name, src, model, path, body, started,
+                                       len(raw))
             if done is True:
                 return
             last_error = done or last_error
@@ -724,13 +810,13 @@ class Handler(BaseHTTPRequestHandler):
                 sys.stdout.write(f"ausweichen: {src['name']} -> "
                                  f"{targets[index + 1]['supplier']['name']} ({last_error})\n")
 
-        store.record(DB, row["id"], alias_name, targets[-1]["supplier"]["name"],
-                     targets[-1]["model"], None, None,
-                     int((time.monotonic() - started) * 1000), "upstream_failed")
-        self.send_error_doc(502, f"Keine Bezugsquelle für „{alias_name}“ hat geantwortet "
+        self.refuse_counted(row, alias_name, targets[-1]["supplier"]["name"],
+                            targets[-1]["model"], int((time.monotonic() - started) * 1000),
+                            "upstream_failed", len(raw),
+                            502, f"Keine Bezugsquelle für „{alias_name}“ hat geantwortet "
                                  f"({last_error}).", "upstream_failed")
 
-    def relay_once(self, row, alias_name, src, model, path, body, started):
+    def relay_once(self, row, alias_name, src, model, path, body, started, up_bytes):
         up, counts = relay.call_json(src, path, body, timeout=TIMEOUT)
         ms = int((time.monotonic() - started) * 1000)
         if up.status == 0 or up.status >= 500:
@@ -738,17 +824,19 @@ class Handler(BaseHTTPRequestHandler):
         if up.status >= 400:
             # Ein 4xx ist die Antwort auf **diese** Anfrage — Ausweichen
             # würde denselben Fehler noch einmal erzeugen.
-            store.record(DB, row["id"], alias_name, src["name"], model,
-                         counts[0], counts[1], ms, f"upstream_{up.status}")
+            store.record(DB, row, alias_name, src["name"], model,
+                         counts[0], counts[1], ms, f"upstream_{up.status}",
+                         up_bytes, len(up.body))
             self.send_response(up.status)
             self.send_header("Content-Type", up.content_type or "application/json")
             self.send_header("Content-Length", str(len(up.body)))
             self.end_headers()
             self.wfile.write(up.body)
             return True
-        store.record(DB, row["id"], alias_name, src["name"], model,
+        store.record(DB, row, alias_name, src["name"], model,
                      counts[0], counts[1], ms,
-                     "ok" if counts[0] is not None else "ok_no_counts")
+                     "ok" if counts[0] is not None else "ok_no_counts",
+                     up_bytes, len(up.body))
         self.send_response(200)
         self.send_header("Content-Type", up.content_type or "application/json")
         self.send_header("Content-Length", str(len(up.body)))
@@ -756,7 +844,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(up.body)
         return True
 
-    def relay_stream(self, row, alias_name, src, model, path, body, started):
+    def relay_stream(self, row, alias_name, src, model, path, body, started, up_bytes):
         up, asked_usage = relay.open_stream(src, path, body, timeout=TIMEOUT)
         if up.status == 0 or up.status >= 500:
             up.close()
@@ -764,8 +852,9 @@ class Handler(BaseHTTPRequestHandler):
         if up.status >= 400:
             payload = up.body or b'{"error":{"message":"upstream error"}}'
             up.close()
-            store.record(DB, row["id"], alias_name, src["name"], model, None, None,
-                         int((time.monotonic() - started) * 1000), f"upstream_{up.status}")
+            store.record(DB, row, alias_name, src["name"], model, None, None,
+                         int((time.monotonic() - started) * 1000), f"upstream_{up.status}",
+                         up_bytes, len(payload))
             self.send_response(up.status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -779,9 +868,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
 
+        # Gezählt wird der Nutzinhalt, nicht die Chunk-Rahmung — dieselbe
+        # Größe, die der Verbraucher ohne Strom als Rumpf bekommen hätte.
+        sent = [0]
+
         def write(chunk):
             self.wfile.write(b"%x\r\n" % len(chunk) + chunk + b"\r\n")
             self.wfile.flush()
+            sent[0] += len(chunk)
 
         outcome = "ok"
         in_tokens = out_tokens = None
@@ -798,8 +892,8 @@ class Handler(BaseHTTPRequestHandler):
         # wäre die Messzeile ein Wettlauf gegen den Client: Er hätte die
         # Antwort schon vollständig, während der Verbrauch noch nirgends
         # steht — und genau in diesem Fenster fällt ein Prozess aus.
-        store.record(DB, row["id"], alias_name, src["name"], model, in_tokens, out_tokens,
-                     int((time.monotonic() - started) * 1000), outcome)
+        store.record(DB, row, alias_name, src["name"], model, in_tokens, out_tokens,
+                     int((time.monotonic() - started) * 1000), outcome, up_bytes, sent[0])
         try:
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
@@ -819,36 +913,62 @@ def _int(value):
 
 def cli(argv):
     """Für kopflose Knoten: `docker exec <container> python3 /srv/app.py key ...`."""
+    context_opts = ("[--owner X] [--account X] [--project X] [--cost-center X] "
+                    "[--application X] [--labels name=wert,...]")
     if len(argv) < 2 or argv[0] != "key":
         print("Aufruf: app.py key issue <etikett> [--aliases a,b] "
               "[--ceiling green|yellow|red] [--personal-data ja] [--budget N] "
-              "[--rate N] [--owner X] | key list | key revoke <etikett>")
+              f"[--rate N] {context_opts} | key list | key revoke <etikett> "
+              f"| key context <etikett> {context_opts}")
         return 2
     action = argv[1]
-    if action == "list":
-        for row in store.keys(DB):
-            print(f'{row["label"]:24} {row["created"]} '
-                  f'{"WIDERRUFEN" if row["revoked"] else "gültig":10} '
-                  f'aliasse={row["aliases"] or "alle"} bis={row["ceiling"]} '
-                  f'pbD={"freigegeben" if row["personal_data"] else "nein"}')
-        return 0
-    if action == "revoke" and len(argv) > 2:
-        print("widerrufen" if store.revoke(DB, argv[2], "cli") else "unbekannt oder schon widerrufen")
-        return 0
-    if action == "issue" and len(argv) > 2:
+
+    def options():
         opts, i = {}, 3
         while i + 1 < len(argv):
             if argv[i].startswith("--"):
                 opts[argv[i][2:]] = argv[i + 1]
             i += 2
-        value, _ = store.issue(
-            DB, argv[2], "cli",
-            aliases=[a for a in opts.get("aliases", "").split(",") if a],
-            ceiling=(opts.get("ceiling") if opts.get("ceiling") in supply.LIGHT_RANK
-                     else supply.DEFAULT_CEILING),
-            personal_data=opts.get("personal-data", "").lower() in ("ja", "yes", "1"),
-            budget_tokens=_int(opts.get("budget")), rate_per_min=_int(opts.get("rate")),
-            owner=opts.get("owner", ""))
+        return opts
+
+    def context_of(opts):
+        # --cost-center auf der Kommandozeile, cost_center in den Büchern.
+        return {name: opts[name.replace("_", "-")] for name in store.CONTEXT_FIELDS
+                if name.replace("_", "-") in opts}
+
+    if action == "list":
+        for row in store.keys(DB):
+            print(f'{row["label"]:24} {row["created"]} '
+                  f'{"WIDERRUFEN" if row["revoked"] else "gültig":10} '
+                  f'aliasse={row["aliases"] or "alle"} bis={row["ceiling"]} '
+                  f'pbD={"freigegeben" if row["personal_data"] else "nein"} '
+                  f'| {context_line(row)}')
+        return 0
+    if action == "revoke" and len(argv) > 2:
+        print("widerrufen" if store.revoke(DB, argv[2], "cli") else "unbekannt oder schon widerrufen")
+        return 0
+    if action == "context" and len(argv) > 2:
+        try:
+            changed = store.update_context(DB, argv[2], "cli", **context_of(options()))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print("geändert: " + ", ".join(changed) if changed else "unverändert")
+        return 0
+    if action == "issue" and len(argv) > 2:
+        opts = options()
+        try:
+            value, _ = store.issue(
+                DB, argv[2], "cli",
+                aliases=[a for a in opts.get("aliases", "").split(",") if a],
+                ceiling=(opts.get("ceiling") if opts.get("ceiling") in supply.LIGHT_RANK
+                         else supply.DEFAULT_CEILING),
+                personal_data=opts.get("personal-data", "").lower() in ("ja", "yes", "1"),
+                budget_tokens=_int(opts.get("budget")), rate_per_min=_int(opts.get("rate")),
+                **context_of(opts))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
         print(value)
         print("Dieser Wert wird nicht wieder angezeigt.", file=sys.stderr)
         return 0
