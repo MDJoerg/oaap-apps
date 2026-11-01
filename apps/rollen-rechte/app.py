@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import door
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 PORT = 8000
 
 esc = html.escape
@@ -98,6 +98,15 @@ def context_fields(decls, roles_by_id, collection):
                                     typ = f.get("context") or ""
                     if (fk, typ) not in out:
                         out.append((fk, typ))
+    return out
+
+
+def hands_on(decls, roles_by_id, collection):
+    """Die Vorlagen, die dieses Paket weitergeben laesst (`may_grant`)."""
+    out = []
+    for rid in collection.get("roles") or ():
+        r = roles_by_id.get(rid) or {}
+        out += template_of(decls, r.get("app"), r.get("template")).get("may_grant") or []
     return out
 
 
@@ -181,7 +190,8 @@ FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox
 BACK_TO_PORTAL = ('href="/" onclick="location.href=location.protocol+\'//\'+'
                   "location.hostname+'/';return false;\"")
 
-TABS = [("/", "Personen"), ("/roles", "Rollen"), ("/collections", "Berechtigungspakete"),
+TABS = [("/", "Personen"), ("/agents", "Agenten"), ("/roles", "Rollen"),
+        ("/collections", "Berechtigungspakete"), ("/delegated", "Weitergaben"),
         ("/mappings", "Gruppen → Paket"), ("/log", "Protokoll")]
 
 NOTICES = {
@@ -263,9 +273,64 @@ die Plattform an, nicht diese Seite.</p>
 "<tr><td colspan=3 class=muted>Keine Personen.</td></tr>"}</table></div>"""
 
 
+def render_agents(agents):
+    locked = '<span class="badge err">gesperrt</span>'
+    rows = "".join(
+        f"<tr><td><a href='/person?id={quote(u['id'])}'>{esc(u['username'])}</a></td>"
+        f"<td>{esc(u.get('display_name') or '')}</td>"
+        f"<td>{'' if u.get('active', True) else locked}</td></tr>"
+        for u in agents)
+    return f"""<div class="card"><h2>Agenten dieses Mandanten</h2>
+<p class="hint">Ein Agent ist ein eigenes Konto mit eigenen Zuordnungen: Er darf,
+was ihm zugeordnet ist, nicht was die Person darf, die ihn einsetzt. In der App
+und im Protokoll steht sein eigener Name. Weitergeben kann ein Agent nichts.
+Anlegen und seinen Schluessel ausstellen: der Betreiber oder Mandanten-Admin mit
+<code>oaap authz agent-add</code>, nicht diese Seite.</p>
+<table><tr><th>Name</th><th>Anzeigename</th><th></th></tr>{rows or
+"<tr><td colspan=3 class=muted>Keine Agenten.</td></tr>"}</table></div>"""
+
+
+def _orphan_note(a):
+    return ('<span class="badge err">Geber hält es nicht mehr</span>'
+            if a.get("orphaned") else "")
+
+
+def render_delegated(assignments, people, collections, back):
+    """Was Personen weitergegeben haben und noch gilt, das Verwaiste zuerst."""
+    names = {u["id"]: u["username"] for u in people}
+    colls = {c["id"]: c["name"] for c in collections}
+    live = [a for a in assignments if a.get("source") == "delegated" and a.get("live")]
+    live.sort(key=lambda a: (not a.get("orphaned"), a.get("granted_at", "")))
+    rows = []
+    for a in live:
+        ctx = "; ".join(f"{esc(k)}: {esc(', '.join(v))}"
+                        for k, v in (a.get("context") or {}).items())
+        who = names.get(a["subject"], a["subject"])
+        rows.append(
+            f"<tr><td><a href='/person?id={quote(a['subject'])}'>{esc(who)}</a></td>"
+            f"<td>{esc(colls.get(a['collection'], '?'))}</td><td>{ctx or '-'}</td>"
+            f"<td>{esc(a.get('valid_to') or '-')}</td>"
+            f"<td>{esc(a.get('granted_by') or '')}<br>{_orphan_note(a)}</td><td>"
+            + post_form("/do/revoke", hidden(id=a["id"]), "Beenden", back,
+                        cls="inline", quiet=True) + "</td></tr>")
+    return f"""<div class="card"><h2>Weitergaben</h2>
+<p class="hint">Hier steht, was Personen selbst weitergegeben haben, ohne dass
+ein Admin beteiligt war. Geht eine Person, bleibt, was sie gegeben hat: Es gilt
+weiter, bis jemand es beendet. Solche Zeilen stehen oben.</p>
+<p class="hint">Eine App, die das Weitergeben anbietet, sieht den Nachweis jeder
+Person, die sie besucht, und koennte ihn bis zu fuenf Minuten lang
+wiederverwenden. Mehr als diese Person in dieser App weitergeben darf, kann sie
+damit nicht. Das Protokoll nennt jede Weitergabe.</p>
+<table><tr><th>Person</th><th>Berechtigungspaket</th><th>Gilt für</th><th>bis</th>
+<th>Gegeben von</th><th></th></tr>{''.join(rows) or
+"<tr><td colspan=6 class=muted>Keine gueltige Weitergabe.</td></tr>"}</table></div>"""
+
+
 def _source(a):
     if a.get("source") == "idp":
         return f"Gruppe <code>{esc(a.get('via') or '')}</code> (bei jeder Anmeldung gelesen)"
+    if a.get("source") == "delegated":
+        return "weitergegeben"
     return "von Hand"
 
 
@@ -292,14 +357,17 @@ def render_person(uid, eff, collections, roles, decls, back):
             f"<tr><td><b>{esc(a['collection_name'])}</b><br><span class='muted'>"
             f"{esc(', '.join(a['roles']))}</span></td>"
             f"<td>{ctx or '-'}</td><td>{span}</td><td>{_source(a)}<br>"
-            f"<span class='muted'>gegeben von {esc(a['granted_by'])}</span></td>"
+            f"<span class='muted'>gegeben von {esc(a['granted_by'])}</span>"
+            f"{'<br>' + _orphan_note(a) if a.get('orphaned') else ''}</td>"
             f"<td>{state}</td><td>{end}</td></tr>")
     table = (f"<table><tr><th>Berechtigungspaket</th><th>Gilt für</th><th>Zeitraum</th>"
              f"<th>Woher</th><th></th><th></th></tr>{''.join(rows)}</table>"
              if rows else "<p class='muted' style='margin:0'>Noch keine Zuordnung.</p>")
     give = []
+    agent = eff.get("kind") == "machine"
     for c in collections:
-        if c.get("retired"):
+        # Ein Agent gibt nichts weiter; der Dienst lehnt das Paket ohnehin ab.
+        if c.get("retired") or (agent and hands_on(decls, roles_by_id, c)):
             continue
         ctx = "".join(
             f"<label>{esc(fk)}" + (f" (ID eines Objekts vom Typ {esc(typ)})" if typ else "")
@@ -338,12 +406,18 @@ def render_roles(decls, roles, collections, show_all, back):
             continue
         vals = "; ".join(f"{esc(k)} = {esc(', '.join(v))}"
                          for k, v in (r.get("values") or {}).items())
-        title = template_of(decls, r["app"], r["template"]).get("title") or r["template"]
+        tpl = template_of(decls, r["app"], r["template"])
+        title = tpl.get("title") or r["template"]
+        passes = ", ".join((template_of(decls, r["app"], k).get("title") or k)
+                           for k in tpl.get("may_grant") or ())
         act = ('<span class="badge">ausgeblendet</span>' if r.get("retired") else
                post_form("/do/role-retire", hidden(id=r["id"]), "Ausblenden",
                          back, cls="inline", quiet=True))
         rows.append(f"<tr><td><b>{esc(r['name'])}</b></td><td>{esc(r['app'])} / "
-                    f"{esc(title)}</td><td>{vals or '-'}</td>"
+                    f"{esc(title)}"
+                    + (f"<br><span class='muted'>darf weitergeben: {esc(passes)}</span>"
+                       if passes else "")
+                    + f"</td><td>{vals or '-'}</td>"
                     f"<td>{esc(', '.join(held.get(r['id'], [])) or '-')}</td>"
                     f"<td>{act}</td></tr>")
     forms = []
@@ -555,6 +629,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/":
                 body = render_people(door.call("GET", "users", who)["users"])
+            elif path == "/agents":
+                body = render_agents(door.call("GET", "users", who,
+                                               params={"kind": "machine"})["users"])
+            elif path == "/delegated":
+                people = (door.call("GET", "users", who)["users"]
+                          + door.call("GET", "users", who,
+                                      params={"kind": "machine"})["users"])
+                body = render_delegated(
+                    door.call("GET", "assignments", who)["assignments"], people,
+                    door.call("GET", "collections", who)["collections"], back)
             elif path == "/person":
                 uid = (qs.get("id") or [""])[0]
                 eff = door.call("GET", "effective", who, params={"user": uid})

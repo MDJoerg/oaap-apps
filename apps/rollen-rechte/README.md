@@ -7,8 +7,10 @@ App, und warum.* Ein Vereinsvorstand, nicht die Technik, bedient diese Seite.
 | Reiter | Was man dort tut |
 |---|---|
 | **Personen** | Personen des Mandanten; je Person: was sie **zur Zeit** darf, **woher** (Berechtigungspaket, von Hand oder über eine Gruppe, von wem, bis wann), Zuordnungen geben und beenden |
-| **Rollen** | Rollen aus den Vorlagen der installierten Apps anlegen (mit den Werten, die der Mandant einsetzt), ausblenden |
+| **Agenten** | Die Maschinen-Konten des Mandanten (RFC-0067): je Agent dieselbe Seite wie je Person; kein Paket, das weitergeben lässt. Anlegen bleibt `oaap authz agent-add` |
+| **Rollen** | Rollen aus den Vorlagen der installierten Apps anlegen (mit den Werten, die der Mandant einsetzt), ausblenden; je Rolle, was sie weitergeben darf |
 | **Berechtigungspakete** | Rollen zu einem Paket bündeln (auch über mehrere Apps), ausblenden |
+| **Weitergaben** | Was Personen selbst weitergegeben haben und noch gilt; oben, was von jemandem kommt, der es nicht mehr hält (es gilt weiter, bis jemand es beendet) |
 | **Gruppen → Paket** | Eine Gruppe des Anmeldedienstes (Pfad, z. B. `Verein/Hallenwart`) gibt ein Berechtigungspaket — bei **jeder Anmeldung** neu gelesen |
 | **Protokoll** | Wer hat wann was geändert |
 
