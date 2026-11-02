@@ -2,22 +2,25 @@
 
 MCP-Server hinter **einem Endpunkt je Sicht**. Ein KI-Client — Claude
 Code, Copilot, ein eigener Agent — spricht mit `/mcp/<sicht>` wie mit
-einem einzigen MCP-Server und erfährt nie, welcher Server dahintersteht
+einem einzigen MCP-Server und erfährt nie, welche Server dahinterstehen
 oder wo.
 
 Umsetzung der Capability [`oaap.ai.mcp-gateway`
-0.1](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufe 1:
-ein Server je Sicht, technischer Zugang (Verfahren T).
+0.2](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
+und 2: Sichten bündeln Tools, Resources und Prompts mehrerer Server,
+technischer Zugang (Verfahren T).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
 | tut | tut nicht |
 | --- | --- |
-| Tools einzeln freigeben, je Sicht | etwas zeigen, das niemand freigegeben hat |
+| Tools, Resources, Prompts einzeln freigeben, je Sicht — auch aus mehreren Servern | etwas zeigen, das niemand freigegeben hat |
+| Namen der Sicht vergeben, Kollisionen abweisen | einen doppelten Namen still auflösen |
+| Argumente fest vorgeben oder begrenzen (Liste, Muster `Z*`) | einen regulären Ausdruck auf fremde Eingabe loslassen |
 | den freigegebenen Text festhalten, Änderungen sperren | einen geänderten Text still übernehmen |
 | Argumente gegen das freigegebene Schema prüfen | Argumente oder Ergebnisse speichern — **niemals** |
 | Server schützen: Gleichzeitigkeit, Raten, Zeit, Größe, Pause | eine zu große Antwort kürzen |
-| je Tool-Aufruf zählen, mit Kontext-Kopie | Preise kennen — Volumen, nie Geld |
+| je Tool-Aufruf, Resource-Lesen, Prompt zählen, mit Kontext-Kopie | Preise kennen — Volumen, nie Geld |
 | nur die eingetragene Adresse anfahren | einer Weiterleitung folgen, Loopback oder Link-Local anfahren |
 
 ## Zwei Wege, zwei Rollen
@@ -41,10 +44,13 @@ ein Server je Sicht, technischer Zugang (Verfahren T).
    `none`, `bearer`, `basic` oder `header:<Name>`, dazu eine Ampel.
 3. **Katalog lesen:** Knopf auf der Seite des Servers. Danach alle
    15 Minuten von selbst (`MCPGW_CATALOG_MINUTES`).
-4. **Sicht anlegen und Tools hineinlegen:** je Tool eine
-   **Wirkungsklasse** — lesen, schreiben, ausführen. Was der Server
-   über sein Tool sagt (`readOnlyHint`, `destructiveHint`), steht als
-   Vorschlag da und wird nie durchgesetzt.
+4. **Sicht anlegen und Einträge hineinlegen:** auf der Seite eines
+   Servers, je Eintrag. Eine Sicht darf Einträge mehrerer Server
+   enthalten. Ein Tool bekommt eine **Wirkungsklasse** — lesen,
+   schreiben, ausführen. Was der Server über sein Tool sagt
+   (`readOnlyHint`, `destructiveHint`), steht als Vorschlag da und wird
+   nie durchgesetzt. Auf der Seite der Sicht lassen sich danach Name,
+   Beschreibung, feste Argumente und Grenzen setzen.
 5. **Schlüssel ausstellen:** Sichten, höchste Klasse, Ampel, Budget,
    Rate, Kontext für die Abrechnung. Der Wert erscheint genau einmal,
    zusammen mit dem Befehl für Claude Code:
@@ -68,9 +74,65 @@ geben („rug pull“). Deshalb:
   aufrufbar. Die Seite der Sicht zeigt alten und neuen Text
   nebeneinander; erst die Bestätigung gibt den neuen frei.
 
+## Bündel: mehrere Server, eine Sicht
+
+Ein Tool oder Prompt trägt in der Sicht einen **eigenen Namen**.
+Vorgeschlagen wird der Name beim Server, wenn er in der Sicht frei ist,
+sonst `<server>_<name>` — bieten zwei Server je ein `search` an, heißt
+das zweite `confluence_search`. Ein Name, den es in der Sicht schon
+gibt, wird beim Speichern **abgewiesen**, nie überschrieben oder
+durchnummeriert. Resources behalten ihre URI; dieselbe URI aus zwei
+Servern ist ebenfalls eine Kollision.
+
+Die Beschreibung lässt sich durch einen eigenen Text ersetzen. Der
+festgehaltene Text des Servers bleibt dahinter: Ändert der Server ihn,
+wird der Eintrag trotzdem gesperrt.
+
+## Feste Argumente und Grenzen
+
+Beispiel: Ein ABAP-MCP-Server hat `search_objects(package, name)`. In
+der Sicht für ein Projektteam:
+
+```bash
+docker exec <container> python3 /srv/app.py view tailor team-zdemo search_objects \
+  --fixed '{"package": "ZDEMO"}' --bounds '{"name": {"glob": "Z*"}}'
+```
+
+- `package` **verschwindet** aus dem Schema, das der Client sieht; das
+  Gateway setzt `ZDEMO` ein. Schickt ein Client `package` trotzdem, wird
+  abgewiesen — auch mit `ZDEMO`.
+- `name` darf nur mit `Z` beginnen. Das Schema des Clients trägt die
+  Grenze als `pattern`, damit das Modell sie kennt; geprüft wird mit
+  einem eigenen Vergleich für `*` und `?`, **nicht** mit einem
+  regulären Ausdruck — der ließe sich mit der passenden Eingabe so
+  füttern, dass das Gateway hängt.
+- Statt eines Musters geht eine Liste: `{"mode": {"enum": ["kurz", "lang"]}}`.
+
+Beides wird beim Speichern gegen das freigegebene Schema geprüft. Ändert
+der Server später sein Schema so, dass ein festes Argument nicht mehr
+passt, lässt sich der neue Text erst bestätigen, wenn der Zuschnitt
+angepasst ist.
+
+## Rückfragen vom Server an den Client
+
+MCP erlaubt einem Server, während eines Aufrufs zurückzufragen:
+**Elicitation** (den Menschen fragen: „Welcher Transportauftrag?“),
+**Roots** (die Arbeitsverzeichnisse des Clients) und **Sampling** (das
+Modell des Clients für sich arbeiten lassen). Je Sicht einstellbar,
+jede für sich: durchreichen oder ablehnen.
+
+- Neue Sichten: Elicitation und Roots durch, **Sampling abgelehnt** —
+  damit könnte ein Server auf Kosten des Clients ein Modell benutzen
+  und ihm Daten zuspielen.
+- Sichten aus 0.1 lehnen weiter alles ab, bis der Betreiber es ändert.
+- Durchgereicht wird nur, was die Sicht erlaubt **und** der Client
+  kann; dem Server sagt das Gateway auch nur das zu.
+- Die Antwort des Menschen geht durch und wird nirgends gespeichert.
+
 ## Schutz der Server
 
-Je Server, in dieser Reihenfolge: Sicherungsautomat (nach *K* Fehlern
+Je Server — in einem Bündel der Server des aufgerufenen Eintrags —,
+in dieser Reihenfolge: Sicherungsautomat (nach *K* Fehlern
 auf dem Weg eine Pause, dann ein Probeaufruf), Rate je Server und je
 Server und Schlüssel, höchstens *N* gleichzeitige Aufrufe mit kurzer
 Warteschlange, Zeitlimit, **Antwortgröße**. Eine zu große Antwort wird
@@ -88,9 +150,12 @@ alle Menschen aus.
 docker exec -i <container> python3 /srv/app.py server set papier \
   --address https://mcp.example/mcp --auth bearer --credential-stdin ja --light yellow
 docker exec <container> python3 /srv/app.py server read papier
-docker exec <container> python3 /srv/app.py view set sap-lesen --server papier --max-effect read
-docker exec <container> python3 /srv/app.py view add sap-lesen read_class --effect read
+docker exec <container> python3 /srv/app.py view set sap-lesen --max-effect read --sampling refuse
+docker exec <container> python3 /srv/app.py view add sap-lesen papier read_class --effect read
+docker exec <container> python3 /srv/app.py view add sap-lesen wiki search --as wiki_search
+docker exec <container> python3 /srv/app.py view add sap-lesen papier 'sap://class/{name}' --kind template
 docker exec <container> python3 /srv/app.py view confirm sap-lesen read_class
+docker exec <container> python3 /srv/app.py view list
 docker exec <container> python3 /srv/app.py key issue agent-1 --views sap-lesen --cost-center KS1
 ```
 
@@ -98,14 +163,16 @@ docker exec <container> python3 /srv/app.py key issue agent-1 --views sap-lesen 
 
 ```bash
 python3 apps/mcp-gateway/test_argcheck.py   # Argumentprüfung (A1)
+python3 apps/mcp-gateway/test_compose.py    # Namen, feste Argumente, Grenzen, Vorlagen, Umzug aus 0.1
 python3 apps/mcp-gateway/test_gateway.py    # Konformitätsliste der Spec §12, Ende zu Ende
 ```
 
-Die zweite Datei stellt einen **Papier-MCP-Server** hin, der sich auf
-Ansage danebenbenimmt (Weiterleitung, Ausfall, verlorene Sitzung,
+Die letzte Datei stellt zwei **Papier-MCP-Server** hin, die sich auf
+Ansage danebenbenehmen (Weiterleitung, Ausfall, verlorene Sitzung,
 geänderte Beschreibung, Übergröße, Rückfrage, fremde
-Protokollversion). Er lauscht auf der LAN-Adresse des Rechners, weil
-das Gateway Loopback nie anfährt.
+Protokollversion); der zweite bietet dasselbe Tool `echo` wie der erste
+und dazu Resources, eine Vorlage und einen Prompt. Sie lauschen auf der
+LAN-Adresse des Rechners, weil das Gateway Loopback nie anfährt.
 
 Die Bücher (Schlüssel, Kontext, Prüfspur, Tresor, die eine Abfrage,
 Grafiken) stehen in `gwcore/` — eine Kopie von
@@ -114,13 +181,16 @@ KI-Gateway. Geändert wird nur dort, dann `check-shared.py --fix`.
 
 ## Was noch fehlt
 
-- **Stufe 2:** Bündel über mehrere Server, Umbenennen, feste Argumente
-  und Grenzen, Resources und Prompts, Rückfragen vom Server an den
-  Client je Sicht einstellbar (in 0.1 lehnt das Gateway sie ab).
+- **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.
+  Ein Client dieser Version erkennt das Gateway an seiner Antwort als
+  Server der älteren Art und fällt zurück (Spec §6.2). Die neue Version
+  selbst zu sprechen ist ein Umbau.
+- Abonnements von Resources und Änderungsmeldungen an den Client —
+  dafür fehlt der vom Server ausgehende Strom über `GET` (0.2 antwortet
+  405).
 - **Stufe 3:** Anmeldung eines Menschen über das Keycloak des
   Mandanten, Zugangsprofile, Token-Tausch (Verfahren X).
 - **Stufe 4:** der Benutzer bis ins SAP-System (Verfahren P,
   RFC-0066).
-- `pattern` und `format` in Schemas werden nicht durchgesetzt; die
-  Seite des Servers nennt sie je Tool.
-- Kein vom Server ausgehender Strom über `GET` (0.1 antwortet 405).
+- `pattern` und `format` in Schemas der Server werden nicht
+  durchgesetzt; die Seite des Servers nennt sie je Tool.

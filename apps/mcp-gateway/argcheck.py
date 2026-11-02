@@ -229,6 +229,13 @@ def _passes(schema, value, path, root, depth, top):
         return False
 
 
+def check_property(schema, name, value):
+    """Prüft einen Wert gegen eine Eigenschaft der obersten Ebene — für feste Werte und Grenzen einer Sicht."""
+    root = schema if isinstance(schema, dict) else {}
+    props = root.get("properties") if isinstance(root.get("properties"), dict) else {}
+    _check(props.get(name, True), value, name, root, 0, False)
+
+
 def check(schema, arguments):
     """Wirft Refused, wenn `arguments` nicht zum Schema passt. `None` zählt als `{}`."""
     if arguments is None:

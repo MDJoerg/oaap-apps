@@ -1,6 +1,9 @@
-"""OAAP MCP-Gateway 0.1 — Tool-Server hinter einem Endpunkt je Sicht.
+"""OAAP MCP-Gateway 0.2 — Tool-Server hinter einem Endpunkt je Sicht.
 
-Umsetzung der Capability `oaap.ai.mcp-gateway` 0.1 (RFC-0065 Stufe 1).
+Umsetzung der Capability `oaap.ai.mcp-gateway` 0.2 (RFC-0065 Stufen 1
+und 2): Eine Sicht bündelt Tools, Resources und Prompts mehrerer Server
+unter eigenen Namen, mit festen Argumenten und Grenzen; Rückfragen vom
+Server an den Client sind je Sicht einstellbar.
 Ein KI-Client — Claude Code, Copilot, ein eigener Agent — spricht mit
 `/mcp/<sicht>` wie mit einem einzigen MCP-Server. Welcher Server
 dahintersteht und wo, erfährt er nie.
@@ -14,11 +17,12 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
 - `/` ist `admin`: Server, Katalog, Sichten, Schlüssel, Verbrauch,
   Auswertung und `/report/v1/…` für ein Abrechnungssystem.
 
-Je `tools/call`, in dieser Reihenfolge (Spec §7, §8): Tool in der Sicht
-und freigegeben, Wirkungsklasse, Argumente gegen das **freigegebene**
-Schema, Budget, dann der Schutz des Servers. Dann erst geht der Aufruf
-hinaus — und genau eine Messzeile entsteht, ohne Argument, ohne
-Ergebnis (Spec §10).
+Je `tools/call`, `resources/read` und `prompts/get`, in dieser
+Reihenfolge (Spec §7, §8): Eintrag in der Sicht und freigegeben,
+Wirkungsklasse, Argumente gegen das **freigegebene** Schema und die
+Grenzen der Sicht, Budget, dann der Schutz des Servers. Dann erst geht
+der Aufruf hinaus — und genau eine Messzeile entsteht, ohne Argument,
+ohne Ergebnis (Spec §10).
 
 Gebaut als gewöhnliche OAAP-App: ein HTTP-Port, Persistenz nur unter
 dem deklarierten Mount, Konfiguration über deklarierte Variablen, Logs
@@ -37,13 +41,14 @@ from urllib.parse import parse_qsl, quote, unquote_plus
 
 import argcheck
 import books
+import compose
 import guard
 import upstream
 from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -152,21 +157,27 @@ def server_access(srow):
     return {"auth_kind": srow["auth_kind"], "credential": credential}, url
 
 
+KIND_PLURAL = {"tool": "Tools", "resource": "Resources", "template": "Resource-Vorlagen",
+               "prompt": "Prompts"}
+
+
 def read_catalog(name):
-    """Liest die Tools eines Servers. Gibt (ok, satz) zurück; schreibt Katalog und Zustand."""
+    """Liest, was ein Server anbietet. Gibt (ok, satz) zurück; schreibt Katalog und Zustand."""
     srow = books.server_row(DB, name)
     if not srow:
         return False, f"Einen Server „{name}“ gibt es nicht."
     lim = limits_of(srow)
     try:
         server, url = server_access(srow)
-        tools, session = upstream.list_tools(server, url, timeout=min(60, lim["timeout_s"]))
+        offers, session = upstream.list_catalog(server, url, timeout=min(60, lim["timeout_s"]))
     except upstream.UpstreamError as exc:
         books.note_server(DB, name, error=str(exc))
         return False, f"Katalog von „{name}“ nicht gelesen: {exc}"
-    changed = books.store_catalog(DB, name, tools)
+    changed = books.store_catalog(DB, name, offers)
     books.note_server(DB, name, version=session.version, error="", read=True)
-    text = f"Katalog von „{name}“ gelesen: {len(tools)} Tools, Protokoll {session.version}."
+    counts = ", ".join(f"{len(offers.get(k, []))} {KIND_PLURAL[k]}" for k in compose.KINDS
+                       if offers.get(k) or k == "tool")
+    text = f"Katalog von „{name}“ gelesen: {counts}, Protokoll {session.version}."
     if changed:
         text += " Gesperrt, weil geändert oder verschwunden: " + ", ".join(changed) + "."
     return True, text
@@ -177,13 +188,18 @@ def read_catalog(name):
 class DownSession:
     """Eine Sitzung des Clients. Gehört dem Schlüssel und der Sicht, die sie eröffnet haben."""
 
-    def __init__(self, key_id, view, version):
+    def __init__(self, key_id, view, version, client_caps=None):
         self.id = secrets.token_urlsafe(24)
         self.key_id = key_id
         self.view = view
         self.version = version
+        # Welche Rückfragen der Client beantworten kann (aus seinem initialize).
+        self.client_caps = {r for r in books.REQUESTS if isinstance(client_caps, dict)
+                            and isinstance(client_caps.get(r), dict)}
         self.last = time.monotonic()
         self.upstream = {}               # Servername → upstream.Session
+        self.inflight = {}               # Anfrage-ID des Clients → Servername (für Abbruch)
+        self.pending = {}                # Rückfrage-ID beim Client → (Server, Sitzung, ID beim Server)
         self.lock = threading.Lock()
 
 
@@ -229,38 +245,39 @@ def rank_ok(effect, *ceilings):
     return all(books.EFFECT_RANK[effect] <= books.EFFECT_RANK.get(c, 0) for c in ceilings)
 
 
-def visible_items(vrow, key):
-    """Die Einträge, die dieser Schlüssel in dieser Sicht sieht: aktiv und nicht über der Klasse."""
+def visible_items(vrow, key, kind):
+    """Die Einträge einer Art, die dieser Schlüssel in dieser Sicht sieht: aktiv, nicht über der Klasse."""
     out = {}
-    for item in books.items(DB, vrow["name"]):
-        if books.item_state(DB, vrow["server"], item) != "active":
+    for item in books.items(DB, vrow["name"], kind):
+        if books.item_state(DB, item) != "active":
             continue
         if not rank_ok(item["effect"], vrow["max_effect"], key["max_effect"]):
             continue
-        out[item["tool"]] = item
+        out[item["name"]] = item
     return out
 
 
-def shaped(doc, version):
-    """Der freigegebene Text, in der Form der Protokollversion des Clients (A3)."""
-    tool = {"name": doc["name"], "description": doc.get("description", ""),
-            "inputSchema": doc.get("inputSchema") or {"type": "object"}}
-    if "annotations" in doc:
-        tool["annotations"] = doc["annotations"]
-    if version >= "2025-06-18":
-        for field in ("title", "outputSchema"):
-            if field in doc:
-                tool[field] = doc[field]
-    return tool
+def refusal(vrow, kind, name):
+    """Warum ein Eintrag nicht sichtbar ist: (Grund, Code, Satz). Nennt nie den Server."""
+    word = compose.KIND_WORDS[kind]
+    item = books.item_row(DB, vrow["name"], kind, name)
+    state = books.item_state(DB, item) if item else None
+    if state == "suspended":
+        return "suspended", -32002, (f"{word} {name} ist gesperrt, bis der Betreiber einen "
+                                     "geänderten Text bestätigt.")
+    if state == "active":
+        return "effect", -32002, (f"{word} {name} liegt über der Wirkungsklasse dieses "
+                                  "Schlüssels oder der Sicht.")
+    if kind in ("resource", "template"):
+        return "unknown_resource", -32002, "Diese Resource gibt es in dieser Sicht nicht."
+    return "unknown_" + kind, -32602, f"Unbekanntes {word}: {name}"
 
 
 def entitled(key, vrow):
     if not vrow or vrow["name"] not in books.key_views(key):
         return False
-    srow = books.server_row(DB, vrow["server"])
-    if not srow:
-        return False
-    return books.LIGHT_RANK[srow["light"]] <= books.LIGHT_RANK.get(key["ceiling"], 1)
+    light = books.view_light(DB, vrow["name"])
+    return books.LIGHT_RANK[light] <= books.LIGHT_RANK.get(key["ceiling"], 1)
 
 
 # ------------------------------------------------------------- Optik
@@ -441,22 +458,22 @@ def admin_page(user, roles, host, notice="", secret=None):
     for v in books.views(DB):
         states = {}
         for item in books.items(DB, v["name"]):
-            st = books.item_state(DB, v["server"], item)
+            st = books.item_state(DB, item)
             states[st] = states.get(st, 0) + 1
         summary = ", ".join(f"{n} {STATE_WORDS[s][1]}" for s, n in sorted(states.items())) or "leer"
+        light = books.view_light(DB, v["name"])
         vrows.append(f'<tr><td><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a></td>'
-                     f'<td>{esc(v["server"])}</td><td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}</td>'
+                     f'<td>{esc(", ".join(books.view_servers(DB, v["name"])) or "—")}<br>{badge(light, light)}</td>'
+                     f'<td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}</td>'
                      f'<td>{esc(summary)}</td><td><code>{esc(endpoint(host, v["name"]))}</code></td></tr>')
-    srv = [s["name"] for s in books.servers(DB)]
     parts.append(f'''<div class="card"><h2>Sichten</h2>
-<p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie zeigt nur, was hier freigegeben ist — ein neues
-Tool des Servers erscheint nirgends von selbst.</p>
-<div class="scroll"><table><tr><th>Sicht</th><th>Server</th><th>Höchste Klasse</th><th>Tools</th>
+<p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie bündelt, was hier freigegeben ist — aus einem
+Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst.</p>
+<div class="scroll"><table><tr><th>Sicht</th><th>Server, Ampel</th><th>Höchste Klasse</th><th>Einträge</th>
 <th>Endpunkt</th></tr>{"".join(vrows) or '<tr><td colspan=5 class=muted>Noch keine Sicht.</td></tr>'}</table></div>
 <h2 style="margin-top:1.2rem">Sicht anlegen</h2>
 <form class="grid" method="post" action="view-save">
 <div><label>Name (Pfad)</label><input type="text" name="name" required></div>
-<div><label>Server</label><select name="server">{options(srv, "")}</select></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
 <div><button>Anlegen</button></div></form></div>''')
 
@@ -543,34 +560,59 @@ def server_page(user, roles, host, name, notice=""):
     parts = []
     if notice:
         parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
-    vnames = [v["name"] for v in books.views(DB) if v["server"] == name]
+    vnames = [v["name"] for v in books.views(DB)]
     in_views = {}
-    for v in vnames:
-        for item in books.items(DB, v):
-            in_views.setdefault(item["tool"], []).append(f'{v} ({books.EFFECT_WORDS[item["effect"]]})')
-    crow = []
-    for c in books.catalog(DB, name):
-        doc = json.loads(c["doc"])
-        ann = doc.get("annotations") or {}
-        hint = ("read" if ann.get("readOnlyHint") else
-                "execute" if ann.get("destructiveHint") else "write")
-        unchecked = argcheck.unchecked(doc.get("inputSchema"))
-        remote = argcheck.remote_refs(doc.get("inputSchema"))
-        add = ""
-        if c["present"] and vnames and not remote:
-            add = (f'<form method="post" action="item-add"><input type="hidden" name="tool" '
-                   f'value="{esc(c["name"])}"><select name="view">{options(vnames, vnames[0])}</select> '
-                   f'<select name="effect">{options(books.EFFECTS, hint, books.EFFECT_WORDS)}</select> '
-                   f'<button class="quiet">In Sicht legen</button></form>')
-        crow.append(
-            f'<tr><td><code>{esc(c["name"])}</code>{"" if c["present"] else " " + badge("red", "nicht mehr angeboten")}'
-            f'<br><span class="muted">{esc((doc.get("description") or "")[:240])}</span></td>'
-            f'<td>{esc(", ".join(f"{k}={v}" for k, v in ann.items() if k.endswith("Hint")) or "—")}'
-            f'<br><span class="hint">nur Hinweis, nie durchgesetzt</span></td>'
-            f'<td>{esc(", ".join(in_views.get(c["name"], [])) or "in keiner Sicht")}'
-            f'{"<br><span class=hint>nicht geprüft: " + esc(", ".join(unchecked)) + "</span>" if unchecked else ""}'
-            f'{"<br><span class=err>Schema verweist nach außen — nicht freigebbar</span>" if remote else ""}'
-            f'</td><td><code>{esc(c["fingerprint"][:12])}</code></td><td>{add}</td></tr>')
+    for item in books.approved_items(DB, name):
+        in_views.setdefault((item["kind"], item["source"]), []).append(
+            f'{item["view"]}: {item["name"]}' + (f' ({books.EFFECT_WORDS[item["effect"]]})'
+                                                 if item["kind"] == "tool" else ""))
+    sections = []
+    for kind in compose.KINDS:
+        rows = []
+        for c in books.catalog(DB, name, kind):
+            doc = json.loads(c["doc"])
+            ann = doc.get("annotations") or {}
+            note, add = "", ""
+            if kind == "tool":
+                unchecked = argcheck.unchecked(doc.get("inputSchema"))
+                remote = argcheck.remote_refs(doc.get("inputSchema"))
+                if unchecked:
+                    note += "<br><span class=hint>nicht geprüft: " + esc(", ".join(unchecked)) + "</span>"
+                if remote:
+                    note += "<br><span class=err>Schema verweist nach außen — nicht freigebbar</span>"
+                blocked = bool(remote)
+            elif kind == "template":
+                blocked = not compose.template_supported(c["name"])
+                if blocked:
+                    note += "<br><span class=err>Vorlage nicht eindeutig prüfbar — nicht freigebbar</span>"
+            else:
+                blocked = False
+            if c["present"] and vnames and not blocked:
+                extra = ""
+                if kind == "tool":
+                    hint = ("read" if ann.get("readOnlyHint") else
+                            "execute" if ann.get("destructiveHint") else "write")
+                    extra = f'<select name="effect">{options(books.EFFECTS, hint, books.EFFECT_WORDS)}</select> '
+                if kind in ("tool", "prompt"):
+                    extra = (f'<input type="text" name="as" placeholder="Name in der Sicht (leer = '
+                             f'Vorschlag)" style="max-width:16rem"> ' + extra)
+                add = (f'<form method="post" action="item-add"><input type="hidden" name="server" '
+                       f'value="{esc(name)}"><input type="hidden" name="kind" value="{kind}">'
+                       f'<input type="hidden" name="source" value="{esc(c["name"])}">'
+                       f'<select name="view">{options(vnames, vnames[0])}</select> {extra}'
+                       f'<button class="quiet">In Sicht legen</button></form>')
+            hints = ", ".join(f"{k}={v}" for k, v in ann.items() if k.endswith("Hint"))
+            rows.append(
+                f'<tr><td><code>{esc(c["name"])}</code>'
+                f'{"" if c["present"] else " " + badge("red", "nicht mehr angeboten")}'
+                f'<br><span class="muted">{esc((doc.get("description") or "")[:240])}</span></td>'
+                f'<td>{esc(hints or "—")}{"<br><span class=hint>nur Hinweis, nie durchgesetzt</span>" if hints else ""}</td>'
+                f'<td>{esc("; ".join(in_views.get((kind, c["name"]), [])) or "in keiner Sicht")}{note}</td>'
+                f'<td><code>{esc(c["fingerprint"][:12])}</code></td><td>{add}</td></tr>')
+        if rows:
+            sections.append(f'<h2 style="margin-top:1rem">{esc(KIND_PLURAL[kind])}</h2>'
+                            f'<div class="scroll"><table><tr><th>Name</th><th>Angabe des Servers</th>'
+                            f'<th>Sichten</th><th>Fingerabdruck</th><th></th></tr>{"".join(rows)}</table></div>')
     parts.append(f'''<div class="card"><h1>Server {esc(name)}</h1>
 <p>{badge(s["light"], LIGHT_WORDS[s["light"]])} Protokoll {esc(s["version"] or "noch nicht ausgehandelt")}
 · Katalog gelesen: {esc(s["last_read"] or "nie")}</p>
@@ -580,13 +622,46 @@ Clients. Durchgesetzt wird die Ampel nur für das, was zum Server geht.</p>
 <form method="post" action="server-read"><input type="hidden" name="name" value="{esc(name)}">
 <button>Katalog jetzt lesen</button></form></div>
 <div class="card"><h2>Katalog</h2><p class="hint">Was der Server anbietet. Nichts davon ist sichtbar, bis es
-in einer Sicht liegt. Die Wirkungsklasse vergibt der Betreiber; die Angaben des Servers sind nur ein
-Vorschlag.</p><div class="scroll"><table><tr><th>Tool</th><th>Angabe des Servers</th><th>Sichten</th>
-<th>Fingerabdruck</th><th></th></tr>{"".join(crow) or '<tr><td colspan=5 class=muted>Noch nicht gelesen.</td></tr>'}</table></div></div>
+in einer Sicht liegt. Ein Tool oder Prompt bekommt dort einen Namen der Sicht — vorgeschlagen wird der des
+Servers, wenn er frei ist, sonst <code>&lt;server&gt;_&lt;name&gt;</code>. Die Wirkungsklasse vergibt der
+Betreiber; die Angaben des Servers sind nur ein Vorschlag.</p>
+{"".join(sections) or '<p class=muted>Noch nicht gelesen.</p>'}</div>
 <div class="card"><h2>Ändern</h2>{server_form(s)}
 <form method="post" action="server-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
 <button class="quiet">Server löschen</button></form></div>''')
     return page(f"Server {name}", "".join(parts), user, roles)
+
+
+REQUEST_WORDS = {"elicitation": "Rückfrage an den Menschen (elicitation)",
+                 "roots": "Arbeitsverzeichnisse des Clients (roots)",
+                 "sampling": "Modell des Clients benutzen (sampling)"}
+
+
+def item_hidden(item):
+    return (f'<input type="hidden" name="view" value="{esc(item["view"])}">'
+            f'<input type="hidden" name="kind" value="{esc(item["kind"])}">'
+            f'<input type="hidden" name="name" value="{esc(item["name"])}">')
+
+
+def tailor_form(item):
+    """Was die Sicht aus einem Eintrag macht: Name, Beschreibung, feste Argumente, Grenzen, Klasse."""
+    kind = item["kind"]
+    fields = []
+    if kind in ("tool", "prompt"):
+        fields.append(f'<div><label>Name in der Sicht</label><input type="text" name="new_name" '
+                      f'value="{esc(item["name"])}"></div>')
+    fields.append(f'<div><label>Beschreibung (leer = die des Servers)</label><input type="text" '
+                  f'name="description" value="{esc(item["description"])}"></div>')
+    if kind == "tool":
+        fields.append(f'<div><label>Feste Argumente (JSON), z. B. {{"package": "ZDEMO"}}</label>'
+                      f'<input type="text" name="fixed" value="{esc(item["fixed"])}"></div>')
+        fields.append(f'<div><label>Grenzen (JSON), z. B. {{"name": {{"glob": "Z*"}}}} oder '
+                      f'{{"mode": {{"enum": ["a", "b"]}}}}</label>'
+                      f'<input type="text" name="bounds" value="{esc(item["bounds"])}"></div>')
+        fields.append(f'<div><label>Wirkungsklasse</label><select name="effect">'
+                      f'{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select></div>')
+    return (f'<form class="grid" method="post" action="item-tailor">{item_hidden(item)}'
+            f'{"".join(fields)}<div><button class="quiet">Übernehmen</button></div></form>')
 
 
 def view_page(user, roles, host, name, notice=""):
@@ -598,45 +673,61 @@ def view_page(user, roles, host, name, notice=""):
         parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
     rows, compare = [], []
     for item in books.items(DB, name):
-        state = books.item_state(DB, v["server"], item)
+        state = books.item_state(DB, item)
         cls, word = STATE_WORDS[state]
-        actions = (f'<form class="inline" method="post" action="item-remove"><input type="hidden" name="view" '
-                   f'value="{esc(name)}"><input type="hidden" name="tool" value="{esc(item["tool"])}">'
-                   f'<button class="quiet">Herausnehmen</button></form>')
-        if state == "active":
-            actions = (f'<form class="inline" method="post" action="item-effect"><input type="hidden" name="view" '
-                       f'value="{esc(name)}"><input type="hidden" name="tool" value="{esc(item["tool"])}">'
-                       f'<select name="effect">{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select> '
-                       f'<button class="quiet">Klasse setzen</button></form> ' + actions)
-        rows.append(f'<tr><td><code>{esc(item["tool"])}</code></td><td>{badge(cls, word)}</td>'
-                    f'<td>{esc(books.EFFECT_WORDS[item["effect"]])}</td>'
-                    f'<td class="muted">{esc(item["approved_by"])}, {esc(item["approved_at"])}</td>'
-                    f'<td>{actions}</td></tr>')
+        remove = (f'<form class="inline" method="post" action="item-remove">{item_hidden(item)}'
+                  f'<button class="quiet">Herausnehmen</button></form>')
+        tailored = []
+        if item["description"]:
+            tailored.append("eigene Beschreibung")
+        if item["fixed"] != "{}":
+            tailored.append("fest: " + item["fixed"])
+        if item["bounds"] != "{}":
+            tailored.append("Grenzen: " + item["bounds"])
+        source = item["source"] if item["source"] == item["name"] else f'{item["source"]} → {item["name"]}'
+        rows.append(f'<tr><td>{esc(compose.KIND_WORDS[item["kind"]])}</td><td><code>{esc(item["name"])}</code>'
+                    f'<br><span class="muted">{esc(item["server"])}: {esc(source)}</span></td>'
+                    f'<td>{badge(cls, word)}</td><td>{esc(books.EFFECT_WORDS[item["effect"]])}</td>'
+                    f'<td class="muted">{esc("; ".join(tailored) or "—")}<br>{esc(item["approved_by"])}, '
+                    f'{esc(item["approved_at"])}</td><td>{remove}</td></tr>'
+                    f'<tr><td></td><td colspan=5>{tailor_form(item)}</td></tr>')
         if state == "suspended":
-            cat = books.catalog_row(DB, v["server"], item["tool"])
+            cat = books.catalog_row(DB, item["server"], item["kind"], item["source"])
             old = json.dumps(json.loads(item["approved_doc"]), indent=2, ensure_ascii=False)
             new = json.dumps(json.loads(cat["doc"]), indent=2, ensure_ascii=False)
-            compare.append(f'''<div class="card attention"><h2>„{esc(item["tool"])}“: der Server meldet einen anderen Text</h2>
-<p class="hint">Bis zur Bestätigung ist das Tool weder sichtbar noch aufrufbar. Ein Text, der in das Modell
+            effect = (f'<label>Wirkungsklasse</label><select name="effect" style="max-width:14rem">'
+                      f'{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select>'
+                      if item["kind"] == "tool" else "")
+            compare.append(f'''<div class="card attention"><h2>„{esc(item["name"])}“: der Server meldet einen anderen Text</h2>
+<p class="hint">Bis zur Bestätigung ist der Eintrag weder sichtbar noch aufrufbar. Ein Text, der in das Modell
 geht, kann Anweisungen enthalten — darum wird er nicht still übernommen.</p>
 <div class="side"><div><b>Freigegeben</b><pre>{esc(old)}</pre></div><div><b>Jetzt beim Server</b><pre>{esc(new)}</pre></div></div>
-<form method="post" action="item-confirm"><input type="hidden" name="view" value="{esc(name)}">
-<input type="hidden" name="tool" value="{esc(item["tool"])}">
-<label>Wirkungsklasse</label><select name="effect" style="max-width:14rem">{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select>
+<form method="post" action="item-confirm">{item_hidden(item)}{effect}
 <button>Neuen Text bestätigen</button></form></div>''')
     users = [k["label"] for k in books.keys(DB, include_revoked=False) if name in books.key_views(k)]
+    reqs = books.view_requests(v)
+    req_inputs = "".join(
+        f'<div><label>{esc(REQUEST_WORDS[r])}</label><select name="req_{r}">'
+        f'{options(("pass", "refuse"), reqs[r], {"pass": "durchreichen", "refuse": "ablehnen"})}'
+        f'</select></div>' for r in books.REQUESTS)
+    light = books.view_light(DB, name)
     parts.append(f'''<div class="card"><h1>Sicht {esc(name)}</h1>
-<p>Endpunkt <code>{esc(endpoint(host, name))}</code> · Server <a href="server?name={quote(v["server"])}">{esc(v["server"])}</a>
-· Schlüssel: {esc(", ".join(users) or "keiner")}</p>
+<p>Endpunkt <code>{esc(endpoint(host, name))}</code> · Server: {esc(", ".join(books.view_servers(DB, name)) or "noch keiner")}
+· {badge(light, "Ampel " + light)} · Schlüssel: {esc(", ".join(users) or "keiner")}</p>
+<p class="hint">Die Ampel einer Sicht ist die ihres schlechtesten Servers. Rückfragen eines Servers an den
+Client gehen nur durch, wenn sie hier durchgereicht werden UND der Client sie kann; Sampling lässt einen
+Server das Modell des Clients benutzen und ihm Daten schicken.</p>
 <form class="grid" method="post" action="view-save"><input type="hidden" name="name" value="{esc(name)}">
-<input type="hidden" name="server" value="{esc(v["server"])}">
 <div><label>Höchste Wirkungsklasse der Sicht</label><select name="max_effect">{options(books.EFFECTS, v["max_effect"], books.EFFECT_WORDS)}</select></div>
-<div><button class="quiet">Setzen</button></div></form></div>
+{req_inputs}<div><button class="quiet">Setzen</button></div></form></div>
 {"".join(compare)}
-<div class="card"><h2>Freigegebene Tools</h2><p class="hint">Neue Tools kommen über den Katalog des Servers in
-die Sicht. Clients sehen nur den hier festgehaltenen Text.</p>
-<div class="scroll"><table><tr><th>Tool</th><th>Zustand</th><th>Klasse</th><th>Freigegeben</th><th></th></tr>
-{"".join(rows) or '<tr><td colspan=5 class=muted>Leer.</td></tr>'}</table></div>
+<div class="card"><h2>Freigegebene Einträge</h2><p class="hint">Neue Einträge kommen über den Katalog eines
+Servers in die Sicht. Clients sehen nur den hier festgehaltenen Text, unter dem Namen der Sicht. Ein festes
+Argument verschwindet aus dem Schema, das der Client sieht; eine Grenze erlaubt nur bestimmte Werte oder ein
+Muster mit <code>*</code> und <code>?</code>.</p>
+<div class="scroll"><table><tr><th>Art</th><th>Name (Server: Original)</th><th>Zustand</th><th>Klasse</th>
+<th>Zuschnitt, Freigabe</th><th></th></tr>
+{"".join(rows) or '<tr><td colspan=6 class=muted>Leer.</td></tr>'}</table></div>
 <form method="post" action="view-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
 <button class="quiet">Sicht löschen</button></form></div>''')
     return page(f"Sicht {name}", "".join(parts), user, roles)
@@ -644,7 +735,7 @@ die Sicht. Clients sehen nur den hier festgehaltenen Text.</p>
 
 # ------------------------------------------------------------- Auswertung
 
-DIMENSIONS = {**greport.CONTEXT_DIMENSIONS, "view": "u.view", "tool": "u.tool",
+DIMENSIONS = {**greport.CONTEXT_DIMENSIONS, "view": "u.view", "kind": "u.kind", "tool": "u.tool",
               "server": "u.server", "outcome": "u.outcome", **greport.TIME_DIMENSIONS}
 REPORT = greport.Report(DIMENSIONS, [
     ("calls", "COUNT(*)"),
@@ -719,6 +810,32 @@ def _int(value):
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+# Was ein Client aufruft (eine Messzeile je Aufruf) und was er auflistet.
+CALLS = {"tools/call": "tool", "resources/read": "resource", "prompts/get": "prompt"}
+LISTS = {"tools/list": ("tool", "tools"), "resources/list": ("resource", "resources"),
+         "resources/templates/list": ("template", "resourceTemplates"),
+         "prompts/list": ("prompt", "prompts")}
+LEGACY_ONLY = ("Dieses Gateway spricht MCP mit Sitzung (initialize), Protokollversionen "
+               + ", ".join(upstream.TESTED) + " — 2026-07-28 noch nicht.")
+
+
+def modern(msg):
+    """Eine Anfrage der Ära MCP 2026-07-28: `server/discover` oder Version im `_meta`."""
+    if msg.get("method") == "server/discover":
+        return True
+    params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+    meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+    return "io.modelcontextprotocol/protocolVersion" in meta
+
+
+class Refusal(Exception):
+    """Das Gateway weist einen Aufruf ab, bevor er zum Server geht."""
+
+    def __init__(self, kind, name, reason, code, text):
+        super().__init__(text)
+        self.kind, self.name, self.reason, self.code, self.text = kind, name, reason, code, text
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -808,7 +925,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/issue", "/revoke", "/context", "/server-save", "/server-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
-                    "/item-confirm", "/item-effect"):
+                    "/item-confirm", "/item-tailor"):
             self.handle_admin_post(path)
             return
         self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -845,6 +962,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         sess = self.session_of(key, vrow)
         if sess is None:
+            if not self.headers.get("Mcp-Session-Id") and modern(msg):
+                # MCP 2026-07-28 ohne Sitzung (Spec §6.2): eine 400 OHNE modernen
+                # Fehlercode — daran erkennt ein Client dieser Ära einen Server mit
+                # initialize und fällt zurück. Ein Code aus -32020…-32099 hieße
+                # „moderner Server“, und der Client käme nie zurück.
+                books.count_protocol(DB, key["id"], vrow["name"], "server/discover"
+                                     if method == "server/discover" else "modern")
+                self.send_json(400, rpc_error(msg_id, -32600, LEGACY_ONLY))
+                return
             self.send_json(404 if self.headers.get("Mcp-Session-Id") else 400, SESSION_UNKNOWN)
             return
         header_version = self.headers.get("MCP-Protocol-Version")
@@ -852,25 +978,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, rpc_error(msg_id, -32600, f"MCP-Protocol-Version {header_version} "
                                                           f"passt nicht zur Sitzung ({sess.version})."))
             return
-        if method is None:                     # Antwort des Clients — wir fragen nie etwas
+        if method is None:                     # Antwort des Clients auf eine Rückfrage
+            self.relay_response(sess, key, vrow, msg)
             self.send_bytes(202, "application/json", b"")
             return
         if msg_id is None:                     # Mitteilung
             books.count_protocol(DB, key["id"], vrow["name"], method)
             if method == "notifications/cancelled":
-                self.forward_cancel(sess, vrow, msg)
+                self.forward_cancel(sess, msg)
             self.send_bytes(202, "application/json", b"")
             return
-        if method == "tools/call":
+        if method in CALLS:
             self.mcp_call(sess, key, vrow, msg, len(raw))
             return
         books.count_protocol(DB, key["id"], vrow["name"], method)
         if method == "ping":
             self.send_json(200, rpc_result(msg_id, {}))
-        elif method == "tools/list":
-            tools = [shaped(json.loads(i["approved_doc"]), sess.version)
-                     for _, i in sorted(visible_items(vrow, key).items())]
-            self.send_json(200, rpc_result(msg_id, {"tools": tools}))
+        elif method in LISTS:
+            kind, field = LISTS[method]
+            entries = [compose.shaped(kind, i, sess.version)
+                       for _, i in sorted(visible_items(vrow, key, kind).items())]
+            self.send_json(200, rpc_result(msg_id, {field: entries}))
         else:
             self.send_json(200, rpc_error(msg_id, -32601, f"Methode {method} wird in dieser "
                                                           "Version nicht angeboten."))
@@ -880,18 +1008,27 @@ class Handler(BaseHTTPRequestHandler):
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         asked = params.get("protocolVersion")
         version = asked if asked in upstream.TESTED else upstream.NEWEST
-        sess = DownSession(key["id"], vrow["name"], version)
+        sess = DownSession(key["id"], vrow["name"], version, params.get("capabilities"))
         with _SESS_LOCK:
             SESSIONS[sess.id] = sess
+        kinds = {i["kind"] for i in books.items(DB, vrow["name"])}
+        caps = {"tools": {"listChanged": False}}
+        if kinds & {"resource", "template"}:
+            caps["resources"] = {"subscribe": False, "listChanged": False}
+        if "prompt" in kinds:
+            caps["prompts"] = {"listChanged": False}
         self.send_json(200, rpc_result(msg.get("id"), {
             "protocolVersion": version,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": caps,
             "serverInfo": {"name": vrow["name"], "version": VERSION},
         }), [("Mcp-Session-Id", sess.id)])
 
-    def forward_cancel(self, sess, vrow, msg):
-        us = sess.upstream.get(vrow["server"])
-        srow = books.server_row(DB, vrow["server"])
+    def forward_cancel(self, sess, msg):
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        with sess.lock:
+            name = sess.inflight.get(json.dumps(params.get("requestId")))
+            us = sess.upstream.get(name) if name else None
+        srow = books.server_row(DB, name) if name else None
         if not us or not srow:
             return
         try:
@@ -900,15 +1037,67 @@ class Handler(BaseHTTPRequestHandler):
         except upstream.UpstreamError:
             pass
 
+    def relay_response(self, sess, key, vrow, msg):
+        """Die Antwort des Clients auf eine durchgereichte Rückfrage geht an den Server, der fragte."""
+        with sess.lock:
+            pending = sess.pending.pop(str(msg.get("id")), None)
+        if not pending:
+            return                              # nichts gefragt, oder schon beantwortet
+        name, us, server_id = pending
+        books.count_protocol(DB, key["id"], vrow["name"], "client-response")
+        srow = books.server_row(DB, name)
+        if not srow:
+            return
+        out = {"jsonrpc": "2.0", "id": server_id}
+        if "error" in msg:
+            out["error"] = msg["error"]
+        else:
+            out["result"] = msg.get("result") if isinstance(msg.get("result"), dict) else {}
+        try:
+            server, url = server_access(srow)
+            upstream.post(server, url, out, session_id=us.id, version=us.version, timeout=10)
+        except upstream.UpstreamError:
+            pass
+
+    def resolve(self, vrow, key, method, params):
+        """Welcher Eintrag ist gemeint? Gibt (kind, item, name_für_messung) oder wirft Refusal."""
+        if method == "tools/call":
+            name = params.get("name")[:200] if isinstance(params.get("name"), str) else ""
+            item = visible_items(vrow, key, "tool").get(name)
+            if item is None:
+                raise Refusal("tool", name, *refusal(vrow, "tool", name))
+            return "tool", item, name
+        if method == "prompts/get":
+            name = params.get("name")[:200] if isinstance(params.get("name"), str) else ""
+            item = visible_items(vrow, key, "prompt").get(name)
+            if item is None:
+                raise Refusal("prompt", name, *refusal(vrow, "prompt", name))
+            return "prompt", item, name
+        uri = params.get("uri") if isinstance(params.get("uri"), str) else ""
+        item = visible_items(vrow, key, "resource").get(uri)
+        if item is not None:
+            return "resource", item, uri[:500]
+        hits = [i for t, i in sorted(visible_items(vrow, key, "template").items())
+                if uri and compose.template_match(t, uri)]
+        if len(hits) == 1:
+            return "template", hits[0], hits[0]["name"]
+        # Eine URI, die niemand freigab, landet nicht in der Messzeile: In ihr können Werte stehen.
+        if len(hits) > 1:
+            raise Refusal("resource", "", "ambiguous", -32602,
+                          "Diese URI passt zu mehreren Vorlagen der Sicht; der Betreiber muss sie "
+                          "eindeutig machen.")
+        known = books.item_row(DB, vrow["name"], "resource", uri)
+        if known:
+            raise Refusal("resource", uri[:500], *refusal(vrow, "resource", uri))
+        raise Refusal("resource", "", *refusal(vrow, "resource", ""))
+
     def mcp_call(self, sess, key, vrow, msg, bytes_up):
-        """Ein Tool-Aufruf: prüfen, begrenzen, weiterreichen, messen — eine Messzeile."""
+        """Ein Aufruf — Tool, Resource, Prompt: prüfen, begrenzen, weiterreichen, messen — eine Messzeile."""
         t0 = time.monotonic()
-        msg_id = msg.get("id")
+        msg_id, method = msg.get("id"), msg.get("method")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
-        # Der Name kommt vom Client und landet in der Messzeile: gekürzt, nie ein Argument.
-        name = params.get("name")[:200] if isinstance(params.get("name"), str) else ""
-        srow = books.server_row(DB, vrow["server"])
-        state = {"down": 0, "outcome": "upstream_error", "reason": "", "sse": False}
+        state = {"down": 0, "outcome": "upstream_error", "reason": "", "sse": False,
+                 "kind": CALLS[method], "name": "", "server": "", "source": ""}
 
         def done(outcome, reason=""):
             state["outcome"], state["reason"] = outcome, reason
@@ -920,33 +1109,40 @@ class Handler(BaseHTTPRequestHandler):
                 state["down"] += self.send_json(status, doc, headers)
 
         try:
-            item = visible_items(vrow, key).get(name)
-            if item is None:
-                known = next((i for i in books.items(DB, vrow["name"]) if i["tool"] == name), None)
-                if known and books.item_state(DB, vrow["server"], known) == "suspended":
-                    done("refused", "suspended")
-                    answer(rpc_error(msg_id, -32002, f"Das Tool {name} ist gesperrt, bis der "
-                                                     "Betreiber einen geänderten Text bestätigt."))
-                elif known and books.item_state(DB, vrow["server"], known) == "active":
-                    done("refused", "effect")
-                    answer(rpc_error(msg_id, -32002, f"Das Tool {name} liegt über der "
-                                                     "Wirkungsklasse dieses Schlüssels oder der Sicht."))
-                else:
-                    done("refused", "unknown_tool")
-                    answer(rpc_error(msg_id, -32602, f"Unbekanntes Tool: {name}"))
+            try:
+                kind, item, measured = self.resolve(vrow, key, method, params)
+            except Refusal as exc:
+                state["kind"], state["name"] = exc.kind, exc.name
+                done("refused", exc.reason)
+                answer(rpc_error(msg_id, exc.code, exc.text))
                 return
+            state.update(kind=kind, name=measured, server=item["server"], source=item["source"])
             doc = json.loads(item["approved_doc"])
             try:
-                argcheck.check(doc.get("inputSchema"), params.get("arguments"))
+                if kind == "tool":
+                    args = compose.prepare_call(doc, json.loads(item["fixed"]),
+                                                json.loads(item["bounds"]), params.get("arguments"))
+                    out_params = {"name": item["source"], "arguments": args}
+                elif kind == "prompt":
+                    args = compose.check_prompt_arguments(doc, params.get("arguments"))
+                    out_params = {"name": item["source"]}
+                    if args:
+                        out_params["arguments"] = args
+                else:
+                    out_params = {"uri": params["uri"]}
             except argcheck.Refused as exc:
                 done("refused", "arguments")
                 answer(rpc_error(msg_id, -32602, str(exc)))
                 return
+            meta = params.get("_meta")
+            if isinstance(meta, dict) and "progressToken" in meta:
+                out_params["_meta"] = {"progressToken": meta["progressToken"]}
             if key["budget_calls"] and books.calls_used(DB, key["id"]) >= key["budget_calls"]:
                 done("limited", "budget")
                 answer(rpc_error(msg_id, -32001, "Das Budget dieses Schlüssels ist aufgebraucht.",
                                  "budget"), status=429)
                 return
+            srow = books.server_row(DB, item["server"])
             g = guard_of(srow)
             try:
                 probe = g.enter(key["id"])
@@ -956,26 +1152,28 @@ class Handler(BaseHTTPRequestHandler):
                                  exc.retry_after))
                 return
             failed = False
+            out = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": out_params}
+            inflight = json.dumps(msg_id)
+            with sess.lock:
+                sess.inflight[inflight] = srow["name"]
             try:
-                failed = self.forward_call(sess, key, vrow, srow, msg, name, params, g.limits,
-                                           state, answer, done)
+                failed = self.forward(sess, vrow, srow, out, g.limits, state, answer, done)
             finally:
+                with sess.lock:
+                    sess.inflight.pop(inflight, None)
                 g.leave(probe, failed)
         finally:
-            books.record(DB, key, vrow["name"], name, vrow["server"], name, state["outcome"],
-                         state["reason"], (time.monotonic() - t0) * 1000, bytes_up, state["down"])
+            books.record(DB, key, vrow["name"], state["kind"], state["name"], state["server"],
+                         state["source"], state["outcome"], state["reason"],
+                         (time.monotonic() - t0) * 1000, bytes_up, state["down"])
             if state["sse"]:
                 self.close_connection = True
 
-    def forward_call(self, sess, key, vrow, srow, msg, name, params, lim, state, answer, done):
+    def forward(self, sess, vrow, srow, out, lim, state, answer, done):
         """Zum Server und zurück. Gibt True zurück, wenn der WEG scheiterte (Sicherungsautomat)."""
-        msg_id = msg.get("id")
+        msg_id = out["id"]
         wants_sse = "text/event-stream" in (self.headers.get("Accept") or "")
-        out = {"jsonrpc": "2.0", "id": msg_id, "method": "tools/call",
-               "params": {"name": name, "arguments": params.get("arguments") or {}}}
-        meta = params.get("_meta")
-        if isinstance(meta, dict) and "progressToken" in meta:
-            out["params"]["_meta"] = {"progressToken": meta["progressToken"]}
+        reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
         try:
             server, url = server_access(srow)
         except upstream.UpstreamError as exc:
@@ -983,26 +1181,65 @@ class Handler(BaseHTTPRequestHandler):
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — {exc}"))
             return True
 
+        def stream():
+            if not state["sse"]:
+                self.start_sse()
+                state["sse"] = True
+
+        def current():
+            with sess.lock:
+                return sess.upstream.get(srow["name"])
+
+        def to_server(doc):
+            us = current()
+            if us is None:
+                return
+            try:
+                upstream.post(server, url, doc, session_id=us.id, version=us.version, timeout=10)
+            except upstream.UpstreamError:
+                pass
+
         def on_message(m):
             if "method" in m and "id" in m:
-                # Rückfrage des Servers an den Client: in 0.1 abgelehnt (Spec §6).
-                try:
-                    upstream.post(server, url, rpc_error(m["id"], -32601, "Das Gateway reicht "
-                                  "Rückfragen an den Client in dieser Version nicht weiter."),
-                                  session_id=us.id, version=us.version, timeout=10)
-                except upstream.UpstreamError:
-                    pass
+                # Rückfrage des Servers an den Client (Spec §6.1).
+                if m["method"] == "ping":
+                    to_server(rpc_result(m["id"], {}))
+                    return False
+                what = books.REQUEST_METHODS.get(m["method"])
+                if what and reqs[what] == "pass" and what in sess.client_caps and wants_sse:
+                    gid = "oaap-" + secrets.token_urlsafe(12)
+                    asked.append(gid)
+                    us = current()              # nimmt die Sperre selbst — nicht darin aufrufen
+                    with sess.lock:
+                        sess.pending[gid] = (srow["name"], us, m["id"])
+                    stream()
+                    state["down"] += self.sse_event({**m, "id": gid})
+                    return False
+                why = ("Die Sicht reicht diese Rückfrage nicht an den Client weiter."
+                       if not what or reqs[what] != "pass" else
+                       "Der Client kann diese Rückfrage nicht beantworten.")
+                to_server(rpc_error(m["id"], -32601, why))
                 return False
             if m.get("method") in ("notifications/progress", "notifications/message") and wants_sse:
-                if not state["sse"]:
-                    self.start_sse()
-                    state["sse"] = True
+                stream()
                 state["down"] += self.sse_event(m)
             return False
 
+        asked = []                              # Rückfragen dieses Aufrufs: enden mit ihm
+        try:
+            result = self._forward_loop(sess, vrow, srow, out, lim, reqs, server, url, on_message,
+                                        answer, done)
+        finally:
+            with sess.lock:
+                for gid in asked:
+                    sess.pending.pop(gid, None)
+        return result
+
+    def _forward_loop(self, sess, vrow, srow, out, lim, reqs, server, url, on_message, answer, done):
+        msg_id = out["id"]
         for attempt in (1, 2):
             try:
-                us = self.upstream_session(sess, srow, server, url, lim)
+                us = self.upstream_session(sess, srow, server, url, lim, reqs)
                 ex = upstream.post(server, url, out, session_id=us.id, version=us.version,
                                    timeout=lim["timeout_s"], max_bytes=lim["max_bytes"],
                                    on_message=on_message)
@@ -1038,12 +1275,14 @@ class Handler(BaseHTTPRequestHandler):
         answer(final)
         return False
 
-    def upstream_session(self, sess, srow, server, url, lim):
+    def upstream_session(self, sess, srow, server, url, lim, reqs):
         with sess.lock:
             us = sess.upstream.get(srow["name"])
             if us is None:
+                # Zugesagt wird nur, was die Sicht durchreicht UND der Client kann.
+                caps = {r: {} for r in books.REQUESTS if reqs[r] == "pass" and r in sess.client_caps}
                 us = upstream.open_session(server, url, timeout=min(30, lim["timeout_s"]),
-                                           max_bytes=lim["max_bytes"])
+                                           max_bytes=lim["max_bytes"], capabilities=caps)
                 sess.upstream[srow["name"]] = us
                 if us.version != srow["version"]:
                     books.note_server(DB, srow["name"], version=us.version)
@@ -1175,23 +1414,32 @@ class Handler(BaseHTTPRequestHandler):
                 _, notice = read_catalog(form.get("name", ""))
                 back = ("server", form.get("name", ""))
             elif path == "/view-save":
-                books.save_view(DB, user, form.get("name", ""), form.get("server", ""),
-                                form.get("max_effect", "read"))
+                reqs = {r: form["req_" + r] for r in books.REQUESTS if "req_" + r in form}
+                books.save_view(DB, user, form.get("name", ""), form.get("max_effect", "read"),
+                                reqs or None)
                 notice, back = "Sicht gespeichert.", ("view", form.get("name", ""))
             elif path == "/view-delete":
                 books.delete_view(DB, user, form.get("name", ""))
                 notice = f"Sicht „{form.get('name', '')}“ gelöscht."
-            elif path in ("/item-add", "/item-confirm"):
-                books.approve(DB, user, form.get("view", ""), form.get("tool", ""),
-                              form.get("effect", "read"))
-                notice = (f"„{form.get('tool', '')}“ freigegeben in Sicht „{form.get('view', '')}“; "
+            elif path == "/item-add":
+                name = books.approve(DB, user, form.get("view", ""), form.get("kind", "tool"),
+                                     form.get("server", ""), form.get("source", ""),
+                                     form.get("as", "").strip() or None, form.get("effect", "read"))
+                notice = (f"„{name}“ freigegeben in Sicht „{form.get('view', '')}“; "
                           "der Text ist festgehalten.")
                 back = ("view", form.get("view", ""))
-            elif path == "/item-effect":
-                self.set_effect(form, user)
-                notice, back = "Wirkungsklasse gesetzt.", ("view", form.get("view", ""))
+            elif path == "/item-confirm":
+                books.confirm(DB, user, form.get("view", ""), form.get("kind", "tool"),
+                              form.get("name", ""), form.get("effect") or None)
+                notice = f"Neuer Text von „{form.get('name', '')}“ bestätigt."
+                back = ("view", form.get("view", ""))
+            elif path == "/item-tailor":
+                changed = tailor_from_form(form, user)
+                notice = "Geändert: " + "; ".join(changed) if changed else "Unverändert."
+                back = ("view", form.get("view", ""))
             elif path == "/item-remove":
-                books.remove_item(DB, user, form.get("view", ""), form.get("tool", ""))
+                books.remove_item(DB, user, form.get("view", ""), form.get("kind", "tool"),
+                                  form.get("name", ""))
                 notice, back = "Herausgenommen.", ("view", form.get("view", ""))
         except ValueError as exc:
             notice = str(exc)
@@ -1202,17 +1450,26 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_html(200, admin_page(user, roles, host, notice, secret))
 
-    def set_effect(self, form, user):
-        """Nur die Klasse — der festgehaltene Text bleibt (anders als beim Bestätigen)."""
-        view, tool, effect = form.get("view", ""), form.get("tool", ""), form.get("effect", "")
-        if effect not in books.EFFECT_RANK:
-            raise ValueError("Wirkungsklasse ist read, write oder execute.")
-        row = DB.execute("SELECT effect FROM items WHERE view=? AND tool=?", (view, tool)).fetchone()
-        if not row:
-            raise ValueError("Diesen Eintrag gibt es nicht.")
-        DB.execute("UPDATE items SET effect=? WHERE view=? AND tool=?", (effect, view, tool))
-        books.log(DB, user, "item.effect", f"{view}/{tool}", f"{row['effect']} → {effect}")
-        DB.commit()
+
+def json_field(form, name):
+    """Ein JSON-Feld eines Formulars: None, wenn es fehlt; ValueError mit einem Satz, wenn kaputt."""
+    if name not in form:
+        return None
+    text = form[name].strip() or "{}"
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise ValueError(f"„{name}“ ist kein gültiges JSON.") from None
+
+
+def tailor_from_form(form, user):
+    """Gemeinsam für Seite und Kommandozeile."""
+    return books.tailor_item(
+        DB, user, form.get("view", ""), form.get("kind", "tool"), form.get("name", ""),
+        new_name=form["new_name"].strip() if "new_name" in form else None,
+        description=form["description"].strip() if "description" in form else None,
+        fixed=json_field(form, "fixed"), bounds=json_field(form, "bounds"),
+        effect=form.get("effect") or None)
 
 
 def save_server(form, user):
@@ -1255,8 +1512,12 @@ def cli(argv):
     """Für kopflose Knoten: `docker exec <container> python3 /srv/app.py …`."""
     usage = ("Aufruf: app.py server set <name> --address A [--auth none|bearer|basic|header:N] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
-             "        app.py view set <name> --server S [--max-effect read|write|execute] | "
-             "view add <sicht> <tool> [--effect read] | view confirm <sicht> <tool> | view list\n"
+             "        app.py view set <name> [--max-effect read|write|execute] "
+             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] | view list\n"
+             "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
+             "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
+             "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
+             "[--fixed JSON] [--bounds JSON] [--effect E] | view remove <sicht> <name> [--kind K]\n"
              "        app.py key issue <etikett> --views a,b [--max-effect read] [--ceiling yellow] "
              "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>")
     if len(argv) < 2:
@@ -1303,24 +1564,47 @@ def cli(argv):
             return 0 if ok else 1
         if area == "view" and action == "list":
             for v in books.views(DB):
-                print(f'{v["name"]:20} server={v["server"]} bis={v["max_effect"]}')
+                reqs = books.view_requests(v)
+                print(f'{v["name"]:20} bis={v["max_effect"]} ampel={books.view_light(DB, v["name"])} '
+                      + " ".join(f"{r}={reqs[r]}" for r in books.REQUESTS))
                 for item in books.items(DB, v["name"]):
-                    print(f'    {item["tool"]:30} {item["effect"]:8} '
-                          f'{books.item_state(DB, v["server"], item)}')
+                    print(f'    {item["kind"]:8} {item["name"]:30} {item["server"]}:{item["source"]} '
+                          f'{item["effect"]:8} {books.item_state(DB, item)}'
+                          + (f' fest={item["fixed"]}' if item["fixed"] != "{}" else "")
+                          + (f' grenzen={item["bounds"]}' if item["bounds"] != "{}" else ""))
             return 0
         if area == "view" and action == "set" and pos:
-            books.save_view(DB, "cli", pos[0], opts.get("server", ""), opts.get("max-effect", "read"))
+            if "server" in opts:
+                raise ValueError("Seit 0.2 hat eine Sicht keinen festen Server mehr; Einträge "
+                                 "kommen mit `view add <sicht> <server> <name>` hinein.")
+            old = books.view_row(DB, pos[0])
+            reqs = {r: opts[r] for r in books.REQUESTS if r in opts}
+            books.save_view(DB, "cli", pos[0],
+                            opts.get("max-effect", old["max_effect"] if old else "read"), reqs or None)
             print("gespeichert")
             return 0
-        if area == "view" and action in ("add", "confirm") and len(pos) >= 2:
-            effect = opts.get("effect")
-            if not effect:
-                row = DB.execute("SELECT effect FROM items WHERE view=? AND tool=?",
-                                 (pos[0], pos[1])).fetchone()
-                effect = row["effect"] if row else "read"
-            books.approve(DB, "cli", pos[0], pos[1], effect)
-            print("freigegeben, Text festgehalten")
+        if area == "view" and action == "add" and len(pos) >= 3:
+            name = books.approve(DB, "cli", pos[0], opts.get("kind", "tool"), pos[1], pos[2],
+                                 opts.get("as"), opts.get("effect", "read"))
+            print(f"freigegeben als „{name}“, Text festgehalten")
             return 0
+        if area == "view" and action == "confirm" and len(pos) >= 2:
+            books.confirm(DB, "cli", pos[0], opts.get("kind", "tool"), pos[1], opts.get("effect"))
+            print("bestätigt, neuer Text festgehalten")
+            return 0
+        if area == "view" and action == "tailor" and len(pos) >= 2:
+            form = {"view": pos[0], "name": pos[1], "kind": opts.get("kind", "tool")}
+            for opt, field in (("rename", "new_name"), ("description", "description"),
+                               ("fixed", "fixed"), ("bounds", "bounds"), ("effect", "effect")):
+                if opt in opts:
+                    form[field] = opts[opt]
+            changed = tailor_from_form(form, "cli")
+            print("; ".join(changed) or "unverändert")
+            return 0
+        if area == "view" and action == "remove" and len(pos) >= 2:
+            ok = books.remove_item(DB, "cli", pos[0], opts.get("kind", "tool"), pos[1])
+            print("herausgenommen" if ok else "nicht gefunden")
+            return 0 if ok else 1
         if area == "key" and action == "list":
             for k in books.keys(DB):
                 print(f'{k["label"]:24} {"WIDERRUFEN" if k["revoked"] else "gültig":10} '

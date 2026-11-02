@@ -29,10 +29,10 @@ from urllib.parse import urlsplit
 
 TESTED = ("2025-03-26", "2025-06-18", "2025-11-25")
 NEWEST = TESTED[-1]
-CLIENT_INFO = {"name": "oaap-mcp-gateway", "version": "0.1"}
+CLIENT_INFO = {"name": "oaap-mcp-gateway", "version": "0.2"}
 ACCEPT = "application/json, text/event-stream"
 CONNECT_TIMEOUT = 10
-MAX_TOOLS = 1000
+MAX_TOOLS = 1000                    # je Art: Tools, Resources, Vorlagen, Prompts
 
 
 class UpstreamError(Exception):
@@ -211,6 +211,11 @@ def post(server, url, message, session_id=None, version=None, timeout=60,
         if resp.status in (202, 204):
             return ex
         if resp.status >= 400:
+            supported = _supported_versions(resp, conn, deadline) if message.get(
+                "method") == "initialize" else None
+            if supported:
+                raise UpstreamError("version", "Der Server spricht nur die Protokollversionen "
+                                    + ", ".join(supported) + "; getestet sind " + ", ".join(TESTED) + ".")
             raise UpstreamError("http", f"Der Server antwortet mit HTTP {resp.status}.")
         ctype = (resp.getheader("Content-Type") or "").split(";")[0].strip().lower()
         if ctype == "text/event-stream":
@@ -231,6 +236,19 @@ def post(server, url, message, session_id=None, version=None, timeout=60,
         return ex
     finally:
         conn.close()
+
+
+def _supported_versions(resp, conn, deadline):
+    """Ein Server der Ära 2026-07-28 nennt beim abgelehnten `initialize` seine Versionen."""
+    try:
+        doc = _json(_read_limited(resp, conn, deadline, 64 * 1024))
+    except UpstreamError:
+        return None
+    data = ((doc or {}).get("error") or {}).get("data") if isinstance(doc, dict) else None
+    found = data.get("supported") if isinstance(data, dict) else None
+    if isinstance(found, list) and all(isinstance(v, str) for v in found):
+        return [v[:20] for v in found[:10]]
+    return None
 
 
 def _is_answer(msg, want):
@@ -322,18 +340,24 @@ def delete(server, url, session_id):
 # ------------------------------------------------------------------ Sitzung
 
 class Session:
-    """Eine Sitzung beim Server: ihre Kennung (darf fehlen) und die ausgehandelte Version."""
+    """Eine Sitzung beim Server: Kennung (darf fehlen), ausgehandelte Version, Fähigkeiten des Servers."""
 
-    def __init__(self, session_id, version, server_info):
+    def __init__(self, session_id, version, server_info, capabilities=None):
         self.id = session_id
         self.version = version
         self.server_info = server_info
+        self.capabilities = capabilities or {}
 
 
-def open_session(server, url, timeout=30, max_bytes=1 << 20):
-    """`initialize` mit der neuesten getesteten Version, dann `notifications/initialized`."""
+def open_session(server, url, timeout=30, max_bytes=1 << 20, capabilities=None):
+    """`initialize` mit der neuesten getesteten Version, dann `notifications/initialized`.
+
+    `capabilities` sind die Client-Fähigkeiten, die das Gateway für diese
+    Sitzung zusagt — nur Rückfragen, die die Sicht durchlässt UND der
+    Client kann (Spec §6.1). Sonst fragt ein Server gar nicht erst.
+    """
     msg = {"jsonrpc": "2.0", "id": 0, "method": "initialize",
-           "params": {"protocolVersion": NEWEST, "capabilities": {},
+           "params": {"protocolVersion": NEWEST, "capabilities": capabilities or {},
                       "clientInfo": CLIENT_INFO}}
     ex = post(server, url, msg, timeout=timeout, max_bytes=max_bytes)
     answer = ex.messages[-1]
@@ -346,36 +370,59 @@ def open_session(server, url, timeout=30, max_bytes=1 << 20):
         raise UpstreamError("version", f"Der Server spricht die Protokollversion {version!r}; "
                                        f"getestet sind {', '.join(TESTED)}.")
     info = result.get("serverInfo") if isinstance(result.get("serverInfo"), dict) else {}
-    session = Session(ex.session_id, version, info)
+    caps = result.get("capabilities") if isinstance(result.get("capabilities"), dict) else {}
+    session = Session(ex.session_id, version, info, caps)
     post(server, url, {"jsonrpc": "2.0", "method": "notifications/initialized"},
          session_id=session.id, version=version, timeout=timeout, max_bytes=max_bytes)
     return session
 
 
-def list_tools(server, url, timeout=30, max_bytes=8 << 20):
-    """Alle Tools des Servers, Seite für Seite, höchstens MAX_TOOLS. Gibt (tools, session) zurück."""
+# Was der Katalog liest: Art → (Methode, Feld der Antwort, nötige Fähigkeit des Servers).
+LISTS = {"tool": ("tools/list", "tools", "tools"),
+         "resource": ("resources/list", "resources", "resources"),
+         "template": ("resources/templates/list", "resourceTemplates", "resources"),
+         "prompt": ("prompts/list", "prompts", "prompts")}
+
+
+def _list_all(server, url, session, method, field, timeout, max_bytes, start_id):
+    found, cursor, n = [], None, start_id
+    while True:
+        params = {"cursor": cursor} if cursor else {}
+        ex = post(server, url, {"jsonrpc": "2.0", "id": n, "method": method, "params": params},
+                  session_id=session.id, version=session.version, timeout=timeout,
+                  max_bytes=max_bytes)
+        answer = ex.messages[-1]
+        if "error" in answer:
+            raise UpstreamError("protocol", f"{method} abgelehnt: "
+                                + str((answer["error"] or {}).get("message", ""))[:200])
+        result = answer.get("result") or {}
+        for entry in result.get(field) or ():
+            if isinstance(entry, dict):
+                found.append(entry)
+        if len(found) > MAX_TOOLS:
+            raise UpstreamError("protocol", f"Der Server bietet mehr als {MAX_TOOLS} Einträge "
+                                            f"({method}).")
+        cursor = result.get("nextCursor")
+        n += 1
+        if not cursor:
+            return found, n
+
+
+def list_catalog(server, url, timeout=30, max_bytes=8 << 20):
+    """Alles, was der Server anbietet: {art: [einträge]}. Gibt (offers, session) zurück.
+
+    Eine Art, deren Fähigkeit der Server nicht nennt, ist leer: Er bietet
+    sie nicht an, und was davon in einer Sicht liegt, fehlt jetzt — es
+    bleibt nicht mit einem alten Stand freigegeben.
+    """
     session = open_session(server, url, timeout=timeout)
-    tools, cursor, n = [], None, 1
+    offers, n = {}, 1
     try:
-        while True:
-            params = {"cursor": cursor} if cursor else {}
-            ex = post(server, url, {"jsonrpc": "2.0", "id": n, "method": "tools/list",
-                                    "params": params},
-                      session_id=session.id, version=session.version, timeout=timeout,
-                      max_bytes=max_bytes)
-            answer = ex.messages[-1]
-            if "error" in answer:
-                raise UpstreamError("protocol", "tools/list abgelehnt: "
-                                    + str((answer["error"] or {}).get("message", ""))[:200])
-            result = answer.get("result") or {}
-            for tool in result.get("tools") or ():
-                if isinstance(tool, dict) and isinstance(tool.get("name"), str):
-                    tools.append(tool)
-            if len(tools) > MAX_TOOLS:
-                raise UpstreamError("protocol", f"Der Server bietet mehr als {MAX_TOOLS} Tools.")
-            cursor = result.get("nextCursor")
-            n += 1
-            if not cursor:
-                return tools, session
+        for kind, (method, field, cap) in LISTS.items():
+            if cap not in session.capabilities:
+                offers[kind] = []
+                continue
+            offers[kind], n = _list_all(server, url, session, method, field, timeout, max_bytes, n)
+        return offers, session
     finally:
         delete(server, url, session.id)

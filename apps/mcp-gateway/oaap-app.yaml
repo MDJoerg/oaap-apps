@@ -3,10 +3,10 @@ oaap_manifest: "0.2"
 app:
   id: mcp-gateway
   name: OAAP MCP-Gateway
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
-  description: "MCP-Server hinter einem Endpunkt je Sicht — mit API-Schlüsseln, Katalog mit Freigabe, festgehaltenen Tool-Texten, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
+  description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln, Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
 
 services:
   web:
@@ -29,7 +29,7 @@ routes:
     roles: [admin]
 
 storage:
-  # Schlüssel (nur als SHA-256), Server, Katalog, freigegebene Texte,
+  # Schlüssel (nur als SHA-256), Server, Katalog, freigegebene Einträge,
   # Messzeilen, Prüfspur. KEINE Argumente, KEINE Ergebnisse: Es gibt keine
   # Spalte, in die sie passen würden (Spec §10).
   - name: data
