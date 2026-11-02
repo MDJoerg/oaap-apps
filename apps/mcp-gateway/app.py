@@ -1,0 +1,1362 @@
+"""OAAP MCP-Gateway 0.1 — Tool-Server hinter einem Endpunkt je Sicht.
+
+Umsetzung der Capability `oaap.ai.mcp-gateway` 0.1 (RFC-0065 Stufe 1).
+Ein KI-Client — Claude Code, Copilot, ein eigener Agent — spricht mit
+`/mcp/<sicht>` wie mit einem einzigen MCP-Server. Welcher Server
+dahintersteht und wo, erfährt er nie.
+
+Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
+
+- `/mcp/...` ist `public`: Die Plattform authentifiziert dort nichts,
+  entfernt gefälschte Identitäts-Kopfzeilen und bremst je Client
+  (RFC-0010). Geprüft wird hier: **Der API-Schlüssel ist die
+  Identität**, und er nennt die Sichten, die er benutzen darf.
+- `/` ist `admin`: Server, Katalog, Sichten, Schlüssel, Verbrauch,
+  Auswertung und `/report/v1/…` für ein Abrechnungssystem.
+
+Je `tools/call`, in dieser Reihenfolge (Spec §7, §8): Tool in der Sicht
+und freigegeben, Wirkungsklasse, Argumente gegen das **freigegebene**
+Schema, Budget, dann der Schutz des Servers. Dann erst geht der Aufruf
+hinaus — und genau eine Messzeile entsteht, ohne Argument, ohne
+Ergebnis (Spec §10).
+
+Gebaut als gewöhnliche OAAP-App: ein HTTP-Port, Persistenz nur unter
+dem deklarierten Mount, Konfiguration über deklarierte Variablen, Logs
+nach stdout, Gesundheitspfad, nur Standardbibliothek.
+"""
+import html
+import json
+import os
+import secrets
+import sys
+import threading
+import time
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qsl, quote, unquote_plus
+
+import argcheck
+import books
+import guard
+import upstream
+from gwcore import charts as gcharts
+from gwcore import report as greport
+from gwcore.vault import Vault, VaultError
+
+VERSION = "0.1.0"
+PORT = 8000
+
+DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
+DB_PATH = os.path.join(DATA_DIR, "gateway.db")
+MASTER = os.environ.get("MCPGW_MASTER_KEY", "")
+VAULT = Vault(b"oaap-mcp-gateway-vault|", "MCPGW_MASTER_KEY")
+
+try:
+    CATALOG_MINUTES = max(0, min(1440, int(os.environ.get("MCPGW_CATALOG_MINUTES") or 15)))
+except ValueError:
+    CATALOG_MINUTES = 15
+
+MAX_BODY = 4 * 1024 * 1024
+DEFAULT_RATE = 120                  # Anfragen je Minute und Schlüssel, wenn nichts gesetzt
+SESSION_IDLE = 1800                 # Sekunden ohne Anfrage, dann ist eine Sitzung vorbei
+
+esc = html.escape
+DB = books.connect(DB_PATH)
+LIMITER = books.RateLimiter()
+
+# ------------------------------------------------------------- Antworten
+
+# Dieselbe Antwort für „kein Schlüssel“, „unbekannt“, „widerrufen“ und
+# „für diese Sicht nicht berechtigt“ (Spec §2): Wer probiert, soll aus der
+# Antwort nichts lernen — nicht einmal, ob es die Sicht gibt.
+DENIED = json.dumps({"jsonrpc": "2.0", "id": None,
+                     "error": {"code": -32000, "message": "Kein gültiger Schlüssel für diese "
+                                                          "Sicht."}},
+                    ensure_ascii=False).encode("utf-8")
+SESSION_UNKNOWN = {"jsonrpc": "2.0", "id": None,
+                   "error": {"code": -32000, "message": "Sitzung unbekannt oder abgelaufen — "
+                                                        "bitte neu initialisieren."}}
+
+
+def rpc_result(msg_id, result):
+    return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+
+
+def rpc_error(msg_id, code, message, reason=None, retry_after=None):
+    err = {"code": code, "message": message}
+    if reason:
+        err["data"] = {"oaap": {"reason": reason}}
+        if retry_after:
+            err["data"]["oaap"]["retry_after"] = int(retry_after)
+    return {"jsonrpc": "2.0", "id": msg_id, "error": err}
+
+
+# ------------------------------------------------------------- Fehlversuche
+
+_FAILS = {}
+_FAILS_LOCK = threading.Lock()
+FAIL_WINDOW = 300
+FAIL_LIMIT = 5
+
+
+def note_failure(addr):
+    with _FAILS_LOCK:
+        cutoff = time.monotonic() - FAIL_WINDOW
+        hits = [t for t in _FAILS.get(addr, ()) if t > cutoff]
+        hits.append(time.monotonic())
+        _FAILS[addr] = hits
+
+
+def failing_hard(addr):
+    with _FAILS_LOCK:
+        cutoff = time.monotonic() - FAIL_WINDOW
+        hits = [t for t in _FAILS.get(addr, ()) if t > cutoff]
+        _FAILS[addr] = hits
+        return len(hits) >= FAIL_LIMIT
+
+
+# ------------------------------------------------------------- Server, Schutz
+
+GUARDS = {}
+_GUARDS_LOCK = threading.Lock()
+
+
+def limits_of(srow):
+    try:
+        return guard.clean(json.loads(srow["limits"] or "{}"))
+    except (ValueError, TypeError):
+        return dict(guard.DEFAULTS)
+
+
+def guard_of(srow):
+    with _GUARDS_LOCK:
+        g = GUARDS.get(srow["name"])
+        lim = limits_of(srow)
+        if g is None:
+            g = GUARDS[srow["name"]] = guard.ServerGuard(lim)
+        elif g.limits != lim:
+            g.update(lim)
+        return g
+
+
+def server_access(srow):
+    """Adresse und Zugang für upstream.py. Wirft UpstreamError mit einem Satz."""
+    url = upstream.resolve(srow["address"])
+    credential = ""
+    if srow["credential"]:
+        try:
+            credential = VAULT.open_(MASTER, srow["credential"])
+        except VaultError as exc:
+            raise upstream.UpstreamError("credential",
+                                         f"Zugangsdaten nicht lesbar: {exc}") from None
+    return {"auth_kind": srow["auth_kind"], "credential": credential}, url
+
+
+def read_catalog(name):
+    """Liest die Tools eines Servers. Gibt (ok, satz) zurück; schreibt Katalog und Zustand."""
+    srow = books.server_row(DB, name)
+    if not srow:
+        return False, f"Einen Server „{name}“ gibt es nicht."
+    lim = limits_of(srow)
+    try:
+        server, url = server_access(srow)
+        tools, session = upstream.list_tools(server, url, timeout=min(60, lim["timeout_s"]))
+    except upstream.UpstreamError as exc:
+        books.note_server(DB, name, error=str(exc))
+        return False, f"Katalog von „{name}“ nicht gelesen: {exc}"
+    changed = books.store_catalog(DB, name, tools)
+    books.note_server(DB, name, version=session.version, error="", read=True)
+    text = f"Katalog von „{name}“ gelesen: {len(tools)} Tools, Protokoll {session.version}."
+    if changed:
+        text += " Gesperrt, weil geändert oder verschwunden: " + ", ".join(changed) + "."
+    return True, text
+
+
+# ------------------------------------------------------------- Sitzungen
+
+class DownSession:
+    """Eine Sitzung des Clients. Gehört dem Schlüssel und der Sicht, die sie eröffnet haben."""
+
+    def __init__(self, key_id, view, version):
+        self.id = secrets.token_urlsafe(24)
+        self.key_id = key_id
+        self.view = view
+        self.version = version
+        self.last = time.monotonic()
+        self.upstream = {}               # Servername → upstream.Session
+        self.lock = threading.Lock()
+
+
+SESSIONS = {}
+_SESS_LOCK = threading.Lock()
+
+
+def end_session(sess):
+    with _SESS_LOCK:
+        SESSIONS.pop(sess.id, None)
+    for name, us in list(sess.upstream.items()):
+        srow = books.server_row(DB, name)
+        if srow:
+            try:
+                server, url = server_access(srow)
+                upstream.delete(server, url, us.id)
+            except upstream.UpstreamError:
+                pass
+    sess.upstream.clear()
+
+
+def housekeeping():
+    """Im Hintergrund: abgelaufene Sitzungen beenden, Kataloge neu lesen."""
+    next_read = time.monotonic() + 30
+    while True:
+        time.sleep(30)
+        now = time.monotonic()
+        with _SESS_LOCK:
+            old = [s for s in SESSIONS.values() if now - s.last > SESSION_IDLE]
+        for sess in old:
+            end_session(sess)
+        if CATALOG_MINUTES and now >= next_read:
+            next_read = now + CATALOG_MINUTES * 60
+            for srow in books.servers(DB):
+                ok, text = read_catalog(srow["name"])
+                sys.stdout.write(f"Katalog: {text}\n")
+                sys.stdout.flush()
+
+
+# ------------------------------------------------------------- Sichten
+
+def rank_ok(effect, *ceilings):
+    return all(books.EFFECT_RANK[effect] <= books.EFFECT_RANK.get(c, 0) for c in ceilings)
+
+
+def visible_items(vrow, key):
+    """Die Einträge, die dieser Schlüssel in dieser Sicht sieht: aktiv und nicht über der Klasse."""
+    out = {}
+    for item in books.items(DB, vrow["name"]):
+        if books.item_state(DB, vrow["server"], item) != "active":
+            continue
+        if not rank_ok(item["effect"], vrow["max_effect"], key["max_effect"]):
+            continue
+        out[item["tool"]] = item
+    return out
+
+
+def shaped(doc, version):
+    """Der freigegebene Text, in der Form der Protokollversion des Clients (A3)."""
+    tool = {"name": doc["name"], "description": doc.get("description", ""),
+            "inputSchema": doc.get("inputSchema") or {"type": "object"}}
+    if "annotations" in doc:
+        tool["annotations"] = doc["annotations"]
+    if version >= "2025-06-18":
+        for field in ("title", "outputSchema"):
+            if field in doc:
+                tool[field] = doc[field]
+    return tool
+
+
+def entitled(key, vrow):
+    if not vrow or vrow["name"] not in books.key_views(key):
+        return False
+    srow = books.server_row(DB, vrow["server"])
+    if not srow:
+        return False
+    return books.LIGHT_RANK[srow["light"]] <= books.LIGHT_RANK.get(key["ceiling"], 1)
+
+
+# ------------------------------------------------------------- Optik
+
+STYLE = """<style>
+  :root{--oaap-blue-950:#172554;--oaap-blue-900:#1e3a8a;--oaap-blue-700:#1d4ed8;
+    --oaap-blue-600:#2563eb;--oaap-blue-100:#dbeafe;--oaap-bg:#f4f6fa;--oaap-surface:#fff;
+    --oaap-text:#1f2937;--oaap-muted:#6b7280;--oaap-border:#e5e7eb;--ok:#15803d;--err:#b91c1c}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;
+       background:var(--oaap-bg);color:var(--oaap-text)}
+  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
+       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
+  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
+  .brand b{font-size:1.15rem;letter-spacing:.08em}
+  .brand small{display:block;font-size:.62rem;opacity:.75}
+  .userbox{margin-left:auto;font-size:.9rem;text-align:right;line-height:1.2}
+  .userbox small{opacity:.75}
+  nav.tabs{display:flex;gap:1rem;margin:0 0 1rem}
+  main{max-width:68rem;margin:1.6rem auto;padding:0 1.2rem}
+  h1{font-size:1.35rem;margin:.2rem 0 1rem} h2{font-size:1.02rem;margin:0 0 .8rem}
+  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);border-radius:.6rem;
+       padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);margin-bottom:1.2rem}
+  .card.attention{border-color:#fcd34d;background:#fffbeb}
+  .card.secretbox{border-color:#86efac;background:#f0fdf4}
+  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;background:var(--oaap-blue-100);
+       color:var(--oaap-blue-900);white-space:nowrap}
+  .badge.green{background:#dcfce7;color:#166534}.badge.yellow{background:#fef3c7;color:#92400e}
+  .badge.red,.badge.err{background:#fee2e2;color:#991b1b}.badge.off{background:#f3f4f6;color:#6b7280}
+  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
+       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
+       cursor:pointer;min-height:44px}
+  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
+  button.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;font-size:.85rem}
+  button.quiet:hover{background:#e5e7eb}
+  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
+  .err{color:var(--err)}.muted{color:var(--oaap-muted);font-size:.9rem}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
+       vertical-align:top;font-size:.92rem}
+  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
+  code{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
+       word-break:break-all}
+  pre{background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:.5rem;overflow-x:auto;
+       font-size:.82rem;white-space:pre-wrap;word-break:break-word}
+  form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.8rem 1rem;
+       align-items:end}
+  form.inline{display:inline}
+  label{display:block;font-size:.82rem;color:var(--oaap-muted);margin-bottom:.25rem}
+  input[type=text],input[type=number],input[type=password],select{width:100%;padding:.5rem .6rem;
+       border-radius:.4rem;border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px;
+       background:#fff}
+  .side{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  .scroll{overflow-x:auto}td.num{text-align:right;white-space:nowrap}
+  .legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:0 0 .5rem;font-size:.85rem}
+  .lg{display:inline-flex;align-items:center;gap:.35rem}
+  .lg i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}
+  svg.chart{width:100%;height:auto;display:block} svg.chart .ax{font-size:11px;fill:var(--oaap-muted)}
+  .hbar{display:grid;grid-template-columns:minmax(8rem,2fr) 3fr minmax(6rem,auto);gap:.6rem;
+       align-items:center;padding:.3rem 0;font-size:.9rem}
+  .hl{overflow:hidden;text-overflow:ellipsis}.hl code{white-space:nowrap;font-size:.78rem}
+  .ht{background:#f3f4f6;border-radius:4px;height:.8rem;overflow:hidden}
+  .ht i{display:block;height:100%;border-radius:0 4px 4px 0}
+  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-muted)}
+  footer.oaap{max-width:68rem;margin:2rem auto 1.2rem;padding:0 1.2rem;color:var(--oaap-muted);
+       font-size:.8rem}
+  @media (max-width:640px){.side{grid-template-columns:1fr}.hbar{grid-template-columns:1fr 1fr}}
+</style>"""
+
+LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
+            '<polygon points="50,6 88,28 88,72 50,94 12,72 12,28" fill="none" stroke="#fff" '
+            'stroke-width="6" stroke-linejoin="round"/><circle cx="50" cy="50" r="13" fill="#fff"/>'
+            '</svg>')
+
+STATE_WORDS = {"active": ("green", "freigegeben"), "suspended": ("yellow", "gesperrt: Text geändert"),
+               "missing": ("red", "fehlt beim Server")}
+LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
+               "yellow": "gelb — unter verbindlicher Zusage",
+               "red": "rot — Daten können abfließen"}
+
+
+def page(title, body, user, roles):
+    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(title)} — OAAP MCP-Gateway</title>
+{STYLE}
+<header class="oaap">
+  <a class="brand" href="./">{LOGO_SVG}
+    <span><b>OAAP MCP-GATEWAY</b><small>Eine Sicht, ein Schlüssel, freigegebene Werkzeuge</small></span></a>
+  <div class="userbox">{esc(user)}<br><small>{esc(roles)}</small></div>
+</header>
+<main>
+<nav class="tabs"><a href="./">Übersicht</a><a href="auswertung">Auswertung</a></nav>
+{body}</main>
+<footer class="oaap">OAAP MCP-Gateway {VERSION} — zählt Aufrufe, speichert keine Argumente
+und keine Ergebnisse</footer></html>"""
+
+
+def badge(cls, text):
+    return f'<span class="badge {esc(cls)}">{esc(text)}</span>'
+
+
+def options(values, current, words=None):
+    return "".join(f'<option value="{esc(v)}"{" selected" if v == current else ""}>'
+                   f'{esc((words or {}).get(v, v))}</option>' for v in values)
+
+
+def fmt_bytes(value):
+    return gcharts.fmt_bytes(value or 0)
+
+
+def context_line(row):
+    bits = [f"{n}: {row[n]}" for n in ("owner", "account", "project", "cost_center", "application")
+            if row[n] and not (n == "account" and row[n] == "default")]
+    if row["labels"]:
+        bits.append(books.labels_text(row["labels"]))
+    return " · ".join(bits) or "—"
+
+
+CONTEXT_LABELS = {"owner": "Verantwortlich", "account": "Konto", "project": "Projekt",
+                  "cost_center": "Kostenstelle", "application": "Anwendung",
+                  "labels": "Etiketten (name=wert, …)"}
+
+
+def context_inputs(row=None):
+    out = []
+    for name in books.CONTEXT_FIELDS:
+        value = ""
+        if row is not None:
+            value = books.labels_text(row[name]) if name == "labels" else row[name]
+        out.append(f'<div><label>{esc(CONTEXT_LABELS[name])}</label>'
+                   f'<input type="text" name="{name}" value="{esc(value or "")}"></div>')
+    return "".join(out)
+
+
+def endpoint(host, view):
+    return f"https://{host}/mcp/{view}"
+
+
+def admin_page(user, roles, host, notice="", secret=None):
+    parts = []
+    if notice:
+        parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
+    if secret:
+        views = secret["views"]
+        cmd = "\n".join(f'claude mcp add --transport http {v} {endpoint(host, v)} \\\n'
+                        f'  --header "Authorization: Bearer {secret["value"]}"' for v in views)
+        parts.append(f'''<div class="card secretbox"><h2>Schlüssel „{esc(secret["label"])}“</h2>
+<p><b>Nur jetzt sichtbar.</b> Gespeichert ist nur ein Hash; wer den Wert verliert, bekommt einen neuen.</p>
+<pre>{esc(secret["value"])}</pre><p class="hint">Zum Beispiel für Claude Code:</p>
+<pre>{esc(cmd)}</pre></div>''')
+    if not VAULT.usable(MASTER):
+        parts.append('<div class="card attention"><p><b>MCPGW_MASTER_KEY fehlt.</b> Server ohne '
+                     'Zugangsdaten und Server hinter einer Destination lassen sich pflegen; eigene '
+                     'Zugangsdaten verweigert die App, bis der Tresorschlüssel gesetzt ist (Portal → '
+                     'Instanz → Konfiguration → erzeugen).</p></div>')
+
+    rows = []
+    for s in books.servers(DB):
+        g = GUARDS.get(s["name"])
+        st = g.state() if g else None
+        load = (f'{st["inflight"]} laufend, {st["waiting"]} wartend'
+                + (f', Pause {st["open_for"]} s' if st["open_for"] else "")) if st else "—"
+        rows.append(f'<tr><td><a href="server?name={quote(s["name"])}"><b>{esc(s["name"])}</b></a></td>'
+                    f'<td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}</td>'
+                    f'<td>{esc(s["version"] or "—")}</td>'
+                    f'<td>{esc(s["last_read"] or "nie")}'
+                    f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
+                    f'</td><td>{esc(load)}</td></tr>')
+    parts.append(f'''<div class="card"><h2>Server</h2>
+<p class="hint">MCP-Server mit Streamable HTTP. Adresse als URL oder <code>destination:&lt;name&gt;</code>
+— dann setzt die Plattform die Zugangsdaten ein, und das Gateway hält kein Geheimnis.</p>
+<div class="scroll"><table><tr><th>Name</th><th>Adresse</th><th>Ampel</th><th>Protokoll</th>
+<th>Katalog gelesen</th><th>Last</th></tr>{"".join(rows) or '<tr><td colspan=6 class=muted>Noch kein Server.</td></tr>'}</table></div>
+<h2 style="margin-top:1.2rem">Server anlegen</h2>{server_form()}</div>''')
+
+    vrows = []
+    for v in books.views(DB):
+        states = {}
+        for item in books.items(DB, v["name"]):
+            st = books.item_state(DB, v["server"], item)
+            states[st] = states.get(st, 0) + 1
+        summary = ", ".join(f"{n} {STATE_WORDS[s][1]}" for s, n in sorted(states.items())) or "leer"
+        vrows.append(f'<tr><td><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a></td>'
+                     f'<td>{esc(v["server"])}</td><td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}</td>'
+                     f'<td>{esc(summary)}</td><td><code>{esc(endpoint(host, v["name"]))}</code></td></tr>')
+    srv = [s["name"] for s in books.servers(DB)]
+    parts.append(f'''<div class="card"><h2>Sichten</h2>
+<p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie zeigt nur, was hier freigegeben ist — ein neues
+Tool des Servers erscheint nirgends von selbst.</p>
+<div class="scroll"><table><tr><th>Sicht</th><th>Server</th><th>Höchste Klasse</th><th>Tools</th>
+<th>Endpunkt</th></tr>{"".join(vrows) or '<tr><td colspan=5 class=muted>Noch keine Sicht.</td></tr>'}</table></div>
+<h2 style="margin-top:1.2rem">Sicht anlegen</h2>
+<form class="grid" method="post" action="view-save">
+<div><label>Name (Pfad)</label><input type="text" name="name" required></div>
+<div><label>Server</label><select name="server">{options(srv, "")}</select></div>
+<div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
+<div><button>Anlegen</button></div></form></div>''')
+
+    totals = books.totals(DB)
+    krows = []
+    for k in books.keys(DB):
+        t = totals.get(k["id"])
+        used = f'{t["calls"]} Aufrufe' if t else "—"
+        state = badge("off", "widerrufen") if k["revoked"] else badge("green", "gültig")
+        action = "" if k["revoked"] else (
+            f'<form class="inline" method="post" action="revoke"><input type="hidden" name="label" '
+            f'value="{esc(k["label"])}"><button class="quiet">Widerrufen</button></form>')
+        krows.append(f'<tr><td><b>{esc(k["label"])}</b><br>{state}</td>'
+                     f'<td>{esc(", ".join(books.key_views(k)))}</td>'
+                     f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
+                     f'{badge(k["ceiling"], "Ampel bis " + k["ceiling"])}</td>'
+                     f'<td>{esc(used)}{" / Budget " + str(k["budget_calls"]) if k["budget_calls"] else ""}</td>'
+                     f'<td class="muted">{esc(context_line(k))}</td><td>{action}</td></tr>')
+    vnames = [v["name"] for v in books.views(DB)]
+    parts.append(f'''<div class="card"><h2>Schlüssel</h2>
+<div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
+<th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
+<h2 style="margin-top:1.2rem">Schlüssel ausstellen</h2>
+<form class="grid" method="post" action="issue">
+<div><label>Etikett</label><input type="text" name="label" required></div>
+<div><label>Sichten (Komma) — bekannt: {esc(", ".join(vnames) or "keine")}</label>
+<input type="text" name="views" required></div>
+<div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
+<div><label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, "yellow")}</select></div>
+<div><label>Budget (Aufrufe, 0 = ohne)</label><input type="number" name="budget" value="0" min="0"></div>
+<div><label>Rate je Minute (0 = {DEFAULT_RATE})</label><input type="number" name="rate" value="0" min="0"></div>
+{context_inputs()}<div><button>Ausstellen</button></div></form></div>''')
+
+    labels = {k["id"]: k["label"] for k in books.keys(DB)}
+    urows = "".join(
+        f'<tr><td>{esc(r["time"])}</td><td>{esc(labels.get(r["key_id"], r["key_id"]))}</td>'
+        f'<td>{esc(r["view"])}</td><td><code>{esc(r["tool"])}</code></td>'
+        f'<td>{esc(r["outcome"])}{" (" + esc(r["reason"]) + ")" if r["reason"] else ""}</td>'
+        f'<td class="num">{r["ms"]} ms</td><td class="num">{esc(fmt_bytes(r["bytes_up"]))} / '
+        f'{esc(fmt_bytes(r["bytes_down"]))}</td></tr>' for r in books.recent(DB, limit=40))
+    proto = ", ".join(f'{r["method"]} {r["n"]}' for r in books.protocol_totals(DB)) or "—"
+    parts.append(f'''<div class="card"><h2>Letzte Tool-Aufrufe</h2>
+<p class="hint">Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
+Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
+<div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Sicht</th><th>Tool</th><th>Ausgang</th>
+<th>Dauer</th><th>Bytes hoch/runter</th></tr>{urows or '<tr><td colspan=7 class=muted>Noch keine.</td></tr>'}</table></div></div>''')
+
+    arows = "".join(f'<tr><td>{esc(r["time"])}</td><td>{esc(r["actor"])}</td><td>{esc(r["action"])}</td>'
+                    f'<td>{esc(r["subject"])}</td><td class="muted">{esc(r["detail"])}</td></tr>'
+                    for r in books.audit(DB, 40))
+    parts.append(f'<div class="card"><h2>Prüfspur</h2><div class="scroll"><table><tr><th>Zeit</th>'
+                 f'<th>Wer</th><th>Was</th><th>Woran</th><th>Einzelheiten</th></tr>{arows}</table></div></div>')
+    return page("Übersicht", "".join(parts), user, roles)
+
+
+def server_form(s=None):
+    lim = limits_of(s) if s else dict(guard.DEFAULTS)
+    kind = s["auth_kind"] if s else "none"
+    plain = kind if kind in books.AUTH_KINDS else "header"
+    header = kind[7:] if kind.startswith("header:") else ""
+    limit_inputs = "".join(
+        f'<div><label>{esc(guard.LABELS[n])}</label><input type="number" name="lim_{n}" '
+        f'value="{lim[n]}"></div>' for n in guard.DEFAULTS)
+    cred_note = ("gesetzt — leer lassen heißt unverändert" if s and s["credential"]
+                 else "nicht gesetzt")
+    return f'''<form class="grid" method="post" action="server-save">
+<div><label>Name</label><input type="text" name="name" value="{esc(s["name"] if s else "")}"
+{" readonly" if s else ""} required></div>
+<div><label>Adresse (URL oder destination:&lt;name&gt;)</label>
+<input type="text" name="address" value="{esc(s["address"] if s else "")}" required></div>
+<div><label>Zugang (Verfahren T)</label><select name="auth">{options(("none", "bearer", "basic", "header"), plain)}</select></div>
+<div><label>Kopfzeile (bei Zugang header)</label><input type="text" name="header" value="{esc(header)}"></div>
+<div><label>Zugangsdaten ({esc(cred_note)}; basic: name:passwort)</label>
+<input type="password" name="credential" autocomplete="off"></div>
+<div><label><input type="checkbox" name="drop_credential" value="1"> Zugangsdaten entfernen</label></div>
+<div><label>Ampel</label><select name="light">{options(books.LIGHTS, s["light"] if s else "red", LIGHT_WORDS)}</select></div>
+{limit_inputs}<div><button>Speichern</button></div></form>'''
+
+
+def server_page(user, roles, host, name, notice=""):
+    s = books.server_row(DB, name)
+    if not s:
+        return page("Unbekannt", '<div class="card"><p>Diesen Server gibt es nicht.</p></div>', user, roles)
+    parts = []
+    if notice:
+        parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
+    vnames = [v["name"] for v in books.views(DB) if v["server"] == name]
+    in_views = {}
+    for v in vnames:
+        for item in books.items(DB, v):
+            in_views.setdefault(item["tool"], []).append(f'{v} ({books.EFFECT_WORDS[item["effect"]]})')
+    crow = []
+    for c in books.catalog(DB, name):
+        doc = json.loads(c["doc"])
+        ann = doc.get("annotations") or {}
+        hint = ("read" if ann.get("readOnlyHint") else
+                "execute" if ann.get("destructiveHint") else "write")
+        unchecked = argcheck.unchecked(doc.get("inputSchema"))
+        remote = argcheck.remote_refs(doc.get("inputSchema"))
+        add = ""
+        if c["present"] and vnames and not remote:
+            add = (f'<form method="post" action="item-add"><input type="hidden" name="tool" '
+                   f'value="{esc(c["name"])}"><select name="view">{options(vnames, vnames[0])}</select> '
+                   f'<select name="effect">{options(books.EFFECTS, hint, books.EFFECT_WORDS)}</select> '
+                   f'<button class="quiet">In Sicht legen</button></form>')
+        crow.append(
+            f'<tr><td><code>{esc(c["name"])}</code>{"" if c["present"] else " " + badge("red", "nicht mehr angeboten")}'
+            f'<br><span class="muted">{esc((doc.get("description") or "")[:240])}</span></td>'
+            f'<td>{esc(", ".join(f"{k}={v}" for k, v in ann.items() if k.endswith("Hint")) or "—")}'
+            f'<br><span class="hint">nur Hinweis, nie durchgesetzt</span></td>'
+            f'<td>{esc(", ".join(in_views.get(c["name"], [])) or "in keiner Sicht")}'
+            f'{"<br><span class=hint>nicht geprüft: " + esc(", ".join(unchecked)) + "</span>" if unchecked else ""}'
+            f'{"<br><span class=err>Schema verweist nach außen — nicht freigebbar</span>" if remote else ""}'
+            f'</td><td><code>{esc(c["fingerprint"][:12])}</code></td><td>{add}</td></tr>')
+    parts.append(f'''<div class="card"><h1>Server {esc(name)}</h1>
+<p>{badge(s["light"], LIGHT_WORDS[s["light"]])} Protokoll {esc(s["version"] or "noch nicht ausgehandelt")}
+· Katalog gelesen: {esc(s["last_read"] or "nie")}</p>
+{"<p class=err>" + esc(s["last_error"]) + "</p>" if s["last_error"] else ""}
+<p class="hint">Was mit Ergebnissen geschieht, sieht das Gateway nicht: Sie fließen in das Modell des
+Clients. Durchgesetzt wird die Ampel nur für das, was zum Server geht.</p>
+<form method="post" action="server-read"><input type="hidden" name="name" value="{esc(name)}">
+<button>Katalog jetzt lesen</button></form></div>
+<div class="card"><h2>Katalog</h2><p class="hint">Was der Server anbietet. Nichts davon ist sichtbar, bis es
+in einer Sicht liegt. Die Wirkungsklasse vergibt der Betreiber; die Angaben des Servers sind nur ein
+Vorschlag.</p><div class="scroll"><table><tr><th>Tool</th><th>Angabe des Servers</th><th>Sichten</th>
+<th>Fingerabdruck</th><th></th></tr>{"".join(crow) or '<tr><td colspan=5 class=muted>Noch nicht gelesen.</td></tr>'}</table></div></div>
+<div class="card"><h2>Ändern</h2>{server_form(s)}
+<form method="post" action="server-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
+<button class="quiet">Server löschen</button></form></div>''')
+    return page(f"Server {name}", "".join(parts), user, roles)
+
+
+def view_page(user, roles, host, name, notice=""):
+    v = books.view_row(DB, name)
+    if not v:
+        return page("Unbekannt", '<div class="card"><p>Diese Sicht gibt es nicht.</p></div>', user, roles)
+    parts = []
+    if notice:
+        parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
+    rows, compare = [], []
+    for item in books.items(DB, name):
+        state = books.item_state(DB, v["server"], item)
+        cls, word = STATE_WORDS[state]
+        actions = (f'<form class="inline" method="post" action="item-remove"><input type="hidden" name="view" '
+                   f'value="{esc(name)}"><input type="hidden" name="tool" value="{esc(item["tool"])}">'
+                   f'<button class="quiet">Herausnehmen</button></form>')
+        if state == "active":
+            actions = (f'<form class="inline" method="post" action="item-effect"><input type="hidden" name="view" '
+                       f'value="{esc(name)}"><input type="hidden" name="tool" value="{esc(item["tool"])}">'
+                       f'<select name="effect">{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select> '
+                       f'<button class="quiet">Klasse setzen</button></form> ' + actions)
+        rows.append(f'<tr><td><code>{esc(item["tool"])}</code></td><td>{badge(cls, word)}</td>'
+                    f'<td>{esc(books.EFFECT_WORDS[item["effect"]])}</td>'
+                    f'<td class="muted">{esc(item["approved_by"])}, {esc(item["approved_at"])}</td>'
+                    f'<td>{actions}</td></tr>')
+        if state == "suspended":
+            cat = books.catalog_row(DB, v["server"], item["tool"])
+            old = json.dumps(json.loads(item["approved_doc"]), indent=2, ensure_ascii=False)
+            new = json.dumps(json.loads(cat["doc"]), indent=2, ensure_ascii=False)
+            compare.append(f'''<div class="card attention"><h2>„{esc(item["tool"])}“: der Server meldet einen anderen Text</h2>
+<p class="hint">Bis zur Bestätigung ist das Tool weder sichtbar noch aufrufbar. Ein Text, der in das Modell
+geht, kann Anweisungen enthalten — darum wird er nicht still übernommen.</p>
+<div class="side"><div><b>Freigegeben</b><pre>{esc(old)}</pre></div><div><b>Jetzt beim Server</b><pre>{esc(new)}</pre></div></div>
+<form method="post" action="item-confirm"><input type="hidden" name="view" value="{esc(name)}">
+<input type="hidden" name="tool" value="{esc(item["tool"])}">
+<label>Wirkungsklasse</label><select name="effect" style="max-width:14rem">{options(books.EFFECTS, item["effect"], books.EFFECT_WORDS)}</select>
+<button>Neuen Text bestätigen</button></form></div>''')
+    users = [k["label"] for k in books.keys(DB, include_revoked=False) if name in books.key_views(k)]
+    parts.append(f'''<div class="card"><h1>Sicht {esc(name)}</h1>
+<p>Endpunkt <code>{esc(endpoint(host, name))}</code> · Server <a href="server?name={quote(v["server"])}">{esc(v["server"])}</a>
+· Schlüssel: {esc(", ".join(users) or "keiner")}</p>
+<form class="grid" method="post" action="view-save"><input type="hidden" name="name" value="{esc(name)}">
+<input type="hidden" name="server" value="{esc(v["server"])}">
+<div><label>Höchste Wirkungsklasse der Sicht</label><select name="max_effect">{options(books.EFFECTS, v["max_effect"], books.EFFECT_WORDS)}</select></div>
+<div><button class="quiet">Setzen</button></div></form></div>
+{"".join(compare)}
+<div class="card"><h2>Freigegebene Tools</h2><p class="hint">Neue Tools kommen über den Katalog des Servers in
+die Sicht. Clients sehen nur den hier festgehaltenen Text.</p>
+<div class="scroll"><table><tr><th>Tool</th><th>Zustand</th><th>Klasse</th><th>Freigegeben</th><th></th></tr>
+{"".join(rows) or '<tr><td colspan=5 class=muted>Leer.</td></tr>'}</table></div>
+<form method="post" action="view-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
+<button class="quiet">Sicht löschen</button></form></div>''')
+    return page(f"Sicht {name}", "".join(parts), user, roles)
+
+
+# ------------------------------------------------------------- Auswertung
+
+DIMENSIONS = {**greport.CONTEXT_DIMENSIONS, "view": "u.view", "tool": "u.tool",
+              "server": "u.server", "outcome": "u.outcome", **greport.TIME_DIMENSIONS}
+REPORT = greport.Report(DIMENSIONS, [
+    ("calls", "COUNT(*)"),
+    ("bytes_up", "COALESCE(SUM(u.bytes_up),0)"),
+    ("bytes_down", "COALESCE(SUM(u.bytes_down),0)"),
+])
+OUTCOME_WORDS = {"ok": "beantwortet", "tool_error": "Tool meldet Fehler",
+                 "refused": "vom Gateway abgewiesen", "limited": "Grenze erreicht",
+                 "upstream_error": "Server nicht erreichbar oder fehlerhaft"}
+CHARTS = gcharts.Charts(
+    {"calls": "Aufrufe", "bytes_up": "Bytes hoch", "bytes_down": "Bytes runter"},
+    lambda o: {"ok": "good", "tool_error": "warning", "refused": "serious",
+               "limited": "serious"}.get(o, "critical"),
+    lambda o: OUTCOME_WORDS.get(o, o))
+CHART_DIMS = {"view": "Sicht", "tool": "Tool", "key": "Schlüssel", "server": "Server",
+              "account": "Konto", "project": "Projekt", "cost_center": "Kostenstelle",
+              "owner": "Verantwortlich", "application": "Anwendung"}
+
+
+def charts_page(user, roles, params):
+    today = datetime.now(timezone.utc).date()
+    try:
+        first = datetime.strptime(params.get("von", ""), "%Y-%m-%d").date()
+    except ValueError:
+        first = today - timedelta(days=29)
+    try:
+        last = datetime.strptime(params.get("bis", ""), "%Y-%m-%d").date()
+    except ValueError:
+        last = today
+    if last < first:
+        first, last = last, first
+    by = params.get("nach") if params.get("nach") in CHART_DIMS else "view"
+    metric = params.get("mass") if params.get("mass") in CHARTS.metric_labels else "calls"
+    step = "month" if (last - first).days > 92 else "day"
+    frm = greport.stamp(datetime(first.year, first.month, first.day))
+    to = greport.stamp(datetime(last.year, last.month, last.day) + timedelta(days=1))
+    over = REPORT.usage(DB, frm, to, [step, by])
+    ranked = REPORT.usage(DB, frm, to, ["tool"])
+    outcomes = REPORT.usage(DB, frm, to, ["outcome"])
+    body = f'''<div class="card"><h1>Auswertung</h1>
+<form class="grid" method="get" action="auswertung">
+<div><label>Von</label><input type="text" name="von" value="{first}"></div>
+<div><label>Bis</label><input type="text" name="bis" value="{last}"></div>
+<div><label>Gestapelt nach</label><select name="nach">{options(list(CHART_DIMS), by, CHART_DIMS)}</select></div>
+<div><label>Maß</label><select name="mass">{options(list(CHARTS.metric_labels), metric, CHARTS.metric_labels)}</select></div>
+<div><button>Zeigen</button></div></form>
+<p class="hint">Dieselbe Abfrage wie <code>/report/v1/usage</code>. Volumen, keine Preise.</p></div>
+<div class="card"><h2>{esc(CHARTS.metric_labels[metric])} je {"Tag" if step == "day" else "Monat"}</h2>
+{CHARTS.stacked_bars(over, step, by, metric)}</div>
+<div class="card"><h2>Tools nach {esc(CHARTS.metric_labels[metric])}</h2>{CHARTS.top_list(ranked, "tool", metric)}</div>
+<div class="card"><h2>Ausgänge</h2>{CHARTS.outcome_list(outcomes)}</div>'''
+    return page("Auswertung", body, user, roles)
+
+
+def keys_doc():
+    out = []
+    for row in DB.execute("SELECT * FROM keys ORDER BY label"):
+        out.append({"key": row["label"], "created": row["created"], "revoked": row["revoked"] or None,
+                    "views": books.key_views(row), "max_effect": row["max_effect"],
+                    "ceiling": row["ceiling"], "budget_calls": row["budget_calls"],
+                    "owner": row["owner"], "account": row["account"], "project": row["project"],
+                    "cost_center": row["cost_center"], "application": row["application"],
+                    "tenant": row["tenant"],
+                    "labels": json.loads(row["labels"]) if row["labels"] else {}})
+    return {"keys": out}
+
+
+# ------------------------------------------------------------- HTTP
+
+def _int(value):
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "oaap-mcp-gateway/" + VERSION
+
+    def log_message(self, fmt, *args):
+        # Nur Methode und Pfad — Anfragen dieses Dienstes tragen ihren Inhalt im Körper (§10).
+        sys.stdout.write("%s %s\n" % (self.address_string(), fmt % args))
+
+    def client_addr(self):
+        return (self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                or self.client_address[0])
+
+    def send_bytes(self, status, ctype, body, headers=()):
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        for name, value in headers:
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(body)
+        return len(body)
+
+    def send_json(self, status, doc, headers=()):
+        return self.send_bytes(status, "application/json; charset=utf-8",
+                               json.dumps(doc, ensure_ascii=False).encode("utf-8"), headers)
+
+    def send_html(self, status, text):
+        self.send_bytes(status, "text/html; charset=utf-8", text.encode("utf-8"))
+
+    def read_body(self, limit=MAX_BODY):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        if length < 0 or length > limit:
+            return None
+        return self.rfile.read(length) if length else b""
+
+    def identity(self):
+        return self.headers.get("X-OAAP-User", ""), self.headers.get("X-OAAP-Roles", "")
+
+    def is_admin(self):
+        return "admin" in [r.strip() for r in self.identity()[1].split(",")]
+
+    def route(self):
+        return self.path.split("?")[0].rstrip("/") or "/"
+
+    # ---- MCP
+
+    def mcp_view(self):
+        rest = self.route()[len("/mcp/"):]
+        return rest if rest and "/" not in rest else None
+
+    def authorize(self, view_name):
+        """Schlüsselzeile und Sicht — oder die Anfrage ist schon beantwortet (403/429)."""
+        addr = self.client_addr()
+        if failing_hard(addr):
+            self.send_json(429, {"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32000, "message": "Zu viele Fehlversuche."}},
+                           [("Retry-After", "60")])
+            return None, None
+        header = self.headers.get("Authorization", "")
+        value = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        key = books.find(DB, value)
+        vrow = books.view_row(DB, view_name) if view_name else None
+        if not key or key["revoked"] or not entitled(key, vrow):
+            note_failure(addr)
+            self.send_bytes(403, "application/json; charset=utf-8", DENIED)
+            return None, None
+        return key, vrow
+
+    def session_of(self, key, vrow):
+        sid = self.headers.get("Mcp-Session-Id", "")
+        with _SESS_LOCK:
+            sess = SESSIONS.get(sid)
+        if not sess or sess.key_id != key["id"] or sess.view != vrow["name"]:
+            return None
+        sess.last = time.monotonic()
+        return sess
+
+    def do_POST(self):
+        path = self.route()
+        if path.startswith("/mcp/"):
+            self.handle_mcp_post()
+            return
+        if path in ("/issue", "/revoke", "/context", "/server-save", "/server-delete",
+                    "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
+                    "/item-confirm", "/item-effect"):
+            self.handle_admin_post(path)
+            return
+        self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
+
+    def handle_mcp_post(self):
+        raw = self.read_body()
+        key, vrow = self.authorize(self.mcp_view())
+        if key is None:
+            return
+        if raw is None:
+            self.send_json(413, rpc_error(None, -32600, f"Anfrage größer als {MAX_BODY} Bytes."))
+            return
+        ok, wait = LIMITER.allow(key["id"], key["rate_per_min"] or DEFAULT_RATE)
+        if not ok:
+            self.send_json(429, rpc_error(None, -32000, "Zu viele Anfragen dieses Schlüssels je "
+                                                        "Minute.", "rate", wait),
+                           [("Retry-After", str(wait))])
+            return
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            self.send_json(400, rpc_error(None, -32700, "Kein gültiges JSON."))
+            return
+        if isinstance(msg, list):
+            self.send_json(400, rpc_error(None, -32600, "Stapel (JSON-RPC-Batches) werden nicht "
+                                                        "unterstützt."))
+            return
+        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+            self.send_json(400, rpc_error(None, -32600, "Keine JSON-RPC-2.0-Nachricht."))
+            return
+        method, msg_id = msg.get("method"), msg.get("id")
+        if method == "initialize":
+            self.mcp_initialize(key, vrow, msg)
+            return
+        sess = self.session_of(key, vrow)
+        if sess is None:
+            self.send_json(404 if self.headers.get("Mcp-Session-Id") else 400, SESSION_UNKNOWN)
+            return
+        header_version = self.headers.get("MCP-Protocol-Version")
+        if header_version and header_version != sess.version:
+            self.send_json(400, rpc_error(msg_id, -32600, f"MCP-Protocol-Version {header_version} "
+                                                          f"passt nicht zur Sitzung ({sess.version})."))
+            return
+        if method is None:                     # Antwort des Clients — wir fragen nie etwas
+            self.send_bytes(202, "application/json", b"")
+            return
+        if msg_id is None:                     # Mitteilung
+            books.count_protocol(DB, key["id"], vrow["name"], method)
+            if method == "notifications/cancelled":
+                self.forward_cancel(sess, vrow, msg)
+            self.send_bytes(202, "application/json", b"")
+            return
+        if method == "tools/call":
+            self.mcp_call(sess, key, vrow, msg, len(raw))
+            return
+        books.count_protocol(DB, key["id"], vrow["name"], method)
+        if method == "ping":
+            self.send_json(200, rpc_result(msg_id, {}))
+        elif method == "tools/list":
+            tools = [shaped(json.loads(i["approved_doc"]), sess.version)
+                     for _, i in sorted(visible_items(vrow, key).items())]
+            self.send_json(200, rpc_result(msg_id, {"tools": tools}))
+        else:
+            self.send_json(200, rpc_error(msg_id, -32601, f"Methode {method} wird in dieser "
+                                                          "Version nicht angeboten."))
+
+    def mcp_initialize(self, key, vrow, msg):
+        books.count_protocol(DB, key["id"], vrow["name"], "initialize")
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        asked = params.get("protocolVersion")
+        version = asked if asked in upstream.TESTED else upstream.NEWEST
+        sess = DownSession(key["id"], vrow["name"], version)
+        with _SESS_LOCK:
+            SESSIONS[sess.id] = sess
+        self.send_json(200, rpc_result(msg.get("id"), {
+            "protocolVersion": version,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": vrow["name"], "version": VERSION},
+        }), [("Mcp-Session-Id", sess.id)])
+
+    def forward_cancel(self, sess, vrow, msg):
+        us = sess.upstream.get(vrow["server"])
+        srow = books.server_row(DB, vrow["server"])
+        if not us or not srow:
+            return
+        try:
+            server, url = server_access(srow)
+            upstream.post(server, url, msg, session_id=us.id, version=us.version, timeout=10)
+        except upstream.UpstreamError:
+            pass
+
+    def mcp_call(self, sess, key, vrow, msg, bytes_up):
+        """Ein Tool-Aufruf: prüfen, begrenzen, weiterreichen, messen — eine Messzeile."""
+        t0 = time.monotonic()
+        msg_id = msg.get("id")
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        # Der Name kommt vom Client und landet in der Messzeile: gekürzt, nie ein Argument.
+        name = params.get("name")[:200] if isinstance(params.get("name"), str) else ""
+        srow = books.server_row(DB, vrow["server"])
+        state = {"down": 0, "outcome": "upstream_error", "reason": "", "sse": False}
+
+        def done(outcome, reason=""):
+            state["outcome"], state["reason"] = outcome, reason
+
+        def answer(doc, status=200, headers=()):
+            if state["sse"]:
+                state["down"] += self.sse_event(doc)
+            else:
+                state["down"] += self.send_json(status, doc, headers)
+
+        try:
+            item = visible_items(vrow, key).get(name)
+            if item is None:
+                known = next((i for i in books.items(DB, vrow["name"]) if i["tool"] == name), None)
+                if known and books.item_state(DB, vrow["server"], known) == "suspended":
+                    done("refused", "suspended")
+                    answer(rpc_error(msg_id, -32002, f"Das Tool {name} ist gesperrt, bis der "
+                                                     "Betreiber einen geänderten Text bestätigt."))
+                elif known and books.item_state(DB, vrow["server"], known) == "active":
+                    done("refused", "effect")
+                    answer(rpc_error(msg_id, -32002, f"Das Tool {name} liegt über der "
+                                                     "Wirkungsklasse dieses Schlüssels oder der Sicht."))
+                else:
+                    done("refused", "unknown_tool")
+                    answer(rpc_error(msg_id, -32602, f"Unbekanntes Tool: {name}"))
+                return
+            doc = json.loads(item["approved_doc"])
+            try:
+                argcheck.check(doc.get("inputSchema"), params.get("arguments"))
+            except argcheck.Refused as exc:
+                done("refused", "arguments")
+                answer(rpc_error(msg_id, -32602, str(exc)))
+                return
+            if key["budget_calls"] and books.calls_used(DB, key["id"]) >= key["budget_calls"]:
+                done("limited", "budget")
+                answer(rpc_error(msg_id, -32001, "Das Budget dieses Schlüssels ist aufgebraucht.",
+                                 "budget"), status=429)
+                return
+            g = guard_of(srow)
+            try:
+                probe = g.enter(key["id"])
+            except guard.Limited as exc:
+                done("limited", exc.reason)
+                answer(rpc_error(msg_id, -32001, f"Sicht {vrow['name']}: {exc}", exc.reason,
+                                 exc.retry_after))
+                return
+            failed = False
+            try:
+                failed = self.forward_call(sess, key, vrow, srow, msg, name, params, g.limits,
+                                           state, answer, done)
+            finally:
+                g.leave(probe, failed)
+        finally:
+            books.record(DB, key, vrow["name"], name, vrow["server"], name, state["outcome"],
+                         state["reason"], (time.monotonic() - t0) * 1000, bytes_up, state["down"])
+            if state["sse"]:
+                self.close_connection = True
+
+    def forward_call(self, sess, key, vrow, srow, msg, name, params, lim, state, answer, done):
+        """Zum Server und zurück. Gibt True zurück, wenn der WEG scheiterte (Sicherungsautomat)."""
+        msg_id = msg.get("id")
+        wants_sse = "text/event-stream" in (self.headers.get("Accept") or "")
+        out = {"jsonrpc": "2.0", "id": msg_id, "method": "tools/call",
+               "params": {"name": name, "arguments": params.get("arguments") or {}}}
+        meta = params.get("_meta")
+        if isinstance(meta, dict) and "progressToken" in meta:
+            out["params"]["_meta"] = {"progressToken": meta["progressToken"]}
+        try:
+            server, url = server_access(srow)
+        except upstream.UpstreamError as exc:
+            done("upstream_error", exc.kind)
+            answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — {exc}"))
+            return True
+
+        def on_message(m):
+            if "method" in m and "id" in m:
+                # Rückfrage des Servers an den Client: in 0.1 abgelehnt (Spec §6).
+                try:
+                    upstream.post(server, url, rpc_error(m["id"], -32601, "Das Gateway reicht "
+                                  "Rückfragen an den Client in dieser Version nicht weiter."),
+                                  session_id=us.id, version=us.version, timeout=10)
+                except upstream.UpstreamError:
+                    pass
+                return False
+            if m.get("method") in ("notifications/progress", "notifications/message") and wants_sse:
+                if not state["sse"]:
+                    self.start_sse()
+                    state["sse"] = True
+                state["down"] += self.sse_event(m)
+            return False
+
+        for attempt in (1, 2):
+            try:
+                us = self.upstream_session(sess, srow, server, url, lim)
+                ex = upstream.post(server, url, out, session_id=us.id, version=us.version,
+                                   timeout=lim["timeout_s"], max_bytes=lim["max_bytes"],
+                                   on_message=on_message)
+                break
+            except upstream.SessionGone:
+                with sess.lock:
+                    sess.upstream.pop(srow["name"], None)
+                if attempt == 2:
+                    done("upstream_error", "session")
+                    answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: der Server verliert "
+                                                     "die Sitzung."))
+                    return True
+            except upstream.TooLarge as exc:
+                done("limited", "size")
+                answer(rpc_error(msg_id, -32001, f"Sicht {vrow['name']}: Die Antwort ist größer "
+                                                 f"als {exc.limit} Bytes und wird nicht "
+                                                 "weitergereicht — auch nicht gekürzt.", "size"))
+                return False
+            except upstream.UpstreamError as exc:
+                if exc.kind == "version":
+                    books.note_server(DB, srow["name"], error=str(exc))
+                done("upstream_error", exc.kind)
+                answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — "
+                                                 f"{exc}"))
+                return True
+        final = ex.messages[-1]
+        if "error" in final:
+            done("upstream_error", "jsonrpc")
+        elif isinstance(final.get("result"), dict) and final["result"].get("isError"):
+            done("tool_error")
+        else:
+            done("ok")
+        answer(final)
+        return False
+
+    def upstream_session(self, sess, srow, server, url, lim):
+        with sess.lock:
+            us = sess.upstream.get(srow["name"])
+            if us is None:
+                us = upstream.open_session(server, url, timeout=min(30, lim["timeout_s"]),
+                                           max_bytes=lim["max_bytes"])
+                sess.upstream[srow["name"]] = us
+                if us.version != srow["version"]:
+                    books.note_server(DB, srow["name"], version=us.version)
+            return us
+
+    def start_sse(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+    def sse_event(self, doc):
+        data = ("event: message\ndata: " + json.dumps(doc, ensure_ascii=False) + "\n\n").encode()
+        self.wfile.write(data)
+        self.wfile.flush()
+        return len(data)
+
+    def do_DELETE(self):
+        if not self.route().startswith("/mcp/"):
+            self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
+            return
+        key, vrow = self.authorize(self.mcp_view())
+        if key is None:
+            return
+        sess = self.session_of(key, vrow)
+        if sess is None:
+            self.send_json(404, SESSION_UNKNOWN)
+            return
+        books.count_protocol(DB, key["id"], vrow["name"], "DELETE")
+        end_session(sess)
+        self.send_bytes(204, "application/json", b"")
+
+    # ---- GET
+
+    def do_GET(self):
+        path = self.route()
+        if path == "/healthz":
+            self.send_json(200, {"status": "ok", "version": VERSION})
+            return
+        if path.startswith("/mcp"):
+            # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede
+            # Sicht, ob es sie gibt oder nicht: Hier wird nichts verraten.
+            self.send_bytes(405, "application/json", b"", [("Allow", "POST, DELETE")])
+            return
+        if path.startswith("/report"):
+            self.handle_report(path)
+            return
+        if not self.is_admin():
+            self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Diese Seite ist der '
+                                     'Verwaltung vorbehalten.</p></div>', "", ""))
+            return
+        user, roles = self.identity()
+        host = self.headers.get("Host", "<gateway>")
+        query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+        if path == "/server":
+            self.send_html(200, server_page(user, roles, host, query.get("name", "")))
+        elif path == "/view":
+            self.send_html(200, view_page(user, roles, host, query.get("name", "")))
+        elif path == "/auswertung":
+            self.send_html(200, charts_page(user, roles, query))
+        else:
+            self.send_html(200, admin_page(user, roles, host))
+
+    def handle_report(self, path):
+        if not self.is_admin():
+            self.send_json(403, {"error": "Nur für die Rolle admin — ein Abrechnungssystem fragt "
+                                          "mit einem Plattform-API-Schlüssel (Portal → Zugänge)."})
+            return
+        if path == "/report/v1/keys":
+            self.send_json(200, keys_doc())
+            return
+        if path != "/report/v1/usage":
+            self.send_json(404, {"error": "Bekannt sind /report/v1/usage und /report/v1/keys."})
+            return
+        try:
+            frm, to, group_by, filters, fmt = REPORT.parse_query(
+                parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+            doc = REPORT.usage(DB, frm, to, group_by, filters)
+        except ValueError as exc:
+            self.send_json(400, {"error": str(exc)})
+            return
+        if fmt == "json":
+            self.send_json(200, doc)
+            return
+        self.send_bytes(200, "text/csv; charset=utf-8", REPORT.to_csv(doc).encode("utf-8"),
+                        [("X-OAAP-Complete-Until", doc["complete_until"]),
+                         ("X-OAAP-Complete", "true" if doc["complete"] else "false")])
+
+    # ---- Betreiber
+
+    def handle_admin_post(self, path):
+        raw = self.read_body(1 << 20) or b""
+        if not self.is_admin():
+            self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Nicht erlaubt.</p></div>',
+                                     "", ""))
+            return
+        user, roles = self.identity()
+        host = self.headers.get("Host", "<gateway>")
+        form = {}
+        for pair in raw.decode("utf-8", "replace").split("&"):
+            if pair:
+                name, _, value = pair.partition("=")
+                form[unquote_plus(name)] = unquote_plus(value)
+        notice, secret, back = "", None, None
+        try:
+            if path == "/issue":
+                views = [v.strip() for v in form.get("views", "").split(",") if v.strip()]
+                value, _ = books.issue(
+                    DB, form.get("label", ""), user, views=views,
+                    max_effect=form.get("max_effect", "read"), ceiling=form.get("ceiling", "yellow"),
+                    budget_calls=_int(form.get("budget")), rate_per_min=_int(form.get("rate")),
+                    **{n: form.get(n, "") for n in books.CONTEXT_FIELDS})
+                secret = {"label": form.get("label", ""), "value": value, "views": views}
+            elif path == "/revoke":
+                label = form.get("label", "")
+                notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."
+                          if books.revoke(DB, label, user) else f"Nichts zu widerrufen: „{label}“.")
+            elif path == "/context":
+                changed = books.update_context(DB, form.get("label", ""), user,
+                                               **{n: form[n] for n in books.CONTEXT_FIELDS if n in form})
+                notice = "Kontext geändert: " + ", ".join(changed) if changed else "Kontext unverändert."
+            elif path == "/server-save":
+                notice, back = save_server(form, user), ("server", form.get("name", ""))
+            elif path == "/server-delete":
+                books.delete_server(DB, user, form.get("name", ""))
+                notice = f"Server „{form.get('name', '')}“ gelöscht."
+            elif path == "/server-read":
+                _, notice = read_catalog(form.get("name", ""))
+                back = ("server", form.get("name", ""))
+            elif path == "/view-save":
+                books.save_view(DB, user, form.get("name", ""), form.get("server", ""),
+                                form.get("max_effect", "read"))
+                notice, back = "Sicht gespeichert.", ("view", form.get("name", ""))
+            elif path == "/view-delete":
+                books.delete_view(DB, user, form.get("name", ""))
+                notice = f"Sicht „{form.get('name', '')}“ gelöscht."
+            elif path in ("/item-add", "/item-confirm"):
+                books.approve(DB, user, form.get("view", ""), form.get("tool", ""),
+                              form.get("effect", "read"))
+                notice = (f"„{form.get('tool', '')}“ freigegeben in Sicht „{form.get('view', '')}“; "
+                          "der Text ist festgehalten.")
+                back = ("view", form.get("view", ""))
+            elif path == "/item-effect":
+                self.set_effect(form, user)
+                notice, back = "Wirkungsklasse gesetzt.", ("view", form.get("view", ""))
+            elif path == "/item-remove":
+                books.remove_item(DB, user, form.get("view", ""), form.get("tool", ""))
+                notice, back = "Herausgenommen.", ("view", form.get("view", ""))
+        except ValueError as exc:
+            notice = str(exc)
+        if back and back[0] == "server" and books.server_row(DB, back[1]):
+            self.send_html(200, server_page(user, roles, host, back[1], notice))
+        elif back and back[0] == "view" and books.view_row(DB, back[1]):
+            self.send_html(200, view_page(user, roles, host, back[1], notice))
+        else:
+            self.send_html(200, admin_page(user, roles, host, notice, secret))
+
+    def set_effect(self, form, user):
+        """Nur die Klasse — der festgehaltene Text bleibt (anders als beim Bestätigen)."""
+        view, tool, effect = form.get("view", ""), form.get("tool", ""), form.get("effect", "")
+        if effect not in books.EFFECT_RANK:
+            raise ValueError("Wirkungsklasse ist read, write oder execute.")
+        row = DB.execute("SELECT effect FROM items WHERE view=? AND tool=?", (view, tool)).fetchone()
+        if not row:
+            raise ValueError("Diesen Eintrag gibt es nicht.")
+        DB.execute("UPDATE items SET effect=? WHERE view=? AND tool=?", (effect, view, tool))
+        books.log(DB, user, "item.effect", f"{view}/{tool}", f"{row['effect']} → {effect}")
+        DB.commit()
+
+
+def save_server(form, user):
+    """Gemeinsam für Seite und Kommandozeile. Gibt einen Satz zurück, wirft ValueError."""
+    name = form.get("name", "").strip()
+    address = form.get("address", "").strip()
+    if address.startswith("destination:"):
+        if not books.NAME.match(address[len("destination:"):]):
+            raise ValueError("Nach destination: folgt der Name der Bindung (Kleinbuchstaben, "
+                             "Ziffern, Bindestriche).")
+    else:
+        try:
+            upstream.check_host(upstream.resolve(address))
+        except upstream.UpstreamError as exc:
+            # Verbotene Adressen schon beim Speichern abweisen; ein Name, der sich
+            # gerade nicht auflösen lässt, darf trotzdem eingetragen werden.
+            if exc.kind == "address":
+                raise ValueError(str(exc)) from None
+    auth = form.get("auth", "none")
+    if auth == "header":
+        auth = "header:" + form.get("header", "").strip()
+    limits = guard.clean({n: form.get("lim_" + n, guard.DEFAULTS[n]) for n in guard.DEFAULTS})
+    sealed = None
+    if form.get("credential"):
+        try:
+            sealed = VAULT.seal(MASTER, form["credential"])
+        except VaultError as exc:
+            raise ValueError(f"Zugangsdaten nicht gespeichert: {exc}") from None
+    books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,
+                      sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1")
+    srow = books.server_row(DB, name)
+    if srow:
+        guard_of(srow)
+    return f"Server „{name}“ gespeichert."
+
+
+# ------------------------------------------------------------- Kommandozeile
+
+def cli(argv):
+    """Für kopflose Knoten: `docker exec <container> python3 /srv/app.py …`."""
+    usage = ("Aufruf: app.py server set <name> --address A [--auth none|bearer|basic|header:N] "
+             "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
+             "        app.py view set <name> --server S [--max-effect read|write|execute] | "
+             "view add <sicht> <tool> [--effect read] | view confirm <sicht> <tool> | view list\n"
+             "        app.py key issue <etikett> --views a,b [--max-effect read] [--ceiling yellow] "
+             "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>")
+    if len(argv) < 2:
+        print(usage)
+        return 2
+    area, action, rest = argv[0], argv[1], argv[2:]
+    opts, i = {}, 0
+    while i < len(rest):
+        if rest[i].startswith("--") and i + 1 < len(rest):
+            opts[rest[i][2:]] = rest[i + 1]
+            i += 2
+        else:
+            i += 1
+    pos = []
+    i = 0
+    while i < len(rest):
+        if rest[i].startswith("--"):
+            i += 2
+        else:
+            pos.append(rest[i])
+            i += 1
+    try:
+        if area == "server" and action == "list":
+            for s in books.servers(DB):
+                print(f'{s["name"]:20} {s["address"]:50} {s["light"]:6} {s["version"] or "-":11} '
+                      f'{s["last_error"] or ""}')
+            return 0
+        if area == "server" and action == "set" and pos:
+            form = {"name": pos[0], "address": opts.get("address", ""),
+                    "auth": opts.get("auth", "none"), "light": opts.get("light", "red")}
+            if form["auth"].startswith("header:"):
+                form["auth"], form["header"] = "header", form["auth"][7:]
+            old = books.server_row(DB, pos[0])
+            for n in guard.DEFAULTS:
+                form["lim_" + n] = opts.get(n.replace("_", "-"),
+                                            limits_of(old)[n] if old else guard.DEFAULTS[n])
+            if opts.get("credential-stdin", "").lower() in ("ja", "yes", "1"):
+                form["credential"] = sys.stdin.readline().rstrip("\n")
+            print(save_server(form, "cli"))
+            return 0
+        if area == "server" and action == "read" and pos:
+            ok, text = read_catalog(pos[0])
+            print(text)
+            return 0 if ok else 1
+        if area == "view" and action == "list":
+            for v in books.views(DB):
+                print(f'{v["name"]:20} server={v["server"]} bis={v["max_effect"]}')
+                for item in books.items(DB, v["name"]):
+                    print(f'    {item["tool"]:30} {item["effect"]:8} '
+                          f'{books.item_state(DB, v["server"], item)}')
+            return 0
+        if area == "view" and action == "set" and pos:
+            books.save_view(DB, "cli", pos[0], opts.get("server", ""), opts.get("max-effect", "read"))
+            print("gespeichert")
+            return 0
+        if area == "view" and action in ("add", "confirm") and len(pos) >= 2:
+            effect = opts.get("effect")
+            if not effect:
+                row = DB.execute("SELECT effect FROM items WHERE view=? AND tool=?",
+                                 (pos[0], pos[1])).fetchone()
+                effect = row["effect"] if row else "read"
+            books.approve(DB, "cli", pos[0], pos[1], effect)
+            print("freigegeben, Text festgehalten")
+            return 0
+        if area == "key" and action == "list":
+            for k in books.keys(DB):
+                print(f'{k["label"]:24} {"WIDERRUFEN" if k["revoked"] else "gültig":10} '
+                      f'sichten={k["views"]} bis={k["max_effect"]} ampel={k["ceiling"]} '
+                      f'| {context_line(k)}')
+            return 0
+        if area == "key" and action == "revoke" and pos:
+            print("widerrufen" if books.revoke(DB, pos[0], "cli") else "unbekannt oder schon widerrufen")
+            return 0
+        if area == "key" and action == "issue" and pos:
+            value, _ = books.issue(
+                DB, pos[0], "cli", views=[v for v in opts.get("views", "").split(",") if v],
+                max_effect=opts.get("max-effect", "read"), ceiling=opts.get("ceiling", "yellow"),
+                budget_calls=_int(opts.get("budget")), rate_per_min=_int(opts.get("rate")),
+                **{n: opts[n.replace("_", "-")] for n in books.CONTEXT_FIELDS
+                   if n.replace("_", "-") in opts})
+            print(value)
+            print("Dieser Wert wird nicht wieder angezeigt.", file=sys.stderr)
+            return 0
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(usage)
+    return 2
+
+
+def main():
+    if len(sys.argv) > 1:
+        sys.exit(cli(sys.argv[1:]))
+    sys.stdout.write(f"OAAP MCP-Gateway {VERSION} auf Port {PORT} — {len(books.servers(DB))} "
+                     f"Server, {len(books.views(DB))} Sichten; Katalog alle "
+                     f"{CATALOG_MINUTES or '—'} Minuten\n")
+    sys.stdout.flush()
+    threading.Thread(target=housekeeping, daemon=True).start()
+    ThreadingHTTPServer(("", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

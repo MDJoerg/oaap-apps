@@ -26,7 +26,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Modul in lib/ → Apps, die es tragen.
 SHARED = {
-    "gwcore": ["ai-gateway"],
+    "gwcore": ["ai-gateway", "mcp-gateway"],
 }
 
 

@@ -14,6 +14,7 @@ import hashlib
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -50,6 +51,61 @@ def connect(path, schema, migrate=None):
         migrate(db)
     db.commit()
     return db
+
+
+class _Rows:
+    """Ein schon gelesenes Ergebnis — sieht aus wie ein Cursor, hält aber keine Verbindung."""
+
+    def __init__(self, rows, rowcount):
+        self._rows = rows
+        self.rowcount = rowcount
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class Serialized:
+    """Eine Verbindung für viele Threads: jede Anweisung unter einer Sperre, Zeilen sofort gelesen.
+
+    Wozu: `ThreadingHTTPServer` beantwortet jede Anfrage in einem eigenen
+    Thread. Teilen sich Threads eine SQLite-Verbindung ohne Sperre, bricht
+    SQLite unter Last mit „bad parameter or other API misuse“ ab —
+    gefunden 2026-11-02 im Paralleltest des MCP-Gateways. Ein Cursor, der
+    nach dem Freigeben der Sperre weitergelesen würde, wäre dieselbe Lücke;
+    deshalb werden die Zeilen noch unter der Sperre geholt.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql, args=()):
+        with self._lock:
+            cur = self._conn.execute(sql, args)
+            return _Rows(cur.fetchall(), cur.rowcount)
+
+    def executescript(self, script):
+        with self._lock:
+            self._conn.executescript(script)
+
+    def commit(self):
+        with self._lock:
+            self._conn.commit()
+
+    def close(self):
+        with self._lock:
+            self._conn.close()
+
+
+def connect_serialized(path, schema, migrate=None):
+    """Wie connect(), aber sicher für viele Threads (siehe Serialized)."""
+    return Serialized(connect(path, schema, migrate))
 
 
 def add_columns(db, added):

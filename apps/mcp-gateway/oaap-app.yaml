@@ -1,0 +1,58 @@
+oaap_manifest: "0.2"
+
+app:
+  id: mcp-gateway
+  name: OAAP MCP-Gateway
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "MCP-Server hinter einem Endpunkt je Sicht — mit API-Schlüsseln, Katalog mit Freigabe, festgehaltenen Tool-Texten, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Zwei Wege in dieselbe App. Der längere Pfad gewinnt.
+  #
+  # /mcp ist `public`: Die Plattform authentifiziert hier NICHTS, entfernt
+  # gefälschte Identitäts-Kopfzeilen und bremst je Client-Adresse
+  # (RFC-0010). Geprüft wird im Dienst: Der API-Schlüssel IST die
+  # Identität und nennt die Sichten, die er benutzen darf (Spec §2).
+  - path: /mcp
+    roles: [public]
+  # Die Betreiber-Sicht: Server, Katalog, Sichten, Schlüssel, Verbrauch,
+  # Auswertung, /report/v1/… für ein Abrechnungssystem. Ausdrücklich
+  # `admin`: Wer hier freigibt, öffnet Systeme für KI-Agenten.
+  - path: /
+    roles: [admin]
+
+storage:
+  # Schlüssel (nur als SHA-256), Server, Katalog, freigegebene Texte,
+  # Messzeilen, Prüfspur. KEINE Argumente, KEINE Ergebnisse: Es gibt keine
+  # Spalte, in die sie passen würden (Spec §10).
+  - name: data
+    mount: /data
+
+config:
+  # Der Schlüssel zum Tresor für Zugangsdaten der Server. Kommt bewusst
+  # aus einer ANDEREN Quelle als /data, damit eine Sicherung von /data
+  # allein sie nicht preisgibt. Wird er geändert, sind gespeicherte
+  # Zugangsdaten nicht mehr lesbar. Server hinter einer Destination
+  # (`destination:<name>`) brauchen ihn nicht: Dort setzt die Plattform
+  # die Zugangsdaten ein.
+  - key: MCPGW_MASTER_KEY
+    label: "Tresorschlüssel für die Zugangsdaten der Server (einmal erzeugen, danach nicht ändern)"
+    secret: true
+    generate: token
+  # Wie oft die Tools jedes Servers neu gelesen werden. Ein geänderter
+  # Text sperrt das Tool bis zur Bestätigung (Spec §4.2) — je kürzer,
+  # desto früher fällt eine Änderung auf.
+  - key: MCPGW_CATALOG_MINUTES
+    label: "Katalog neu lesen alle … Minuten (0 = nur auf Knopfdruck)"
+    default: "15"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15

@@ -261,6 +261,60 @@
       ]
     },
     {
+      "id": "mcp-gateway",
+      "name": "OAAP MCP-Gateway",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-11-02",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/mcp-gateway"
+      },
+      "roles": [
+        "admin",
+        "public"
+      ],
+      "categories": [
+        "ai",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator",
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "ki",
+        "mcp",
+        "agenten",
+        "gateway",
+        "api-key",
+        "verbrauch",
+        "souveraen",
+        "sap"
+      ],
+      "summary": "MCP-Server hinter einem Endpunkt je Sicht: API-Schlüssel, Freigabe einzelner Tools mit festgehaltenem Text, Wirkungsklassen, Schutz der Server, Verbrauchsmessung.",
+      "description": "Ein KI-Client (Claude Code, Copilot, ein eigener Agent) spricht mit /mcp/<sicht> wie mit einem einzigen MCP-Server und erfährt nie, welcher Server dahintersteht. Der Betreiber trägt MCP-Server ein (Streamable HTTP; Adresse als URL oder als Destination der Plattform, dann hält das Gateway kein Geheimnis), liest ihren Katalog und legt einzelne Tools in Sichten. Nichts erscheint von selbst: Ein neues Tool des Servers ist nirgends sichtbar, und ändert ein Server die Beschreibung eines freigegebenen Tools, ist es gesperrt, bis der Betreiber den neuen Text bestätigt — Clients sehen immer nur den festgehaltenen Text. Jedes Tool trägt eine Wirkungsklasse (lesen, schreiben, ausführen), die der Betreiber vergibt; Sicht und Schlüssel begrenzen sie. Argumente werden vor dem Weiterreichen gegen das freigegebene Schema geprüft. Je Server: höchstens N gleichzeitige Aufrufe mit kurzer Warteschlange, Raten, Zeitlimit, Antwortgröße und ein Sicherungsautomat — damit ein Agent in einer Schleife kein SAP-System lahmlegt. Weiterleitungen werden nicht verfolgt, Loopback und Link-Local nie angefahren. Gemessen wird je Tool-Aufruf mit Kontext-Kopie für die Abrechnung außerhalb; Argumente und Ergebnisse stehen in keinem Protokoll. Version 0.1 = RFC-0065 Stufe 1: ein Server je Sicht, technischer Zugang; Bündel, Anmeldung über Keycloak und Weitergabe des Benutzers bis ins SAP-System folgen.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/mcp-gateway"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.ai.mcp-gateway.md",
+          "label": "Capability oaap.ai.mcp-gateway"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0065-mcp-gateway.md",
+          "label": "RFC-0065 — MCP-Gateway"
+        }
+      ]
+    },
+    {
       "id": "ollama-models",
       "name": "OAAP Ollama-Modelle",
       "type": "native",
