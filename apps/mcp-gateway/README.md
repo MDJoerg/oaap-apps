@@ -128,6 +128,11 @@ jede für sich: durchreichen oder ablehnen.
 - Durchgereicht wird nur, was die Sicht erlaubt **und** der Client
   kann; dem Server sagt das Gateway auch nur das zu.
 - Die Antwort des Menschen geht durch und wird nirgends gespeichert.
+- Manche Server zeigen Tools nur Clients, die Rückfragen beantworten
+  können (der offizielle Referenzserver: 16 statt 20). Der Katalog wird
+  deshalb mit allen drei Fähigkeiten gelesen. Liegt so ein Tool in
+  einer Sicht, die die Rückfrage ablehnt, kennt der Server es beim
+  Aufruf nicht und sagt das — das Gateway reicht die Antwort durch.
 
 ## Schutz der Server
 

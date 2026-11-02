@@ -75,7 +75,8 @@ def paper_state(**extra):
     st = {"version": "2025-11-25", "mode": None, "calls": [], "inflight": 0, "peak": 0,
           "sessions": set(), "lose_session": False, "answers": [], "auth": [], "proto": [],
           "deleted": [], "lock": threading.Lock(), "caps": {"tools": {}}, "init_caps": [],
-          "resources": [], "templates": [], "prompts": [], "reads": [], "gets": []}
+          "resources": [], "templates": [], "prompts": [], "reads": [], "gets": [],
+          "sess_caps": {}, "capable_tools": []}
     st.update(extra)
     return st
 
@@ -147,6 +148,7 @@ class Paper(BaseHTTPRequestHandler):
             sid = secrets.token_hex(8)
             S["sessions"].add(sid)
             S["init_caps"].append((body.get("params") or {}).get("capabilities"))
+            S["sess_caps"][sid] = (body.get("params") or {}).get("capabilities") or {}
             self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {
                 "protocolVersion": S["version"], "capabilities": S["caps"],
                 "serverInfo": {"name": "papier-intern-geheim", "version": "9"}}},
@@ -165,10 +167,12 @@ class Paper(BaseHTTPRequestHandler):
             self.reply(202)
             return
         if m == "tools/list":
+            # Wie der Referenzserver: manche Tools nur für Clients, die zurückfragen lassen.
+            offered = S["tools"] + (S["capable_tools"] if "elicitation" in S["sess_caps"].get(sid, {}) else [])
             start = int((body.get("params") or {}).get("cursor") or 0)
-            page = S["tools"][start:start + 3]
+            page = offered[start:start + 3]
             res = {"tools": page}
-            if start + 3 < len(S["tools"]):
+            if start + 3 < len(offered):
                 res["nextCursor"] = str(start + 3)
             self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": res})
             return
@@ -254,6 +258,7 @@ Z = paper_state(
            tool("lookup", "Sucht ein Objekt.", {"package": {"type": "string"},
                                                 "name": {"type": "string"}}, ["package", "name"]),
            tool("ask", "Fragt zurück.", {}), tool("sample", "Will das Modell des Clients.", {})],
+    capable_tools=[tool("nur_mit_rueckfrage", "Nur für Clients mit Elicitation.", {})],
     resources=[{"uri": "doc://handbuch", "name": "handbuch", "description": "Das Handbuch.",
                 "mimeType": "text/plain"},
                {"uri": "doc://geheim", "name": "geheim", "description": "Nicht freigegeben."}],
@@ -677,8 +682,10 @@ print("\n-- Stufe 2: zweiter Server, Katalog mit allen Arten")
 admin("/server-save", name="zwei", address=ZWEI, auth="none", light="green")
 page = admin("/server-read", name="zwei")
 check("Katalog: Tools, Resources, Vorlagen, Prompts gelesen",
-      all(t in page for t in ("4 Tools", "2 Resources", "2 Resource-Vorlagen", "1 Prompts")),
+      all(t in page for t in ("5 Tools", "2 Resources", "2 Resource-Vorlagen", "1 Prompts")),
       page[page.find("Katalog von"):][:300])
+check("Katalog sieht auch Tools, die der Server nur Clients mit Rückfragen zeigt",
+      books.catalog_row(app.DB, "zwei", "tool", "nur_mit_rueckfrage") is not None)
 check("der Katalog weiß die Art", {r["kind"] for r in books.catalog(app.DB, "zwei")}
       == {"tool", "resource", "template", "prompt"})
 _, sp = admin_get("/server?name=zwei")

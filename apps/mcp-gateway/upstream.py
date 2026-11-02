@@ -377,6 +377,8 @@ def open_session(server, url, timeout=30, max_bytes=1 << 20, capabilities=None):
     return session
 
 
+CATALOG_CAPS = {"elicitation": {}, "roots": {}, "sampling": {}}
+
 # Was der Katalog liest: Art → (Methode, Feld der Antwort, nötige Fähigkeit des Servers).
 LISTS = {"tool": ("tools/list", "tools", "tools"),
          "resource": ("resources/list", "resources", "resources"),
@@ -415,7 +417,12 @@ def list_catalog(server, url, timeout=30, max_bytes=8 << 20):
     sie nicht an, und was davon in einer Sicht liegt, fehlt jetzt — es
     bleibt nicht mit einem alten Stand freigegeben.
     """
-    session = open_session(server, url, timeout=timeout)
+    # Alle drei Rückfragen zusagen: Manche Server zeigen Tools nur Clients,
+    # die zurückfragen lassen (gemessen 2026-11-02 am Referenzserver: 16
+    # statt 20 Tools). In dieser Sitzung wird nichts aufgerufen, also wird
+    # auch nichts gefragt; bei Aufrufen gilt weiter, was Sicht und Client
+    # erlauben (Spec §4.1).
+    session = open_session(server, url, timeout=timeout, capabilities=CATALOG_CAPS)
     offers, n = {}, 1
     try:
         for kind, (method, field, cap) in LISTS.items():
