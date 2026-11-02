@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -178,6 +179,37 @@ many = {"groups": [{"day": "2026-10-01", "cost_center": f"KS-{i}", "calls": 10 -
 svg = charts.stacked_bars(many, "day", "cost_center", "calls")
 check("mehr als sieben Reihen: sechs Farben plus „Andere“, keine erfundene achte",
       "Andere" in svg and svg.count('class="lg"') == 7, svg.count('class="lg"'))
+
+print("\n-- viele Threads, eine Datei (0.5.2)")
+# Der Dienst beantwortet jede Anfrage in einem eigenen Thread. Bis 0.5.1
+# teilten sie sich die Verbindung ohne Sperre: 16 Threads, 15 brachen ab,
+# 422 von 3200 Messzeilen kamen an (gemessen 2026-11-02).
+par = store.connect(os.path.join(TMP, "parallel.db"))
+store.issue(par, "p", "test")
+pkey = store.keys(par)[0]
+errors = []
+
+
+def work():
+    try:
+        for _ in range(200):
+            store.record(par, pkey, "a", "s", "m", 1, 2, 3, "ok", 10, 20)
+            store.spent(par, pkey["id"])
+            store.totals(par)
+            store.recent(par, pkey["id"])
+    except Exception as e:  # noqa: BLE001 — jeder Abbruch ist der Befund
+        errors.append(repr(e))
+
+
+threads = [threading.Thread(target=work) for _ in range(16)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+check("kein Thread bricht ab", errors == [], sorted(set(errors))[:3])
+got = par.execute("SELECT COUNT(*) AS c FROM usage").fetchone()["c"]
+check("jede Messzeile kommt an", got == 16 * 200, f"{got} von {16 * 200}")
+par.close()
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")

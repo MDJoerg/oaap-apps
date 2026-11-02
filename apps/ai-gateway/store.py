@@ -118,7 +118,10 @@ KEY_PREFIX = "sk-oaap-"
 
 
 def connect(path):
-    return ledger.connect(path, SCHEMA, migrate)
+    # Serialisiert: Jede Anfrage läuft in einem eigenen Thread. Mit einer
+    # geteilten Verbindung ohne Sperre gingen unter Last Messzeilen
+    # verloren — gemessen 2026-11-02 (16 Threads, 422 von 3200 Zeilen).
+    return ledger.connect_serialized(path, SCHEMA, migrate)
 
 
 def migrate(db):

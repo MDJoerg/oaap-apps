@@ -302,6 +302,18 @@ macht (Modellnamen, Ampel, Token). Verhalten unverändert — 0.5.0 und
 2026-11-02), und ein Tresorinhalt von 0.5.0 bleibt lesbar
 (`test_catalog.py`).
 
+## Viele Anfragen gleichzeitig (0.5.2)
+
+Der Dienst beantwortet jede Anfrage in einem eigenen Thread, und bis
+0.5.1 teilten sich alle Threads eine SQLite-Verbindung ohne Sperre.
+Gemessen am 2026-11-02 mit 16 Threads zu je 200 Aufrufen: 15 Threads
+brachen ab („bad parameter or other API misuse“), **422 von 3200
+Messzeilen kamen an**. Unter Last fehlte also Verbrauch in den Büchern.
+Seit 0.5.2 läuft jede Anweisung unter einer Sperre
+(`gwcore.ledger.Serialized`, gefunden beim Bau des MCP-Gateways):
+0 Abbrüche, 3200 von 3200. `test_report.py` prüft das und wird mit der
+alten Verbindung rot.
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

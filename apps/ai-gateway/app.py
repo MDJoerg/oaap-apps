@@ -48,7 +48,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
