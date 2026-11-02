@@ -285,6 +285,23 @@ Alle vier laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 
+## Gemeinsame Bücher mit dem MCP-Gateway (seit 0.5.1, RFC-0065 Stufe 0)
+
+Schlüssel, Kontext, Prüfspur, Rate, Tresor, die eine Abfrage und die
+Grafiken stehen in **`gwcore/`** — eine Kopie von
+[`oaap-apps/lib/gwcore`](../../lib/gwcore/), die auch das MCP-Gateway
+trägt. Die Plattform baut eine App nur aus ihrem eigenen Ordner, deshalb
+Kopie statt Verweis. **Geändert wird nur in `lib/`**, danach
+`python3 check-shared.py --fix` im Wurzelordner von oaap-apps;
+`check-shared.py` ohne `--fix` meldet jede abweichende Kopie.
+
+`store.py`, `vault.py`, `report.py` und `charts.py` sind geblieben, mit
+derselben Schnittstelle: Sie sagen nur noch, was dieses Gateway anders
+macht (Modellnamen, Ampel, Token). Verhalten unverändert — 0.5.0 und
+0.5.1 liefern auf denselben Eingaben dieselben Bytes (Gegenvergleich
+2026-11-02), und ein Tresorinhalt von 0.5.0 bleibt lesbar
+(`test_catalog.py`).
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

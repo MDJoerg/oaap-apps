@@ -68,6 +68,18 @@ try:
 except vault.VaultError:
     check("ohne Hauptschlüssel wird nichts versiegelt", True)
 
+# Versiegelt von 0.5.0, also VOR dem Umzug des Tresors nach gwcore/
+# (RFC-0065 Stufe 0). Der Zweck der Ableitung ist Teil des gespeicherten
+# Formats: Ändert ihn jemand, sind auf jeder Instanz die Zugangsdaten
+# der Anbieter weg — und genau das soll hier auffallen, nicht dort.
+VOR_DEM_UMZUG = ("v1:BwG81HORUzpZfrkBP9Q8ClsoNhiUbG3sPup4qaL9Yx7HsA59f6j2qG/J7ZrmMNvB"
+                 "+tsa0iLM5guTaFzEPFZi7iX7vLVE")
+try:
+    check("ein Tresorinhalt von 0.5.0 bleibt lesbar",
+          vault.open_("fester-testschluessel-0.5.0", VOR_DEM_UMZUG) == "sk-vor-der-umstellung")
+except vault.VaultError as exc:
+    check("ein Tresorinhalt von 0.5.0 bleibt lesbar", False, exc)
+
 print("\n-- Übernahme: Zugangsdaten da, Hauptschlüssel nicht → warten")
 db = fresh("gesperrt")
 state, notes = catalog.import_config(db, ENV, "")
