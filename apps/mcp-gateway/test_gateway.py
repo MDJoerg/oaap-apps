@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Die Konformitätsliste von `oaap.ai.mcp-gateway` 0.2 (Spec §12), Ende zu Ende.
+"""Die Konformitätsliste von `oaap.ai.mcp-gateway` 0.3 (Spec §12), Ende zu Ende.
 
 Zwei **Papier-MCP-Server** im selben Prozess sprechen Streamable HTTP und
 benehmen sich auf Ansage daneben: leiten weiter, fallen aus, vergessen
@@ -9,12 +9,18 @@ eine Resource-Vorlage und einen Prompt, und ein Tool mit demselben Namen
 wie der erste — für das Bündel (Stufe 2). Das Gateway läuft echt, per
 HTTP, mit Betreiber-Formularen wie hinter der Plattform.
 
+Für die Anmeldung (Stufe 3) steht daneben ein **Papier-Anmeldedienst**:
+Discovery, Schlüssel und Token-Tausch wie Keycloak, mit einem eigenen
+RSA-Schlüssel — und ein dritter Papier-Server, der sagt, mit welchem
+Token er gerufen wurde.
+
 Der Papier-Server lauscht auf der LAN-Adresse dieses Rechners, nicht auf
 127.0.0.1: Das Gateway fährt Loopback nie an (Spec §3.1) — und das soll
 dieser Test nicht umgehen müssen.
 
 Run: python3 apps/mcp-gateway/test_gateway.py
 """
+import base64
 import http.client
 import io
 import json
@@ -29,10 +35,12 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import signin  # noqa: E402
+import test_rsa_keys as rk  # noqa: E402
 TMP = tempfile.mkdtemp(prefix="mcpgw-")
 os.environ.update({"MCPGW_DATA_DIR": TMP, "MCPGW_MASTER_KEY": "test-tresor-schluessel-0123456789",
                    "MCPGW_CATALOG_MINUTES": "0"})
@@ -76,7 +84,7 @@ def paper_state(**extra):
           "sessions": set(), "lose_session": False, "answers": [], "auth": [], "proto": [],
           "deleted": [], "lock": threading.Lock(), "caps": {"tools": {}}, "init_caps": [],
           "resources": [], "templates": [], "prompts": [], "reads": [], "gets": [],
-          "sess_caps": {}, "capable_tools": []}
+          "sess_caps": {}, "capable_tools": [], "notes": [], "tokens": []}
     st.update(extra)
     return st
 
@@ -164,6 +172,7 @@ class Paper(BaseHTTPRequestHandler):
             self.reply(404, {"error": "vergessen"})
             return
         if mid is None:
+            S["notes"].append(body)
             self.reply(202)
             return
         if m == "tools/list":
@@ -213,6 +222,16 @@ class Paper(BaseHTTPRequestHandler):
             with S["lock"]:
                 S["inflight"] -= 1
             self.reply(200, text("langsam fertig"))
+        elif name == "whoami":
+            auth = self.headers.get("Authorization") or ""
+            tok = auth[7:] if auth.startswith("Bearer ") else ""
+            S["tokens"].append(tok)
+            try:
+                c = json.loads(signin.b64(tok.split(".")[1]))
+            except (ValueError, IndexError):
+                c = {}
+            self.reply(200, text(json.dumps({"sub": c.get("sub"), "aud": c.get("aud"),
+                                             "azp": c.get("azp")})))
         elif name == "big":
             self.reply(200, text("x" * (2 << 20)))
         elif name == "fail":
@@ -273,6 +292,72 @@ ZWEI = f"http://{IP}:{zwei.server_address[1]}/mcp"
 if IP.startswith("127."):
     print("Keine LAN-Adresse gefunden — das Gateway fährt Loopback nie an; Test nicht ausführbar.")
     sys.exit(2)
+
+# Der dritte Server: Verfahren X — er sagt, mit wessen Token er gerufen wurde.
+XS = paper_state(tools=[tool("whoami", "Sagt, wer ruft.", {})])
+drei = ThreadingHTTPServer(("0.0.0.0", 0), Paper)
+drei.state = XS
+threading.Thread(target=drei.serve_forever, daemon=True).start()
+DREI = f"http://{IP}:{drei.server_address[1]}/mcp"
+
+# ------------------------------------------------------------- Papier-Anmeldedienst
+
+KEY = rk.keypair()
+OTHER_KEY = rk.keypair()
+GW_CLIENT, GW_SECRET, SIGNIN_CLIENT = "mcp-gw-probe", "GEHEIM-CLIENT-777", "mcp-claude"
+IDP = {"mode": None, "exchanges": [], "discovery": 0}
+
+
+class Idp(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, status, doc):
+        body = json.dumps(doc).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/realms/probe/.well-known/openid-configuration":
+            IDP["discovery"] += 1
+            self.reply(200, {"issuer": ISS, "jwks_uri": ISS + "/protocol/openid-connect/certs",
+                             "token_endpoint": ISS + "/protocol/openid-connect/token"})
+        elif self.path == "/realms/probe/protocol/openid-connect/certs":
+            self.reply(200, {"keys": [rk.jwk(KEY[0], KEY[1], "k1")]})
+        else:
+            self.reply(404, {})
+
+    def do_POST(self):
+        form = dict(parse_qsl(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()))
+        basic = base64.b64decode((self.headers.get("Authorization") or "Basic ")[6:] or b"").decode()
+        IDP["exchanges"].append({"client": basic.split(":")[0], "audience": form.get("audience"),
+                                 "grant": form.get("grant_type")})
+        if IDP["mode"] == "deny" or basic != f"{GW_CLIENT}:{GW_SECRET}":
+            self.reply(400, {"error": "access_denied", "error_description": "GEHEIM-IDP-TEXT"})
+            return
+        try:
+            c = signin.check(form.get("subject_token", ""), signin.Keys(ISS, lambda: {
+                "keys": [rk.jwk(KEY[0], KEY[1], "k1")]}), ISS, GW_CLIENT)
+        except signin.Invalid:
+            self.reply(400, {"error": "invalid_token"})
+            return
+        new = rk.token(KEY, rk.claims(ISS, form.get("audience"), sub=c["sub"], azp=GW_CLIENT))
+        self.reply(200, {"access_token": new, "expires_in": 300, "token_type": "Bearer"})
+
+
+idp = ThreadingHTTPServer(("0.0.0.0", 0), Idp)
+threading.Thread(target=idp.serve_forever, daemon=True).start()
+ISS = f"http://{IP}:{idp.server_address[1]}/realms/probe"
+os.environ.update({"MCPGW_ISSUER": ISS, "MCPGW_AUDIENCE": GW_CLIENT, "MCPGW_SIGNIN_CLIENT": SIGNIN_CLIENT})
+
+
+def person_token(sub="person-1", groups=("/team",), key=None, aud=None, **extra):
+    return rk.token(key or KEY, rk.claims(ISS, aud or GW_CLIENT, sub=sub, groups=groups, **extra))
 
 # ------------------------------------------------------------- Gateway
 
@@ -459,14 +544,19 @@ answers = {
     "Sicht gibt es nicht": rpc("gibtsnicht", init, VOLL, addr="198.51.100.5"),
 }
 bodies = {k: (v[0], v[3]) for k, v in answers.items()}
-check("alle 403", all(s == 403 for s, _ in bodies.values()), {k: s for k, (s, _) in bodies.items()})
+check("alle 401 (seit 0.3; MCP-Anmeldung)", all(s == 401 for s, _ in bodies.values()),
+      {k: s for k, (s, _) in bodies.items()})
 check("alle Bytes gleich", len({b for _, b in bodies.values()}) == 1)
+www = {k: v[1].get("WWW-Authenticate") for k, v in answers.items() if k != "Sicht gibt es nicht"}
+check("gleiche WWW-Authenticate-Kopfzeile mit dem Weg zu den Metadaten",
+      len(set(www.values())) == 1 and "/.well-known/oauth-protected-resource/mcp/alles"
+      in next(iter(www.values())), www)
 
 admin("/server-save", name="papier", address=PAPER, auth="bearer", light="yellow")
-check("Ampel gelb über einem grünen Schlüssel: dieselbe 403",
+check("Ampel gelb über einem grünen Schlüssel: dieselbe 401",
       rpc("alles", init, GRUEN, addr="198.51.100.6")[3] == bodies["ohne Schlüssel"][1])
 probes = [rpc("alles", init, "mcp-oaap-geraten", addr="198.51.100.7")[0] for _ in range(6)]
-check("fünf Fehlversuche von einer Adresse, dann 429", probes == [403] * 5 + [429], probes)
+check("fünf Fehlversuche von einer Adresse, dann 429", probes == [401] * 5 + [429], probes)
 check("ein ehrlicher Client von anderswo bleibt unberührt",
       rpc("alles", init, VOLL, addr="198.51.100.8")[0] == 200)
 admin("/server-save", name="papier", address=PAPER, auth="bearer", light="green")
@@ -898,7 +988,7 @@ check("Prüfspur nennt die Änderung", any(r["action"] == "view.save" and "elici
 print("\n-- Ampel einer Sicht = schlechtester Server")
 admin("/server-save", name="zwei", address=ZWEI, auth="none", light="red")
 st, _, _, raw = rpc("buendel", init, BUENDEL, addr="198.51.100.20")
-check("ein Server rot: gelber Schlüssel bekommt dieselbe 403", st == 403
+check("ein Server rot: gelber Schlüssel bekommt dieselbe 401", st == 401
       and raw == bodies["ohne Schlüssel"][1], st)
 admin("/server-save", name="zwei", address=ZWEI, auth="none", light="green")
 
@@ -925,6 +1015,29 @@ check("bestätigen scheitert: das feste Argument gibt es nicht mehr", "verträgt
 admin("/item-tailor", view="buendel", kind="tool", name="lookup", fixed="{}", bounds="{}")
 admin("/item-confirm", view="buendel", kind="tool", name="lookup")
 check("nach dem Anpassen bestätigt und wieder gelistet", "lookup" in listed("buendel", BUENDEL, b_sid))
+
+print("\n-- Abbruch im Bündel geht an den Server, der den Aufruf ausführt")
+add("buendel", "slow")
+c_sid, _ = session("buendel", BUENDEL)
+P["notes"].clear()
+Z["notes"].clear()
+slow_call = threading.Thread(target=lambda: rpc("buendel", {"jsonrpc": "2.0", "id": "lang-1", "method": "tools/call",
+                                                           "params": {"name": "slow", "arguments": {"s": 1.5}}},
+                                                BUENDEL, c_sid))
+slow_call.start()
+time.sleep(0.6)
+cancel = {"jsonrpc": "2.0", "method": "notifications/cancelled",
+          "params": {"requestId": "lang-1", "reason": "abgebrochen"}}
+st, _, _, _ = rpc("buendel", cancel, BUENDEL, c_sid)
+slow_call.join()
+got = [n for n in P["notes"] if n.get("method") == "notifications/cancelled"]
+check("Abbruch: 202, beim Server papier angekommen, mit der Anfrage-ID", st == 202 and len(got) == 1
+      and got[0]["params"]["requestId"] == "lang-1", (st, P["notes"]))
+check("Server zwei bekam keinen Abbruch",
+      not any(n.get("method") == "notifications/cancelled" for n in Z["notes"]), Z["notes"])
+st, _, _, _ = rpc("buendel", cancel, BUENDEL, c_sid)
+check("Abbruch nach dem Ende: 202, geht nirgends hin",
+      st == 202 and len([n for n in P["notes"] if n.get("method") == "notifications/cancelled"]) == 1)
 
 print("\n-- MCP 2026-07-28: bewusst als Server mit Sitzung erkennbar (Spec §6.2)")
 for label, msg in (("server/discover", {"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
@@ -959,6 +1072,179 @@ check("Report nach Art", doc["totals"]["calls"] == len(rows)
       and {g["kind"] for g in doc["groups"]} == kinds, doc)
 _, vp = admin_get("/view?name=buendel")
 check("Seite der Sicht rendert mit Bündel", "zwei: echo → echo2" in vp and "Rückfrage an den Menschen" in vp)
+
+print("\n-- Stufe 3: Metadaten für die Anmeldung (RFC 9728)")
+
+
+def get_json(path):
+    try:
+        resp = urllib.request.urlopen(urllib.request.Request(GW + path, headers={"Host": "gw.example"}))
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    raw = resp.read()
+    return resp.status, (json.loads(raw) if raw else None)
+
+
+st, meta = get_json("/.well-known/oauth-protected-resource/mcp/alles")
+check("Metadaten einer Sicht: Issuer, Ressource, nur Kopfzeile",
+      st == 200 and meta["authorization_servers"] == [ISS] and meta["resource"].endswith("/mcp/alles")
+      and meta["bearer_methods_supported"] == ["header"], meta)
+st2, meta2 = get_json("/.well-known/oauth-protected-resource/mcp/gibtsnicht")
+check("für eine Sicht, die es nicht gibt, dieselbe Form", st2 == 200
+      and {k: v for k, v in meta2.items() if k not in ("resource", "resource_name")}
+      == {k: v for k, v in meta.items() if k not in ("resource", "resource_name")}, meta2)
+check("Wurzel des Gateways", get_json("/.well-known/oauth-protected-resource")[0] == 200)
+check("anderer Pfad darunter: 404", get_json("/.well-known/oauth-protected-resource/admin")[0] == 404)
+
+print("\n-- Zugangsprofile, Sicht nur für Anmeldung")
+admin("/view-save", name="angemeldet", max_effect="read", ways="signin")
+add("angemeldet", "echo")
+admin("/issue", label="a-team", kind="profile", groups="/team", views="angemeldet", rate=6,
+      cost_center="KS-TEAM")
+admin("/issue", label="b-alle", kind="profile", groups="*", views="angemeldet", cost_center="KS-ALLE")
+page = admin("/issue", label="kaputt", kind="profile", groups="team-ohne-pfad", views="angemeldet")
+check("Gruppe ohne Pfad: abgewiesen", "volle Pfade" in page)
+check("Profil hat keinen benutzbaren Wert: keiner auf der Seite",
+      "mcp-oaap-" not in page.split("Zugangsprofil „b-alle“")[0][-2000:])
+
+T1 = person_token("person-1", ("/team",))
+s1, init1 = session("angemeldet", T1)
+check("Anmeldung: Sitzung", bool(s1) and (init1 or {}).get("result", {}).get("serverInfo", {}).get("name")
+      == "angemeldet", init1)
+st, _, msgs, _ = call("angemeldet", T1, s1, "echo", {"text": "angemeldet"})
+check("Aufruf als angemeldeter Mensch", "Echo" in json.dumps(msgs), msgs)
+row = list(app.DB.execute("SELECT * FROM usage ORDER BY id DESC LIMIT 1"))[0]
+profiles = {k["label"]: k for k in books.keys(app.DB)}
+check("Messzeile: Profil a-team (Gruppe /team), sub und Issuer, Kontext des Profils",
+      row["key_id"] == profiles["a-team"]["id"] and row["user_sub"] == "person-1"
+      and row["user_iss"] == ISS and row["ctx_cost_center"] == "KS-TEAM", dict(row))
+T2 = person_token("person-2", ("/anders",))
+s2, _ = session("angemeldet", T2)
+call("angemeldet", T2, s2, "echo", {"text": "x"})
+row = list(app.DB.execute("SELECT * FROM usage ORDER BY id DESC LIMIT 1"))[0]
+check("ohne passende Gruppe: das *-Profil", row["key_id"] == profiles["b-alle"]["id"]
+      and row["user_sub"] == "person-2", dict(row))
+
+print("\n-- Ablehnungen bei Anmeldung: dieselbe 401")
+no_cred = rpc("angemeldet", init, addr="198.51.100.30")
+bad = {
+    "ohne Anmeldung": no_cred,
+    "fremder Schlüssel (Unterschrift)": rpc("angemeldet", init, person_token(key=OTHER_KEY), addr="198.51.100.31"),
+    "an jemand anderen adressiert (aud account)": rpc("angemeldet", init, person_token(aud="account"),
+                                                       addr="198.51.100.32"),
+    "abgelaufen": rpc("angemeldet", init, person_token(lifetime=-120), addr="198.51.100.33"),
+    "alg none": rpc("angemeldet", init, rk.token(KEY, rk.claims(ISS, GW_CLIENT), alg="none"),
+                    addr="198.51.100.34"),
+    "anderer Issuer": rpc("angemeldet", init, rk.token(KEY, rk.claims(ISS + "x", GW_CLIENT)),
+                          addr="198.51.100.35"),
+    "gültiger Schlüssel, Sicht nur für Anmeldung": rpc("angemeldet", init, VOLL, addr="198.51.100.36"),
+}
+check("alle 401, Körper und Kopfzeile gleich",
+      all(v[0] == 401 for v in bad.values()) and len({v[3] for v in bad.values()}) == 1
+      and len({v[1].get("WWW-Authenticate") for v in bad.values()}) == 1,
+      {k: v[0] for k, v in bad.items()})
+st, _, _, raw = rpc("alles", init, T1, addr="198.51.100.37")
+check("gültig angemeldet, aber Sicht nicht im Profil: 403 (keine neue Anmeldung)", st == 403, st)
+# Die Zugänge der Sicht selbst: Schlüssel und Profil nennen die Sicht, und trotzdem nicht.
+NUR_ANM = secret_from(admin("/issue", label="nennt-angemeldet", views="angemeldet"))
+st, _, _, raw = rpc("angemeldet", init, NUR_ANM, addr="198.51.100.39")
+check("Schlüssel nennt die Sicht, die Sicht nimmt nur Anmeldungen: dieselbe 401",
+      st == 401 and raw == no_cred[3], st)
+admin("/issue", label="c-alles", kind="profile", groups="/team", views="alles")
+st, _, _, _ = rpc("alles", init, T1, addr="198.51.100.40")
+check("Profil nennt die Sicht, die Sicht nimmt nur Schlüssel: 403", st == 403, st)
+admin("/revoke", label="c-alles")
+admin("/revoke", label="b-alle")
+st, _, _, _ = rpc("angemeldet", init, T2, addr="198.51.100.38")
+check("kein passendes Profil mehr: 403", st == 403, st)
+T1b = person_token("person-1b", ("/team",))
+st, _, _, _ = rpc("angemeldet", {"jsonrpc": "2.0", "id": 3, "method": "ping"}, T1b, s1)
+check("Sitzung eines anderen Menschen derselben Gruppe: 404", st == 404, st)
+T1_neu = person_token("person-1", ("/team",), lifetime=900)
+st, _, _, _ = rpc("angemeldet", {"jsonrpc": "2.0", "id": 3, "method": "ping"}, T1_neu, s1)
+check("erneuertes Token desselben Menschen: Sitzung geht weiter", st == 200, st)
+
+print("\n-- Rate je Mensch im Profil")
+T3 = person_token("person-3", ("/team",))
+s3, _ = session("angemeldet", T3)
+r1 = [rpc("angemeldet", {"jsonrpc": "2.0", "id": 9, "method": "ping"}, T1, s1)[0] for _ in range(6)]
+check("person-1: nach 6 je Minute 429", 429 in r1, r1)
+check("person-3 im selben Profil bleibt unberührt",
+      rpc("angemeldet", {"jsonrpc": "2.0", "id": 9, "method": "ping"}, T3, s3)[0] == 200)
+
+print("\n-- Verfahren X: Token-Tausch")
+page = admin("/server-save", name="xs", address=DREI, auth="exchange", light="green",
+             token_url=ISS + "/protocol/openid-connect/token", client_id="falsch", audience="backend-app",
+             credential=GW_SECRET)
+check("eigener Client ungleich MCPGW_AUDIENCE: abgewiesen", "MCPGW_AUDIENCE" in page
+      and books.server_row(app.DB, "xs") is None)
+admin("/server-save", name="xs", address=DREI, auth="exchange", light="green",
+      token_url=ISS + "/protocol/openid-connect/token", client_id=GW_CLIENT, audience="backend-app",
+      credential=GW_SECRET)
+check("Server mit Verfahren X angelegt, Geheimnis nicht im Klartext",
+      books.server_row(app.DB, "xs") is not None
+      and b"GEHEIM-CLIENT-777" not in open(os.path.join(TMP, "gateway.db"), "rb").read())
+page = admin("/server-read", name="xs")
+check("Katalog ohne Menschen: nicht gelesen, Satz nennt den Weg", "--token-stdin" in page)
+ok_, text_ = app.read_catalog("xs", {"iss": ISS, "sub": "betreiber", "token": person_token("betreiber")})
+check("Katalog mit Token des Betreibers gelesen", ok_, text_)
+page = add("alles", "whoami", server="xs")
+check("X-Server in einer Sicht mit Schlüsseln: abgewiesen", "Anmeldung" in page
+      and not books.item_row(app.DB, "alles", "tool", "whoami"))
+admin("/view-save", name="x-sicht", max_effect="read", ways="signin")
+add("x-sicht", "whoami", server="xs")
+page = admin("/view-save", name="x-sicht", max_effect="read", ways="key,signin")
+check("Sicht mit X-Server auf Schlüssel umstellen: abgewiesen", "Verfahren X" in page
+      and books.view_row(app.DB, "x-sicht")["ways"] == "signin")
+admin("/issue", label="x-profil", kind="profile", groups="/team", views="x-sicht")
+TX = person_token("person-x", ("/team",))
+sx, _ = session("x-sicht", TX)
+XS["tokens"].clear()
+IDP["exchanges"].clear()
+st, _, msgs, _ = call("x-sicht", TX, sx, "whoami")
+seen = json.loads(((msgs[-1].get("result") or {}).get("content") or [{}])[0].get("text") or "{}") if msgs else {}
+check("Backend sieht den Menschen (sub) mit Token nur für sich (aud backend-app)",
+      seen.get("sub") == "person-x" and seen.get("aud") == "backend-app", (seen, msgs))
+check("nie das Token des Menschen selbst", XS["tokens"] and TX not in XS["tokens"])
+check("getauscht wurde als eigener Client, für backend-app, mit dem Grant von RFC 8693",
+      IDP["exchanges"] and IDP["exchanges"][-1] == {
+          "client": GW_CLIENT, "audience": "backend-app",
+          "grant": "urn:ietf:params:oauth:grant-type:token-exchange"}, IDP["exchanges"])
+call("x-sicht", TX, sx, "whoami")
+check("zweiter Aufruf: getauschtes Token wiederverwendet", len(IDP["exchanges"]) == 1, IDP["exchanges"])
+try:
+    app.server_access(books.server_row(app.DB, "xs"), None)
+    check("Verfahren X ohne Menschen: kein Zugang, auch nicht der technische", False, "Zugang geliefert")
+except app.NoPerson:
+    check("Verfahren X ohne Menschen: kein Zugang, auch nicht der technische", True)
+IDP["mode"] = "deny"
+app.EXCHANGED.clear()
+calls_before = len(XS["calls"])
+st, _, msgs, _ = call("x-sicht", TX, sx, "whoami")
+check("Tausch abgelehnt: -32003, Server nicht gerufen, kein Rückfall",
+      err(msgs).get("code") == -32003 and len(XS["calls"]) == calls_before, msgs)
+check("Fehlertext des Anmeldediensts nicht weitergereicht", "GEHEIM-IDP-TEXT" not in json.dumps(msgs))
+IDP["mode"] = None
+row = list(app.DB.execute("SELECT * FROM usage WHERE server='xs' ORDER BY id"))
+check("Messzeilen von X: Verfahren X, sub, Ausgang", row and all(r["procedure"] == "X" for r in row)
+      and row[0]["user_sub"] == "person-x" and row[-1]["outcome"] == "upstream_error"
+      and row[-1]["reason"] == "exchange", [dict(r) for r in row])
+
+print("\n-- Kein Token irgendwo")
+db_bytes = open(os.path.join(TMP, "gateway.db"), "rb").read()
+if os.path.exists(os.path.join(TMP, "gateway.db-wal")):
+    db_bytes += open(os.path.join(TMP, "gateway.db-wal"), "rb").read()
+sig_parts = [t.split(".")[2][:40] for t in (T1, T2, TX, *XS["tokens"])]
+check("keine Unterschrift eines Tokens in der Datenbank", not any(p.encode() in db_bytes for p in sig_parts))
+check("und nicht im Protokoll", not any(p in LOG.getvalue() for p in sig_parts))
+_, pg = admin_get("/")
+check("Übersicht: Anmeldung mit Issuer und Befehl für Claude Code",
+      ISS in pg and "--client-id mcp-claude --callback-port 33418" in pg)
+req = urllib.request.Request(f"{GW}/report/v1/usage?from={time.strftime('%Y-%m-%d', time.gmtime())}"
+                             f"&to=2999-01-01&group_by=user&view=angemeldet",
+                             headers={"X-OAAP-User": "abrechnung", "X-OAAP-Roles": "admin"})
+doc = json.loads(urllib.request.urlopen(req).read())
+check("Report nach Mensch (sub)", {g["user"] for g in doc["groups"]} >= {"person-1", "person-2"}, doc["groups"])
 
 print("\n-- §12.10 Messung: je Aufruf genau eine Zeile, nie ein Inhalt")
 rows = list(app.DB.execute("SELECT * FROM usage"))
@@ -1006,7 +1292,14 @@ check("Übersicht rendert", st == 200 and "Sichten" in main_page and "papier" in
 gw.shutdown()
 paper.shutdown()
 zwei.shutdown()
+drei.shutdown()
+idp.shutdown()
 sys.stdout = sys.__stdout__
-shutil.rmtree(TMP, ignore_errors=True)
+if os.environ.get("MCPGW_TEST_KEEP"):
+    # Für einen Blick auf die Betreiber-Seiten mit echten Daten (Browser ohne Fenster).
+    app.DB.commit()
+    print(f"Daten bleiben: {TMP}")
+else:
+    shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

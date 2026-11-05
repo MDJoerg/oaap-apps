@@ -322,6 +322,35 @@ def _json(raw):
         return None
 
 
+def plain(method, url, body=None, headers=None, timeout=15, max_bytes=256 * 1024):
+    """Eine gewöhnliche HTTP-Anfrage nach denselben Regeln wie zum Server (A4).
+
+    Für den Anmeldedienst: Schlüssel des Issuers lesen (GET), Token
+    tauschen (POST). Keine Weiterleitung, Verbindung an die geprüfte
+    Adresse, Größe begrenzt. Gibt (status, körper) zurück; wirft
+    UpstreamError. Der Körper wird nie in eine Meldung übernommen — in
+    ihm können Tokens stehen.
+    """
+    deadline = time.monotonic() + timeout
+    conn, path = _connection(url)
+    try:
+        try:
+            conn.request(method, path, body=body, headers=dict(headers or {}))
+            conn.sock.settimeout(max(0.1, deadline - time.monotonic()))
+            resp = conn.getresponse()
+        except socket.timeout:
+            raise UpstreamError("timeout", "Der Anmeldedienst hat nicht rechtzeitig geantwortet.") from None
+        except (OSError, http.client.HTTPException) as exc:
+            raise UpstreamError("connect", f"Keine Verbindung zum Anmeldedienst "
+                                           f"({type(exc).__name__}).") from None
+        if 300 <= resp.status < 400:
+            raise UpstreamError("redirect", f"Der Anmeldedienst leitet weiter (HTTP {resp.status}); "
+                                            "das Gateway folgt keiner Weiterleitung.")
+        return resp.status, _read_limited(resp, conn, deadline, max_bytes)
+    finally:
+        conn.close()
+
+
 def delete(server, url, session_id):
     """Sitzung beenden. Fehler sind hier egal: Der Server räumt sonst selbst auf."""
     if not session_id:

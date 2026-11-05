@@ -3,10 +3,10 @@ oaap_manifest: "0.2"
 app:
   id: mcp-gateway
   name: OAAP MCP-Gateway
-  version: 0.2.1
+  version: 0.3.0
   type: native
   class: frontend
-  description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln, Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
+  description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln oder Anmeldung am Anmeldedienst des Mandanten (Zugangsprofile, Token-Tausch), Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
 
 services:
   web:
@@ -21,6 +21,10 @@ routes:
   # (RFC-0010). Geprüft wird im Dienst: Der API-Schlüssel IST die
   # Identität und nennt die Sichten, die er benutzen darf (Spec §2).
   - path: /mcp
+    roles: [public]
+  # Wo ein MCP-Client erfährt, bei welchem Anmeldedienst er sich anmeldet
+  # (RFC 9728). Öffentlich wie /mcp, für jede Sicht gleich (Spec §2.2).
+  - path: /.well-known/oauth-protected-resource
     roles: [public]
   # Die Betreiber-Sicht: Server, Katalog, Sichten, Schlüssel, Verbrauch,
   # Auswertung, /report/v1/… für ein Abrechnungssystem. Ausdrücklich
@@ -52,6 +56,16 @@ config:
   - key: MCPGW_CATALOG_MINUTES
     label: "Katalog neu lesen alle … Minuten (0 = nur auf Knopfdruck)"
     default: "15"
+  # Anmeldung von Menschen (RFC-0065 Stufe 3, D14/D15). Leer = aus.
+  - key: MCPGW_ISSUER
+    label: "Issuer des Anmeldediensts des Mandanten, genau wie im Token (z. B. https://auth.<knoten>/realms/<mandant>; leer = keine Anmeldung)"
+    default: ""
+  - key: MCPGW_AUDIENCE
+    label: "Diese Kennung muss im Token als Audience stehen: Client-ID des vertraulichen Gateway-Clients im Realm"
+    default: ""
+  - key: MCPGW_SIGNIN_CLIENT
+    label: "Client-ID, mit der sich Menschen anmelden (öffentlicher Client, für Claude Code --client-id)"
+    default: ""
 
 health:
   path: /healthz

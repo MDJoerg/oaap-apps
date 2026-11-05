@@ -1,9 +1,12 @@
-"""OAAP MCP-Gateway 0.2 — Tool-Server hinter einem Endpunkt je Sicht.
+"""OAAP MCP-Gateway 0.3 — Tool-Server hinter einem Endpunkt je Sicht.
 
-Umsetzung der Capability `oaap.ai.mcp-gateway` 0.2 (RFC-0065 Stufen 1
-und 2): Eine Sicht bündelt Tools, Resources und Prompts mehrerer Server
+Umsetzung der Capability `oaap.ai.mcp-gateway` 0.3 (RFC-0065 Stufen 1
+bis 3): Eine Sicht bündelt Tools, Resources und Prompts mehrerer Server
 unter eigenen Namen, mit festen Argumenten und Grenzen; Rückfragen vom
-Server an den Client sind je Sicht einstellbar.
+Server an den Client sind je Sicht einstellbar. Hinein kommt man mit
+einem Schlüssel oder als Mensch, angemeldet am Anmeldedienst des
+Mandanten (Zugangsprofil); ein Server mit Verfahren X sieht den
+Menschen über einen getauschten Token.
 Ein KI-Client — Claude Code, Copilot, ein eigener Agent — spricht mit
 `/mcp/<sicht>` wie mit einem einzigen MCP-Server. Welcher Server
 dahintersteht und wo, erfährt er nie.
@@ -12,8 +15,11 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
 
 - `/mcp/...` ist `public`: Die Plattform authentifiziert dort nichts,
   entfernt gefälschte Identitäts-Kopfzeilen und bremst je Client
-  (RFC-0010). Geprüft wird hier: **Der API-Schlüssel ist die
-  Identität**, und er nennt die Sichten, die er benutzen darf.
+  (RFC-0010). Geprüft wird hier: ein **API-Schlüssel** oder das **Token
+  eines angemeldeten Menschen** (signin.py), und was Schlüssel oder
+  Zugangsprofil benutzen dürfen.
+- `/.well-known/oauth-protected-resource…` ist `public`: Dort erfährt
+  ein Client, bei welchem Anmeldedienst er sich anmelden soll.
 - `/` ist `admin`: Server, Katalog, Sichten, Schlüssel, Verbrauch,
   Auswertung und `/report/v1/…` für ein Abrechnungssystem.
 
@@ -43,18 +49,25 @@ import argcheck
 import books
 import compose
 import guard
+import signin
 import upstream
 from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "gateway.db")
 MASTER = os.environ.get("MCPGW_MASTER_KEY", "")
 VAULT = Vault(b"oaap-mcp-gateway-vault|", "MCPGW_MASTER_KEY")
+
+# Anmeldung (Spec §2.2, RFC-0065 D14/D15). Ohne Issuer ist sie aus.
+ISSUER = (os.environ.get("MCPGW_ISSUER") or "").strip().rstrip("/")
+AUDIENCE = (os.environ.get("MCPGW_AUDIENCE") or "").strip()
+SIGNIN_CLIENT = (os.environ.get("MCPGW_SIGNIN_CLIENT") or "").strip()
+ISSUER_KEYS = signin.Keys(ISSUER) if ISSUER else None
 
 try:
     CATALOG_MINUTES = max(0, min(1440, int(os.environ.get("MCPGW_CATALOG_MINUTES") or 15)))
@@ -71,13 +84,19 @@ LIMITER = books.RateLimiter()
 
 # ------------------------------------------------------------- Antworten
 
-# Dieselbe Antwort für „kein Schlüssel“, „unbekannt“, „widerrufen“ und
-# „für diese Sicht nicht berechtigt“ (Spec §2): Wer probiert, soll aus der
-# Antwort nichts lernen — nicht einmal, ob es die Sicht gibt.
+# Dieselbe Antwort für jedes Scheitern (Spec §2): kein Schlüssel, unbekannt,
+# widerrufen, Token ungültig, Sicht gibt es nicht oder nimmt den Weg nicht an.
+# Wer probiert, soll nichts lernen — nicht einmal, ob es die Sicht gibt. Seit
+# 0.3 eine 401: Die MCP-Anmeldung braucht sie, um den Weg zur Anmeldung zu zeigen.
 DENIED = json.dumps({"jsonrpc": "2.0", "id": None,
-                     "error": {"code": -32000, "message": "Kein gültiger Schlüssel für diese "
-                                                          "Sicht."}},
+                     "error": {"code": -32000, "message": "Kein gültiger Schlüssel und keine "
+                                                          "gültige Anmeldung für diese Sicht."}},
                     ensure_ascii=False).encode("utf-8")
+# Ein angemeldeter Mensch, der diese Sicht nicht benutzen darf (Spec §2.3).
+FORBIDDEN = json.dumps({"jsonrpc": "2.0", "id": None,
+                        "error": {"code": -32000, "message": "Angemeldet, aber kein Zugangsprofil "
+                                                             "erlaubt diese Sicht."}},
+                       ensure_ascii=False).encode("utf-8")
 SESSION_UNKNOWN = {"jsonrpc": "2.0", "id": None,
                    "error": {"code": -32000, "message": "Sitzung unbekannt oder abgelaufen — "
                                                         "bitte neu initialisieren."}}
@@ -144,8 +163,24 @@ def guard_of(srow):
         return g
 
 
-def server_access(srow):
-    """Adresse und Zugang für upstream.py. Wirft UpstreamError mit einem Satz."""
+class NoPerson(upstream.UpstreamError):
+    """Verfahren X ohne angemeldeten Menschen — oder der Tausch scheiterte. Nie ein Rückfall (D8)."""
+
+    def __init__(self, text):
+        super().__init__("exchange", text)
+
+
+EXCHANGED = {}                       # (Issuer, sub, Server) → (Token, gültig bis); nur im Speicher
+_EXCHANGED_LOCK = threading.Lock()
+
+
+def server_access(srow, person=None):
+    """Adresse und Zugang für upstream.py. Wirft UpstreamError mit einem Satz.
+
+    Verfahren X (Spec §3.5): Statt eines eigenen Zugangs bekommt der
+    Server ein Token, das der Anmeldedienst für genau ihn ausstellt — im
+    Tausch gegen das Token des Menschen. Ohne Menschen kein Aufruf.
+    """
     url = upstream.resolve(srow["address"])
     credential = ""
     if srow["credential"]:
@@ -154,21 +189,50 @@ def server_access(srow):
         except VaultError as exc:
             raise upstream.UpstreamError("credential",
                                          f"Zugangsdaten nicht lesbar: {exc}") from None
-    return {"auth_kind": srow["auth_kind"], "credential": credential}, url
+    if srow["auth_kind"] != "exchange":
+        return {"auth_kind": srow["auth_kind"], "credential": credential}, url
+    if not person or not person.get("token"):
+        raise NoPerson("Dieser Server arbeitet mit Verfahren X und braucht einen angemeldeten "
+                       "Menschen; mit einem Schlüssel geht es nicht.")
+    ex = json.loads(srow["exchange"] or "{}")
+    cache = (person["iss"], person["sub"], srow["name"])
+    with _EXCHANGED_LOCK:
+        hit = EXCHANGED.get(cache)
+        if hit and hit[1] > time.time() + 30:
+            return {"auth_kind": "bearer", "credential": hit[0]}, url
+    try:
+        token, lifetime = signin.exchange(upstream.resolve(ex.get("token_url", "")),
+                                          ex.get("client_id", ""), credential, person["token"],
+                                          ex.get("audience", ""))
+    except signin.Invalid as exc:
+        raise NoPerson(f"Token-Tausch abgelehnt: {exc}") from None
+    except upstream.UpstreamError as exc:
+        raise NoPerson(f"Token-Tausch nicht möglich: {exc}") from None
+    with _EXCHANGED_LOCK:
+        EXCHANGED[cache] = (token, time.time() + lifetime)
+    return {"auth_kind": "bearer", "credential": token}, url
 
 
 KIND_PLURAL = {"tool": "Tools", "resource": "Resources", "template": "Resource-Vorlagen",
                "prompt": "Prompts"}
 
 
-def read_catalog(name):
-    """Liest, was ein Server anbietet. Gibt (ok, satz) zurück; schreibt Katalog und Zustand."""
+def read_catalog(name, person=None):
+    """Liest, was ein Server anbietet. Gibt (ok, satz) zurück; schreibt Katalog und Zustand.
+
+    Bei Verfahren X braucht es einen Menschen: `person` mit dem Token des
+    Betreibers (Kommandozeile `--token-stdin`). Ohne ihn bleibt der Katalog,
+    wie er zuletzt gelesen wurde.
+    """
     srow = books.server_row(DB, name)
     if not srow:
         return False, f"Einen Server „{name}“ gibt es nicht."
+    if srow["auth_kind"] == "exchange" and not person:
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
+                       f"Menschen — app.py server read {name} --token-stdin ja.")
     lim = limits_of(srow)
     try:
-        server, url = server_access(srow)
+        server, url = server_access(srow, person)
         offers, session = upstream.list_catalog(server, url, timeout=min(60, lim["timeout_s"]))
     except upstream.UpstreamError as exc:
         books.note_server(DB, name, error=str(exc))
@@ -188,9 +252,12 @@ def read_catalog(name):
 class DownSession:
     """Eine Sitzung des Clients. Gehört dem Schlüssel und der Sicht, die sie eröffnet haben."""
 
-    def __init__(self, key_id, view, version, client_caps=None):
+    def __init__(self, key_id, view, version, client_caps=None, person=None):
         self.id = secrets.token_urlsafe(24)
         self.key_id = key_id
+        # Bei Anmeldung: der Mensch (Issuer, sub) — die Sitzung gehört ihm allein.
+        self.person = person
+        self.subject = (person["iss"], person["sub"]) if person else None
         self.view = view
         self.version = version
         # Welche Rückfragen der Client beantworten kann (aus seinem initialize).
@@ -214,7 +281,7 @@ def end_session(sess):
         srow = books.server_row(DB, name)
         if srow:
             try:
-                server, url = server_access(srow)
+                server, url = server_access(srow, sess.person)
                 upstream.delete(server, url, us.id)
             except upstream.UpstreamError:
                 pass
@@ -273,8 +340,8 @@ def refusal(vrow, kind, name):
     return "unknown_" + kind, -32602, f"Unbekanntes {word}: {name}"
 
 
-def entitled(key, vrow):
-    if not vrow or vrow["name"] not in books.key_views(key):
+def entitled(key, vrow, way):
+    if not vrow or vrow["name"] not in books.key_views(key) or way not in books.view_ways(vrow):
         return False
     light = books.view_light(DB, vrow["name"])
     return books.LIGHT_RANK[light] <= books.LIGHT_RANK.get(key["ceiling"], 1)
@@ -314,6 +381,7 @@ STYLE = """<style>
   button.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;font-size:.85rem}
   button.quiet:hover{background:#e5e7eb}
   .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
+  details summary{cursor:pointer;color:var(--oaap-blue-700);font-size:.85rem;margin:.1rem 0 .5rem}
   .err{color:var(--err)}.muted{color:var(--oaap-muted);font-size:.9rem}
   table{width:100%;border-collapse:collapse}
   th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
@@ -429,6 +497,7 @@ def admin_page(user, roles, host, notice="", secret=None):
 <p><b>Nur jetzt sichtbar.</b> Gespeichert ist nur ein Hash; wer den Wert verliert, bekommt einen neuen.</p>
 <pre>{esc(secret["value"])}</pre><p class="hint">Zum Beispiel für Claude Code:</p>
 <pre>{esc(cmd)}</pre></div>''')
+    parts.append(signin_card(host))
     if not VAULT.usable(MASTER):
         parts.append('<div class="card attention"><p><b>MCPGW_MASTER_KEY fehlt.</b> Server ohne '
                      'Zugangsdaten und Server hinter einer Destination lassen sich pflegen; eigene '
@@ -464,7 +533,8 @@ def admin_page(user, roles, host, notice="", secret=None):
         light = books.view_light(DB, v["name"])
         vrows.append(f'<tr><td><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a></td>'
                      f'<td>{esc(", ".join(books.view_servers(DB, v["name"])) or "—")}<br>{badge(light, light)}</td>'
-                     f'<td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}</td>'
+                     f'<td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}<br>'
+                     f'<span class="muted">{esc(books.WAY_WORDS.get(v["ways"], v["ways"]))}</span></td>'
                      f'<td>{esc(summary)}</td><td><code>{esc(endpoint(host, v["name"]))}</code></td></tr>')
     parts.append(f'''<div class="card"><h2>Sichten</h2>
 <p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie bündelt, was hier freigegeben ist — aus einem
@@ -475,6 +545,7 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
 <form class="grid" method="post" action="view-save">
 <div><label>Name (Pfad)</label><input type="text" name="name" required></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
+<div><label>Zugänge</label><select name="ways">{options(books.WAYS, "key", books.WAY_WORDS)}</select></div>
 <div><button>Anlegen</button></div></form></div>''')
 
     totals = books.totals(DB)
@@ -486,6 +557,9 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
         action = "" if k["revoked"] else (
             f'<form class="inline" method="post" action="revoke"><input type="hidden" name="label" '
             f'value="{esc(k["label"])}"><button class="quiet">Widerrufen</button></form>')
+        if k["kind"] == "profile":
+            state += " " + badge("yellow", "Zugangsprofil") + f'<br><span class="muted">Gruppen: ' \
+                f'{esc(", ".join(books.profile_groups(k)))}</span>'
         krows.append(f'<tr><td><b>{esc(k["label"])}</b><br>{state}</td>'
                      f'<td>{esc(", ".join(books.key_views(k)))}</td>'
                      f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
@@ -493,12 +567,16 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
                      f'<td>{esc(used)}{" / Budget " + str(k["budget_calls"]) if k["budget_calls"] else ""}</td>'
                      f'<td class="muted">{esc(context_line(k))}</td><td>{action}</td></tr>')
     vnames = [v["name"] for v in books.views(DB)]
-    parts.append(f'''<div class="card"><h2>Schlüssel</h2>
+    parts.append(f'''<div class="card"><h2>Schlüssel und Zugangsprofile</h2>
+<p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert:
+Es gilt für angemeldete Menschen der genannten Gruppen (volle Pfade wie /sap-dev, oder * für alle).</p>
 <div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
 <th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
-<h2 style="margin-top:1.2rem">Schlüssel ausstellen</h2>
+<h2 style="margin-top:1.2rem">Schlüssel ausstellen oder Zugangsprofil anlegen</h2>
 <form class="grid" method="post" action="issue">
 <div><label>Etikett</label><input type="text" name="label" required></div>
+<div><label>Art</label><select name="kind">{options(("key", "profile"), "key", {"key": "Schlüssel", "profile": "Zugangsprofil"})}</select></div>
+<div><label>Gruppen (nur Zugangsprofil, Komma)</label><input type="text" name="groups"></div>
 <div><label>Sichten (Komma) — bekannt: {esc(", ".join(vnames) or "keine")}</label>
 <input type="text" name="views" required></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
@@ -510,15 +588,16 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
     labels = {k["id"]: k["label"] for k in books.keys(DB)}
     urows = "".join(
         f'<tr><td>{esc(r["time"])}</td><td>{esc(labels.get(r["key_id"], r["key_id"]))}</td>'
-        f'<td>{esc(r["view"])}</td><td><code>{esc(r["tool"])}</code></td>'
+        f'<td>{esc(r["view"])}</td><td><code>{esc(r["tool"] or "—")}</code>'
+        f'{"" if r["kind"] == "tool" else " <span class=muted>" + esc(compose.KIND_WORDS.get(r["kind"], r["kind"])) + "</span>"}</td>'
         f'<td>{esc(r["outcome"])}{" (" + esc(r["reason"]) + ")" if r["reason"] else ""}</td>'
         f'<td class="num">{r["ms"]} ms</td><td class="num">{esc(fmt_bytes(r["bytes_up"]))} / '
         f'{esc(fmt_bytes(r["bytes_down"]))}</td></tr>' for r in books.recent(DB, limit=40))
     proto = ", ".join(f'{r["method"]} {r["n"]}' for r in books.protocol_totals(DB)) or "—"
-    parts.append(f'''<div class="card"><h2>Letzte Tool-Aufrufe</h2>
+    parts.append(f'''<div class="card"><h2>Letzte Aufrufe</h2>
 <p class="hint">Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
 Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
-<div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Sicht</th><th>Tool</th><th>Ausgang</th>
+<div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Sicht</th><th>Eintrag</th><th>Ausgang</th>
 <th>Dauer</th><th>Bytes hoch/runter</th></tr>{urows or '<tr><td colspan=7 class=muted>Noch keine.</td></tr>'}</table></div></div>''')
 
     arows = "".join(f'<tr><td>{esc(r["time"])}</td><td>{esc(r["actor"])}</td><td>{esc(r["action"])}</td>'
@@ -529,11 +608,37 @@ Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
     return page("Übersicht", "".join(parts), user, roles)
 
 
+CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code (D15)
+
+
+def signin_card(host):
+    """Wie sich Menschen anmelden (Spec §2.2) — oder warum es noch nicht geht."""
+    if not ISSUER:
+        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Für die Anmeldung am '
+                'Anmeldedienst des Mandanten MCPGW_ISSUER, MCPGW_AUDIENCE und MCPGW_SIGNIN_CLIENT in der '
+                'Konfiguration der Instanz setzen (RFC-0065 D14, D15).</p></div>')
+    err = ISSUER_KEYS.error if ISSUER_KEYS else ""
+    views = [v["name"] for v in books.views(DB) if "signin" in books.view_ways(v)]
+    cmd = "\n".join(f"claude mcp add --transport http {v} {endpoint(host, v)} \\\n"
+                    f"  --client-id {SIGNIN_CLIENT or '<client>'} --callback-port {CALLBACK_PORT}"
+                    for v in views) or "Noch keine Sicht nimmt Anmeldungen an."
+    return f'''<div class="card"><h2>Anmeldung von Menschen</h2>
+<p>Issuer <code>{esc(ISSUER)}</code> · Audience <code>{esc(AUDIENCE or "— fehlt")}</code> ·
+Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
+{"<p class=err>Schlüssel des Issuers: " + esc(err) + "</p>" if err else ""}
+<p class="hint">Im Realm braucht es einen öffentlichen Client (Rücksprung nur
+<code>http://localhost:{CALLBACK_PORT}/callback</code>) mit einem Audience-Mapper auf
+<code>{esc(AUDIENCE or "MCPGW_AUDIENCE")}</code>. Wer zahlt, entscheidet ein Zugangsprofil über die
+Gruppen im Token; ohne passendes Profil gibt es 403.</p>
+<pre>{esc(cmd)}</pre></div>'''
+
+
 def server_form(s=None):
     lim = limits_of(s) if s else dict(guard.DEFAULTS)
     kind = s["auth_kind"] if s else "none"
     plain = kind if kind in books.AUTH_KINDS else "header"
     header = kind[7:] if kind.startswith("header:") else ""
+    ex = json.loads(s["exchange"] or "{}") if s else {}
     limit_inputs = "".join(
         f'<div><label>{esc(guard.LABELS[n])}</label><input type="number" name="lim_{n}" '
         f'value="{lim[n]}"></div>' for n in guard.DEFAULTS)
@@ -544,9 +649,15 @@ def server_form(s=None):
 {" readonly" if s else ""} required></div>
 <div><label>Adresse (URL oder destination:&lt;name&gt;)</label>
 <input type="text" name="address" value="{esc(s["address"] if s else "")}" required></div>
-<div><label>Zugang (Verfahren T)</label><select name="auth">{options(("none", "bearer", "basic", "header"), plain)}</select></div>
+<div><label>Zugang (Verfahren T, oder X = Token-Tausch)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange"), plain)}</select></div>
 <div><label>Kopfzeile (bei Zugang header)</label><input type="text" name="header" value="{esc(header)}"></div>
-<div><label>Zugangsdaten ({esc(cred_note)}; basic: name:passwort)</label>
+<div><label>Verfahren X: Token-Endpunkt (URL oder destination:&lt;name&gt;)</label>
+<input type="text" name="token_url" value="{esc(ex.get("token_url", ""))}"></div>
+<div><label>Verfahren X: eigener Client (= MCPGW_AUDIENCE)</label>
+<input type="text" name="client_id" value="{esc(ex.get("client_id", ""))}"></div>
+<div><label>Verfahren X: Audience des Backends</label>
+<input type="text" name="audience" value="{esc(ex.get("audience", ""))}"></div>
+<div><label>Zugangsdaten ({esc(cred_note)}; basic: name:passwort; X: Client-Geheimnis)</label>
 <input type="password" name="credential" autocomplete="off"></div>
 <div><label><input type="checkbox" name="drop_credential" value="1"> Zugangsdaten entfernen</label></div>
 <div><label>Ampel</label><select name="light">{options(books.LIGHTS, s["light"] if s else "red", LIGHT_WORDS)}</select></div>
@@ -690,7 +801,8 @@ def view_page(user, roles, host, name, notice=""):
                     f'<td>{badge(cls, word)}</td><td>{esc(books.EFFECT_WORDS[item["effect"]])}</td>'
                     f'<td class="muted">{esc("; ".join(tailored) or "—")}<br>{esc(item["approved_by"])}, '
                     f'{esc(item["approved_at"])}</td><td>{remove}</td></tr>'
-                    f'<tr><td></td><td colspan=5>{tailor_form(item)}</td></tr>')
+                    f'<tr><td></td><td colspan=5><details><summary>Zuschnitt ändern</summary>'
+                    f'{tailor_form(item)}</details></td></tr>')
         if state == "suspended":
             cat = books.catalog_row(DB, item["server"], item["kind"], item["source"])
             old = json.dumps(json.loads(item["approved_doc"]), indent=2, ensure_ascii=False)
@@ -719,6 +831,7 @@ Client gehen nur durch, wenn sie hier durchgereicht werden UND der Client sie ka
 Server das Modell des Clients benutzen und ihm Daten schicken.</p>
 <form class="grid" method="post" action="view-save"><input type="hidden" name="name" value="{esc(name)}">
 <div><label>Höchste Wirkungsklasse der Sicht</label><select name="max_effect">{options(books.EFFECTS, v["max_effect"], books.EFFECT_WORDS)}</select></div>
+<div><label>Zugänge</label><select name="ways">{options(books.WAYS, v["ways"], books.WAY_WORDS)}</select></div>
 {req_inputs}<div><button class="quiet">Setzen</button></div></form></div>
 {"".join(compare)}
 <div class="card"><h2>Freigegebene Einträge</h2><p class="hint">Neue Einträge kommen über den Katalog eines
@@ -735,7 +848,8 @@ Muster mit <code>*</code> und <code>?</code>.</p>
 
 # ------------------------------------------------------------- Auswertung
 
-DIMENSIONS = {**greport.CONTEXT_DIMENSIONS, "view": "u.view", "kind": "u.kind", "tool": "u.tool",
+DIMENSIONS = {**greport.CONTEXT_DIMENSIONS, "view": "u.view", "kind": "u.kind", "user": "u.user_sub",
+              "tool": "u.tool",
               "server": "u.server", "outcome": "u.outcome", **greport.TIME_DIMENSIONS}
 REPORT = greport.Report(DIMENSIONS, [
     ("calls", "COUNT(*)"),
@@ -750,7 +864,7 @@ CHARTS = gcharts.Charts(
     lambda o: {"ok": "good", "tool_error": "warning", "refused": "serious",
                "limited": "serious"}.get(o, "critical"),
     lambda o: OUTCOME_WORDS.get(o, o))
-CHART_DIMS = {"view": "Sicht", "tool": "Tool", "key": "Schlüssel", "server": "Server",
+CHART_DIMS = {"view": "Sicht", "tool": "Eintrag", "kind": "Art", "key": "Schlüssel", "server": "Server",
               "account": "Konto", "project": "Projekt", "cost_center": "Kostenstelle",
               "owner": "Verantwortlich", "application": "Anwendung"}
 
@@ -785,7 +899,7 @@ def charts_page(user, roles, params):
 <p class="hint">Dieselbe Abfrage wie <code>/report/v1/usage</code>. Volumen, keine Preise.</p></div>
 <div class="card"><h2>{esc(CHARTS.metric_labels[metric])} je {"Tag" if step == "day" else "Monat"}</h2>
 {CHARTS.stacked_bars(over, step, by, metric)}</div>
-<div class="card"><h2>Tools nach {esc(CHARTS.metric_labels[metric])}</h2>{CHARTS.top_list(ranked, "tool", metric)}</div>
+<div class="card"><h2>Einträge nach {esc(CHARTS.metric_labels[metric])}</h2>{CHARTS.top_list(ranked, "tool", metric)}</div>
 <div class="card"><h2>Ausgänge</h2>{CHARTS.outcome_list(outcomes)}</div>'''
     return page("Auswertung", body, user, roles)
 
@@ -798,7 +912,8 @@ def keys_doc():
                     "ceiling": row["ceiling"], "budget_calls": row["budget_calls"],
                     "owner": row["owner"], "account": row["account"], "project": row["project"],
                     "cost_center": row["cost_center"], "application": row["application"],
-                    "tenant": row["tenant"],
+                    "tenant": row["tenant"], "kind": row["kind"],
+                    "groups": books.profile_groups(row),
                     "labels": json.loads(row["labels"]) if row["labels"] else {}})
     return {"keys": out}
 
@@ -828,6 +943,9 @@ def modern(msg):
     params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
     meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
     return "io.modelcontextprotocol/protocolVersion" in meta
+
+
+WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
 
 class Refusal(Exception):
@@ -891,8 +1009,23 @@ class Handler(BaseHTTPRequestHandler):
         rest = self.route()[len("/mcp/"):]
         return rest if rest and "/" not in rest else None
 
+    def origin(self):
+        proto = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip()
+        return f"{proto if proto in ('http', 'https') else 'http'}://{self.headers.get('Host', 'gateway')}"
+
+    def deny(self):
+        """Die eine Antwort für jedes Scheitern (Spec §2), mit dem Weg zur Anmeldung."""
+        meta = f"{self.origin()}/.well-known/oauth-protected-resource{self.route()}"
+        self.send_bytes(401, "application/json; charset=utf-8", DENIED,
+                        [("WWW-Authenticate", f'Bearer resource_metadata="{meta}"')])
+
     def authorize(self, view_name):
-        """Schlüsselzeile und Sicht — oder die Anfrage ist schon beantwortet (403/429)."""
+        """Zahler (Schlüssel- oder Profilzeile) und Sicht — oder die Anfrage ist beantwortet.
+
+        Setzt `self.person` bei einer Anmeldung: Issuer, sub, Gruppen und das
+        Token selbst (nur im Speicher, für Verfahren X).
+        """
+        self.person = None
         addr = self.client_addr()
         if failing_hard(addr):
             self.send_json(429, {"jsonrpc": "2.0", "id": None,
@@ -901,21 +1034,46 @@ class Handler(BaseHTTPRequestHandler):
             return None, None
         header = self.headers.get("Authorization", "")
         value = header[7:].strip() if header[:7].lower() == "bearer " else ""
-        key = books.find(DB, value)
         vrow = books.view_row(DB, view_name) if view_name else None
-        if not key or key["revoked"] or not entitled(key, vrow):
+        if ISSUER and signin.looks_like_token(value):
+            try:
+                claims = signin.check(value, ISSUER_KEYS, ISSUER, AUDIENCE)
+            except signin.Invalid:
+                note_failure(addr)
+                self.deny()
+                return None, None
+            person = {"iss": claims["iss"], "sub": claims["sub"], "token": value,
+                      "groups": sorted(signin.groups_of(claims))}
+            profile = books.match_profile(DB, person["groups"], view_name or "")
+            if not profile or not entitled(profile, vrow, "signin"):
+                # Gültig angemeldet, aber nicht für diese Sicht: 403, nicht 401 — eine 401
+                # schickte den Client in eine neue Anmeldung, die nichts ändert (Spec §2.3).
+                self.send_bytes(403, "application/json; charset=utf-8", FORBIDDEN)
+                return None, None
+            self.person = person
+            return profile, vrow
+        key = books.find(DB, value)
+        if not key or key["revoked"] or key["kind"] != "key" or not entitled(key, vrow, "key"):
             note_failure(addr)
-            self.send_bytes(403, "application/json; charset=utf-8", DENIED)
+            self.deny()
             return None, None
         return key, vrow
+
+    def rate_id(self, key):
+        """Rate je Schlüssel — bei einem Profil je Mensch (Spec §2.3)."""
+        return key["id"] + (":" + self.person["sub"] if self.person else "")
 
     def session_of(self, key, vrow):
         sid = self.headers.get("Mcp-Session-Id", "")
         with _SESS_LOCK:
             sess = SESSIONS.get(sid)
-        if not sess or sess.key_id != key["id"] or sess.view != vrow["name"]:
+        subject = (self.person["iss"], self.person["sub"]) if self.person else None
+        if not sess or sess.key_id != key["id"] or sess.view != vrow["name"] \
+                or sess.subject != subject:
             return None
         sess.last = time.monotonic()
+        if self.person:
+            sess.person = self.person            # das jüngste Token — für Verfahren X
         return sess
 
     def do_POST(self):
@@ -938,7 +1096,7 @@ class Handler(BaseHTTPRequestHandler):
         if raw is None:
             self.send_json(413, rpc_error(None, -32600, f"Anfrage größer als {MAX_BODY} Bytes."))
             return
-        ok, wait = LIMITER.allow(key["id"], key["rate_per_min"] or DEFAULT_RATE)
+        ok, wait = LIMITER.allow(self.rate_id(key), key["rate_per_min"] or DEFAULT_RATE)
         if not ok:
             self.send_json(429, rpc_error(None, -32000, "Zu viele Anfragen dieses Schlüssels je "
                                                         "Minute.", "rate", wait),
@@ -1008,7 +1166,8 @@ class Handler(BaseHTTPRequestHandler):
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         asked = params.get("protocolVersion")
         version = asked if asked in upstream.TESTED else upstream.NEWEST
-        sess = DownSession(key["id"], vrow["name"], version, params.get("capabilities"))
+        sess = DownSession(key["id"], vrow["name"], version, params.get("capabilities"),
+                           self.person)
         with _SESS_LOCK:
             SESSIONS[sess.id] = sess
         kinds = {i["kind"] for i in books.items(DB, vrow["name"])}
@@ -1032,7 +1191,7 @@ class Handler(BaseHTTPRequestHandler):
         if not us or not srow:
             return
         try:
-            server, url = server_access(srow)
+            server, url = server_access(srow, sess.person)
             upstream.post(server, url, msg, session_id=us.id, version=us.version, timeout=10)
         except upstream.UpstreamError:
             pass
@@ -1054,7 +1213,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             out["result"] = msg.get("result") if isinstance(msg.get("result"), dict) else {}
         try:
-            server, url = server_access(srow)
+            server, url = server_access(srow, sess.person)
             upstream.post(server, url, out, session_id=us.id, version=us.version, timeout=10)
         except upstream.UpstreamError:
             pass
@@ -1145,7 +1304,7 @@ class Handler(BaseHTTPRequestHandler):
             srow = books.server_row(DB, item["server"])
             g = guard_of(srow)
             try:
-                probe = g.enter(key["id"])
+                probe = g.enter(self.rate_id(key))
             except guard.Limited as exc:
                 done("limited", exc.reason)
                 answer(rpc_error(msg_id, -32001, f"Sicht {vrow['name']}: {exc}", exc.reason,
@@ -1165,7 +1324,8 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             books.record(DB, key, vrow["name"], state["kind"], state["name"], state["server"],
                          state["source"], state["outcome"], state["reason"],
-                         (time.monotonic() - t0) * 1000, bytes_up, state["down"])
+                         (time.monotonic() - t0) * 1000, bytes_up, state["down"],
+                         person=self.person, procedure=state.get("procedure", "T"))
             if state["sse"]:
                 self.close_connection = True
 
@@ -1174,8 +1334,16 @@ class Handler(BaseHTTPRequestHandler):
         msg_id = out["id"]
         wants_sse = "text/event-stream" in (self.headers.get("Accept") or "")
         reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
+        if srow["auth_kind"] == "exchange":
+            state["procedure"] = "X"
         try:
-            server, url = server_access(srow)
+            server, url = server_access(srow, self.person)
+        except NoPerson as exc:
+            # Kein Rückfall auf einen technischen Zugang (D8) — und kein Fehler auf dem
+            # Weg zum Server: Der Sicherungsautomat zählt das nicht.
+            done("refused" if not self.person else "upstream_error", "exchange")
+            answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
+            return False
         except upstream.UpstreamError as exc:
             done("upstream_error", exc.kind)
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — {exc}"))
@@ -1301,6 +1469,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         return len(data)
 
+    def resource_metadata(self, rest):
+        """RFC 9728 für jede Sicht gleich — ob es sie gibt, verrät das nicht (Spec §2.2)."""
+        if not ISSUER or not (rest == "" or (rest.startswith("/mcp/") and "/" not in rest[5:]
+                                              and rest[5:])):
+            self.send_json(404, {"error": "Keine Anmeldung an diesem Gateway."})
+            return
+        doc = {"resource": self.origin() + (rest or "/mcp"),
+               "authorization_servers": [ISSUER],
+               "bearer_methods_supported": ["header"],
+               "resource_name": rest[5:] or "OAAP MCP-Gateway"}
+        self.send_json(200, doc, [("Cache-Control", "max-age=300")])
+
     def do_DELETE(self):
         if not self.route().startswith("/mcp/"):
             self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -1322,6 +1502,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.route()
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION})
+            return
+        if path.startswith(WELL_KNOWN):
+            self.resource_metadata(path[len(WELL_KNOWN):])
             return
         if path.startswith("/mcp"):
             # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede
@@ -1391,12 +1574,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/issue":
                 views = [v.strip() for v in form.get("views", "").split(",") if v.strip()]
+                kind = form.get("kind", "key")
                 value, _ = books.issue(
                     DB, form.get("label", ""), user, views=views,
                     max_effect=form.get("max_effect", "read"), ceiling=form.get("ceiling", "yellow"),
                     budget_calls=_int(form.get("budget")), rate_per_min=_int(form.get("rate")),
+                    kind=kind, groups=form.get("groups", ""),
                     **{n: form.get(n, "") for n in books.CONTEXT_FIELDS})
-                secret = {"label": form.get("label", ""), "value": value, "views": views}
+                if kind == "profile":
+                    notice = f"Zugangsprofil „{form.get('label', '')}“ angelegt."   # Wert verworfen
+                else:
+                    secret = {"label": form.get("label", ""), "value": value, "views": views}
             elif path == "/revoke":
                 label = form.get("label", "")
                 notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."
@@ -1416,7 +1604,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/view-save":
                 reqs = {r: form["req_" + r] for r in books.REQUESTS if "req_" + r in form}
                 books.save_view(DB, user, form.get("name", ""), form.get("max_effect", "read"),
-                                reqs or None)
+                                reqs or None, form.get("ways") or None)
                 notice, back = "Sicht gespeichert.", ("view", form.get("name", ""))
             elif path == "/view-delete":
                 books.delete_view(DB, user, form.get("name", ""))
@@ -1498,8 +1686,15 @@ def save_server(form, user):
             sealed = VAULT.seal(MASTER, form["credential"])
         except VaultError as exc:
             raise ValueError(f"Zugangsdaten nicht gespeichert: {exc}") from None
+    exchange = None
+    if auth == "exchange":
+        exchange = {k: form.get(k) for k in ("token_url", "client_id", "audience")}
+        if exchange.get("client_id") and AUDIENCE and exchange["client_id"] != AUDIENCE:
+            raise ValueError("Der eigene Client für den Tausch muss MCPGW_AUDIENCE sein: Keycloak "
+                             "tauscht nur für einen Client, an den das Token adressiert ist.")
     books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,
-                      sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1")
+                      sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1",
+                      exchange=exchange)
     srow = books.server_row(DB, name)
     if srow:
         guard_of(srow)
@@ -1513,13 +1708,17 @@ def cli(argv):
     usage = ("Aufruf: app.py server set <name> --address A [--auth none|bearer|basic|header:N] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
              "        app.py view set <name> [--max-effect read|write|execute] "
-             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] | view list\n"
+             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key|signin|key,signin] | view list\n"
              "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
              "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
              "[--fixed JSON] [--bounds JSON] [--effect E] | view remove <sicht> <name> [--kind K]\n"
              "        app.py key issue <etikett> --views a,b [--max-effect read] [--ceiling yellow] "
-             "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>")
+             "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>\n"
+             "        app.py profile create <etikett> --groups /a,/b|* --views a,b [wie key issue] | "
+             "profile groups <etikett> --groups ...\n"
+             "        app.py server set <name> --auth exchange --token-url U --client-id C --audience A "
+             "--credential-stdin ja | server read <name> [--token-stdin ja]")
     if len(argv) < 2:
         print(usage)
         return 2
@@ -1550,6 +1749,10 @@ def cli(argv):
                     "auth": opts.get("auth", "none"), "light": opts.get("light", "red")}
             if form["auth"].startswith("header:"):
                 form["auth"], form["header"] = "header", form["auth"][7:]
+            for opt, field in (("token-url", "token_url"), ("client-id", "client_id"),
+                               ("audience", "audience")):
+                if opt in opts:
+                    form[field] = opts[opt]
             old = books.server_row(DB, pos[0])
             for n in guard.DEFAULTS:
                 form["lim_" + n] = opts.get(n.replace("_", "-"),
@@ -1559,13 +1762,24 @@ def cli(argv):
             print(save_server(form, "cli"))
             return 0
         if area == "server" and action == "read" and pos:
-            ok, text = read_catalog(pos[0])
+            person = None
+            if opts.get("token-stdin", "").lower() in ("ja", "yes", "1"):
+                # Verfahren X: ein Token des Betreibers, nur für diesen einen Lesevorgang.
+                tok = sys.stdin.readline().strip()
+                try:
+                    claims = signin.check(tok, ISSUER_KEYS, ISSUER, AUDIENCE) if ISSUER_KEYS else None
+                except signin.Invalid as exc:
+                    raise ValueError(f"Token taugt nicht: {exc}") from None
+                if not claims:
+                    raise ValueError("Ohne MCPGW_ISSUER gibt es keine Anmeldung.")
+                person = {"iss": claims["iss"], "sub": claims["sub"], "token": tok}
+            ok, text = read_catalog(pos[0], person)
             print(text)
             return 0 if ok else 1
         if area == "view" and action == "list":
             for v in books.views(DB):
                 reqs = books.view_requests(v)
-                print(f'{v["name"]:20} bis={v["max_effect"]} ampel={books.view_light(DB, v["name"])} '
+                print(f'{v["name"]:20} bis={v["max_effect"]} ampel={books.view_light(DB, v["name"])} zugänge={v["ways"]} '
                       + " ".join(f"{r}={reqs[r]}" for r in books.REQUESTS))
                 for item in books.items(DB, v["name"]):
                     print(f'    {item["kind"]:8} {item["name"]:30} {item["server"]}:{item["source"]} '
@@ -1580,7 +1794,8 @@ def cli(argv):
             old = books.view_row(DB, pos[0])
             reqs = {r: opts[r] for r in books.REQUESTS if r in opts}
             books.save_view(DB, "cli", pos[0],
-                            opts.get("max-effect", old["max_effect"] if old else "read"), reqs or None)
+                            opts.get("max-effect", old["max_effect"] if old else "read"), reqs or None,
+                            opts.get("ways"))
             print("gespeichert")
             return 0
         if area == "view" and action == "add" and len(pos) >= 3:
@@ -1623,6 +1838,19 @@ def cli(argv):
                    if n.replace("_", "-") in opts})
             print(value)
             print("Dieser Wert wird nicht wieder angezeigt.", file=sys.stderr)
+            return 0
+        if area == "profile" and action == "create" and pos:
+            books.issue(DB, pos[0], "cli", views=[v for v in opts.get("views", "").split(",") if v],
+                        max_effect=opts.get("max-effect", "read"), ceiling=opts.get("ceiling", "yellow"),
+                        budget_calls=_int(opts.get("budget")), rate_per_min=_int(opts.get("rate")),
+                        kind="profile", groups=opts.get("groups", ""),
+                        **{n: opts[n.replace("_", "-")] for n in books.CONTEXT_FIELDS
+                           if n.replace("_", "-") in opts})
+            print("Zugangsprofil angelegt")
+            return 0
+        if area == "profile" and action == "groups" and pos:
+            books.set_profile_groups(DB, "cli", pos[0], opts.get("groups", ""))
+            print("Gruppen gesetzt")
             return 0
     except ValueError as exc:
         print(exc, file=sys.stderr)

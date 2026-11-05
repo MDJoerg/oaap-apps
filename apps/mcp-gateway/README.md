@@ -6,9 +6,11 @@ einem einzigen MCP-Server und erfährt nie, welche Server dahinterstehen
 oder wo.
 
 Umsetzung der Capability [`oaap.ai.mcp-gateway`
-0.2](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
-und 2: Sichten bündeln Tools, Resources und Prompts mehrerer Server,
-technischer Zugang (Verfahren T).
+0.3](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
+bis 3: Sichten bündeln Tools, Resources und Prompts mehrerer Server;
+hinein mit einem Schlüssel oder als Mensch, angemeldet am Anmeldedienst
+des Mandanten; zum Server technisch (Verfahren T) oder als dieser Mensch
+über einen getauschten Token (Verfahren X).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -22,14 +24,19 @@ technischer Zugang (Verfahren T).
 | Server schützen: Gleichzeitigkeit, Raten, Zeit, Größe, Pause | eine zu große Antwort kürzen |
 | je Tool-Aufruf, Resource-Lesen, Prompt zählen, mit Kontext-Kopie | Preise kennen — Volumen, nie Geld |
 | nur die eingetragene Adresse anfahren | einer Weiterleitung folgen, Loopback oder Link-Local anfahren |
+| Tokens eines Menschen selbst prüfen (RS256, Issuer, Audience, Ablauf) | ein Token an einen Server weiterreichen |
+| bei Verfahren X ein Token nur für das Backend eintauschen | auf den technischen Zugang ausweichen, wenn der Mensch fehlt |
 
 ## Zwei Wege, zwei Rollen
 
 - **`/mcp/...` ist `public`.** Die Plattform authentifiziert hier
   nichts, entfernt gefälschte Identitäts-Kopfzeilen und bremst je
-  Client-Adresse (RFC-0010). Geprüft wird im Dienst: **Der
-  API-Schlüssel ist die Identität**, und er nennt die Sichten, die er
-  benutzen darf. Ohne genannte Sicht erreicht er nichts.
+  Client-Adresse (RFC-0010). Geprüft wird im Dienst: ein
+  **API-Schlüssel** oder das **Token eines angemeldeten Menschen**. Wer
+  nicht darf, bekommt immer dieselbe `401` — ob ohne Schlüssel, mit
+  falschem Token oder für eine Sicht, die es nicht gibt.
+- **`/.well-known/oauth-protected-resource` ist `public`.** Dort
+  erfährt ein MCP-Client, bei welchem Anmeldedienst er sich anmeldet.
 - **`/` ist `admin`.** Server, Katalog, Sichten, Schlüssel, Verbrauch,
   Auswertung und `/report/v1/…` für ein Abrechnungssystem.
 
@@ -58,6 +65,53 @@ technischer Zugang (Verfahren T).
 ```bash
 claude mcp add --transport http <sicht> https://<gateway>/mcp/<sicht> \
   --header "Authorization: Bearer mcp-oaap-…"
+```
+
+## Anmeldung von Menschen (0.3)
+
+Die Plattform zeigt einer App ihren Anmeldedienst bewusst nicht
+(RFC-0041). Das MCP-Gateway ist die Ausnahme, und der Betreiber richtet
+sie ein (RFC-0065 §15, D14–D16):
+
+1. **Im Realm des Mandanten** (Keycloak), von Hand:
+   - ein **vertraulicher Client** des Gateways, z. B. `mcp-gw-<instanz>`,
+     ohne Anmeldefluss; für Verfahren X mit eingeschaltetem
+     *Standard token exchange*;
+   - ein **öffentlicher Client** für Menschen, z. B. `mcp-claude`:
+     Anmeldung mit PKCE, Rücksprung nur
+     `http://localhost:33418/callback`, ein **Audience-Mapper** auf den
+     vertraulichen Client und ein Gruppen-Mapper (`groups`, volle Pfade).
+2. **In der Konfiguration der Instanz:** `MCPGW_ISSUER` (genau wie im
+   Token, z. B. `https://auth.<knoten>/realms/<mandant>`),
+   `MCPGW_AUDIENCE` (der vertrauliche Client), `MCPGW_SIGNIN_CLIENT`
+   (der öffentliche).
+3. **Sicht auf „Anmeldung“** stellen und ein **Zugangsprofil** anlegen:
+   Gruppen (`/sap-dev`, oder `*` für alle), Sichten, Kontext, Rate,
+   Budget — wie ein Schlüssel, nur ohne Wert. Das Profil wird je Sicht
+   gewählt; die Rate gilt je Mensch, das Budget für alle zusammen.
+4. **Claude Code**, einmal je Mensch:
+
+```bash
+claude mcp add --transport http <sicht> https://<gateway>/mcp/<sicht> \
+  --client-id mcp-claude --callback-port 33418
+```
+
+Claude Code öffnet den Browser, der Mensch meldet sich an, und das
+Gateway prüft das Token selbst: RS256, mindestens 2048 Bit, Issuer,
+Audience, Ablauf. Die Schlüssel des Issuers holt es nur von dessen
+eigener Adresse. In der Messzeile steht der Mensch als `sub` mit
+Issuer — nie Name oder E-Mail.
+
+**Verfahren X (Token-Tausch):** Ein Server mit Zugang `exchange` wird
+als dieser Mensch gerufen. Das Gateway tauscht dessen Token beim
+Token-Endpunkt gegen eines nur für das Backend (`audience`) und reicht
+das eigene Token nie weiter. Klappt der Tausch nicht, wird abgelehnt —
+nie der technische Zugang. Eine Sicht mit so einem Server nimmt nur
+Anmeldungen an. Den Katalog eines solchen Servers liest der Betreiber
+mit eigenem Token:
+
+```bash
+echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <name> --token-stdin ja
 ```
 
 ## Der festgehaltene Text
@@ -162,6 +216,11 @@ docker exec <container> python3 /srv/app.py view add sap-lesen papier 'sap://cla
 docker exec <container> python3 /srv/app.py view confirm sap-lesen read_class
 docker exec <container> python3 /srv/app.py view list
 docker exec <container> python3 /srv/app.py key issue agent-1 --views sap-lesen --cost-center KS1
+docker exec <container> python3 /srv/app.py view set sap-ich --ways signin
+docker exec <container> python3 /srv/app.py profile create entwickler --groups /sap-dev --views sap-ich --cost-center KS2
+echo "$GEHEIMNIS" | docker exec -i <container> python3 /srv/app.py server set a4h-ich \
+  --address https://a4h.example/mcp --auth exchange --token-url destination:kc-token \
+  --client-id mcp-gw-probe --audience a4h-mcp --credential-stdin ja
 ```
 
 ## Prüfen
@@ -169,6 +228,7 @@ docker exec <container> python3 /srv/app.py key issue agent-1 --views sap-lesen 
 ```bash
 python3 apps/mcp-gateway/test_argcheck.py   # Argumentprüfung (A1)
 python3 apps/mcp-gateway/test_compose.py    # Namen, feste Argumente, Grenzen, Vorlagen, Umzug aus 0.1
+python3 apps/mcp-gateway/test_signin.py     # Tokenprüfung: Unterschrift, Issuer, Audience, Ablauf, Schlüssel
 python3 apps/mcp-gateway/test_gateway.py    # Konformitätsliste der Spec §12, Ende zu Ende
 ```
 
@@ -178,6 +238,10 @@ geänderte Beschreibung, Übergröße, Rückfrage, fremde
 Protokollversion); der zweite bietet dasselbe Tool `echo` wie der erste
 und dazu Resources, eine Vorlage und einen Prompt. Sie lauschen auf der
 LAN-Adresse des Rechners, weil das Gateway Loopback nie anfährt.
+Daneben stehen ein dritter Papier-Server, der sagt, mit welchem Token er
+gerufen wurde, und ein **Papier-Anmeldedienst** (Discovery, Schlüssel,
+Token-Tausch wie Keycloak, mit eigenem RSA-Schlüssel aus
+`test_rsa_keys.py`).
 
 Die Bücher (Schlüssel, Kontext, Prüfspur, Tresor, die eine Abfrage,
 Grafiken) stehen in `gwcore/` — eine Kopie von
@@ -193,8 +257,8 @@ KI-Gateway. Geändert wird nur dort, dann `check-shared.py --fix`.
 - Abonnements von Resources und Änderungsmeldungen an den Client —
   dafür fehlt der vom Server ausgehende Strom über `GET` (0.2 antwortet
   405).
-- **Stufe 3:** Anmeldung eines Menschen über das Keycloak des
-  Mandanten, Zugangsprofile, Token-Tausch (Verfahren X).
+- Die Clients im Realm legt der Betreiber von Hand an; ein Auftrag des
+  IdP-Konnektors folgt (RFC-0065 D15). Nur RS256, nur ein Issuer.
 - **Stufe 4:** der Benutzer bis ins SAP-System (Verfahren P,
   RFC-0066).
 - `pattern` und `format` in Schemas der Server werden nicht

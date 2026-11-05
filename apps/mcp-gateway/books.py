@@ -137,7 +137,22 @@ REQUEST_METHODS = {"elicitation/create": "elicitation", "roots/list": "roots",
 ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMNS) + (
     ("usage", "kind", "TEXT NOT NULL DEFAULT 'tool'"),
     ("views", "requests", f"TEXT NOT NULL DEFAULT '{REQUESTS_OLD}'"),
+    # 0.3 (RFC-0065 Stufe 3): Zugangsprofile stehen neben den Schlüsseln —
+    # dieselben Bücher, derselbe Kontext, derselbe Widerruf. Ein Profil hat
+    # keinen benutzbaren Wert; `kind` sorgt dafür, dass es nie als Schlüssel gilt.
+    ("keys", "kind", "TEXT NOT NULL DEFAULT 'key'"),
+    ("keys", "groups", "TEXT NOT NULL DEFAULT ''"),
+    # Welche Wege eine Sicht annimmt. Sichten aus 0.2 behalten `key`.
+    ("views", "ways", "TEXT NOT NULL DEFAULT 'key'"),
+    # Verfahren X: Token-Endpunkt, eigener Client, Ziel-Audience (Spec §3.5).
+    ("servers", "exchange", "TEXT NOT NULL DEFAULT '{}'"),
+    # Der Mensch hinter einem angemeldeten Aufruf: sub und Issuer (D16), nie ein Name.
+    ("usage", "user_sub", "TEXT NOT NULL DEFAULT ''"),
+    ("usage", "user_iss", "TEXT NOT NULL DEFAULT ''"),
 )
+WAYS = ("key", "signin", "key,signin")
+WAY_WORDS = {"key": "Schlüssel", "signin": "Anmeldung", "key,signin": "Schlüssel und Anmeldung"}
+GROUP = re.compile(r"^(\*|/[^,]{1,200})$")
 
 KEY_PREFIX = "mcp-oaap-"
 EFFECTS = ("read", "write", "execute")
@@ -146,7 +161,7 @@ EFFECT_WORDS = {"read": "lesen", "write": "schreiben", "execute": "ausführen"}
 LIGHTS = ("green", "yellow", "red")
 LIGHT_RANK = {e: i for i, e in enumerate(LIGHTS)}
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
-AUTH_KINDS = ("none", "bearer", "basic")
+AUTH_KINDS = ("none", "bearer", "basic", "exchange")
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
 
@@ -207,16 +222,23 @@ def valid_auth(kind):
                                 "mcp-protocol-version", "accept"):
             raise ValueError(f"Die Kopfzeile {kind[7:]} setzt das Gateway selbst.")
         return kind
-    raise ValueError("Zugang ist none, bearer, basic oder header:<Name>.")
+    raise ValueError("Zugang ist none, bearer, basic, header:<Name> oder exchange.")
 
 
 # ------------------------------------------------------------------ Schlüssel
 
 def issue(db, label, actor, views=(), max_effect="read", ceiling="yellow", budget_calls=0,
-          rate_per_min=0, tenant="default", **ctx):
+          rate_per_min=0, tenant="default", kind="key", groups=(), **ctx):
+    """Stellt einen Schlüssel aus — oder legt ein Zugangsprofil an (`kind="profile"`, Spec §2.3).
+
+    Ein Profil bekommt denselben Datensatz wie ein Schlüssel, aber sein
+    Wert wird verworfen: Niemand kennt ihn, und `kind` verhindert, dass
+    die Zeile je als Schlüssel angenommen wird.
+    """
+    word = "Ein Zugangsprofil" if kind == "profile" else "Ein Schlüssel"
     if not views:
-        raise ValueError("Ein Schlüssel braucht mindestens eine Sicht — ohne genannte Sicht "
-                         "erreicht er nichts.")
+        raise ValueError(f"{word} braucht mindestens eine Sicht — ohne genannte Sicht "
+                         "erreicht es nichts.")
     known = {r["name"] for r in db.execute("SELECT name FROM views")}
     unknown = [v for v in views if v not in known]
     if unknown:
@@ -227,9 +249,62 @@ def issue(db, label, actor, views=(), max_effect="read", ceiling="yellow", budge
         raise ValueError("Ampel ist green, yellow oder red.")
     extra = {"views": ",".join(views), "max_effect": max_effect, "ceiling": ceiling,
              "budget_calls": max(0, int(budget_calls or 0)),
-             "rate_per_min": max(0, int(rate_per_min or 0))}
-    return ledger.issue(db, label, actor, KEY_PREFIX, extra, ctx, tenant,
-                        f"sichten={','.join(views)} bis={max_effect} ampel={ceiling}")
+             "rate_per_min": max(0, int(rate_per_min or 0)), "kind": kind}
+    detail = f"sichten={','.join(views)} bis={max_effect} ampel={ceiling}"
+    if kind == "profile":
+        extra["groups"] = clean_groups(groups)
+        detail = f"Zugangsprofil, gruppen={extra['groups']}; " + detail
+    elif kind != "key":
+        raise ValueError("Art ist key oder profile.")
+    return ledger.issue(db, label, actor, KEY_PREFIX, extra, ctx, tenant, detail)
+
+
+def clean_groups(groups):
+    if isinstance(groups, str):
+        groups = groups.split(",")
+    out = [g.strip() for g in groups if g and g.strip()]
+    if not out:
+        raise ValueError("Ein Zugangsprofil nennt mindestens eine Gruppe (/pfad) oder * für alle.")
+    bad = [g for g in out if not GROUP.match(g)]
+    if bad:
+        raise ValueError("Gruppen sind volle Pfade wie /sap-dev, oder * für alle Menschen des "
+                         "Issuers: " + ", ".join(bad))
+    return ",".join(sorted(set(out)))
+
+
+def profile_groups(row):
+    return [g for g in (row["groups"] or "").split(",") if g]
+
+
+def set_profile_groups(db, actor, label, groups):
+    row = db.execute("SELECT * FROM keys WHERE label=? AND kind='profile'", (label,)).fetchone()
+    if not row:
+        raise ValueError(f"Ein Zugangsprofil „{label}“ gibt es nicht.")
+    new = clean_groups(groups)
+    if new != row["groups"]:
+        db.execute("UPDATE keys SET groups=? WHERE id=?", (new, row["id"]))
+        log(db, actor, "profile.groups", label, f"{row['groups']} → {new}")
+        db.commit()
+
+
+def match_profile(db, groups, view):
+    """Das Profil für einen Menschen mit diesen Gruppen in dieser Sicht (Spec §2.3) — oder None.
+
+    Nur Profile, die die Sicht nennen. Darunter zuerst das erste (nach
+    Namen), dessen Gruppen sich mit denen des Tokens überschneiden; nur
+    wenn keines passt, das erste mit `*`. Ohne die Sicht als Bedingung
+    käme ein Mensch mit zwei Profilen für zwei Sichten nie in die zweite
+    — gefunden im Test, 2026-11-02.
+    """
+    rows = [r for r in db.execute("SELECT * FROM keys WHERE kind='profile' AND revoked='' "
+                                  "ORDER BY label") if view in key_views(r)]
+    for row in rows:
+        if set(profile_groups(row)) & set(groups):
+            return row
+    for row in rows:
+        if "*" in profile_groups(row):
+            return row
+    return None
 
 
 def key_views(row):
@@ -253,10 +328,32 @@ def servers(db):
 
 
 def save_server(db, actor, name, address, auth_kind, light, limits, sealed_credential=None,
-                drop_credential=False):
-    """Legt an oder ändert. `sealed_credential` ist schon verschlüsselt; None = unverändert."""
+                drop_credential=False, exchange=None):
+    """Legt an oder ändert. `sealed_credential` ist schon verschlüsselt; None = unverändert.
+
+    `exchange` (nur bei Zugang `exchange`): {token_url, client_id, audience}
+    — Spec §3.5. Das Geheimnis ist dann das des eigenen Clients beim
+    Token-Endpunkt, nicht eines für den Server.
+    """
     valid_name(name, "eines Servers")
     auth_kind = valid_auth(auth_kind)
+    old_row = server_row(db, name)
+    if auth_kind == "exchange":
+        ex = dict(json.loads(old_row["exchange"] or "{}")) if old_row else {}
+        ex.update({k: (v or "").strip() for k, v in (exchange or {}).items() if v is not None})
+        missing = [k for k in ("token_url", "client_id", "audience") if not ex.get(k)]
+        if missing:
+            raise ValueError("Verfahren X braucht Token-Endpunkt, eigenen Client und Ziel-Audience "
+                             "(fehlt: " + ", ".join(missing) + ").")
+        exchange_json = json.dumps({k: ex[k] for k in ("token_url", "client_id", "audience")},
+                                   sort_keys=True)
+        if any(r["server"] == name for r in db.execute(
+                "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
+                "WHERE v.ways LIKE '%key%'")):
+            raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren X "
+                             "braucht einen Menschen — erst die Sicht auf „Anmeldung“ stellen.")
+    else:
+        exchange_json = "{}"
     if light not in LIGHT_RANK:
         raise ValueError("Ampel ist green, yellow oder red.")
     old = server_row(db, name)
@@ -265,24 +362,25 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
         credential = ""
     if sealed_credential is not None:
         credential = sealed_credential
-    if address.startswith("destination:") and credential:
+    if address.startswith("destination:") and credential and auth_kind != "exchange":
         raise ValueError("Ein Server hinter einer Destination trägt keine eigenen Zugangsdaten: "
                          "Die Plattform setzt die der Destination ein (eine Wahrheit, nicht zwei).")
     if auth_kind != "none" and not credential:
         raise ValueError(f"Zugang {auth_kind} braucht Zugangsdaten.")
     stamp = now()
-    db.execute("INSERT INTO servers (name,address,auth_kind,credential,light,limits,created,updated) "
-               "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET address=excluded.address,"
-               "auth_kind=excluded.auth_kind,credential=excluded.credential,light=excluded.light,"
-               "limits=excluded.limits,updated=excluded.updated",
+    db.execute("INSERT INTO servers (name,address,auth_kind,credential,light,limits,exchange,created,"
+               "updated) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+               "address=excluded.address,auth_kind=excluded.auth_kind,credential=excluded.credential,"
+               "light=excluded.light,limits=excluded.limits,exchange=excluded.exchange,"
+               "updated=excluded.updated",
                (name, address, auth_kind, credential, light, json.dumps(limits, sort_keys=True),
-                stamp, stamp))
+                exchange_json, stamp, stamp))
     changes = []
     if not old:
         changes.append("angelegt")
     else:
         for field, new in (("address", address), ("auth_kind", auth_kind), ("light", light),
-                           ("limits", json.dumps(limits, sort_keys=True))):
+                           ("limits", json.dumps(limits, sort_keys=True)), ("exchange", exchange_json)):
             if old[field] != new:
                 changes.append(f"{field}: {old[field]} → {new}")
         if old["credential"] != credential:
@@ -395,12 +493,22 @@ def view_requests(vrow):
     return {r: ("pass" if doc.get(r) == "pass" else "refuse") for r in REQUESTS}
 
 
-def save_view(db, actor, name, max_effect, requests=None):
-    """Legt an oder ändert. `requests` = {elicitation|roots|sampling: pass|refuse}; None = unverändert."""
+def save_view(db, actor, name, max_effect, requests=None, ways=None):
+    """Legt an oder ändert. `requests` = {elicitation|roots|sampling: pass|refuse}; None = unverändert.
+
+    `ways` = key, signin oder key,signin (Spec §2); None = unverändert, neu: key.
+    """
     valid_name(name, "einer Sicht")
     if max_effect not in EFFECT_RANK:
         raise ValueError("Höchste Wirkungsklasse ist read, write oder execute.")
     old = view_row(db, name)
+    old_ways = old["ways"] if old else "key"
+    ways = old_ways if ways is None else ways
+    if ways not in WAYS:
+        raise ValueError("Zugänge sind key, signin oder key,signin.")
+    if "key" in ways and old and exchange_servers(db, name):
+        raise ValueError("Die Sicht enthält Server mit Verfahren X (" + ", ".join(exchange_servers(db, name))
+                         + "); die brauchen einen angemeldeten Menschen — Schlüssel gehen hier nicht.")
     current = view_requests(old) if old else dict(REQUESTS_NEW)
     if requests:
         for r, v in requests.items():
@@ -408,19 +516,23 @@ def save_view(db, actor, name, max_effect, requests=None):
                 raise ValueError("Rückfragen: elicitation, roots, sampling — je pass oder refuse.")
             current[r] = v
     stamp = now()
-    db.execute("INSERT INTO views (name,server,max_effect,requests,created,updated) "
-               "VALUES (?,'',?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
-               "max_effect=excluded.max_effect,requests=excluded.requests,updated=excluded.updated",
-               (name, max_effect, json.dumps(current, sort_keys=True), stamp, stamp))
+    db.execute("INSERT INTO views (name,server,max_effect,requests,ways,created,updated) "
+               "VALUES (?,'',?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET "
+               "max_effect=excluded.max_effect,requests=excluded.requests,ways=excluded.ways,"
+               "updated=excluded.updated",
+               (name, max_effect, json.dumps(current, sort_keys=True), ways, stamp, stamp))
     words = ", ".join(f"{r} {current[r]}" for r in REQUESTS)
     if not old:
-        log(db, actor, "view.save", name, f"angelegt, bis {max_effect}; Rückfragen: {words}")
+        log(db, actor, "view.save", name, f"angelegt, bis {max_effect}, Zugänge {ways}; "
+            f"Rückfragen: {words}")
     else:
         bits = []
         if old["max_effect"] != max_effect:
             bits.append(f"bis {old['max_effect']} → {max_effect}")
         before = view_requests(old)
         bits += [f"{r} {before[r]} → {current[r]}" for r in REQUESTS if before[r] != current[r]]
+        if old_ways != ways:
+            bits.append(f"Zugänge {old_ways} → {ways}")
         if bits:
             log(db, actor, "view.save", name, "; ".join(bits))
     db.commit()
@@ -435,6 +547,16 @@ def delete_view(db, actor, name):
     db.execute("DELETE FROM views WHERE name=?", (name,))
     log(db, actor, "view.delete", name)
     db.commit()
+
+
+def exchange_servers(db, view):
+    return [r["name"] for r in db.execute(
+        "SELECT DISTINCT s.name FROM items i JOIN servers s ON s.name=i.server "
+        "WHERE i.view=? AND s.auth_kind='exchange' ORDER BY s.name", (view,))]
+
+
+def view_ways(vrow):
+    return [w for w in (vrow["ways"] or "key").split(",") if w]
 
 
 def view_servers(db, view):
@@ -493,6 +615,10 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     effect = effect if kind == "tool" else "read"
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
+    if server_row(db, server)["auth_kind"] == "exchange" and "key" in view_ways(view_row(db, view)):
+        raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X und braucht einen angemeldeten "
+                         f"Menschen; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
+                         "„Anmeldung“ stellen.")
     cat = catalog_row(db, server, kind, source)
     if not cat or not cat["present"]:
         raise ValueError(f"Der Server „{server}“ bietet {compose.KIND_WORDS[kind]} „{source}“ "
@@ -628,16 +754,19 @@ def remove_item(db, actor, view, kind, name):
 
 # ------------------------------------------------------------------ Messung
 
-def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down):
+def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down,
+           person=None, procedure="T"):
     """Eine Messzeile je Aufruf. `key` ist die Schlüsselzeile vom Beginn der Anfrage.
 
     `name`/`source` sind Namen in der Sicht und beim Server — bei einer
     Vorlage die Vorlage, nie die eingesetzte URI: In ihr stünden Werte.
     """
     cols = ["time", "key_id", "view", "kind", "tool", "server", "server_tool", "procedure",
-            "outcome", "reason", "ms", "bytes_up", "bytes_down"] + context.snapshot_columns()
-    values = [now(), key["id"], view, kind, name, server, source, "T", outcome, reason, int(ms),
-              int(bytes_up), int(bytes_down)] + context.snapshot_values(key)
+            "outcome", "reason", "ms", "bytes_up", "bytes_down", "user_sub",
+            "user_iss"] + context.snapshot_columns()
+    values = [now(), key["id"], view, kind, name, server, source, procedure, outcome, reason,
+              int(ms), int(bytes_up), int(bytes_down), (person or {}).get("sub", ""),
+              (person or {}).get("iss", "")] + context.snapshot_values(key)
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()
