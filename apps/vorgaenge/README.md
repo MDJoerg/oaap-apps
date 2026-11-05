@@ -1,4 +1,4 @@
-# Vorgänge (RFC-0061 Stufen 1 und 2)
+# Vorgänge (RFC-0061 Stufen 1 und 2; RFC-0069 Stufe 2 seit 0.3.0)
 
 Melden, Klären und Übergeben im Mandanten. **Eine Instanz je Mandant.**
 Plattform ab **0.1.199** für den Knopf: Erst diese Version reserviert
@@ -112,6 +112,42 @@ Die Antwort ist `201 {"ok": true, "number": "V-…", "id": "…"}`.
   den Vorgang unter „Von mir gemeldet“.
 - **Ohne `on_behalf_of`** meldet die App selbst.
 - **Grenze:** höchstens 600 Vorgänge je Instanz und Stunde.
+
+## Vorgänge vom Knoten selbst (seit 0.3.0, RFC-0069 Stufe 2)
+
+Plant der Knoten einen Neustart (`oaap.core.updates` 2.7: ein Kernel wartet
+und ein Fenster ist gesetzt, oder der Betreiber plant von Hand), legt die
+Plattform in **jedem** Posteingang des Knotens einen Vorgang an — einen je
+Plan, im Bereich `eingang`, Art „Intern“, gemeldet vom „Knoten *name*“. Jedes
+Verschieben (ein Schutz kam, ein Schutz ging, überstimmt, überfällig, „startet
+jetzt“) wird als Kommentar fortgeschrieben; nach dem Neustart schließt die
+Plattform den Vorgang mit dem Beweis („Neustart erfolgt, der Knoten läuft
+wieder“), eine Absage schließt ihn mit der Absage. Niemand muss etwas tun;
+wer den Eingang liest, weiß Bescheid.
+
+Die Tür ist `/platform/cases/node` auf der **eigenen** Site dieser Instanz.
+Dort lässt das Gateway nur den Schlüssel des Prinzipals
+`platform:<diese Instanz>` durch, den die Plattform für genau diesen
+Posteingang prägt und 30 Tage vor Ablauf erneuert (Scope
+`oaap.cases.node:<instanz>`); die App prüft denselben Prinzipal gegen die
+vom Gateway gesetzte Herkunft noch einmal. Ein Mensch mit Sitzung kommt dort
+nicht durch, ein Backend-Schlüssel (`oaap.cases.submit`) auch nicht.
+
+```http
+POST /platform/cases/node          (Authorization: Bearer <Schlüssel des Knotens>)
+{"op": "open",  "ref": "kernel:…:2026-11-06T10:00:00Z", "node": "oaap-test",
+ "title": "Neustart des Knotens oaap-test: 2026-11-08 04:15 CET (Pflege)", "body": "…"}
+  → 201 {"ok": true, "number": "V-…"}   (dieselbe ref noch einmal: 200, "existing": true)
+{"op": "note",  "number": "V-…", "node": "oaap-test", "text": "Verschoben auf …"}
+{"op": "close", "number": "V-…", "node": "oaap-test", "text": "Neustart erfolgt …"}
+```
+
+`note` und `close` gelten nur für Vorgänge, die der Knoten selbst angelegt
+hat (404 sonst). `close` schließt aus jedem offenen Status — es ist kein
+Bearbeitungsschritt, sondern ein Tatbestand — und lässt einen schon
+beendeten Vorgang in Ruhe. Was der Vorgang **nicht** trägt: Kernel-Versionen;
+die stehen in `oaap status` und im Flottenstatus. Begründungen trägt er nur
+in den Worten des Betreibers (Plan von Hand).
 
 ## Übergabe an einen anderen Mandanten (seit 0.2.0, RFC-0061 §5)
 

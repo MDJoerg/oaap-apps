@@ -12,6 +12,14 @@ Eine Instanz je Mandant. Sie nimmt zweierlei an:
    fehlen sie, kam die Anfrage nicht ueber den Knopf, und `/platform/feedback`
    lehnt ab. Das ist die ganze Beglaubigung (RFC-0061 §3.1, Q1).
 2. **Interne Vorgaenge**, in dieser App selbst angelegt.
+3. Seit 0.2.0 **Vorgaenge aus dem Backend einer App** (`/platform/cases/submit`,
+   RFC-0061 §3.2) und **Uebergaben** an einen Partner-Mandanten (§5).
+4. Seit 0.3.0 **Vorgaenge vom Knoten selbst** (`/platform/cases/node`,
+   RFC-0069 Stufe 2): der Knoten kuendigt seinen Neustart als Vorgang an,
+   schreibt ihn bei jedem Verschieben fort und schliesst ihn nach dem
+   Neustart mit dem Beweis. Durch darf nur der Prinzipal
+   `platform:<diese Instanz>`, dessen Schluessel das Gateway nur an dieser
+   Tuer dieser Site annimmt.
 
 Geklaert wird in **Bereichen** (Queues). Ein Bereich ist ein Kontext im
 Sinn von RFC-0045: wer welchen Bereich bearbeitet, vergibt der Mandant in
@@ -45,7 +53,7 @@ import authz_client
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    NEXT, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -396,6 +404,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.feedback_post()
         if p == "/platform/cases/submit":
             return self.backend_submit()
+        if p == "/platform/cases/node":
+            return self.node_post()
         if p == "/handover":
             return self.handover_in()
         if self.is_partner():
@@ -511,6 +521,62 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(400, {"error": str(e) if isinstance(e, Refused) else "Ungültiger Vorgang."})
         print(f"case {made['number']} from backend of {src['instance']}", flush=True)
         return self.json(201, {"ok": True, "number": made["number"], "id": made["id"]})
+
+    # --- Vorgaenge vom Knoten selbst (RFC-0069 Stufe 2)
+    def node_post(self):
+        """Der Knoten meldet seinen Neustart-Plan: `open` legt den Vorgang
+        an (mit `ref` als Bezug; dieselbe `ref` ein zweites Mal gibt den
+        vorhandenen zurueck), `note` schreibt ihn fort, `close` schliesst
+        ihn mit dem Beweis. Durch darf nur `platform:<diese Instanz>` --
+        der Prinzipal, den die Plattform fuer genau diesen Posteingang
+        gepraegt hat; sein Schluessel gilt beim Gateway nur an dieser Tuer
+        dieser Site, und die Herkunft sagt, dass es diese Site war. Eine
+        Sitzung, die den Pfad erreicht, ist kein Knoten."""
+        src = self.attested()
+        principal = self.headers.get("X-OAAP-User", "").strip()
+        if not src or principal != f"platform:{src['instance']}":
+            return self.json(403, {"error": "Nur der Knoten selbst, mit dem Schlüssel "
+                                            "dieses Posteingangs."})
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            return self.json(415, {"error": "JSON erwartet."})
+        try:
+            doc = json.loads(self.body().decode("utf-8") or "{}")
+            if not isinstance(doc, dict):
+                raise Refused("JSON-Objekt erwartet.")
+            op = str(doc.get("op") or "")
+            node = str(doc.get("node") or "").strip()[:80]
+            name = f"Knoten {node}" if node else "Knoten"
+            if op == "open":
+                if self.store.submissions_by(src["instance"], 3600) >= SUBMISSIONS_PER_HOUR:
+                    return self.json(429, {"error": "Zu viele Vorgänge des Knotens in der "
+                                                    "letzten Stunde."})
+                ref = str(doc.get("ref") or "").strip()[:200]
+                if not ref:
+                    raise Refused("ref fehlt: der Bezug des Plans.")
+                have = self.store.open_by_object("reboot", ref)
+                if have:
+                    return self.json(200, {"ok": True, "number": have["number"],
+                                           "id": have["id"], "existing": True})
+                made = self.store.create(
+                    kind="internal", title=doc.get("title"), body=doc.get("body") or "",
+                    reporter=principal, reporter_name=name,
+                    queue=str(doc.get("queue") or DEFAULT_QUEUE),
+                    obj={"kind": "reboot", "id": ref},
+                    attested=dict(src, submitted_by=principal, node=node))
+                print(f"case {made['number']} from node {node}", flush=True)
+                return self.json(201, {"ok": True, "number": made["number"], "id": made["id"]})
+            c = self.store.get(str(doc.get("number") or ""))
+            if not c or c["reporter"] != principal:
+                return self.json(404, {"error": "Diesen Vorgang hat der Knoten nicht angelegt."})
+            if op == "note":
+                self.store.comment(c, principal, name, doc.get("text"))
+                return self.json(200, {"ok": True, "number": c["number"]})
+            if op == "close":
+                closed = self.store.close_by_node(c, principal, name, doc.get("text") or "")
+                return self.json(200, {"ok": True, "number": c["number"], "closed": closed})
+            raise Refused("op: open, note oder close.")
+        except (Refused, ValueError) as e:
+            return self.json(400, {"error": str(e) if isinstance(e, Refused) else "Ungültige Meldung."})
 
     # --- Posteingang fuer Uebergaben (RFC-0061 §5.3)
     def handover_in(self):
@@ -728,7 +794,10 @@ Betreff und Text.</p>
         tech = c["tech"] or {}
         att = tech.get("attested") or {}
         src = ""
-        if att.get("instance"):
+        if att.get("node"):
+            src = (f"<div class=muted>Gemeldet vom Knoten <b>{esc(att['node'])}</b> "
+                   "(Neustart-Plan der Plattform, vom Gateway beglaubigt)</div>")
+        elif att.get("instance"):
             src = (f"<div class=muted>Gemeldet aus <b>{esc(att.get('app', ''))}</b> "
                    f"{esc(att.get('version', ''))}, Instanz <code>{esc(att['instance'])}</code> "
                    f"(vom Gateway beglaubigt)</div>")

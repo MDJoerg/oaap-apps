@@ -352,6 +352,36 @@ class Store:
             self._entry(c["id"], actor, actor_name, "status", text,
                         {"from": c["status"], "to": new})
 
+    # ------------------------------------------ der Knoten (RFC-0069 Stufe 2)
+    def open_by_object(self, kind, oid):
+        """Der offene Vorgang zu einem Bezug, oder None. Damit ein Absender,
+        der dieselbe Sache ein zweites Mal meldet (ein Wiederholungsversuch
+        nach einem Fehler), keinen zweiten Vorgang anlegt."""
+        with self.lock:
+            r = self.db.execute(
+                "SELECT number FROM cases WHERE object_kind=? AND object_id=? "
+                "AND status NOT IN ('closed', 'rejected') ORDER BY created DESC LIMIT 1",
+                (kind, oid)).fetchone()
+        return self.get(r["number"]) if r else None
+
+    def close_by_node(self, c, actor, actor_name, text):
+        """Der Knoten schliesst seinen eigenen Vorgang -- mit dem Beweis
+        (Neustart erfolgt) oder der Absage -- aus JEDEM offenen Status. Das
+        ist keine Bearbeitung, die der Tabelle NEXT folgt, sondern ein
+        Tatbestand: die Maschine ist neu gestartet, der Vorgang ist erledigt.
+        Ein schon beendeter Vorgang bleibt, wie er ist (False)."""
+        if c["status"] in ENDED:
+            return False
+        text = (text or "").strip()[:BODY_MAX]
+        with self.lock, self.db:
+            if not self.db.execute(
+                    "UPDATE cases SET status='closed', ended=? WHERE id=? AND status=?",
+                    (_now(), c["id"], c["status"])).rowcount:
+                return False
+            self._entry(c["id"], actor, actor_name, "status", text,
+                        {"from": c["status"], "to": "closed", "by": "node"})
+        return True
+
     def move(self, c, actor, actor_name, target, text=""):
         if target == c["queue"]:
             raise Refused("Der Vorgang liegt schon dort.")
