@@ -23,7 +23,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # ---------- Grundwerkzeuge ----------
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl wget ca-certificates gnupg unzip zip jq nano less htop tree \
-      openssh-client python3 \
+      openssh-client python3 libnotify-bin \
       xfce4-terminal fonts-dejavu fonts-noto-color-emoji fonts-liberation \
       libwebkit2gtk-4.1-0 libsecret-1-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -169,8 +169,12 @@ COPY desktop/*.desktop /usr/share/applications/
 COPY skel/ /defaults/oaap-skel/
 COPY projekte/ /defaults/oaap-projekte/
 COPY init/50-oaap-init /custom-cont-init.d/50-oaap-init
+# 0.1.10 (RFC-0069 Stufe 3): der Desk liest die Tür des Knotens (OAAP_CARE_URL) und sagt
+# dem Menschen, wann der Knoten neu startet -- linuxserver custom-services.d, läuft als root.
+COPY init/oaap-care-watch /custom-services.d/oaap-care-watch
 COPY bin/ /usr/local/bin/
-RUN chmod +x /custom-cont-init.d/50-oaap-init /usr/local/bin/code /usr/local/bin/claude-desktop \
+RUN chmod +x /custom-cont-init.d/50-oaap-init /custom-services.d/oaap-care-watch \
+         /usr/local/bin/code /usr/local/bin/claude-desktop \
          /usr/local/bin/google-chrome /usr/local/bin/oaap-keyring /usr/local/bin/oaap-arc1 \
          /usr/local/bin/goose-desktop /usr/local/bin/opencode-desktop \
          /usr/local/bin/oaap-trust-launchers \
@@ -186,7 +190,7 @@ RUN chmod +x /custom-cont-init.d/50-oaap-init /usr/local/bin/code /usr/local/bin
 ENV LANG="de_DE.UTF-8" \
     LANGUAGE="de_DE:de" \
     TITLE="OAAP Desktop" \
-    OAAP_DESKTOP_VERSION="0.1.9" \
+    OAAP_DESKTOP_VERSION="0.1.10" \
     SELKIES_VIDEO_FULLCOLOR=true \
     SELKIES_VIDEO_STREAMING_MODE=false \
     SELKIES_VIDEO_PAINTOVER_CRF=14 \

@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Der Desk liest die Tür des Knotens (RFC-0069 Stufe 3, Runtime 2.28).
+
+Läuft als linuxserver custom-service (root), fragt jede Minute
+OAAP_CARE_URL -- `/platform/care.json` auf dem internen Port des Gateways,
+nur vom Knoten aus erreichbar -- und sagt es dem Menschen am Desktop:
+
+- ein neuer oder verschobener Termin: eine Meldung (notify-send an die
+  Sitzung von `abc`) und die Datei ~/Desktop/NEUSTART-GEPLANT.txt;
+- 30 und 10 Minuten vorher: eine dringende Meldung;
+- „startet jetzt neu“: eine dringende Meldung;
+- kein Plan mehr (erledigt oder abgesagt): die Datei verschwindet.
+
+Die Plattform sagt wann; was der Mensch mit der Stunde tut, ist seine
+Sache -- Arbeit sichern, Sitzungen schließen. Ohne OAAP_CARE_URL
+(Plattform vor 0.1.223) tut das Skript nichts und wartet still.
+Nur Standardbibliothek; notify-send ist libnotify-bin.
+"""
+import json
+import os
+import shlex
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+URL = os.environ.get("OAAP_CARE_URL", "").strip()
+HOME = os.environ.get("OAAP_CARE_HOME", "/config")
+USER = os.environ.get("OAAP_CARE_USER", "abc")
+INTERVAL = int(os.environ.get("OAAP_CARE_INTERVAL", "60") or 60)
+NOTIFY_CMD = os.environ.get("OAAP_CARE_NOTIFY", "")  # nur fuer den Test
+NOTE = os.path.join(HOME, "Desktop", "NEUSTART-GEPLANT.txt")
+WARN_MINUTES = (30, 10)
+
+
+def say(msg):
+    print(f"[oaap-care-watch] {msg}", flush=True)
+
+
+def read_door():
+    """Die Tuer, oder None: 404 (Plattform ohne Messung) und jeder Fehler
+    heissen 'kein Plan' -- eine Tuer, die nicht antwortet, haelt nichts an."""
+    try:
+        with urllib.request.urlopen(URL, timeout=5) as r:
+            doc = json.loads(r.read().decode("utf-8") or "{}")
+        return doc if isinstance(doc, dict) else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def notify(summary, body, urgency="normal"):
+    try:
+        if NOTIFY_CMD:
+            cmd = ([sys.executable, NOTIFY_CMD] if NOTIFY_CMD.endswith(".py") else [NOTIFY_CMD])
+            subprocess.run(cmd + [urgency, summary, body], timeout=10, check=False)
+            return
+        cmd = (f"DISPLAY=:1 notify-send -u {urgency} -a 'OAAP Desktop' -i system-reboot "
+               f"{shlex.quote(summary)} {shlex.quote(body)}")
+        subprocess.run(["su", USER, "-c", cmd], timeout=10, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def chown_user(path):
+    try:
+        import pwd
+        u = pwd.getpwnam(USER)
+        os.chown(path, u.pw_uid, u.pw_gid)
+    except (ImportError, KeyError, OSError):
+        pass
+
+
+def urgency_de(door):
+    return "kritisch" if door.get("urgency") == "critical" else "Pflege"
+
+
+def write_note(door):
+    try:
+        os.makedirs(os.path.dirname(NOTE), exist_ok=True)
+        with open(NOTE, "w", encoding="utf-8") as f:
+            f.write("NEUSTART DIESES KNOTENS GEPLANT\n\n"
+                    f"Wann:          {door.get('at_local') or door.get('reboot_at')}\n"
+                    f"Dringlichkeit: {urgency_de(door)}"
+                    + (" (durch einen Schutz gehalten)\n" if door.get("held") else "\n")
+                    + "\nDieser Desktop endet mit dem Neustart: offene Programme werden\n"
+                      "geschlossen, nicht gespeicherte Arbeit geht verloren. Bitte vorher\n"
+                      "sichern. Was im Home liegt (~/, Projekte, Einstellungen), bleibt.\n\n"
+                      "Diese Datei verschwindet, wenn der Neustart erledigt oder abgesagt ist.\n")
+        chown_user(NOTE)
+    except OSError as e:
+        say(f"Hinweisdatei nicht geschrieben: {e}")
+
+
+def remove_note():
+    try:
+        if os.path.exists(NOTE):
+            os.remove(NOTE)
+    except OSError:
+        pass
+
+
+def minutes_until(iso):
+    try:
+        at = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return (at - datetime.now(timezone.utc)).total_seconds() / 60
+
+
+def main():
+    if not URL:
+        say("OAAP_CARE_URL fehlt (Plattform vor 0.1.223): nichts zu lesen.")
+        while not os.environ.get("OAAP_CARE_ONCE"):
+            time.sleep(3600)
+        return 0
+    say(f"lese {URL} alle {INTERVAL} s")
+    last_at, warned, said_rebooting = None, set(), False
+    while True:
+        door = read_door()
+        at = (door or {}).get("reboot_at")
+        if at:
+            if at != last_at:
+                notify("Dieser Knoten startet neu",
+                       f"am {door.get('at_local') or at} ({urgency_de(door)}"
+                       + (", durch einen Schutz gehalten" if door.get("held") else "")
+                       + "). Bitte Arbeit rechtzeitig sichern.")
+                write_note(door)
+                say(f"Plan: {door.get('at_local') or at} ({door.get('urgency')})")
+                last_at, warned, said_rebooting = at, set(), False
+            left = minutes_until(at)
+            if left is not None:
+                for thr in WARN_MINUTES:
+                    if left <= thr and thr not in warned:
+                        notify("Neustart in Kürze",
+                               f"Dieser Knoten startet in etwa {max(int(left), 0)} Minuten neu. "
+                               "Jetzt Arbeit sichern.", "critical")
+                        warned.add(thr)
+            if door.get("state") == "rebooting" and not said_rebooting:
+                notify("Der Knoten startet jetzt neu", "Dieser Desktop endet gleich.", "critical")
+                said_rebooting = True
+        elif last_at:
+            notify("Neustart erledigt oder abgesagt", "Kein Neustart dieses Knotens geplant.")
+            remove_note()
+            say("kein Plan mehr")
+            last_at, warned, said_rebooting = None, set(), False
+        elif os.path.exists(NOTE):
+            remove_note()
+        if os.environ.get("OAAP_CARE_ONCE"):
+            return 0
+        time.sleep(INTERVAL)
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)
