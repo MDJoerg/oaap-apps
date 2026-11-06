@@ -632,6 +632,49 @@
           "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/vpn-client"
         }
       ]
+    },
+    {
+      "id": "rollen-rechte",
+      "name": "Rollen & Rechte",
+      "type": "native",
+      "version": "0.2.1",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/rollen-rechte"
+      },
+      "roles": [
+        "user"
+      ],
+      "categories": [
+        "security"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "rechte",
+        "rollen",
+        "berechtigungen",
+        "mandant",
+        "grundeinrichtung"
+      ],
+      "summary": "Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen.",
+      "description": "Fachliche Berechtigungen eines Mandanten verwalten (RFC-0045 A7): Personen, Rollen, Berechtigungspakete, Zuordnungen, Gruppen des Anmeldedienstes und das Protokoll. Privilegiert: die App verwaltet die Rechte EINES Mandanten im Namen des Mandanten-Admins, der sie benutzt — nie Plattformrollen, nie Benutzer, nie einen anderen Mandanten. Beim ersten Installieren fragt der Knoten deshalb nach der Zusage des Server-Admins (im Store oder mit --confirm-administer); ein Update derselben Instanz fragt nicht noch einmal.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/rollen-rechte"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.core.authorization.md",
+          "label": "Spec oaap.core.authorization §2.10 — Verwaltung durch eine App"
+        }
+      ]
     }
   ]
 }
