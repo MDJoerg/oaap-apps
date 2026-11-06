@@ -1,12 +1,16 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.10"
 
 app:
   id: wegweiser
   name: Wegweiser
-  version: 0.4.0
+  version: 0.4.1
   type: native
   class: frontend
   description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, REST-API"
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Beim Bau kommen nur Pakete aus dem Archiv der Basis dazu — ein Neubau ändert nur die Basis-Schicht.
+  rebuild: self
 
 services:
   web:

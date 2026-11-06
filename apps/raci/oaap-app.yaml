@@ -1,12 +1,16 @@
-oaap_manifest: "0.3"
+oaap_manifest: "0.10"
 
 app:
   id: raci
   name: OAAP RACI
-  version: 0.1.1
+  version: 0.1.2
   type: native
   class: frontend
   description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Firma/Kontaktperson als Referenz, schreibt 'responsible' in raci.assignments"
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
+  rebuild: self
 
 services:
   web:

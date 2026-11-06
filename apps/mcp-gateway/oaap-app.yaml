@@ -1,12 +1,16 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.10"
 
 app:
   id: mcp-gateway
   name: OAAP MCP-Gateway
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln oder Anmeldung am Anmeldedienst des Mandanten (Zugangsprofile, Token-Tausch), Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
+  rebuild: self
 
 services:
   web:

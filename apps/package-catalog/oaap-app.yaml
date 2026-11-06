@@ -1,12 +1,16 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.10"
 
 app:
   id: package-catalog
   name: Paketkatalog
-  version: 0.1.0
+  version: 0.1.1
   type: native
   class: frontend
   description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050)."
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Beim Bau wird PyYAML "==6.*" geholt; ein Neubau kann eine neuere 6.x bringen — heilen soll eine neue Version.
+  rebuild: release
 
 services:
   web:

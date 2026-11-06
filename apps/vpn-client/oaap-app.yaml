@@ -1,12 +1,16 @@
-oaap_manifest: "0.8"
+oaap_manifest: "0.10"
 
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.1.1
+  version: 0.1.2
   type: native
   class: service
   description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Beim Bau kommen nur Pakete aus dem Archiv der Basis dazu — ein Neubau ändert nur die Basis-Schicht.
+  rebuild: self
 
 services:
   vpn:

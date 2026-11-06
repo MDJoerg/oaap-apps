@@ -1,4 +1,4 @@
-oaap_manifest: "0.7"
+oaap_manifest: "0.10"
 
 # Gebaut und auf oaap-test gemessen (15.10.2026) — siehe README und
 # program/schulungsarbeitsplatz-webtop-2026-10-14.md (Bauplan Stufe 1).
@@ -6,7 +6,7 @@ oaap_manifest: "0.7"
 app:
   id: webtop
   name: Desktop im Browser (Webtop)
-  version: 0.1.10
+  version: 0.1.11
   type: wrapped
   class: frontend
   description: "Ein ganzer Linux-Desktop (XFCE) im Browser, ein Container je Mensch: für Werkzeuge, die ein Fenster brauchen — Eclipse mit ABAP Development Tools und ABAP Cleaner, Claude Desktop, VS Code, Chrome und Firefox. Anmeldung übernimmt das Gateway (Webtop läuft ohne eigenes Passwort), die Sitzung lebt im Container weiter, wenn der Browser zugeht. Der schwere Bruder der code-server-App: 4 bis 6 GB je Platz. Zweite Arbeitsplatz-App der Schulungslandschaft (RFC-0046) und Arbeitsumgebung für alle, deren Laptop nichts installieren darf."
@@ -21,6 +21,10 @@ app:
 # der Dienst das selbst; ein älterer Knoten ignoriert das Feld und startet
 # mit 64 MB. Die drei Chromium-Starter in bin/ tragen zusätzlich
 # --disable-dev-shm-usage, bis die erste Messung sagt, ob eins von beiden reicht.
+care:
+  # RFC-0071 §15 (Manifest 0.10): Beim Bau kommen fremde Pakete (Node, VS Code, …) aus deren eigenen Quellen — ein Neubau wäre eine Aktualisierung.
+  rebuild: release
+
 services:
   desktop:
     build: .

@@ -1,12 +1,16 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.10"
 
 app:
   id: fleetview
   name: OAAP FleetView
-  version: 0.3.3
+  version: 0.3.4
   type: native
   class: frontend
   description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
+  rebuild: self
 
 services:
   web:

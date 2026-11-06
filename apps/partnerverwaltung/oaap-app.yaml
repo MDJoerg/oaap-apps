@@ -1,12 +1,16 @@
-oaap_manifest: "0.6"
+oaap_manifest: "0.10"
 
 app:
   id: partnerverwaltung
   name: OAAP Partnerverwaltung
-  version: 0.1.3
+  version: 0.1.4
   type: native
   class: frontend
   description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): Owner von Firma und Kontaktperson, verknuepft sie mit isContactOf, legt eigene Projekt-Instanzen an"
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
+  rebuild: self
 
 services:
   web:

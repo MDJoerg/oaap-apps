@@ -1,9 +1,9 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.10"
 
 app:
   id: keycloak
   name: Keycloak (Anmeldedienst)
-  version: 0.1.4
+  version: 0.1.5
   type: wrapped
   # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
   # keine App, die jemand "benutzt" — es ist die Tür, durch die andere
@@ -21,6 +21,10 @@ app:
 # Ausdrücklich NICHT das Plattform-Postgres (oaap.data.store): Dieses RFC
 # darf einen Knoten nicht dazu zwingen, das Profil `store` zu tragen —
 # oaapx01 trägt es nicht (RFC-0041 K2).
+care:
+  # RFC-0071 §15 (Manifest 0.10): Die Basis ist auf eine Version festgenagelt, beim Bau wird nichts nachgeladen — ein Neubau holt nur denselben Stand neu.
+  rebuild: self
+
 services:
   keycloak:
     build: .

@@ -74,25 +74,25 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 
 | App                                | Was es tut                                                 | Version |
 | ---------------------------------- | ---------------------------------------------------------- | ------- |
-| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.4.3   |
-| [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.3   |
-| [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.1   |
-| [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.2   |
-| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.4   |
-| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.5.2   |
-| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.3.0   |
-| [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.0   |
-| [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050) | 0.1.0   |
-| [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.0   |
-| [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.3   |
-| [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.10   |
-| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.1   |
-| [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.3   |
-| [Rollen & Rechte](apps/rollen-rechte/) | Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen (RFC-0045 A7); privilegiert, Installation nur mit `--confirm-administer` | 0.2.0   |
-| [Vorgänge](apps/vorgaenge/)       | Melden, Klären und Übergeben zwischen Mandanten (RFC-0061 Stufe 1+2): nimmt den Feedback-Knopf der Plattform an, Bereiche als Kontexte aus „Rollen & Rechte“; eine Instanz je Mandant, Löschfrist je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier an (RFC-0069); Plattform ab 0.1.201 | 0.3.0   |
-| [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.1   |
-| [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.0   |
-| [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.0   |
+| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.4.4   |
+| [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.4   |
+| [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.2   |
+| [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.3   |
+| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.5   |
+| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.5.3   |
+| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.3.1   |
+| [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.1   |
+| [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050) | 0.1.1   |
+| [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.1   |
+| [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.4   |
+| [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.11   |
+| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.2   |
+| [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.4   |
+| [Rollen & Rechte](apps/rollen-rechte/) | Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen (RFC-0045 A7); privilegiert, Installation nur mit `--confirm-administer` | 0.2.1   |
+| [Vorgänge](apps/vorgaenge/)       | Melden, Klären und Übergeben zwischen Mandanten (RFC-0061 Stufe 1+2): nimmt den Feedback-Knopf der Plattform an, Bereiche als Kontexte aus „Rollen & Rechte“; eine Instanz je Mandant, Löschfrist je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier an (RFC-0069); Plattform ab 0.1.201 | 0.3.1   |
+| [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.2   |
+| [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.1   |
+| [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.1   |
 | [Kundenzufriedenheit](data_models/kundenzufriedenheit/) | `data_models`-Artefakt (kein App-Dienst): dritte Herkunftsgruppe auf Firma, gepflegt im Zwillings-Browser (RFC-0031) | 0.1.0   |
 
 ## Installation
