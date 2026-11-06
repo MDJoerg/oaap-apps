@@ -675,6 +675,221 @@
           "label": "Spec oaap.core.authorization §2.10 — Verwaltung durch eine App"
         }
       ]
+    },
+    {
+      "id": "partnerverwaltung",
+      "name": "OAAP Partnerverwaltung",
+      "type": "native",
+      "version": "0.1.4",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/partnerverwaltung"
+      },
+      "roles": [
+        "user"
+      ],
+      "categories": [
+        "business"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "zwilling",
+        "partner",
+        "firma",
+        "kontakt",
+        "referenz"
+      ],
+      "summary": "Firmen und Kontaktpersonen pflegen — Owner im digitalen Zwilling.",
+      "description": "Referenz-App für den digitalen Zwilling (RFC-0031): zeigt an einem kleinen Fachmodell, wie Apps eines Mandanten gemeinsame Objekte besitzen, beitragen und als Referenz lesen. Owner von Firma und Kontaktperson, verknüpft sie (isContactOf) und legt eigene Projekt-Instanzen an — zweiter Owner des Typs Projekt. Bringt fachliche Rollen-Vorlagen mit (einzurichten in „Rollen & Rechte“).",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/partnerverwaltung"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0031-data-model-and-digital-twin.md",
+          "label": "RFC-0031 — Datenmodell und digitaler Zwilling"
+        }
+      ]
+    },
+    {
+      "id": "mitarbeiterverwaltung",
+      "name": "OAAP Mitarbeiterverwaltung",
+      "type": "native",
+      "version": "0.1.1",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/mitarbeiterverwaltung"
+      },
+      "roles": [
+        "user"
+      ],
+      "categories": [
+        "business"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "zwilling",
+        "mitarbeiter",
+        "dublette",
+        "referenz"
+      ],
+      "summary": "Mitarbeiter pflegen — unabhängiger Owner im digitalen Zwilling.",
+      "description": "Referenz-App für den digitalen Zwilling (RFC-0031): zeigt an einem kleinen Fachmodell, wie Apps eines Mandanten gemeinsame Objekte besitzen, beitragen und als Referenz lesen. Owner von Mitarbeiter, unabhängig von der Partnerverwaltung — erzeugt die erste echte Dublette (dieselbe Person aus zwei Quellen).",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/mitarbeiterverwaltung"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0031-data-model-and-digital-twin.md",
+          "label": "RFC-0031 — Datenmodell und digitaler Zwilling"
+        }
+      ]
+    },
+    {
+      "id": "projekt",
+      "name": "OAAP Projekt-App",
+      "type": "native",
+      "version": "0.1.1",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/projekt"
+      },
+      "roles": [
+        "user"
+      ],
+      "categories": [
+        "business"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "zwilling",
+        "projekt",
+        "referenz"
+      ],
+      "summary": "Projekte — ein Typ, zwei Owner im digitalen Zwilling.",
+      "description": "Referenz-App für den digitalen Zwilling (RFC-0031): zeigt an einem kleinen Fachmodell, wie Apps eines Mandanten gemeinsame Objekte besitzen, beitragen und als Referenz lesen. Definiert den Typ Projekt und liest Firma als Referenz; die Partnerverwaltung legt auf demselben Typ eigene Instanzen an.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/projekt"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0031-data-model-and-digital-twin.md",
+          "label": "RFC-0031 — Datenmodell und digitaler Zwilling"
+        }
+      ]
+    },
+    {
+      "id": "raci",
+      "name": "OAAP RACI",
+      "type": "native",
+      "version": "0.1.2",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/raci"
+      },
+      "roles": [
+        "user"
+      ],
+      "categories": [
+        "business"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "developer"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "zwilling",
+        "raci",
+        "verantwortung",
+        "referenz"
+      ],
+      "summary": "Verantwortlichkeiten (RACI) zu Firmen und Kontakten — Beitrag im digitalen Zwilling.",
+      "description": "Referenz-App für den digitalen Zwilling (RFC-0031): zeigt an einem kleinen Fachmodell, wie Apps eines Mandanten gemeinsame Objekte besitzen, beitragen und als Referenz lesen. Liest Firma und Kontaktperson als Referenz und schreibt 'responsible' in raci.assignments — ein Contributor, kein Owner.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/raci"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0031-data-model-and-digital-twin.md",
+          "label": "RFC-0031 — Datenmodell und digitaler Zwilling"
+        }
+      ]
+    },
+    {
+      "id": "vorgaenge",
+      "name": "Vorgänge",
+      "type": "native",
+      "version": "0.3.1",
+      "released": "2026-11-06",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/vorgaenge"
+      },
+      "roles": [
+        "user",
+        "keyuser",
+        "admin"
+      ],
+      "categories": [
+        "business",
+        "communication"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator",
+        "everyone"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "vorgang",
+        "ticket",
+        "feedback",
+        "meldung",
+        "mandant"
+      ],
+      "summary": "Melden, Klären und Übergeben im Mandanten — nimmt den Feedback-Knopf der Plattform an.",
+      "description": "Vorgänge (RFC-0061): nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Übergaben zwischen Mandanten (Stufe 2). Eine Instanz je Mandant.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/vorgaenge"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0061-cases-feedback-and-handover.md",
+          "label": "RFC-0061 — Vorgänge"
+        }
+      ]
     }
   ]
 }
