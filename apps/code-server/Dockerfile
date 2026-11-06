@@ -18,7 +18,14 @@ USER root
 # Fiori-Tools und die Claude-CLI; Python für Skripte; zip/unzip/jq
 # fürs Material. Debian 13 liefert Node 20 — für neuere Fassungen
 # ist `sudo` im Container da (IDE_SUDO) oder das Kursmaterial.
+#
+# `apt-get upgrade` (RFC-0071 §15): die Basis ist festgenagelt, und coder
+# baut einen alten Tag nicht nach — ohne diese Zeile holte ein Neubau
+# dieselben Pakete mit denselben offenen Sicherheitsmeldungen zurück.
+# So bringt jeder Bau die Sicherheits-Updates von Debian für ALLE Pakete
+# im Abbild mit; VS Code selbst bleibt auf 4.139.1.
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends \
       nodejs npm python3 python3-venv python3-pip \
       jq zip unzip less nano vim-tiny openssh-client ca-certificates \

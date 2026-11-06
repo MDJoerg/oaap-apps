@@ -84,7 +84,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.1   |
 | [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050) | 0.1.1   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.1   |
-| [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.4   |
+| [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.5   |
 | [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.11   |
 | [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.2   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.4   |
