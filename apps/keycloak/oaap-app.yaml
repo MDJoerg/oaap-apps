@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: keycloak
   name: Keycloak (Anmeldedienst)
-  version: 0.1.5
+  version: 0.1.6
   type: wrapped
   # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
   # keine App, die jemand "benutzt" — es ist die Tür, durch die andere
@@ -46,9 +46,54 @@ storage:
 # selbst als Schlüssel verlangt. Die Verwaltungsoberfläche schützt
 # Keycloak mit seinem eigenen Admin-Login; die Mengenbremse (RFC-0010)
 # greift weiterhin.
+#
+# 0.1.6: Die VERWALTUNGSOBERFLÄCHE liegt hinter der OAAP-Anmeldung. Gemessen
+# am 07.11. auf oaap-test: eine Stunde, nachdem der Knoten einen
+# öffentlichen Namen bekam, öffneten fremde Scanner /admin/master/console/.
+# Keycloaks eigener Login hielt — aber eine Tür, die niemand von außen
+# braucht, muss nicht von außen zu sehen sein.
+#
+# „Nur aus dem LAN“ geht NICHT: Konnektor (`oaap idp`) und MCP-Gateway
+# sprechen Keycloak über die öffentliche Adresse an (sie ist der issuer),
+# kommen also über den Router zurück und tragen dieselbe Absender-IP wie
+# ein Fremder. Deshalb eine Rolle statt einer Adresse.
+#
+# Offen bleiben — längster Pfad gewinnt:
+#   /admin/realms, /admin/serverinfo  die Verwaltungs-SCHNITTSTELLE, die der
+#                                     Konnektor benutzt; sie verlangt ein
+#                                     Keycloak-Token, sonst 401
+#   /realms/<realm>/...               jede Anmeldung eines Mandanten, auch
+#                                     die von Claude Code; der Token-
+#                                     Endpunkt von master (Konnektor)
+# Hinter der Anmeldung (`admin` des Mandanten der Instanz; server_admin
+# kommt über die Mandantengrenze, darf aber im Manifest nicht stehen,
+# RFC-0008):
+#   /admin                            jede Verwaltungsoberfläche
+#                                     (/admin/<realm>/console)
+#   /realms/master/protocol/openid-connect/auth, /realms/master/login-actions,
+#   /realms/master/account            die Browser-Anmeldung des
+#                                     Verwalter-Realms
 routes:
   - path: /
     roles: [public]
+    service: keycloak
+  - path: /admin
+    roles: [admin]
+    service: keycloak
+  - path: /admin/realms
+    roles: [public]
+    service: keycloak
+  - path: /admin/serverinfo
+    roles: [public]
+    service: keycloak
+  - path: /realms/master/protocol/openid-connect/auth
+    roles: [admin]
+    service: keycloak
+  - path: /realms/master/login-actions
+    roles: [admin]
+    service: keycloak
+  - path: /realms/master/account
+    roles: [admin]
     service: keycloak
 
 config:

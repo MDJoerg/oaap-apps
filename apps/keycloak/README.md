@@ -241,14 +241,31 @@ bleibt hier.
   erfährt nur, dass sie geklappt hat, und schreibt auf, was behauptet
   wurde (`amr`/`acr`).
 
-## Die Verwaltungsoberfläche ist öffentlich erreichbar
+## Die Verwaltungsoberfläche liegt hinter der OAAP-Anmeldung (seit 0.1.6)
 
-Wie bei jedem Keycloak: Sie schützt sich mit ihrem eigenen Admin-Login.
-Wer das auf einem Knoten am Internet nicht will, stellt die Instanz
-hinter die Sichtbarkeits- oder Randregeln des Knotens. Die Route dieser
-App ist `public`, weil Keycloak die Anmeldung **ist** — sie hinter die
-Anmeldung des Gateways zu stellen wäre eine Tür, die sich selbst als
-Schlüssel verlangt.
+Die Anmeldung selbst bleibt `public`, denn Keycloak **ist** die Anmeldung.
+Sie hinter die Anmeldung des Gateways zu stellen, wäre eine Tür, die sich
+selbst als Schlüssel verlangt. Die **Oberfläche** braucht aber niemand
+von außen. Am 07.11. öffneten fremde Scanner `/admin/master/console/`
+auf oaap-test, eine Stunde nachdem der Knoten einen öffentlichen Namen
+bekommen hatte. Seit 0.1.6 verlangen diese Pfade die OAAP-Rolle `admin`
+des Mandanten der Instanz (`server_admin` kommt über die
+Mandantengrenze):
+
+| Pfad | Zugang |
+| --- | --- |
+| `/admin` (jede `/admin/<realm>/console`) | OAAP-Anmeldung, Rolle `admin` |
+| `/realms/master/protocol/openid-connect/auth`, `…/login-actions`, `…/account` | OAAP-Anmeldung, Rolle `admin` |
+| `/admin/realms`, `/admin/serverinfo` (Verwaltungs-**Schnittstelle**) | offen, verlangt ein Keycloak-Token (sonst 401) |
+| alles andere, auch `/realms/master/protocol/openid-connect/token` | offen |
+
+Danach meldet sich der Verwalter **zweimal** an: erst bei OAAP, dann bei
+Keycloak.
+
+Warum eine Rolle und keine LAN-Sperre: Der Konnektor (`oaap idp`) und
+das MCP-Gateway sprechen Keycloak über seine öffentliche Adresse an,
+denn sie ist der `issuer`. Ihre Anfragen kommen über den Router zurück
+und tragen dieselbe Absender-IP wie die eines Fremden.
 
 ## Die zwei Schalter im Realm
 
