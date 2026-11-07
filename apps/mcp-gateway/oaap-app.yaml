@@ -3,7 +3,7 @@ oaap_manifest: "0.11"
 app:
   id: mcp-gateway
   name: OAAP MCP-Gateway
-  version: 0.4.0
+  version: 0.5.0
   type: native
   class: frontend
   description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln oder Anmeldung am Anmeldedienst des Mandanten (Zugangsprofile, Token-Tausch), Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
@@ -75,6 +75,17 @@ config:
     default: ""
   - key: MCPGW_SIGNIN_CLIENT
     label: "Client-ID, mit der sich Menschen anmelden (öffentlicher Client, für Claude Code --client-id)"
+    default: ""
+  # Verfahren I (RFC-0073 Stufe 2): Der angemeldete Mensch erreicht eine
+  # App-Quelle der Plattform. Das Gateway tauscht sein Token mit dem
+  # EIGENEN Client (MCPGW_AUDIENCE) gegen eines für den Plattform-Client
+  # des Realms. Leer = Quellen nur mit Verfahren T (Agentenschlüssel).
+  - key: MCPGW_CLIENT_SECRET
+    label: "Geheimnis des vertraulichen Gateway-Clients (MCPGW_AUDIENCE) für den Token-Tausch"
+    secret: true
+    default: ""
+  - key: MCPGW_PLATFORM_AUDIENCE
+    label: "Client-ID der Plattform im Realm des Mandanten (Ziel des Tauschs für Verfahren I)"
     default: ""
 
 health:

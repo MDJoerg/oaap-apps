@@ -140,6 +140,21 @@ class Paper(BaseHTTPRequestHandler):
         S = self.server.state
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         S["auth"].append(self.headers.get("Authorization"))
+        S.setdefault("act", []).append(self.headers.get("X-OAAP-Act-Token"))
+        if S.get("refuse_sub"):
+            # Wie die Tür der Plattform: diese Person scheitert an der Route (403 und ein Satz).
+            try:
+                who = json.loads(signin.b64((self.headers.get("X-OAAP-Act-Token") or "").split(".")[1]))
+            except (ValueError, IndexError):
+                who = {}
+            if who.get("sub") == S["refuse_sub"]:
+                said = "Forbidden: not in a visibility group for this app\x07\n zweite Zeile".encode()
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(said)))
+                self.end_headers()
+                self.wfile.write(said)
+                return
         S["proto"].append(self.headers.get("MCP-Protocol-Version"))
         if S["mode"] == "redirect":
             self.reply(307, None, [("Location", "http://169.254.169.254/latest/meta-data/")])
@@ -230,8 +245,15 @@ class Paper(BaseHTTPRequestHandler):
                 c = json.loads(signin.b64(tok.split(".")[1]))
             except (ValueError, IndexError):
                 c = {}
+            act_tok = self.headers.get("X-OAAP-Act-Token") or ""
+            try:
+                a = json.loads(signin.b64(act_tok.split(".")[1]))
+            except (ValueError, IndexError):
+                a = {}
             self.reply(200, text(json.dumps({"sub": c.get("sub"), "aud": c.get("aud"),
-                                             "azp": c.get("azp")})))
+                                             "azp": c.get("azp"),
+                                             "bearer": "" if c else tok,
+                                             "act_sub": a.get("sub"), "act_aud": a.get("aud")})))
         elif name == "big":
             self.reply(200, text("x" * (2 << 20)))
         elif name == "fail":
@@ -300,6 +322,15 @@ drei.state = XS
 threading.Thread(target=drei.serve_forever, daemon=True).start()
 DREI = f"http://{IP}:{drei.server_address[1]}/mcp"
 
+# Der vierte: die Tür der Plattform für Verfahren I (RFC-0073) — er sagt, was ankam.
+IS_ = paper_state(tools=[tool("whoami", "Sagt, wer ruft.", {})])
+vier = ThreadingHTTPServer(("0.0.0.0", 0), Paper)
+vier.state = IS_
+threading.Thread(target=vier.serve_forever, daemon=True).start()
+TUER = f"http://{IP}:{vier.server_address[1]}/platform/mcp/to/kp"
+SOURCES_KEY = "oaapk_abcd1234_QuellenSchluesselNurFuerDenTest0"
+PLATFORM_CLIENT = "oaap-plattform"
+
 # ------------------------------------------------------------- Papier-Anmeldedienst
 
 KEY = rk.keypair()
@@ -353,7 +384,9 @@ class Idp(BaseHTTPRequestHandler):
 idp = ThreadingHTTPServer(("0.0.0.0", 0), Idp)
 threading.Thread(target=idp.serve_forever, daemon=True).start()
 ISS = f"http://{IP}:{idp.server_address[1]}/realms/probe"
-os.environ.update({"MCPGW_ISSUER": ISS, "MCPGW_AUDIENCE": GW_CLIENT, "MCPGW_SIGNIN_CLIENT": SIGNIN_CLIENT})
+os.environ.update({"MCPGW_ISSUER": ISS, "MCPGW_AUDIENCE": GW_CLIENT, "MCPGW_SIGNIN_CLIENT": SIGNIN_CLIENT,
+                   "MCPGW_CLIENT_SECRET": GW_SECRET, "MCPGW_PLATFORM_AUDIENCE": PLATFORM_CLIENT,
+                   "OAAP_MCP_SOURCES_KEY": SOURCES_KEY})
 
 
 def person_token(sub="person-1", groups=("/team",), key=None, aud=None, **extra):
@@ -1230,11 +1263,91 @@ check("Messzeilen von X: Verfahren X, sub, Ausgang", row and all(r["procedure"] 
       and row[0]["user_sub"] == "person-x" and row[-1]["outcome"] == "upstream_error"
       and row[-1]["reason"] == "exchange", [dict(r) for r in row])
 
+print("\n-- Verfahren I: eine Quelle der Plattform, der Mensch durch die Tür (RFC-0073 Stufe 2)")
+rep_ = books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
+                                    "address": DREI, "door": TUER}], app.guard.clean(dict(app.guard.DEFAULTS)))
+srow = books.server_row(app.DB, "kp")
+check("die Quelle mit Tür wird mit Verfahren I eingetragen, Adresse = Tür, Ampel rot",
+      rep_["added"] == ["kp"] and srow["auth_kind"] == "platform" and srow["address"] == TUER
+      and srow["light"] == "red" and srow["credential"] == "", dict(srow))
+page = admin("/server-save", name="hand-i", address=DREI, auth="platform", light="green")
+check("Verfahren I für einen Server von Hand: abgewiesen", "Quellen der Plattform" in page
+      and books.server_row(app.DB, "hand-i") is None)
+ok_, text_ = app.read_catalog("kp")
+check("Katalog ohne Menschen: nicht gelesen, Satz nennt Verfahren I", not ok_ and "Verfahren I" in text_, text_)
+ok_, text_ = app.read_catalog("kp", {"iss": ISS, "sub": "betreiber", "token": person_token("betreiber")})
+check("Katalog mit Token des Betreibers durch die Tür gelesen", ok_, text_)
+admin("/server-save", name="kp", address=TUER, auth="platform", light="green")
+page = add("alles", "whoami", server="kp")
+check("I-Server in einer Sicht mit Schlüsseln: abgewiesen", "Anmeldung" in page
+      and not books.item_row(app.DB, "alles", "tool", "whoami"))
+admin("/view-save", name="i-sicht", max_effect="read", ways="signin")
+add("i-sicht", "whoami", server="kp")
+page = admin("/view-save", name="i-sicht", max_effect="read", ways="key,signin")
+check("Sicht mit I-Server auf Schlüssel umstellen: abgewiesen", books.view_row(app.DB, "i-sicht")["ways"] == "signin")
+admin("/issue", label="i-profil", kind="profile", groups="/team", views="i-sicht")
+TI = person_token("person-i", ("/team",))
+si, _ = session("i-sicht", TI)
+IS_["act"].clear()
+IS_["auth"].clear()
+IDP["exchanges"].clear()
+app.EXCHANGED.clear()
+st, _, msgs, _ = call("i-sicht", TI, si, "whoami")
+seen = json.loads(((msgs[-1].get("result") or {}).get("content") or [{}])[0].get("text") or "{}") if msgs else {}
+check("an der Tür: der Quellen-Schlüssel als Bearer", seen.get("bearer") == SOURCES_KEY, (seen, msgs))
+check("… und das Act-Token des Menschen, an den Plattform-Client adressiert",
+      seen.get("act_sub") == "person-i" and seen.get("act_aud") == PLATFORM_CLIENT, seen)
+check("nie das Token des Menschen selbst an der Tür",
+      TI not in IS_["act"] and all(TI not in (a or "") for a in IS_["auth"]))
+check("getauscht als eigener Client, für den Plattform-Client, Grant RFC 8693",
+      IDP["exchanges"] and IDP["exchanges"][-1] == {
+          "client": GW_CLIENT, "audience": PLATFORM_CLIENT,
+          "grant": "urn:ietf:params:oauth:grant-type:token-exchange"}, IDP["exchanges"])
+call("i-sicht", TI, si, "whoami")
+check("zweiter Aufruf: Act-Token wiederverwendet", len(IDP["exchanges"]) == 1, IDP["exchanges"])
+try:
+    app.server_access(books.server_row(app.DB, "kp"), None)
+    check("Verfahren I ohne Menschen: kein Zugang, auch nicht der Quellen-Schlüssel", False, "geliefert")
+except app.NoPerson:
+    check("Verfahren I ohne Menschen: kein Zugang, auch nicht der Quellen-Schlüssel", True)
+IDP["mode"] = "deny"
+app.EXCHANGED.clear()
+calls_before = len(IS_["calls"])
+st, _, msgs, _ = call("i-sicht", TI, si, "whoami")
+check("Tausch abgelehnt: -32003, Tür nicht gerufen, kein Rückfall",
+      err(msgs).get("code") == -32003 and len(IS_["calls"]) == calls_before, msgs)
+IDP["mode"] = None
+row = list(app.DB.execute("SELECT * FROM usage WHERE server='kp' ORDER BY id"))
+check("Messzeilen: Verfahren I, sub des Menschen",
+      row and all(r["procedure"] == "I" for r in row) and row[0]["user_sub"] == "person-i",
+      [dict(r) for r in row])
+IS_["refuse_sub"] = "person-j"
+TJ = person_token("person-j", ("/team",))
+sj, _ = session("i-sicht", TJ)
+answers = [call("i-sicht", TJ, sj, "whoami") for _ in range(7)]
+msg_j = err(answers[-1][2]).get("message", "")
+check("eine Person, die die Plattform ablehnt: ihr Satz kommt an, bereinigt auf eine Zeile",
+      "Die Plattform lehnt ab (HTTP 403): Forbidden: not in a visibility group for this app zweite Zeile"
+      in msg_j and "\x07" not in msg_j, msg_j)
+st, _, msgs, _ = call("i-sicht", TI, si, "whoami")
+check("… sieben Ablehnungen in Folge öffnen den Sicherungsautomaten NICHT: anna kommt weiter durch",
+      st == 200 and "result" in (msgs[-1] if msgs else {}), msgs)
+row = list(app.DB.execute("SELECT outcome, reason FROM usage WHERE server='kp' AND user_sub='person-j'"))
+check("… gemessen als refused/platform, nicht als Fehler des Servers",
+      row and all((r["outcome"], r["reason"]) == ("refused", "platform") for r in row), [tuple(r) for r in row])
+IS_["refuse_sub"] = None
+rep_ = books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
+                                    "address": DREI, "door": TUER + "x"}], app.guard.clean(dict(app.guard.DEFAULTS)))
+check("Tür zieht um: die Adresse folgt der Tür", rep_["moved"] == ["kp"]
+      and books.server_row(app.DB, "kp")["address"] == TUER + "x", rep_)
+books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
+                             "address": DREI, "door": TUER}], app.guard.clean(dict(app.guard.DEFAULTS)))
+
 print("\n-- Kein Token irgendwo")
 db_bytes = open(os.path.join(TMP, "gateway.db"), "rb").read()
 if os.path.exists(os.path.join(TMP, "gateway.db-wal")):
     db_bytes += open(os.path.join(TMP, "gateway.db-wal"), "rb").read()
-sig_parts = [t.split(".")[2][:40] for t in (T1, T2, TX, *XS["tokens"])]
+sig_parts = [t.split(".")[2][:40] for t in (T1, T2, TX, TI, *XS["tokens"], *[a for a in IS_["act"] if a])]
 check("keine Unterschrift eines Tokens in der Datenbank", not any(p.encode() in db_bytes for p in sig_parts))
 check("und nicht im Protokoll", not any(p in LOG.getvalue() for p in sig_parts))
 _, pg = admin_get("/")

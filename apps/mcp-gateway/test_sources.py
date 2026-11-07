@@ -96,6 +96,36 @@ ok("unbrauchbare Zeilen werden uebergangen",
 logs = [r["detail"] for r in db.execute("SELECT detail FROM audit WHERE action='server.source'")]
 ok("jede Bewegung steht im Protokoll", len(logs) >= 5, logs)
 
+# ------------------------------------------- Stufe 2: die Tuer (Verfahren I)
+DOOR = "http://oaap-gateway-1:8128/platform/mcp/to/"
+rep = books.sync_sources(db, [dict(KP, name="kp-neu", address="http://oaap-gateway-1:8201/mcp",
+                                   door=DOOR + "kp-neu")], LIM)
+row = books.server_row(db, "kp-neu")
+ok("neue Quelle mit Tuer: Verfahren I (platform), Adresse = Tuer, rot, keine Zugangsdaten",
+   rep["added"] == ["kp-neu"] and row["auth_kind"] == "platform" and row["address"] == DOOR + "kp-neu"
+   and row["light"] == "red" and row["credential"] == "", dict(row))
+books.sync_sources(db, [dict(KP, name="kp-alt", address="http://oaap-gateway-1:8202/mcp")], LIM)
+rep = books.sync_sources(db, [dict(KP, name="kp-alt", address="http://oaap-gateway-1:8202/mcp",
+                                   door=DOOR + "kp-alt")], LIM)
+row = books.server_row(db, "kp-alt")
+ok("eine Quelle aus Stufe 1, die nie einen Zugang bekam (none): wechselt auf I, Adresse = Tuer",
+   row["auth_kind"] == "platform" and row["address"] == DOOR + "kp-alt" and rep["moved"] == ["kp-alt"],
+   (dict(row), rep))
+rep = books.sync_sources(db, [dict(KP, address="http://oaap-gateway-1:8199/mcp", door=DOOR + "kp")], LIM)
+row = books.server_row(db, "kp")
+ok("eine Quelle mit Zugang des Betreibers (bearer, Agent) bleibt T an ihrer Adresse",
+   row["auth_kind"] == "bearer" and row["address"] == "http://oaap-gateway-1:8199/mcp"
+   and row["credential"] == "versiegelt" and not rep["moved"], (dict(row), rep))
+rep = books.sync_sources(db, [dict(KP, name="kp-neu", address="http://oaap-gateway-1:8201/mcp",
+                                   door="ftp://evil/x")], LIM)
+ok("eine Tuer, die nicht http:// ist, biegt nichts um",
+   books.server_row(db, "kp-neu")["address"] == DOOR + "kp-neu", rep)
+try:
+    books.save_server(db, "tester", "handarbeit", "http://10.0.0.5:3900/mcp", "platform", "yellow", LIM)
+    ok("Verfahren I fuer einen Server von Hand: abgewiesen", False)
+except ValueError as exc:
+    ok("Verfahren I fuer einen Server von Hand: abgewiesen", "Quellen der Plattform" in str(exc), exc)
+
 # ------------------------------------------------------- die Abfrage der Liste
 SEEN = []
 ANSWER = {"body": json.dumps({"v": 1, "sources": [KP]}).encode(), "code": 200}

@@ -46,6 +46,27 @@ class UpstreamError(Exception):
         self.kind = kind
 
 
+class Refused(UpstreamError):
+    """Die Tür der Plattform lehnt DIESE Person ab (Verfahren I, 401/403).
+
+    Kein Defekt des Servers: Der Sicherungsautomat zählt das nicht, sonst
+    sperrten die Versuche eines Menschen ohne Recht die Quelle für alle.
+    Der Text trägt den Satz der Plattform, bereinigt und gekürzt.
+    """
+
+    def __init__(self, status, sentence):
+        super().__init__("refused", f"Die Plattform lehnt ab (HTTP {status})"
+                         + (f": {sentence}" if sentence else "."))
+        self.status = status
+
+
+def _sentence(raw):
+    """Eine Zeile druckbarer Text, höchstens 200 Zeichen — oder ''."""
+    text = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw or "")
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+    return text[:200]
+
+
 class SessionGone(UpstreamError):
     """Der Server kennt die Sitzung nicht mehr (404) — neu anmelden, einmal."""
 
@@ -143,6 +164,10 @@ def _connection(url):
 def auth_headers(server):
     """Verfahren T: die Kopfzeile für den technischen Zugang. Leer bei `none`."""
     kind, cred = server.get("auth_kind") or "none", server.get("credential") or ""
+    # Verfahren I (RFC-0073): neben dem Zugang das Act-Token für die Tür.
+    extra = dict(server.get("headers") or {})
+    if extra:
+        return {**auth_headers({"auth_kind": kind, "credential": cred}), **extra}
     if kind == "none" or not cred:
         return {}
     if kind == "bearer":
@@ -211,6 +236,12 @@ def post(server, url, message, session_id=None, version=None, timeout=60,
         if resp.status in (202, 204):
             return ex
         if resp.status >= 400:
+            if resp.status in (401, 403) and server.get("door"):
+                try:
+                    said = _sentence(resp.read(400))
+                except (OSError, http.client.HTTPException):
+                    said = ""
+                raise Refused(resp.status, said)
             supported = _supported_versions(resp, conn, deadline) if message.get(
                 "method") == "initialize" else None
             if supported:

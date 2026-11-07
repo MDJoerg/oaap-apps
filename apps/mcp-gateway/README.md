@@ -6,11 +6,13 @@ einem einzigen MCP-Server und erfährt nie, welche Server dahinterstehen
 oder wo.
 
 Umsetzung der Capability [`oaap.ai.mcp-gateway`
-0.3](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
-bis 3: Sichten bündeln Tools, Resources und Prompts mehrerer Server;
-hinein mit einem Schlüssel oder als Mensch, angemeldet am Anmeldedienst
-des Mandanten; zum Server technisch (Verfahren T) oder als dieser Mensch
-über einen getauschten Token (Verfahren X).
+0.5](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
+bis 3 und RFC-0073 Stufen 1 und 2: Sichten bündeln Tools, Resources und
+Prompts mehrerer Server; hinein mit einem Schlüssel oder als Mensch,
+angemeldet am Anmeldedienst des Mandanten; zum Server technisch
+(Verfahren T), als dieser Mensch über einen getauschten Token
+(Verfahren X) oder zu einer App der Plattform als dieser Mensch über die
+Plattform (Verfahren I).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -112,6 +114,40 @@ mit eigenem Token:
 
 ```bash
 echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <name> --token-stdin ja
+```
+
+## Quellen der Plattform (0.4) und Verfahren I (0.5)
+
+Eine App, die im Manifest eine MCP-Tür erklärt (`mcp: {path: /mcp}`),
+ist eine **Quelle**. Dieses Gateway erklärt `mcp_sources: {read: true}`
+und bekommt von der Plattform die Liste der Quellen **seines Mandanten
+auf diesem Knoten** (RFC-0073, Spec §3.6). Abgeglichen wird beim Start,
+alle 5 Minuten, 30 s nach einem Fehler und mit `source sync`. Eine neue
+Quelle wird ein Server mit ihrem Instanznamen, Ampel rot, **in keiner
+Sicht**, bis der Betreiber freigibt. Verschwindet sie, bleiben ihre
+Einträge stehen und sind als weg markiert.
+
+**Verfahren I (0.5):** Nennt die Liste eine Tür, wird die Quelle mit
+Zugang `platform` eingetragen. Ein angemeldeter Mensch erreicht die App
+dann **als er selbst**: Das Gateway tauscht sein Token mit dem eigenen
+Client (`MCPGW_AUDIENCE`, Geheimnis `MCPGW_CLIENT_SECRET`) gegen eines
+für den Plattform-Client des Realms (`MCPGW_PLATFORM_AUDIENCE`) und ruft
+die Tür auf der eigenen Seite mit dem Quellen-Schlüssel und diesem
+Act-Token. Die Plattform prüft beides, findet die Person über ihre
+Bindung und gibt der App die sechs Kopfzeilen der Person. Die App ändert
+nichts. Ohne Menschen kein Aufruf, kein Rückfall auf einen technischen
+Zugang. Eine Sicht mit so einem Server nimmt nur Anmeldungen an.
+
+**Agenten (Verfahren T):** Für eine Sicht mit Schlüsseln trägt der
+Betreiber dieselbe Instanz ein zweites Mal von Hand ein, mit dem
+Schlüssel eines Agenten (`oaap authz agent-add`), beschränkt auf die
+Quelle. Eine Quelle, der der Betreiber schon einen Zugang gegeben hat,
+behält ihn.
+
+```bash
+docker exec <container> python3 /srv/app.py source list
+docker exec <container> python3 /srv/app.py source sync
+echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <quelle> --token-stdin ja
 ```
 
 ## Der festgehaltene Text

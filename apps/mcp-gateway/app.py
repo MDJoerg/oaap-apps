@@ -57,7 +57,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -70,6 +70,11 @@ ISSUER = (os.environ.get("MCPGW_ISSUER") or "").strip().rstrip("/")
 AUDIENCE = (os.environ.get("MCPGW_AUDIENCE") or "").strip()
 SIGNIN_CLIENT = (os.environ.get("MCPGW_SIGNIN_CLIENT") or "").strip()
 ISSUER_KEYS = signin.Keys(ISSUER) if ISSUER else None
+# Verfahren I (RFC-0073 Stufe 2, Spec §3.7): Tausch mit dem eigenen Client.
+CLIENT_SECRET = (os.environ.get("MCPGW_CLIENT_SECRET") or "").strip()
+PLATFORM_AUDIENCE = (os.environ.get("MCPGW_PLATFORM_AUDIENCE") or "").strip()
+ACT_HEADER = "X-OAAP-Act-Token"
+_TOKEN_URL = {}
 
 # Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
 # Manifest `mcp_sources: {read: true}` erklärt; die Plattform prägt den Schlüssel.
@@ -223,6 +228,52 @@ EXCHANGED = {}                       # (Issuer, sub, Server) → (Token, gültig
 _EXCHANGED_LOCK = threading.Lock()
 
 
+def token_endpoint():
+    """Der Token-Endpunkt des Issuers, aus seinem Discovery-Dokument, gleicher Ursprung."""
+    if "url" in _TOKEN_URL:
+        return _TOKEN_URL["url"]
+    status, body = upstream.plain("GET", ISSUER + "/.well-known/openid-configuration",
+                                  headers={"Accept": "application/json"})
+    try:
+        doc = json.loads(body) if status == 200 else {}
+    except ValueError:
+        doc = {}
+    url = str(doc.get("token_endpoint") or "")
+    if doc.get("issuer", "").rstrip("/") != ISSUER or not signin.same_origin(url, ISSUER):
+        raise upstream.UpstreamError("exchange", "Token-Endpunkt des Issuers nicht lesbar")
+    _TOKEN_URL["url"] = url
+    return url
+
+
+def platform_act(person):
+    """Verfahren I: das Token des Menschen gegen eines für den Plattform-Client tauschen.
+
+    Gibt das Act-Token zurück; wirft NoPerson mit einem Satz. Kein Rückfall
+    auf den eigenen Prinzipal (D8): ohne Menschen kein Aufruf."""
+    if not person or not person.get("token"):
+        raise NoPerson("Diese Quelle der Plattform arbeitet mit Verfahren I und braucht einen "
+                       "angemeldeten Menschen; mit einem Schlüssel geht es nicht.")
+    if not (ISSUER and AUDIENCE and CLIENT_SECRET and PLATFORM_AUDIENCE and SOURCES_KEY):
+        raise NoPerson("Verfahren I ist nicht eingerichtet (MCPGW_ISSUER, MCPGW_AUDIENCE, "
+                       "MCPGW_CLIENT_SECRET, MCPGW_PLATFORM_AUDIENCE und der Quellen-Schlüssel "
+                       "der Plattform).")
+    cache = (person["iss"], person["sub"], "@platform")
+    with _EXCHANGED_LOCK:
+        hit = EXCHANGED.get(cache)
+        if hit and hit[1] > time.time() + 30:
+            return hit[0]
+    try:
+        token, lifetime = signin.exchange(token_endpoint(), AUDIENCE, CLIENT_SECRET,
+                                          person["token"], PLATFORM_AUDIENCE)
+    except signin.Invalid as exc:
+        raise NoPerson(f"Token-Tausch zur Plattform abgelehnt: {exc}") from None
+    except upstream.UpstreamError as exc:
+        raise NoPerson(f"Token-Tausch zur Plattform nicht möglich: {exc}") from None
+    with _EXCHANGED_LOCK:
+        EXCHANGED[cache] = (token, time.time() + lifetime)
+    return token
+
+
 def server_access(srow, person=None):
     """Adresse und Zugang für upstream.py. Wirft UpstreamError mit einem Satz.
 
@@ -238,6 +289,11 @@ def server_access(srow, person=None):
         except VaultError as exc:
             raise upstream.UpstreamError("credential",
                                          f"Zugangsdaten nicht lesbar: {exc}") from None
+    if srow["auth_kind"] == "platform":
+        # Zwei Nachweise an der Tür: der Quellen-Schlüssel dieser Instanz und das
+        # Act-Token der Person. Die Plattform macht daraus die Kopfzeilen der Person.
+        return {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True,
+                "headers": {ACT_HEADER: platform_act(person)}}, url
     if srow["auth_kind"] != "exchange":
         return {"auth_kind": srow["auth_kind"], "credential": credential}, url
     if not person or not person.get("token"):
@@ -276,8 +332,9 @@ def read_catalog(name, person=None):
     srow = books.server_row(DB, name)
     if not srow:
         return False, f"Einen Server „{name}“ gibt es nicht."
-    if srow["auth_kind"] == "exchange" and not person:
-        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
+    if srow["auth_kind"] in books.PERSON_KINDS and not person:
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren "
+                       f"{'I' if srow['auth_kind'] == 'platform' else 'X'} braucht ein Token eines "
                        f"Menschen — app.py server read {name} --token-stdin ja.")
     lim = limits_of(srow)
     try:
@@ -1397,6 +1454,8 @@ class Handler(BaseHTTPRequestHandler):
         reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
         if srow["auth_kind"] == "exchange":
             state["procedure"] = "X"
+        elif srow["auth_kind"] == "platform":
+            state["procedure"] = "I"
         try:
             server, url = server_access(srow, self.person)
         except NoPerson as exc:
@@ -1481,6 +1540,14 @@ class Handler(BaseHTTPRequestHandler):
                     answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: der Server verliert "
                                                      "die Sitzung."))
                     return True
+            except upstream.Refused as exc:
+                # Die Plattform lehnt diesen Menschen ab (Route, Bindung, Token): sein
+                # Satz geht weiter, der Sicherungsautomat zählt es nicht (RFC-0073 §4.1).
+                with sess.lock:
+                    sess.upstream.pop(srow["name"], None)
+                done("refused", "platform")
+                answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
+                return False
             except upstream.TooLarge as exc:
                 done("limited", "size")
                 answer(rpc_error(msg_id, -32001, f"Sicht {vrow['name']}: Die Antwort ist größer "
