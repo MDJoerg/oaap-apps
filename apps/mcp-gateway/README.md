@@ -116,7 +116,7 @@ mit eigenem Token:
 echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <name> --token-stdin ja
 ```
 
-## Quellen der Plattform (0.4) und Verfahren I (0.5)
+## Quellen der Plattform (0.4), Verfahren I (0.5), Clients von der Plattform (0.6)
 
 Eine App, die im Manifest eine MCP-Tür erklärt (`mcp: {path: /mcp}`),
 ist eine **Quelle**. Dieses Gateway erklärt `mcp_sources: {read: true}`
@@ -143,6 +143,24 @@ Betreiber dieselbe Instanz ein zweites Mal von Hand ein, mit dem
 Schlüssel eines Agenten (`oaap authz agent-add`), beschränkt auf die
 Quelle. Eine Quelle, der der Betreiber schon einen Zugang gegeben hat,
 behält ihn.
+
+**Clients von der Plattform (0.6):** Die beiden Clients im Realm muss
+niemand mehr von Hand anlegen. Ein `server_admin` klickt auf der
+Instanzseite im Portal „Anmeldung einrichten“ oder ruft auf dem Knoten
+
+```bash
+sudo oaap idp mcp <konnektor> --instance <gateway> [--dry-run]
+```
+
+Dann legt der Konnektor, der den Realm des Mandanten angelegt hat,
+`oaap-mcp-<instanz>` (vertraulich, nur Tausch) und
+`oaap-mcp-<instanz>-login` (öffentlich, PKCE, Rücksprung
+`http://localhost:33418/callback`) an. Die Plattform reicht Issuer,
+Client-IDs, Geheimnis und Plattform-Client als `OAAP_MCP_IDP_*` herein.
+Sie gelten, wo `MCPGW_*` leer ist; was von Hand gesetzt ist, gewinnt. Die
+Karte „Anmeldung von Menschen“ zeigt je Einstellung, woher sie kommt.
+`--off` (oder „abschalten“) deaktiviert beide Clients, gelöscht wird
+nichts.
 
 ```bash
 docker exec <container> python3 /srv/app.py source list
@@ -266,6 +284,8 @@ python3 apps/mcp-gateway/test_argcheck.py   # Argumentprüfung (A1)
 python3 apps/mcp-gateway/test_compose.py    # Namen, feste Argumente, Grenzen, Vorlagen, Umzug aus 0.1
 python3 apps/mcp-gateway/test_signin.py     # Tokenprüfung: Unterschrift, Issuer, Audience, Ablauf, Schlüssel
 python3 apps/mcp-gateway/test_gateway.py    # Konformitätsliste der Spec §12, Ende zu Ende
+python3 apps/mcp-gateway/test_sources.py    # Quellen der Plattform (§3.6)
+python3 apps/mcp-gateway/test_platform_settings.py  # Einstellungen von der Plattform (§3.8)
 ```
 
 Die letzte Datei stellt zwei **Papier-MCP-Server** hin, die sich auf
@@ -293,8 +313,7 @@ KI-Gateway. Geändert wird nur dort, dann `check-shared.py --fix`.
 - Abonnements von Resources und Änderungsmeldungen an den Client —
   dafür fehlt der vom Server ausgehende Strom über `GET` (0.2 antwortet
   405).
-- Die Clients im Realm legt der Betreiber von Hand an; ein Auftrag des
-  IdP-Konnektors folgt (RFC-0065 D15). Nur RS256, nur ein Issuer.
+- Nur RS256, nur ein Issuer.
 - **Stufe 4:** der Benutzer bis ins SAP-System (Verfahren P,
   RFC-0066).
 - `pattern` und `format` in Schemas der Server werden nicht

@@ -57,7 +57,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -65,14 +65,37 @@ DB_PATH = os.path.join(DATA_DIR, "gateway.db")
 MASTER = os.environ.get("MCPGW_MASTER_KEY", "")
 VAULT = Vault(b"oaap-mcp-gateway-vault|", "MCPGW_MASTER_KEY")
 
+# Einstellungen von der Plattform (Spec §3.8, RFC-0073 Stufe 3): Hat ein
+# Konnektor die Clients dieses Gateways angelegt, reicht die Plattform fünf
+# Werte als OAAP_MCP_IDP_* herein. Sie gelten nur, wo die eigene Einstellung
+# leer ist -- ein von Hand gesetzter Wert gewinnt, einzeln je Einstellung.
+PLATFORM_SETTINGS = (("MCPGW_ISSUER", "OAAP_MCP_IDP_ISSUER"),
+                     ("MCPGW_AUDIENCE", "OAAP_MCP_IDP_AUDIENCE"),
+                     ("MCPGW_SIGNIN_CLIENT", "OAAP_MCP_IDP_SIGNIN"),
+                     ("MCPGW_CLIENT_SECRET", "OAAP_MCP_IDP_SECRET"),
+                     ("MCPGW_PLATFORM_AUDIENCE", "OAAP_MCP_IDP_PLATFORM_AUDIENCE"))
+
+
+def setting(own, platform):
+    """(Wert, Herkunft): 'hand', 'platform' oder '' (leer)."""
+    v = (os.environ.get(own) or "").strip()
+    if v:
+        return v, "hand"
+    v = (os.environ.get(platform) or "").strip()
+    return (v, "platform") if v else ("", "")
+
+
+SETTING_FROM = {own: setting(own, plat)[1] for own, plat in PLATFORM_SETTINGS}
+_S = dict((own, setting(own, plat)[0]) for own, plat in PLATFORM_SETTINGS)
+
 # Anmeldung (Spec §2.2, RFC-0065 D14/D15). Ohne Issuer ist sie aus.
-ISSUER = (os.environ.get("MCPGW_ISSUER") or "").strip().rstrip("/")
-AUDIENCE = (os.environ.get("MCPGW_AUDIENCE") or "").strip()
-SIGNIN_CLIENT = (os.environ.get("MCPGW_SIGNIN_CLIENT") or "").strip()
+ISSUER = _S["MCPGW_ISSUER"].rstrip("/")
+AUDIENCE = _S["MCPGW_AUDIENCE"]
+SIGNIN_CLIENT = _S["MCPGW_SIGNIN_CLIENT"]
 ISSUER_KEYS = signin.Keys(ISSUER) if ISSUER else None
 # Verfahren I (RFC-0073 Stufe 2, Spec §3.7): Tausch mit dem eigenen Client.
-CLIENT_SECRET = (os.environ.get("MCPGW_CLIENT_SECRET") or "").strip()
-PLATFORM_AUDIENCE = (os.environ.get("MCPGW_PLATFORM_AUDIENCE") or "").strip()
+CLIENT_SECRET = _S["MCPGW_CLIENT_SECRET"]
+PLATFORM_AUDIENCE = _S["MCPGW_PLATFORM_AUDIENCE"]
 ACT_HEADER = "X-OAAP-Act-Token"
 _TOKEN_URL = {}
 
@@ -732,9 +755,10 @@ CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code 
 def signin_card(host):
     """Wie sich Menschen anmelden (Spec §2.2) — oder warum es noch nicht geht."""
     if not ISSUER:
-        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Für die Anmeldung am '
-                'Anmeldedienst des Mandanten MCPGW_ISSUER, MCPGW_AUDIENCE und MCPGW_SIGNIN_CLIENT in der '
-                'Konfiguration der Instanz setzen (RFC-0065 D14, D15).</p></div>')
+        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Im Portal auf der '
+                'Instanzseite „Anmeldung einrichten“ (oder <code>oaap idp mcp &lt;konnektor&gt; --instance '
+                '&lt;name&gt;</code>), oder MCPGW_ISSUER, MCPGW_AUDIENCE und MCPGW_SIGNIN_CLIENT in der '
+                'Konfiguration der Instanz von Hand setzen (RFC-0065 D14, D15; RFC-0073 Stufe 3).</p></div>')
     err = ISSUER_KEYS.error if ISSUER_KEYS else ""
     views = [v["name"] for v in books.views(DB) if "signin" in books.view_ways(v)]
     cmd = "\n".join(f"claude mcp add --transport http {v} {endpoint(host, v)} \\\n"
@@ -748,7 +772,21 @@ Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
 <code>http://localhost:{CALLBACK_PORT}/callback</code>) mit einem Audience-Mapper auf
 <code>{esc(AUDIENCE or "MCPGW_AUDIENCE")}</code>. Wer zahlt, entscheidet ein Zugangsprofil über die
 Gruppen im Token; ohne passendes Profil gibt es 403.</p>
-<pre>{esc(cmd)}</pre></div>'''
+<pre>{esc(cmd)}</pre>{settings_table()}</div>'''
+
+
+FROM_WORDS = {"hand": "von Hand", "platform": "von der Plattform", "": "leer"}
+
+
+def settings_table():
+    """Woher jede der fünf Einstellungen kommt (Spec §3.8). Das Geheimnis nie."""
+    rows = "".join(
+        f"<tr><td><code>{own}</code></td><td>"
+        + (esc(_S[own]) if own != "MCPGW_CLIENT_SECRET" else ("gesetzt" if _S[own] else "—"))
+        + f"</td><td>{FROM_WORDS[SETTING_FROM[own]]}</td></tr>"
+        for own, _plat in PLATFORM_SETTINGS)
+    return ('<table><tr><th>Einstellung</th><th>Wert</th><th>Herkunft</th></tr>'
+            f"{rows}</table>")
 
 
 def server_form(s=None):

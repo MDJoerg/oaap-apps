@@ -3,7 +3,7 @@ oaap_manifest: "0.11"
 app:
   id: mcp-gateway
   name: OAAP MCP-Gateway
-  version: 0.5.0
+  version: 0.6.0
   type: native
   class: frontend
   description: "MCP-Server hinter einem Endpunkt je Sicht — Bündel aus Tools, Resources und Prompts mehrerer Server, mit API-Schlüsseln oder Anmeldung am Anmeldedienst des Mandanten (Zugangsprofile, Token-Tausch), Katalog mit Freigabe, festgehaltenen Texten, festen Argumenten und Grenzen, Wirkungsklassen, Schutz der Server und Verbrauchsmessung (Capability oaap.ai.mcp-gateway, RFC-0065)"
@@ -66,7 +66,11 @@ config:
   - key: MCPGW_CATALOG_MINUTES
     label: "Katalog neu lesen alle … Minuten (0 = nur auf Knopfdruck)"
     default: "15"
-  # Anmeldung von Menschen (RFC-0065 Stufe 3, D14/D15). Leer = aus.
+  # Anmeldung von Menschen (RFC-0065 Stufe 3, D14/D15). Leer = aus — außer
+  # die Plattform reicht die Werte herein (RFC-0073 Stufe 3, Spec §3.8): Hat
+  # ein Konnektor die Clients angelegt (`oaap idp mcp`, Knopf im Portal),
+  # gelten für die fünf leeren Einstellungen unten OAAP_MCP_IDP_*. Ein hier
+  # von Hand gesetzter Wert gewinnt.
   - key: MCPGW_ISSUER
     label: "Issuer des Anmeldediensts des Mandanten, genau wie im Token (z. B. https://auth.<knoten>/realms/<mandant>; leer = keine Anmeldung)"
     default: ""
