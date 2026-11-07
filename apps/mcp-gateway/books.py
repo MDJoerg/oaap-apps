@@ -149,6 +149,11 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # Der Mensch hinter einem angemeldeten Aufruf: sub und Issuer (D16), nie ein Name.
     ("usage", "user_sub", "TEXT NOT NULL DEFAULT ''"),
     ("usage", "user_iss", "TEXT NOT NULL DEFAULT ''"),
+    # 0.4 (RFC-0073 Stufe 1): ein Server, den das Gateway aus der Quellenliste
+    # der Plattform eingetragen hat, nennt seine Instanz; verschwindet sie aus
+    # der Liste, steht hier wann — die Einträge in den Sichten bleiben sichtbar.
+    ("servers", "source", "TEXT NOT NULL DEFAULT ''"),
+    ("servers", "gone", "TEXT NOT NULL DEFAULT ''"),
 )
 WAYS = ("key", "signin", "key,signin")
 WAY_WORDS = {"key": "Schlüssel", "signin": "Anmeldung", "key,signin": "Schlüssel und Anmeldung"}
@@ -325,6 +330,58 @@ def server_row(db, name):
 
 def servers(db):
     return list(db.execute("SELECT * FROM servers ORDER BY name"))
+
+
+def sync_sources(db, sources, limits):
+    """Gleicht die Quellenliste der Plattform ab (RFC-0073 D2, Spec §3.6). Gibt einen Bericht zurück.
+
+    - Eine neue Quelle wird ein Server mit ihrem Instanznamen, Zugang `none`,
+      Ampel `red`. In keiner Sicht erscheint etwas, bevor der Betreiber
+      freigibt (Standard: alles verboten).
+    - Ein Server gleichen Namens, den jemand von Hand angelegt hat, bleibt
+      unberührt; der Bericht nennt den Konflikt.
+    - Eine bekannte Quelle behält Zugang, Zugangsdaten und Ampel des
+      Betreibers; nur eine geänderte Adresse wird nachgezogen.
+    - Verschwindet eine Quelle, bleibt ihr Server mit Zeitpunkt in `gone`;
+      die Einträge in den Sichten werden nicht still entfernt.
+    """
+    report = {"added": [], "moved": [], "conflict": [], "gone": [], "back": []}
+    seen = set()
+    stamp = now()
+    for src in sources:
+        name = str(src.get("name") or "")
+        address = str(src.get("address") or "")
+        if not NAME.match(name) or not address.startswith("http://"):
+            continue
+        seen.add(name)
+        old = server_row(db, name)
+        if old is None:
+            db.execute("INSERT INTO servers (name,address,auth_kind,credential,light,limits,source,"
+                       "created,updated) VALUES (?,?,'none','','red',?,?,?,?)",
+                       (name, address, json.dumps(limits, sort_keys=True), name, stamp, stamp))
+            log(db, "plattform", "server.source", name,
+                f"aus der Quellenliste eingetragen: {src.get('app')} {src.get('version')}")
+            report["added"].append(name)
+            continue
+        if old["source"] != name:
+            report["conflict"].append(name)
+            continue
+        if old["gone"]:
+            db.execute("UPDATE servers SET gone='', updated=? WHERE name=?", (stamp, name))
+            log(db, "plattform", "server.source", name, "wieder in der Quellenliste")
+            report["back"].append(name)
+        if old["address"] != address:
+            db.execute("UPDATE servers SET address=?, updated=? WHERE name=?", (address, stamp, name))
+            log(db, "plattform", "server.source", name, f"address: {old['address']} → {address}")
+            report["moved"].append(name)
+    for row in db.execute("SELECT name FROM servers WHERE source<>'' AND gone=''").fetchall():
+        if row["name"] not in seen:
+            db.execute("UPDATE servers SET gone=?, updated=? WHERE name=?", (stamp, stamp, row["name"]))
+            log(db, "plattform", "server.source", row["name"],
+                "nicht mehr in der Quellenliste; Einträge in den Sichten bleiben stehen")
+            report["gone"].append(row["name"])
+    db.commit()
+    return report
 
 
 def save_server(db, actor, name, address, auth_kind, light, limits, sealed_credential=None,

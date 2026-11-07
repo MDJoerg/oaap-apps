@@ -41,6 +41,8 @@ import secrets
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, quote, unquote_plus
@@ -55,7 +57,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -68,6 +70,53 @@ ISSUER = (os.environ.get("MCPGW_ISSUER") or "").strip().rstrip("/")
 AUDIENCE = (os.environ.get("MCPGW_AUDIENCE") or "").strip()
 SIGNIN_CLIENT = (os.environ.get("MCPGW_SIGNIN_CLIENT") or "").strip()
 ISSUER_KEYS = signin.Keys(ISSUER) if ISSUER else None
+
+# Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
+# Manifest `mcp_sources: {read: true}` erklärt; die Plattform prägt den Schlüssel.
+SOURCES_URL = (os.environ.get("OAAP_MCP_SOURCES_URL") or "").strip()
+SOURCES_KEY = (os.environ.get("OAAP_MCP_SOURCES_KEY") or "").strip()
+SOURCES_EVERY = 300
+SOURCES_STATE = {"at": "", "error": "", "report": {}}
+
+
+def fetch_sources():
+    """Die Liste von der eigenen Seite der Plattform. Wirft ValueError mit einem Satz."""
+    if not (SOURCES_URL and SOURCES_KEY):
+        raise ValueError("Diese Instanz liest keine Quellen (Manifest ohne mcp_sources oder "
+                         "Generalprobe).")
+    req = urllib.request.Request(SOURCES_URL, headers={"Authorization": "Bearer " + SOURCES_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            doc = json.loads(resp.read(1_000_000))
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"Die Plattform antwortete {exc.code} auf die Quellenliste.") from None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Quellenliste nicht gelesen: {type(exc).__name__}") from None
+    if not isinstance(doc, dict) or doc.get("v") != 1 or not isinstance(doc.get("sources"), list):
+        raise ValueError("Die Quellenliste hat eine unbekannte Form.")
+    return doc["sources"]
+
+
+def sync_sources():
+    """Liste holen und abgleichen. Gibt (ok, Satz) zurück; merkt sich das Ergebnis für die Seite."""
+    SOURCES_STATE["at"] = books.now()
+    try:
+        sources = fetch_sources()
+    except ValueError as exc:
+        SOURCES_STATE["error"] = str(exc)
+        return False, str(exc)
+    rep = books.sync_sources(DB, sources, guard.clean(dict(guard.DEFAULTS)))
+    SOURCES_STATE["error"] = ""
+    SOURCES_STATE["report"] = rep
+    for name in rep["added"] + rep["moved"] + rep["back"]:
+        srow = books.server_row(DB, name)
+        if srow:
+            guard_of(srow)
+    words = {"added": "neu", "moved": "Adresse geändert", "back": "wieder da",
+             "gone": "verschwunden", "conflict": "Name schon von Hand vergeben"}
+    parts = [f"{words[k]}: {', '.join(v)}" for k, v in rep.items() if v]
+    return True, f"{len(sources)} Quelle(n) in der Liste" + ("; " + "; ".join(parts) if parts else "")
+
 
 try:
     CATALOG_MINUTES = max(0, min(1440, int(os.environ.get("MCPGW_CATALOG_MINUTES") or 15)))
@@ -291,7 +340,16 @@ def end_session(sess):
 def housekeeping():
     """Im Hintergrund: abgelaufene Sitzungen beenden, Kataloge neu lesen."""
     next_read = time.monotonic() + 30
+    next_sources = time.monotonic()
     while True:
+        if SOURCES_URL and time.monotonic() >= next_sources:
+            ok, text = sync_sources()
+            # Gemessen auf oaap-test (07.11.): beim ersten Start antwortet die
+            # eigene Seite noch 404, weil die Plattform sie erst nach dem Start
+            # des Containers neu schreibt. Ein Fehlschlag fragt bald wieder.
+            next_sources = time.monotonic() + (SOURCES_EVERY if ok else 30)
+            sys.stdout.write(f"Quellen: {text}\n")
+            sys.stdout.flush()
         time.sleep(30)
         now = time.monotonic()
         with _SESS_LOCK:
@@ -510,8 +568,11 @@ def admin_page(user, roles, host, notice="", secret=None):
         st = g.state() if g else None
         load = (f'{st["inflight"]} laufend, {st["waiting"]} wartend'
                 + (f', Pause {st["open_for"]} s' if st["open_for"] else "")) if st else "—"
-        rows.append(f'<tr><td><a href="server?name={quote(s["name"])}"><b>{esc(s["name"])}</b></a></td>'
-                    f'<td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}</td>'
+        rows.append(f'<tr><td><a href="server?name={quote(s["name"])}"><b>{esc(s["name"])}</b></a>'
+                    + (f'<br><span class=hint>Quelle der Plattform</span>' if s["source"] else "")
+                    + (f'<br><span class=err>nicht mehr in der Quellenliste seit {esc(s["gone"])}</span>'
+                       if s["gone"] else "")
+                    + f'</td><td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}</td>'
                     f'<td>{esc(s["version"] or "—")}</td>'
                     f'<td>{esc(s["last_read"] or "nie")}'
                     f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
@@ -1718,7 +1779,8 @@ def cli(argv):
              "        app.py profile create <etikett> --groups /a,/b|* --views a,b [wie key issue] | "
              "profile groups <etikett> --groups ...\n"
              "        app.py server set <name> --auth exchange --token-url U --client-id C --audience A "
-             "--credential-stdin ja | server read <name> [--token-stdin ja]")
+             "--credential-stdin ja | server read <name> [--token-stdin ja]\n"
+             "        app.py source list | source sync   (Quellen der Plattform, RFC-0073)")
     if len(argv) < 2:
         print(usage)
         return 2
@@ -1739,10 +1801,21 @@ def cli(argv):
             pos.append(rest[i])
             i += 1
     try:
+        if area == "source" and action == "sync":
+            ok, text = sync_sources()
+            print(text, file=sys.stdout if ok else sys.stderr)
+            return 0 if ok else 1
+        if area == "source" and action == "list":
+            for src in fetch_sources():
+                print(f'{src.get("name", ""):24} {src.get("app", "")}@{src.get("version", "")} '
+                      f'{src.get("channel", ""):10} {src.get("address", "")}')
+            return 0
         if area == "server" and action == "list":
             for s in books.servers(DB):
                 print(f'{s["name"]:20} {s["address"]:50} {s["light"]:6} {s["version"] or "-":11} '
-                      f'{s["last_error"] or ""}')
+                      + ("Quelle " if s["source"] else "")
+                      + (f'WEG seit {s["gone"]} ' if s["gone"] else "")
+                      + f'{s["last_error"] or ""}')
             return 0
         if area == "server" and action == "set" and pos:
             form = {"name": pos[0], "address": opts.get("address", ""),
