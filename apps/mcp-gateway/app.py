@@ -57,7 +57,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -764,6 +764,7 @@ def signin_card(host):
     cmd = "\n".join(f"claude mcp add --transport http {v} {endpoint(host, v)} \\\n"
                     f"  --client-id {SIGNIN_CLIENT or '<client>'} --callback-port {CALLBACK_PORT}"
                     for v in views) or "Noch keine Sicht nimmt Anmeldungen an."
+    mcp_json = mcp_json_text(host, views)
     return f'''<div class="card"><h2>Anmeldung von Menschen</h2>
 <p>Issuer <code>{esc(ISSUER)}</code> · Audience <code>{esc(AUDIENCE or "— fehlt")}</code> ·
 Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
@@ -772,7 +773,24 @@ Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
 <code>http://localhost:{CALLBACK_PORT}/callback</code>) mit einem Audience-Mapper auf
 <code>{esc(AUDIENCE or "MCPGW_AUDIENCE")}</code>. Wer zahlt, entscheidet ein Zugangsprofil über die
 Gruppen im Token; ohne passendes Profil gibt es 403.</p>
-<pre>{esc(cmd)}</pre>{settings_table()}</div>'''
+<p>Im Terminal mit <code>claude</code>:</p>
+<pre>{esc(cmd)}</pre>
+<p>In VS Code (die Erweiterung hat keinen Befehl <code>claude mcp</code>): eine Datei
+<code>.mcp.json</code> in den geöffneten Ordner legen, dann in <code>/mcp</code> die Sicht wählen und
+„Authenticate“. <b>Nicht</b> über den Dialog in <code>/mcp</code> eintragen: der kennt keine
+Client-ID, Claude Code versucht dann, sich selbst beim Realm zu registrieren, und der Realm lehnt
+das ab (gemessen am 07.11.).</p>
+<pre>{esc(mcp_json)}</pre>{settings_table()}</div>'''
+
+
+def mcp_json_text(host, views):
+    """Dieselbe Angabe wie `claude mcp add ... --client-id --callback-port`, als Datei."""
+    if not views:
+        return "{}"
+    servers = {v: {"type": "http", "url": endpoint(host, v),
+                   "oauth": {"clientId": SIGNIN_CLIENT or "<client>", "callbackPort": CALLBACK_PORT}}
+               for v in views}
+    return json.dumps({"mcpServers": servers}, indent=2, ensure_ascii=False)
 
 
 FROM_WORDS = {"hand": "von Hand", "platform": "von der Plattform", "": "leer"}
@@ -1244,6 +1262,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
 
+    def note_refusal(self, status, method, why):
+        """Eine Zeile im Protokoll je abgelehnter MCP-Anfrage: Sicht, Methode, Grund.
+
+        Nie Parameter, nie ein Token. Anlass: am 07.11. bekam Claude Code nach der
+        Anmeldung einmal eine 400, und nichts sagte, auf welche Anfrage.
+        """
+        name = method if isinstance(method, str) else "-"
+        name = "".join(ch for ch in name[:60] if ch.isprintable() and ch != " ") or "-"
+        sid = "mit" if self.headers.get("Mcp-Session-Id") else "ohne"
+        print(f"MCP {status} {self.mcp_view() or '-'} methode={name} sitzung={sid} grund={why}",
+              file=sys.stderr, flush=True)
+
     def handle_mcp_post(self):
         raw = self.read_body()
         key, vrow = self.authorize(self.mcp_view())
@@ -1261,13 +1291,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             msg = json.loads(raw)
         except ValueError:
+            self.note_refusal(400, None, "kein-json")
             self.send_json(400, rpc_error(None, -32700, "Kein gültiges JSON."))
             return
         if isinstance(msg, list):
+            self.note_refusal(400, None, "stapel")
             self.send_json(400, rpc_error(None, -32600, "Stapel (JSON-RPC-Batches) werden nicht "
                                                         "unterstützt."))
             return
         if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+            self.note_refusal(400, None, "kein-jsonrpc-2.0")
             self.send_json(400, rpc_error(None, -32600, "Keine JSON-RPC-2.0-Nachricht."))
             return
         method, msg_id = msg.get("method"), msg.get("id")
@@ -1283,12 +1316,16 @@ class Handler(BaseHTTPRequestHandler):
                 # „moderner Server“, und der Client käme nie zurück.
                 books.count_protocol(DB, key["id"], vrow["name"], "server/discover"
                                      if method == "server/discover" else "modern")
+                self.note_refusal(400, method, "modern-ohne-sitzung")
                 self.send_json(400, rpc_error(msg_id, -32600, LEGACY_ONLY))
                 return
+            self.note_refusal(404 if self.headers.get("Mcp-Session-Id") else 400, method,
+                              "sitzung-unbekannt")
             self.send_json(404 if self.headers.get("Mcp-Session-Id") else 400, SESSION_UNKNOWN)
             return
         header_version = self.headers.get("MCP-Protocol-Version")
         if header_version and header_version != sess.version:
+            self.note_refusal(400, method, f"version-{header_version[:20]}-statt-{sess.version}")
             self.send_json(400, rpc_error(msg_id, -32600, f"MCP-Protocol-Version {header_version} "
                                                           f"passt nicht zur Sitzung ({sess.version})."))
             return

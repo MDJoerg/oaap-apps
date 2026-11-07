@@ -98,6 +98,28 @@ claude mcp add --transport http <sicht> https://<gateway>/mcp/<sicht> \
   --client-id mcp-claude --callback-port 33418
 ```
 
+In der **VS-Code-Erweiterung** gibt es den Befehl `claude mcp` nicht.
+Dort legt man eine `.mcp.json` in den geöffneten Ordner (die
+Gateway-Seite zeigt sie fertig ausgefüllt), wählt in `/mcp` die Sicht
+und klickt „Authenticate“:
+
+```json
+{
+  "mcpServers": {
+    "<sicht>": {
+      "type": "http",
+      "url": "https://<gateway>/mcp/<sicht>",
+      "oauth": { "clientId": "mcp-claude", "callbackPort": 33418 }
+    }
+  }
+}
+```
+
+**Nicht** über den Dialog in `/mcp` eintragen: Er kennt keine
+Client-ID. Ohne sie versucht Claude Code, sich selbst im Realm zu
+registrieren (Dynamic Client Registration), und Keycloak lehnt das ab
+(Policy „Trusted Hosts“). Gemessen am 07.11. mit Claude Code 2.1.319.
+
 Claude Code öffnet den Browser, der Mensch meldet sich an, und das
 Gateway prüft das Token selbst: RS256, mindestens 2048 Bit, Issuer,
 Audience, Ablauf. Die Schlüssel des Issuers holt es nur von dessen

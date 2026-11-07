@@ -613,8 +613,24 @@ check("unbekannte Version: das Gateway nennt seine neueste",
 st, _, msgs, _ = rpc("alles", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, VOLL, SID,
                      version="2025-06-18")
 check("abweichende MCP-Protocol-Version in der Kopfzeile: 400", st == 400)
-st, _, _, _ = rpc("alles", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, VOLL)
+_err, sys.stderr = sys.stderr, io.StringIO()
+try:
+    st, _, _, _ = rpc("alles", {"jsonrpc": "2.0", "id": 3, "method": "tools/list",
+                                "params": {"geheim": "PARAM-WERT"}}, VOLL)
+    refusal_log = sys.stderr.getvalue()
+finally:
+    sys.stderr = _err
 check("ohne Sitzung: 400", st == 400)
+check("0.6.1: die Ablehnung steht im Protokoll -- Sicht, Methode, Grund",
+      "MCP 400 alles methode=tools/list sitzung=ohne grund=sitzung-unbekannt" in refusal_log,
+      refusal_log)
+check("... ohne Parameter und ohne Schlüssel",
+      "PARAM-WERT" not in refusal_log and VOLL not in refusal_log, refusal_log)
+card = json.loads(app.mcp_json_text("gw.example", ["kp-i"]))
+check("0.6.1: .mcp.json auf der Seite trägt Client-ID und Rücksprung-Port",
+      card == {"mcpServers": {"kp-i": {"type": "http", "url": "https://gw.example/mcp/kp-i",
+                                       "oauth": {"clientId": app.SIGNIN_CLIENT or "<client>",
+                                                 "callbackPort": 33418}}}}, card)
 st, _, _, _ = rpc("alles", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, VOLL, "ausgedacht")
 check("unbekannte Sitzung: 404", st == 404)
 ANDERER = secret_from(admin("/issue", label="anderer", views="alles", max_effect="execute"))
