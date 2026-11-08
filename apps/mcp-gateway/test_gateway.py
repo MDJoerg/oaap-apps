@@ -141,6 +141,7 @@ class Paper(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         S["auth"].append(self.headers.get("Authorization"))
         S.setdefault("act", []).append(self.headers.get("X-OAAP-Act-Token"))
+        S.setdefault("asrt", []).append(self.headers.get("X-OAAP-Act-Assertion"))
         if S.get("refuse_sub"):
             # Wie die Tür der Plattform: diese Person scheitert an der Route (403 und ein Satz).
             try:
@@ -1359,12 +1360,147 @@ check("Tür zieht um: die Adresse folgt der Tür", rep_["moved"] == ["kp"]
 books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
                              "address": DREI, "door": TUER}], app.guard.clean(dict(app.guard.DEFAULTS)))
 
+print("\n-- Verfahren A: ein Chat der Plattform trägt den Menschen (RFC-0074 Stufe 1)")
+ASRT = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJndyJ9.ZusicherungNurFuerDenTest0123456789abc"
+
+
+def rpc_a(view, msg, sid=None, client="chat", uid="u-anna", asrt=ASRT, assistant="reklamationen",
+          key=None):
+    """Wie hinter der via-Tür: die sechs Kopfzeilen der Person und der Name des Chats."""
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    for h, v in (("X-OAAP-MCP-Client", client), ("X-OAAP-User-Id", uid),
+                 ("X-OAAP-User-Assertion", asrt), ("X-OAAP-User", "vp-anna" if uid else ""),
+                 ("X-OAAP-Roles", "user"), ("X-OAAP-Assistant", assistant)):
+        if v:
+            headers[h] = v
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    if sid:
+        headers["Mcp-Session-Id"] = sid
+    req = urllib.request.Request(f"{GW}/mcp/{view}", data=json.dumps(msg).encode(),
+                                 headers=headers, method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    raw = resp.read()
+    msgs = []
+    if resp.headers.get("Content-Type", "").startswith("text/event-stream"):
+        for block in raw.decode().split("\n\n"):
+            data = [ln[6:] for ln in block.split("\n") if ln.startswith("data: ")]
+            if data:
+                msgs.append(json.loads("\n".join(data)))
+    elif raw:
+        try:
+            msgs.append(json.loads(raw))
+        except ValueError:
+            pass
+    return resp.status, resp.headers, msgs
+
+
+def session_a(view, **kw):
+    st, h, msgs = rpc_a(view, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                          "clientInfo": {"name": "probe", "version": "1"}}}, **kw)
+    sid = h.get("Mcp-Session-Id")
+    if sid:
+        rpc_a(view, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sid, **kw)
+    return st, sid
+
+
+page = admin("/view-save", name="a-sicht", max_effect="read", ways="platform,key")
+check("Zugänge in falscher Reihenfolge: abgewiesen", books.view_row(app.DB, "a-sicht") is None)
+admin("/view-save", name="a-sicht", max_effect="read", ways="platform")
+check("Sicht nur für die Plattform angelegt", books.view_row(app.DB, "a-sicht")["ways"] == "platform")
+add("a-sicht", "whoami", server="kp")
+check("ein I-Server in einer Plattform-Sicht: erlaubt (kein Schlüssel)",
+      books.item_row(app.DB, "a-sicht", "tool", "whoami") is not None)
+page = admin("/issue", label="a-kaputt", kind="profile", groups="@Chat Groß", views="a-sicht")
+check("Profilgruppe @ mit Großbuchstaben/Leerzeichen: abgewiesen",
+      not [k for k in books.keys(app.DB) if k["label"] == "a-kaputt"])
+st, sid = session_a("a-sicht")
+check("ohne passendes Profil: 403 (die Plattform hat die Person, aber niemand zahlt)", st == 403, st)
+admin("/issue", label="a-stern", kind="profile", groups="*", views="a-sicht")
+st, sid = session_a("a-sicht")
+check("ein *-Profil gilt NICHT für Menschen aus einem Chat: 403", st == 403, st)
+admin("/issue", label="a-chat", kind="profile", groups="@chat", views="a-sicht", cost_center="KS-CHAT")
+st, sid = session_a("a-sicht")
+check("Profil @chat: Sitzung eröffnet", st == 200 and bool(sid), st)
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid)
+names = [t["name"] for t in ((msgs[-1].get("result") or {}).get("tools") or [])] if msgs else []
+check("… tools/list nennt das freigegebene Tool", names == ["whoami"], msgs)
+IS_["act"].clear()
+IS_["asrt"].clear()
+IS_["auth"].clear()
+IDP["exchanges"].clear()
+app.EXCHANGED.clear()
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                                "params": {"name": "whoami", "arguments": {}}}, sid)
+seen = json.loads(((msgs[-1].get("result") or {}).get("content") or [{}])[0].get("text") or "{}") if msgs else {}
+check("an der Tür der Quelle: der Quellen-Schlüssel als Bearer", seen.get("bearer") == SOURCES_KEY,
+      (seen, msgs))
+check("… und die Zusicherung der Plattform an dieses Gateway als Act-Zusicherung",
+      IS_["asrt"] and IS_["asrt"][-1] == ASRT, IS_["asrt"])
+check("… kein Act-Token, kein Tausch beim Anmeldedienst",
+      not any(IS_["act"]) and not IDP["exchanges"], (IS_["act"], IDP["exchanges"]))
+def rows_after(sql, n, wait=3.0):
+    """Die Messzeile schreibt das Gateway NACH der Antwort: kurz warten, bis sie da ist."""
+    end = time.monotonic() + wait
+    while True:
+        rows = list(app.DB.execute(sql))
+        if len(rows) >= n or time.monotonic() > end:
+            return rows
+        time.sleep(0.05)
+
+
+row = rows_after("SELECT * FROM usage WHERE view='a-sicht' ORDER BY id", 1)
+check("Messzeile: Verfahren A, Kennung der Person, Issuer platform, Chat, Assistent, Profil",
+      row and row[-1]["procedure"] == "A" and row[-1]["user_sub"] == "u-anna"
+      and row[-1]["user_iss"] == "platform" and row[-1]["client"] == "chat"
+      and row[-1]["assistant"] == "reklamationen"
+      and row[-1]["key_id"] == [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]["id"]
+      and row[-1]["ctx_cost_center"] == "KS-CHAT", [dict(r) for r in row])
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}, sid, uid="u-bert")
+check("dieselbe Sitzung mit einer ANDEREN Person: Sitzung unbekannt", st in (400, 404), (st, msgs))
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 5, "method": "tools/list"}, sid,
+                    asrt="")
+check("ohne Zusicherung (nur Chat und Kennung): kein Verfahren A, 401",
+      st == 401, (st, msgs))
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}, sid,
+                    client="")
+check("ohne Namen des Chats: kein Verfahren A, 401", st == 401, (st, msgs))
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                                "params": {"name": "whoami", "arguments": {}}}, sid,
+                    assistant="Reklamation Böse /..")
+row = rows_after("SELECT assistant FROM usage WHERE view='a-sicht' ORDER BY id DESC", 2)
+check("ein Assistentenname, der keiner ist, wird nicht aufgeschrieben",
+      row and row[0]["assistant"] == "", [dict(r) for r in row])
+st, _ = session_a("a-sicht", client="anderer-chat")
+check("ein anderer Chat ohne eigenes Profil: 403", st == 403, st)
+admin("/issue", label="a-alle-chats", kind="profile", groups="@*", views="a-sicht")
+st, _ = session_a("a-sicht", client="anderer-chat")
+check("… mit einem @*-Profil: 200", st == 200, st)
+admin("/issue", label="i-chat", kind="profile", groups="@chat", views="i-sicht")
+st, _ = session_a("i-sicht")
+check("eine Sicht ohne Zugang „Plattform“ (nur Anmeldung): 403, auch mit @chat-Profil", st == 403, st)
+st, _ = session_a("a-sicht", key=SOURCES_KEY, asrt="", client="")
+check("ein Schlüssel an einer reinen Plattform-Sicht: 401", st == 401, st)
+try:
+    app.server_access(books.server_row(app.DB, "xs"),
+                      {"iss": "platform", "sub": "u-anna", "assertion": ASRT, "client": "chat",
+                       "procedure": "A"})
+    check("Verfahren X für einen Menschen aus einem Chat: abgelehnt", False, "geliefert")
+except app.NoPerson as exc:
+    check("Verfahren X für einen Menschen aus einem Chat: abgelehnt, Satz nennt Verfahren A",
+          "Verfahren A" in str(exc), str(exc))
+
 print("\n-- Kein Token irgendwo")
 db_bytes = open(os.path.join(TMP, "gateway.db"), "rb").read()
 if os.path.exists(os.path.join(TMP, "gateway.db-wal")):
     db_bytes += open(os.path.join(TMP, "gateway.db-wal"), "rb").read()
 sig_parts = [t.split(".")[2][:40] for t in (T1, T2, TX, TI, *XS["tokens"], *[a for a in IS_["act"] if a])]
 check("keine Unterschrift eines Tokens in der Datenbank", not any(p.encode() in db_bytes for p in sig_parts))
+check("keine Zusicherung der Plattform in der Datenbank", ASRT.split(".")[2].encode() not in db_bytes)
 check("und nicht im Protokoll", not any(p in LOG.getvalue() for p in sig_parts))
 _, pg = admin_get("/")
 check("Übersicht: Anmeldung mit Issuer und Befehl für Claude Code",

@@ -190,6 +190,32 @@ docker exec <container> python3 /srv/app.py source sync
 echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <quelle> --token-stdin ja
 ```
 
+## Verfahren A: ein Chat der Plattform trägt den Menschen (0.7)
+
+Eine Chat-App desselben Mandanten (Manifest 0.12, `mcp_client: {use: true}`)
+erreicht das Gateway über eine Tür auf ihrer **eigenen** Seite,
+`/platform/mcp/via/<gateway>/<sicht>` (RFC-0074). Die Plattform prüft dort den
+Schlüssel des Chats und die Zusicherung der Person, die gerade mit ihm spricht,
+und schickt die Anfrage mit den Kopfzeilen der Person hierher. Keycloak wird
+dafür nicht gebraucht.
+
+Im Gateway sind zwei Dinge einzurichten:
+
+```bash
+docker exec <container> python3 /srv/app.py view set kp-i --ways signin,platform
+docker exec <container> python3 /srv/app.py profile create kp-chat \
+  --groups @<chat-instanz> --views kp-i --max-effect write --cost-center CHAT
+```
+
+- Die Sicht braucht den Zugang `platform` (Zugänge sind eine Liste aus `key`,
+  `signin`, `platform`, in dieser Reihenfolge).
+- Es zahlt ein Zugangsprofil mit `@<chat-instanz>` oder `@*` (alle Chats des
+  Mandanten). Ein Profil mit `*` gilt für Chats **nicht**.
+- Zu einer Quelle der Plattform reicht das Gateway die Zusicherung weiter, ohne
+  Token-Tausch. Ein Server mit Verfahren X ist so nicht erreichbar.
+- Gemessen wird Verfahren `A`, mit der Kennung der Person, dem Chat und, wenn
+  der Chat ihn nennt, dem Assistenten (`X-OAAP-Assistant`).
+
 ## Der festgehaltene Text
 
 Eine Tool-Beschreibung geht unmittelbar in das Modell des Clients. Ein

@@ -37,6 +37,7 @@ nach stdout, Gesundheitspfad, nur Standardbibliothek.
 import html
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -97,6 +98,15 @@ ISSUER_KEYS = signin.Keys(ISSUER) if ISSUER else None
 CLIENT_SECRET = _S["MCPGW_CLIENT_SECRET"]
 PLATFORM_AUDIENCE = _S["MCPGW_PLATFORM_AUDIENCE"]
 ACT_HEADER = "X-OAAP-Act-Token"
+# Verfahren A (RFC-0074 Stufe 1, Spec §3.9): Ein Chat der Plattform trägt den
+# Menschen hierher. Die Tür auf der Seite des Chats setzt die sechs Kopfzeilen
+# der Person (die Zusicherung an DIESES Gateway adressiert) und den Namen des
+# Chats; auf /mcp entfernt die Plattform jede vom Client gesendete Kopfzeile
+# dieser Art. Gegenüber einer Quelle reicht das Gateway die Zusicherung weiter.
+ACT_ASSERTION = "X-OAAP-Act-Assertion"
+CLIENT_HEADER = "X-OAAP-MCP-Client"
+ASSISTANT_HEADER = "X-OAAP-Assistant"
+ASSISTANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 _TOKEN_URL = {}
 
 # Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
@@ -315,10 +325,21 @@ def server_access(srow, person=None):
     if srow["auth_kind"] == "platform":
         # Zwei Nachweise an der Tür: der Quellen-Schlüssel dieser Instanz und das
         # Act-Token der Person. Die Plattform macht daraus die Kopfzeilen der Person.
+        # Verfahren A (0.7): statt des Act-Tokens die Zusicherung, die die Plattform
+        # DIESEM Gateway für die Person gab — kein Tausch, kein Anmeldedienst.
+        if person and person.get("assertion"):
+            if not SOURCES_KEY:
+                raise NoPerson("Diese Instanz hat keinen Quellen-Schlüssel der Plattform.")
+            return {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True,
+                    "headers": {ACT_ASSERTION: person["assertion"]}}, url
         return {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True,
                 "headers": {ACT_HEADER: platform_act(person)}}, url
     if srow["auth_kind"] != "exchange":
         return {"auth_kind": srow["auth_kind"], "credential": credential}, url
+    if person and person.get("procedure") == "A":
+        raise NoPerson("Dieser Server arbeitet mit Verfahren X und braucht ein Token des "
+                       "Anmeldediensts; über einen Chat der Plattform (Verfahren A) gibt es "
+                       "keins. Dieses Tool ist hier nicht verfügbar.")
     if not person or not person.get("token"):
         raise NoPerson("Dieser Server arbeitet mit Verfahren X und braucht einen angemeldeten "
                        "Menschen; mit einem Schlüssel geht es nicht.")
@@ -710,7 +731,9 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
     vnames = [v["name"] for v in books.views(DB)]
     parts.append(f'''<div class="card"><h2>Schlüssel und Zugangsprofile</h2>
 <p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert:
-Es gilt für angemeldete Menschen der genannten Gruppen (volle Pfade wie /sap-dev, oder * für alle).</p>
+Es gilt für angemeldete Menschen der genannten Gruppen (volle Pfade wie /sap-dev, oder * für alle)
+— und mit <code>@&lt;chat-instanz&gt;</code> oder <code>@*</code> für Menschen, die ein Chat der
+Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattform“).</p>
 <div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
 <th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
 <h2 style="margin-top:1.2rem">Schlüssel ausstellen oder Zugangsprofil anlegen</h2>
@@ -1209,6 +1232,17 @@ class Handler(BaseHTTPRequestHandler):
         header = self.headers.get("Authorization", "")
         value = header[7:].strip() if header[:7].lower() == "bearer " else ""
         vrow = books.view_row(DB, view_name) if view_name else None
+        carried = self.platform_person()
+        if carried is not None:
+            # Verfahren A: die Plattform hat geprüft (Schlüssel des Chats, seine
+            # Zusicherung für diese Person) und trägt den Menschen her. Wer zahlt,
+            # sagt ein Zugangsprofil mit @<chat> oder @*; ohne eines 403.
+            profile = books.match_profile(DB, carried["groups"], view_name or "", "@*")
+            if not profile or not entitled(profile, vrow, "platform"):
+                self.send_bytes(403, "application/json; charset=utf-8", FORBIDDEN)
+                return None, None
+            self.person = carried
+            return profile, vrow
         if ISSUER and signin.looks_like_token(value):
             try:
                 claims = signin.check(value, ISSUER_KEYS, ISSUER, AUDIENCE)
@@ -1232,6 +1266,25 @@ class Handler(BaseHTTPRequestHandler):
             self.deny()
             return None, None
         return key, vrow
+
+    def platform_person(self):
+        """Der Mensch, den die Plattform durch einen Chat herträgt (Verfahren A), oder None.
+
+        Nur wenn alle drei da sind: der Name des Chats (von der Tür gesetzt), die
+        Kennung der Person und die Zusicherung an dieses Gateway. Auf /mcp
+        entfernt die Plattform alle drei, wenn ein Client sie selbst schickt; nur
+        die via-Tür der Plattform setzt sie. Die Zusicherung prüft das Gateway
+        nicht (es hat den Schlüssel nicht) — es reicht sie an eine Quelle weiter,
+        und dort prüft die Plattform sie erneut."""
+        client = (self.headers.get(CLIENT_HEADER) or "").strip()
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        assertion = (self.headers.get("X-OAAP-User-Assertion") or "").strip()
+        if not (client and uid and assertion):
+            return None
+        assistant = (self.headers.get(ASSISTANT_HEADER) or "").strip()
+        return {"iss": "platform", "sub": uid, "assertion": assertion, "client": client,
+                "assistant": assistant if ASSISTANT_RE.match(assistant) else "",
+                "groups": ["@" + client], "procedure": "A"}
 
     def rate_id(self, key):
         """Rate je Schlüssel — bei einem Profil je Mensch (Spec §2.3)."""
@@ -1527,7 +1580,9 @@ class Handler(BaseHTTPRequestHandler):
         msg_id = out["id"]
         wants_sse = "text/event-stream" in (self.headers.get("Accept") or "")
         reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
-        if srow["auth_kind"] == "exchange":
+        if self.person and self.person.get("procedure") == "A":
+            state["procedure"] = "A"
+        elif srow["auth_kind"] == "exchange":
             state["procedure"] = "X"
         elif srow["auth_kind"] == "platform":
             state["procedure"] = "I"
@@ -1536,7 +1591,8 @@ class Handler(BaseHTTPRequestHandler):
         except NoPerson as exc:
             # Kein Rückfall auf einen technischen Zugang (D8) — und kein Fehler auf dem
             # Weg zum Server: Der Sicherungsautomat zählt das nicht.
-            done("refused" if not self.person else "upstream_error", "exchange")
+            done("refused" if not self.person or self.person.get("procedure") == "A"
+                 else "upstream_error", "exchange")
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
             return False
         except upstream.UpstreamError as exc:
@@ -1911,14 +1967,14 @@ def cli(argv):
     usage = ("Aufruf: app.py server set <name> --address A [--auth none|bearer|basic|header:N] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
              "        app.py view set <name> [--max-effect read|write|execute] "
-             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key|signin|key,signin] | view list\n"
+             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] | view list\n"
              "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
              "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
              "[--fixed JSON] [--bounds JSON] [--effect E] | view remove <sicht> <name> [--kind K]\n"
              "        app.py key issue <etikett> --views a,b [--max-effect read] [--ceiling yellow] "
              "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>\n"
-             "        app.py profile create <etikett> --groups /a,/b|* --views a,b [wie key issue] | "
+             "        app.py profile create <etikett> --groups /a,/b|*|@chat|@* --views a,b [wie key issue] | "
              "profile groups <etikett> --groups ...\n"
              "        app.py server set <name> --auth exchange --token-url U --client-id C --audience A "
              "--credential-stdin ja | server read <name> [--token-stdin ja]\n"

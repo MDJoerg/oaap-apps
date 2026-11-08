@@ -154,10 +154,23 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # der Liste, steht hier wann — die Einträge in den Sichten bleiben sichtbar.
     ("servers", "source", "TEXT NOT NULL DEFAULT ''"),
     ("servers", "gone", "TEXT NOT NULL DEFAULT ''"),
+    # 0.7 (RFC-0074 Stufe 1, Verfahren A): durch welchen Chat die Plattform den
+    # Menschen trug, und welcher Assistent dort sprach — beides nur zur
+    # Auskunft, keine Entscheidung hängt daran (RFC-0074 §5.5).
+    ("usage", "client", "TEXT NOT NULL DEFAULT ''"),
+    ("usage", "assistant", "TEXT NOT NULL DEFAULT ''"),
 )
-WAYS = ("key", "signin", "key,signin")
-WAY_WORDS = {"key": "Schlüssel", "signin": "Anmeldung", "key,signin": "Schlüssel und Anmeldung"}
-GROUP = re.compile(r"^(\*|/[^,]{1,200})$")
+# Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
+# seit 0.7 die Plattform (Verfahren A: ein Chat trägt den Menschen, RFC-0074).
+WAY_PARTS = ("key", "signin", "platform")
+WAYS = ("key", "signin", "key,signin", "platform", "key,platform", "signin,platform",
+        "key,signin,platform")
+_WAY_WORD = {"key": "Schlüssel", "signin": "Anmeldung", "platform": "Plattform (Chat)"}
+WAY_WORDS = {w: " und ".join(_WAY_WORD[p] for p in w.split(",")) for w in WAYS}
+# Gruppen eines Zugangsprofils: volle Pfade aus dem Token (/sap-dev), * für alle
+# angemeldeten Menschen des Issuers — und seit 0.7 @<chat-instanz> bzw. @* für
+# Menschen, die die Plattform durch einen Chat trägt (Verfahren A).
+GROUP = re.compile(r"^(\*|/[^,]{1,200}|@\*|@[a-z0-9][a-z0-9._-]{0,62})$")
 
 KEY_PREFIX = "mcp-oaap-"
 EFFECTS = ("read", "write", "execute")
@@ -275,8 +288,9 @@ def clean_groups(groups):
         raise ValueError("Ein Zugangsprofil nennt mindestens eine Gruppe (/pfad) oder * für alle.")
     bad = [g for g in out if not GROUP.match(g)]
     if bad:
-        raise ValueError("Gruppen sind volle Pfade wie /sap-dev, oder * für alle Menschen des "
-                         "Issuers: " + ", ".join(bad))
+        raise ValueError("Gruppen sind volle Pfade wie /sap-dev, * für alle Menschen des "
+                         "Issuers, @<chat-instanz> oder @* für Menschen aus einem Chat der "
+                         "Plattform: " + ", ".join(bad))
     return ",".join(sorted(set(out)))
 
 
@@ -295,14 +309,19 @@ def set_profile_groups(db, actor, label, groups):
         db.commit()
 
 
-def match_profile(db, groups, view):
+def match_profile(db, groups, view, wildcard="*"):
     """Das Profil für einen Menschen mit diesen Gruppen in dieser Sicht (Spec §2.3) — oder None.
 
     Nur Profile, die die Sicht nennen. Darunter zuerst das erste (nach
     Namen), dessen Gruppen sich mit denen des Tokens überschneiden; nur
-    wenn keines passt, das erste mit `*`. Ohne die Sicht als Bedingung
+    wenn keines passt, das erste mit `wildcard`. Ohne die Sicht als Bedingung
     käme ein Mensch mit zwei Profilen für zwei Sichten nie in die zweite
     — gefunden im Test, 2026-11-02.
+
+    Verfahren A (0.7): Gruppen = [@<chat>], wildcard = @*. Ein `*` gilt nur
+    für Anmeldungen am Anmeldedienst, nie für Menschen aus einem Chat — wer
+    ein Profil „für alle“ angelegt hat, hat an Claude Code gedacht, nicht an
+    jeden Chat des Mandanten.
     """
     rows = [r for r in db.execute("SELECT * FROM keys WHERE kind='profile' AND revoked='' "
                                   "ORDER BY label") if view in key_views(r)]
@@ -310,7 +329,7 @@ def match_profile(db, groups, view):
         if set(profile_groups(row)) & set(groups):
             return row
     for row in rows:
-        if "*" in profile_groups(row):
+        if wildcard in profile_groups(row):
             return row
     return None
 
@@ -585,7 +604,7 @@ def view_requests(vrow):
 def save_view(db, actor, name, max_effect, requests=None, ways=None):
     """Legt an oder ändert. `requests` = {elicitation|roots|sampling: pass|refuse}; None = unverändert.
 
-    `ways` = key, signin oder key,signin (Spec §2); None = unverändert, neu: key.
+    `ways` = Komma-Liste aus key, signin, platform (Spec §2); None = unverändert, neu: key.
     """
     valid_name(name, "einer Sicht")
     if max_effect not in EFFECT_RANK:
@@ -594,7 +613,8 @@ def save_view(db, actor, name, max_effect, requests=None, ways=None):
     old_ways = old["ways"] if old else "key"
     ways = old_ways if ways is None else ways
     if ways not in WAYS:
-        raise ValueError("Zugänge sind key, signin oder key,signin.")
+        raise ValueError("Zugänge sind key, signin und platform, durch Komma getrennt, in "
+                         "dieser Reihenfolge (z. B. signin,platform).")
     if "key" in ways and old and exchange_servers(db, name):
         raise ValueError("Die Sicht enthält Server mit Verfahren X (" + ", ".join(exchange_servers(db, name))
                          + "); die brauchen einen angemeldeten Menschen — Schlüssel gehen hier nicht.")
@@ -856,6 +876,9 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
     values = [now(), key["id"], view, kind, name, server, source, procedure, outcome, reason,
               int(ms), int(bytes_up), int(bytes_down), (person or {}).get("sub", ""),
               (person or {}).get("iss", "")] + context.snapshot_values(key)
+    if (person or {}).get("client"):
+        cols += ["client", "assistant"]
+        values += [person["client"], person.get("assistant", "")]
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()
