@@ -67,6 +67,16 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
   nächsten Schritt (bei fehlendem Zugangsprofil mit der vermuteten Gruppe
   `@<mandant>-<app>`). Fehlt Client oder Modell, zeigt die Seite das beim
   Öffnen von selbst.
+- **Ansichten von MCP Apps (seit 0.4.0, RFC-0075).** Bei Assistenten mit
+  `views: true` zeigt der Chat die Ansicht, die ein Werkzeug mitbringt
+  (`_meta.ui.resourceUri`), unter dem Ergebnis. Sie läuft im Sandbox-Proxy auf
+  der zweiten Herkunft der Instanz (`/ui-sandbox`, Manifest 0.13, Plattform ab
+  0.1.245): ohne Anmeldung und Kekse, im inneren iframe ohne
+  `allow-same-origin`, mit strenger CSP und in dieser Stufe ohne fremde
+  Domains. Was die Ansicht will, geht durch die Türen des Chats als die
+  Person: Werkzeuge nur mit `app` in ihrer `visibility`, schreibende nur nach
+  der Rückfrage des Chats; Links nur http(s); vorgeschlagener Text landet im
+  Eingabefeld. Werkzeuge nur für Ansichten sieht das Modell nicht.
 - **Grenzen:** höchstens sechs Modellzüge je Nachricht, ein Modellzug
   höchstens `CHAT_MODEL_TIMEOUT` Sekunden (240).
 
@@ -119,7 +129,7 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 82 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 99 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

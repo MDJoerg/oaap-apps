@@ -120,6 +120,9 @@ ok("... als anna, Herkunft via mcp vermerkt", c["reporter"] == "anna" and c["rep
    and (c["tech"].get("attested") or {}).get("via") == "mcp", c)
 err, lst = tool("anna", "list_cases", {"scope": "mine"})
 ok("anna sieht ihn in list_cases", not err and [x["number"] for x in lst["cases"]] == [num], lst)
+err, g2 = tool("anna", "get_case", {"number": num.replace("V-", "")})
+ok("0.5.1: get_case nimmt die Nummer auch ohne V- (wie ein Modell sie gern schreibt)",
+   not err and g2.get("number") == num, g2)
 err, g = tool("anna", "get_case", {"number": num})
 ok("get_case: Beschreibung und Verlauf, keine technischen Angaben",
    not err and g["description"] == "Seit heute früh." and g["history"][0]["type"] == "created"

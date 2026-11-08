@@ -53,6 +53,10 @@ KI_URL = (os.environ.get("OAAP_DESTINATION_KI_URL") or "").strip()
 SANDBOX_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_UI_SANDBOX_ORIGINS") or "").split(",")
                    if o.strip()]
 OWN_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_INSTANCE_NAMES") or "").split(",") if o.strip()]
+# Hinter einem Edge nennt die Plattform die Namen mit http (so bedient sie der Knoten);
+# der Browser sieht sie mit https. Erlaubte Eltern der Sandbox sind beide Formen.
+OWN_ORIGINS = list(dict.fromkeys(OWN_ORIGINS + ["https://" + o[7:] for o in OWN_ORIGINS
+                                                if o.startswith("http://")]))
 UI_EXTENSION = "io.modelcontextprotocol/ui"
 UI_MIME = "text/html;profile=mcp-app"
 MODEL_TIMEOUT = int(os.environ.get("CHAT_MODEL_TIMEOUT", "240"))

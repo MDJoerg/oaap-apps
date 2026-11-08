@@ -901,7 +901,7 @@
       "id": "vorgaenge",
       "name": "Vorgänge",
       "type": "native",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "released": "2026-11-08",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

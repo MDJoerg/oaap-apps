@@ -11,6 +11,7 @@ JSON-RPC über Streamable HTTP, nur JSON-Antworten, keine Sitzung.
 """
 import json
 import os
+import re
 
 MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 MAX_LIST = 50
@@ -35,7 +36,8 @@ TOOLS = [
                    "description": "mine = von dir gemeldet, queues = in deinen Bereichen"}}},
      "annotations": {"readOnlyHint": True}},
     {"name": "get_case",
-     "description": "Ein Vorgang mit Verlauf (Kommentare, Statuswechsel), z. B. 2026-0042.",
+     "description": "Ein Vorgang mit Verlauf (Kommentare, Statuswechsel). Die Nummer steht so, wie "
+                    "list_cases sie nennt, z. B. V-2026-0042.",
      "inputSchema": {"type": "object", "required": ["number"],
                      "properties": {"number": {"type": "string"}}},
      "annotations": {"readOnlyHint": True},
@@ -76,6 +78,15 @@ class Rules:
         self.attest = attest
 
 
+def case_number(raw):
+    """Die Nummer, wie der Store sie kennt (V-JJJJ-NNNN). Ein Modell lässt das V- gern weg
+    (gemessen 2026-11-08 im Chat: „2026-0001“ statt „V-2026-0001“) -- das ist dieselbe Nummer."""
+    n = str(raw or "").strip().upper()
+    if re.fullmatch(r"\d{4}-\d{1,6}", n):
+        n = "V-" + n
+    return n
+
+
 def _short(c, qt, rules):
     return {"number": c["number"], "title": c["title"], "kind": rules.kind_label.get(c["kind"], c["kind"]),
             "status": rules.status_label.get(c["status"], c["status"]),
@@ -105,7 +116,7 @@ def _tool(store, who, rules, name, args):
         out.sort(key=lambda x: x["updated"], reverse=True)
         return {"count": len(out), "cases": out[:MAX_LIST]}
     if name in ("get_case", "comment_case"):
-        c = store.get(str(args.get("number") or "").strip())
+        c = store.get(case_number(args.get("number")))
         if not c or not rules.can_see(who, c):
             raise rules.refused("Diesen Vorgang gibt es nicht, oder er liegt nicht in einem "
                                 "deiner Bereiche.")
