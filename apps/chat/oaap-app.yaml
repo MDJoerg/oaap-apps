@@ -1,0 +1,50 @@
+oaap_manifest: "0.12"
+
+app:
+  id: chat
+  name: Chat
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Der Plattform-Chat, erste Fassung (RFC-0074 Stufe 2): ein Assistent (oaap.ai.assistants 0.1) mit den Werkzeugen einer Sicht des MCP-Gateways und einem Modell des KI-Gateways. Jeder Werkzeugaufruf laeuft als die Person, die schreibt (Verfahren A); was etwas aendert, erst nach ihrer Zustimmung. Verlauf je Person unter /data. Plattform ab 0.1.243"
+
+care:
+  # RFC-0071 §15: nur Standardbibliothek, beim Bau wird nichts nachgeladen.
+  rebuild: self
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  - path: /
+    roles: [admin, keyuser, user]
+
+storage:
+  - name: data
+    mount: /data
+
+# RFC-0074 D5: der Chat handelt an den MCP-Gateways seines Mandanten als die
+# Person, die mit ihm spricht. Der Schluessel dafuer oeffnet allein nichts --
+# er braucht die Zusicherung der Person aus derselben Anfrage.
+mcp_client:
+  use: true
+
+# Das Modell: eine Destination auf ein KI-Gateway (der Schluessel bleibt auf
+# der Plattform). Im geschlossenen Mandanten nur ein Schluessel mit Ampel gruen.
+destinations:
+  - name: ki
+    kind: http
+    purpose: "KI-Gateway (OpenAI-Schnittstelle bis /v1) fuer die Modellzuege des Assistenten"
+
+config:
+  - key: CHAT_ASSISTANT
+    label: "Der Assistent als JSON (oaap.ai.assistants 0.1): mindestens view, dazu title, greeting, system, model, gateway"
+    default: ""
+  - key: CHAT_MODEL_EXTRA
+    label: "Weitere Felder fuer jeden Modellzug als JSON, z. B. {\"reasoning\": {\"effort\": \"none\"}} fuer qwen3:8b"
+    default: ""
+
+health:
+  path: /healthz

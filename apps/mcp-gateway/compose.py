@@ -42,6 +42,7 @@ FIELDS = {
     "prompt": ("name", "title", "description", "arguments"),
 }
 # Das Feld, das einen Eintrag beim Server bezeichnet.
+EFFECT_META = "oaap/effect"   # §3.10, in tools/list ab Protokoll 2025-06-18
 SOURCE_FIELD = {"tool": "name", "resource": "uri", "template": "uriTemplate", "prompt": "name"}
 
 # Namen von Tools und Prompts, wie MCP 2025-11-25 sie empfiehlt.
@@ -292,6 +293,10 @@ def shaped(kind, item, version):
             for field in ("title", "outputSchema"):
                 if field in doc:
                     out[field] = doc[field]
+            # §3.10: die Wirkungsklasse, die der Mandant in der Sicht gesetzt hat --
+            # nicht der Hinweis des Herstellers. Ein Chat fragt vor allem, was nicht
+            # `read` ist (RFC-0074 D6).
+            out["_meta"] = {EFFECT_META: item["effect"]}
         return out
     if kind == "prompt":
         out = {"name": item["name"]}

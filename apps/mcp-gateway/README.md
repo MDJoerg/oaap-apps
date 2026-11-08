@@ -215,6 +215,9 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
   Token-Tausch. Ein Server mit Verfahren X ist so nicht erreichbar.
 - Gemessen wird Verfahren `A`, mit der Kennung der Person, dem Chat und, wenn
   der Chat ihn nennt, dem Assistenten (`X-OAAP-Assistant`).
+- **Seit 0.7.1** nennt `tools/list` je Werkzeug die Wirkungsklasse aus der
+  Sicht: `_meta: {"oaap/effect": "read" | "write" | "execute"}` (ab Protokoll
+  2025-06-18). Der Chat (`apps/chat`) fragt vor allem, was nicht `read` ist.
 
 ## Der festgehaltene Text
 

@@ -608,6 +608,13 @@ check("nur tools als Fähigkeit", set(res.get("capabilities", {})) == {"tools"})
 old_sid, old_init = session("alles", VOLL, "2025-03-26")
 check("Client auf 2025-03-26 bekommt 2025-03-26",
       ((old_init or {}).get("result") or {}).get("protocolVersion") == "2025-03-26")
+_new = listed("alles", VOLL, SID)
+check("0.7.1: tools/list nennt die Wirkungsklasse der Sicht in _meta (oaap/effect)",
+      (_new.get("echo") or {}).get("_meta") == {"oaap/effect": "read"}
+      and (_new.get("write_thing") or {}).get("_meta") == {"oaap/effect": "write"}, _new)
+_old = listed("alles", VOLL, old_sid)
+check("... nicht vor Protokoll 2025-06-18 (dort gibt es _meta am Tool nicht)",
+      bool(_old) and not any("_meta" in t for t in _old.values()), _old)
 _, odd = session("alles", VOLL, "1999-01-01")
 check("unbekannte Version: das Gateway nennt seine neueste",
       ((odd or {}).get("result") or {}).get("protocolVersion") == "2025-11-25")
