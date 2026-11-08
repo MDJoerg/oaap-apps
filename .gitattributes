@@ -3,3 +3,6 @@
 # "bad interpreter". This holds regardless of a checkout's autocrlf.
 *.sh text eol=lf
 entrypoint.sh text eol=lf
+
+# Mitgelieferte Fremddateien byte-genau halten (Prüfsumme im README der App).
+apps/chat/static/mermaid.min.js -text
