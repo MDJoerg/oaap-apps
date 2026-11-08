@@ -50,6 +50,23 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
 - **Zustimmung im Gateway:** Ein bestätigter Aufruf trägt
   `X-OAAP-Confirmed: yes`; das MCP-Gateway (ab 0.7.2) schreibt es in die
   Messzeile (`confirmed`).
+- **Antworten als Markdown, Diagramme mit Mermaid (seit 0.3.0).** Der
+  Renderer (`static/markdown.js`, eigener Code ohne Abhängigkeiten) escaped
+  den Text des Modells zuerst vollständig und verwandelt dann nur wenige
+  Auszeichnungen; rohes HTML aus einer Antwort erscheint nie als HTML, Links
+  nur mit http(s)/mailto. ```` ```mermaid ```` wird zum Diagramm — Mermaid
+  11.4.1 liegt der App bei (`static/mermaid.min.js`, MIT, SHA-256
+  `a43bc1af…6f9e`), läuft im strengen Modus und wird nur geladen, wenn eine
+  Antwort ein Diagramm enthält. Nichts kommt von außen: auch ein
+  geschlossener Mandant sieht die Diagramme.
+- **Gespräche umbenennen und löschen** (seit 0.3.0), Knöpfe im Kopf.
+- **„Einrichtung prüfen“** (seit 0.3.0, `GET /api/setup?assistant=…`): der
+  Chat prüft echt, der Reihe nach — Client-Schlüssel, Gateway im Mandanten,
+  die Sicht als die angemeldete Person (eine Runde), Destination `ki`,
+  Modellname am KI-Gateway — und nennt beim ersten fehlenden Teil den
+  nächsten Schritt (bei fehlendem Zugangsprofil mit der vermuteten Gruppe
+  `@<mandant>-<app>`). Fehlt Client oder Modell, zeigt die Seite das beim
+  Öffnen von selbst.
 - **Grenzen:** höchstens sechs Modellzüge je Nachricht, ein Modellzug
   höchstens `CHAT_MODEL_TIMEOUT` Sekunden (240).
 
@@ -102,7 +119,8 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 68 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 82 Prüfpunkte gegen eine nachgebaute Plattform
+node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 
 Die Messungen am Knoten mit echtem Modell:

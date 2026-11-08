@@ -24,7 +24,22 @@ header .muted{font-size:.85rem}
 #log{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
 .msg{max-width:46rem;padding:.6rem .8rem;border-radius:.6rem;white-space:pre-wrap;word-break:break-word;line-height:1.45}
 .user{align-self:flex-end;background:var(--me)}
-.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line);white-space:normal}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p{margin:.45rem 0}.md h3,.md h4,.md h5,.md h6{margin:.7rem 0 .35rem;font-size:1rem}
+.md ul,.md ol{margin:.35rem 0;padding-left:1.4rem}
+.md code{background:var(--tool);border-radius:.25rem;padding:.05rem .3rem;font-size:.88em}
+.md pre{background:var(--tool);border-radius:.4rem;padding:.6rem;overflow-x:auto;white-space:pre}
+.md pre code{background:none;padding:0}
+.md table{border-collapse:collapse;margin:.4rem 0;display:block;overflow-x:auto}
+.md th,.md td{border:1px solid var(--line);padding:.25rem .5rem;text-align:left;vertical-align:top}
+.md blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--line);color:var(--muted)}
+.md a{color:var(--accent)} .md hr{border:0;border-top:1px solid var(--line)}
+.mermaid-src svg{max-width:100%;height:auto;background:#fff;border-radius:.3rem}
+.setup{align-self:stretch;background:var(--panel);border:1px solid var(--line);border-radius:.6rem;padding:.7rem .9rem}
+.setup li{margin:.35rem 0;list-style:none}.setup ul{padding:0;margin:.3rem 0}
+.setup .next{color:var(--muted);font-size:.88rem;display:block}
+.hbtn{font-size:.8rem;padding:.2rem .55rem;margin-left:.3rem}
 .cmd{font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem}
 .call,.result{align-self:flex-start;font-size:.85rem;color:var(--muted);background:var(--tool);
 border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
@@ -61,6 +76,7 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
 </aside>
 <main>
   <header><b id="ctitle">—</b> <span class="muted" id="cassist"></span>
+  <span style="float:right"><button class="hbtn" id="ren" type="button">Umbenennen</button><button class="hbtn" id="del" type="button">Löschen</button><button class="hbtn" id="chk" type="button">Einrichtung prüfen</button></span>
   <div class="muted">Jede Runde läuft als du: der Assistent sieht nur, was du sehen darfst.
   Was etwas ändert, läuft erst nach deiner Zustimmung.</div></header>
   <div id="log"></div>
@@ -97,9 +113,38 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
   </form>
 </dialog>
 
+<script src="static/markdown.js"></script>
 <script>
 "use strict";
-let S = null, C = null, busy = false, CMDS = [];
+let S = null, C = null, busy = false, CMDS = [], SETUP = null;
+// Mermaid nur laden, wenn eine Antwort ein Diagramm hat; jedes Diagramm nur einmal zeichnen.
+const SVG = new Map();
+let mermaidReady = null;
+function loadMermaid(){
+  if (!mermaidReady) mermaidReady = new Promise((ok, no) => {
+    const sc = document.createElement("script"); sc.src = "static/mermaid.min.js";
+    sc.onload = () => { const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default"}); ok(); };
+    sc.onerror = no; document.head.appendChild(sc);
+  });
+  return mermaidReady;
+}
+async function drawMermaid(root){
+  const boxes = root.querySelectorAll(".mermaid-src");
+  if (!boxes.length) return;
+  for (const b of boxes) { const src = b.dataset.src; if (SVG.has(src)) b.innerHTML = SVG.get(src); }
+  const todo = [...boxes].filter(b => !SVG.has(b.dataset.src));
+  if (!todo.length) return;
+  try { await loadMermaid(); } catch (e) { return; }
+  let n = 0;
+  for (const b of todo) {
+    const src = b.dataset.src;
+    try { const out = await window.mermaid.render("mmd" + Date.now() + (n++), src); SVG.set(src, out.svg); b.innerHTML = out.svg; }
+    catch (e) { SVG.set(src, b.innerHTML + '<div class="muted">Diagramm nicht lesbar — oben der Quelltext.</div>');
+                b.innerHTML = SVG.get(src); }
+  }
+}
+function mdEl(text){ const d = el("div", "msg assistant md"); d.innerHTML = window.ChatMarkdown.render(text); return d; }
 const $ = id => document.getElementById(id);
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
   if(text!==undefined) e.textContent=text; return e;}
@@ -134,13 +179,16 @@ function render(status){
   const a = C ? assistant(C.assistant) : null;
   $("ctitle").textContent = C ? C.title : "—";
   $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
-  if (a && a.greeting) log.appendChild(el("div", "msg assistant", a.greeting));
+  if (a && a.greeting) log.appendChild(mdEl(a.greeting));
+  if (SETUP && C && SETUP.assistant === C.assistant) log.appendChild(setupBox(SETUP));
   if (!C) return;
   for (const m of C.messages) {
-    if (m.role === "user" || (m.role === "assistant" && m.content)) {
-      const d = el("div", "msg " + m.role);
+    if (m.role === "user") {
+      const d = el("div", "msg user");
       if (m.command) d.appendChild(el("span", "cmd", "/" + m.command));
       d.appendChild(document.createTextNode(m.content)); log.appendChild(d);
+    } else if (m.role === "assistant" && m.content) {
+      log.appendChild(mdEl(m.content));
     }
     for (const c of m.calls || []) log.appendChild(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
     if (m.role === "tool") {
@@ -160,6 +208,30 @@ function render(status){
   }
   if (status) log.appendChild(status);
   log.scrollTop = log.scrollHeight;
+  drawMermaid(log).then(() => { log.scrollTop = log.scrollHeight; });
+}
+
+// „Einrichtung prüfen“: was fehlt, und der nächste Schritt
+function setupBox(r){
+  const box = el("div", "setup"), ok = r.items.every(i => i.ok);
+  box.appendChild(el("b", "", ok ? "Einrichtung: alles da." : "Einrichtung: es fehlt noch etwas."));
+  const ul = el("ul");
+  for (const i of r.items) {
+    const li = el("li", i.ok ? "" : "err", (i.ok ? "✓ " : "✗ ") + i.title + (i.detail ? " — " + i.detail : ""));
+    if (i.next) li.appendChild(el("span", "next", "Nächster Schritt: " + i.next));
+    ul.appendChild(li);
+  }
+  box.appendChild(ul);
+  const close = el("button", "hbtn", "Ausblenden"); close.type = "button";
+  close.onclick = () => { SETUP = null; render(); }; box.appendChild(close);
+  return box;
+}
+async function checkSetup(aid){
+  if (!aid) return;
+  SETUP = {assistant: aid, items: [{ok: true, title: "Prüfe …", detail: "", next: ""}]}; render();
+  const r = await api("GET", "api/setup?assistant=" + encodeURIComponent(aid));
+  SETUP = r.items ? r : {assistant: aid, items: [{ok: false, title: "Prüfung", detail: r.error || "fehlgeschlagen", next: ""}]};
+  render();
 }
 
 function setBusy(b, text){ busy = b; $("go").disabled = b; $("t").disabled = b; render(b ? el("div", "muted", text) : null); }
@@ -213,6 +285,21 @@ function showCommands(){
 async function refreshState(){ S = await api("GET", "api/state"); renderSide(); }
 async function openConv(id){ C = await api("GET", "api/conv/" + id); render(); renderSide(); loadCommands(); }
 
+$("chk").onclick = () => checkSetup(C ? C.assistant : $("pick").value);
+$("ren").onclick = async () => {
+  if (!C) return;
+  const t = prompt("Neuer Titel für dieses Gespräch:", C.title); if (!t) return;
+  const r = await api("POST", "api/conv/" + C.id + "/rename", {title: t});
+  if (r.error) { render(el("div", "err", r.error)); return; }
+  C = r; await refreshState(); render();
+};
+$("del").onclick = async () => {
+  if (!C || !confirm("Gespräch „" + C.title + "“ löschen? Das lässt sich nicht rückgängig machen.")) return;
+  const r = await api("POST", "api/conv/" + C.id + "/delete", {});
+  if (r.error) { render(el("div", "err", r.error)); return; }
+  C = null; SETUP = null; await refreshState();
+  if (S.conversations.length) await openConv(S.conversations[0].id); else render();
+};
 $("new").onclick = async () => {
   const r = await api("POST", "api/conv", {assistant: $("pick").value});
   if (r.error) { render(el("div", "err", r.error)); return; }
@@ -287,6 +374,8 @@ $("aimp").onchange = async ev => {
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
   $("who").textContent = (S.user || "") + " · Chat " + S.version;
   if (S.conversations.length) await openConv(S.conversations[0].id); else render();
+  // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
+  if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);
   for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));
   if (!S.assistants.length) $("log").appendChild(el("div", "muted", "Für dich ist noch kein Assistent sichtbar. Lege unter „Assistenten …“ einen eigenen an."));
 })();

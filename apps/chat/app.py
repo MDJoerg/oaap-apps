@@ -16,6 +16,9 @@ MCP-Gateways, ein Modell über das KI-Gateway, der Verlauf als Datei.
 - Ein Werkzeug, das nicht liest, läuft erst nach Bestätigung, jedes Mal (D6);
   dem Gateway sagt der Chat das mit `X-OAAP-Confirmed: yes` (§5.6).
 - `/name …` holt einen Prompt der Sicht (MCP prompts/get) als Nachricht.
+- Antworten werden im Browser als Markdown dargestellt, ```mermaid als Diagramm
+  (static/markdown.js, Mermaid mitgeliefert, nichts von außen geladen).
+- „Einrichtung prüfen“ (0.3.0) nennt, welches Teil fehlt und was der nächste Schritt ist.
 - Der Verlauf liegt unter /data, je Person ein Ordner; nur sie liest ihn.
 
 Nur Standardbibliothek.
@@ -37,7 +40,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -421,6 +424,93 @@ def step(person, person_name, assertion, assistant, conv, decision):
 # -------------------------------------------------------------------- Seite
 
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+# Nur diese Dateien, nie ein Pfad aus der Anfrage (kein Weg aus dem Ordner hinaus).
+STATIC = {"markdown.js": "application/javascript; charset=utf-8",
+          "mermaid.min.js": "application/javascript; charset=utf-8"}
+
+
+def own_instance_guess():
+    """Der Name dieser Instanz, wie ihn ein Zugangsprofil als @<name> braucht -- geraten.
+
+    Die Plattform nennt der App ihre Adressen (OAAP_INSTANCE_NAMES), nicht ihren
+    Namen. Die automatische Adresse ist <app>.<mandant>.<knoten> (im Mandanten
+    default <app>.<knoten>); daraus <mandant>-<app>. Nur für einen Hinweis."""
+    names = [n.strip() for n in (os.environ.get("OAAP_INSTANCE_NAMES") or "").split(",") if n.strip()]
+    for origin in reversed(names):            # die automatischen Adressen stehen hinten
+        host = origin.split("://", 1)[-1].split("/")[0].split(":")[0]
+        labels = host.split(".")
+        if len(labels) >= 4:
+            return f"{labels[1]}-{labels[0]}"
+    return ""
+
+
+def setup_report(person, assertion, a):
+    """Jedes Teil, das dieser Assistent braucht, der Reihe nach -- mit dem nächsten Schritt.
+
+    Prüft echt (eine Runde als die Person, eine Frage an das KI-Gateway), damit der
+    Bericht sagt, was IST, nicht was eingestellt sein sollte."""
+    items = []
+
+    def add(key, ok, title, detail="", next_=""):
+        items.append({"key": key, "ok": ok, "title": title, "detail": detail, "next": next_})
+        return ok
+
+    if not add("client", bool(CLIENT_KEY and CLIENT_URL), "Der Chat darf als MCP-Client handeln",
+               "" if CLIENT_KEY and CLIENT_URL else "Die Plattform hat dieser Instanz keinen Client-Schlüssel gegeben.",
+               "" if CLIENT_KEY and CLIENT_URL else "Das Manifest erklärt mcp_client; eine Generalprobe bekommt keinen. "
+               "Instanz neu ausrollen oder die Plattform aktualisieren (ab 0.1.243)."):
+        return items
+    try:
+        gw = gateway_for(a.get("gateway") or "")
+        add("gateway", True, f"Gateway {gw['name']} ist im Mandanten erreichbar")
+    except Stop as exc:
+        add("gateway", False, "Ein MCP-Gateway im Mandanten", exc.text,
+            "Ein MCP-Gateway aus dem Store in diesem Mandanten installieren; nennt der Mandant "
+            "mehrere, im Assistenten das Feld gateway setzen.")
+        gw = None
+    if gw and assertion:
+        group = own_instance_guess()
+        try:
+            n = len(McpWay(person, assertion, a).tools())
+            add("view", True, f"Sicht {a['view']} antwortet dir: {n} Werkzeug(e)")
+            if not n:
+                add("tools", False, "Werkzeuge in der Sicht",
+                    "Die Sicht ist leer, oder ihre Werkzeuge liegen über Ampel oder Wirkungsklasse des Profils.",
+                    "Auf der Betreiberseite des Gateways: Quelle → „Katalog lesen“, Werkzeuge in die Sicht "
+                    "nehmen; die Ampel der Quelle darf nicht über der des Zugangsprofils liegen.")
+        except Stop as exc:
+            hint = ("Auf der Betreiberseite des Gateways ein Zugangsprofil anlegen: Gruppe "
+                    + (f"@{group}" if group else "@<Name dieser Instanz>")
+                    + (" (vermutet aus der Adresse)" if group else "") + f", Sicht {a['view']}. "
+                    f"Die Sicht {a['view']} braucht den Zugang „platform“.") if "403" in exc.text else (
+                    "Seite neu laden (die Anmeldung ist älter als fünf Minuten)." if "401" in exc.text
+                    else f"Gibt es die Sicht {a['view']} im Gateway {gw['name']}?")
+            add("view", False, f"Sicht {a['view']} als du", exc.text, hint)
+    elif gw:
+        add("view", False, f"Sicht {a['view']} als du", "Keine Zusicherung der Plattform in dieser Anfrage.",
+            "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
+    if not add("destination", bool(KI_URL), "Ein Modell ist angebunden (Destination ki)",
+               "" if KI_URL else "Dieser Instanz ist keine Destination ki zugeordnet.",
+               "" if KI_URL else "Ein Server-Admin legt eine Destination auf ein KI-Gateway an und ordnet sie "
+               "dieser Instanz als ki zu (heute nur über die Kommandozeile: oaap destination add / bind)."):
+        return items
+    req = urllib.request.Request(KI_URL.rstrip("/") + "/models", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            ids = [m.get("id") for m in (json.loads(r.read(1_000_000)).get("data") or []) if isinstance(m, dict)]
+        add("model", a["model"] in ids, f"Modellname {a['model']} ist am KI-Gateway freigegeben",
+            "" if a["model"] in ids else "Der Schlüssel der Destination erreicht: " + (", ".join(ids) or "nichts") + ".",
+            "" if a["model"] in ids else f"Auf der Seite des KI-Gateways den Modellnamen {a['model']} anlegen "
+            "und dem Schlüssel der Destination erlauben -- oder im Assistenten einen vorhandenen Namen wählen.")
+    except urllib.error.HTTPError as exc:
+        add("model", False, "Das KI-Gateway antwortet", f"Antwort {exc.code}.",
+            "Der Schlüssel der Destination ist ungültig oder widerrufen: neuen Schlüssel ausstellen und "
+            "bei der Destination hinterlegen." if exc.code in (401, 403) else "Läuft das KI-Gateway?")
+    except (OSError, ValueError) as exc:
+        add("model", False, "Das KI-Gateway antwortet", f"Nicht erreicht ({type(exc).__name__}).",
+            "Läuft das KI-Gateway, und stimmt das Ziel der Destination?")
+    return items
 PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
 
 
@@ -449,12 +539,12 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s %s %s\n" % (self.command, self.path.split("?")[0], args[1]
                                          if len(args) > 1 else ""))
 
-    def send(self, status, ctype, body, extra=()):
+    def send(self, status, ctype, body, extra=(), cache="no-store"):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         for k, v in extra:
             self.send_header(k, v)
         self.end_headers()
@@ -491,6 +581,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             with open(PAGE_FILE, encoding="utf-8") as f:
                 return self.send(200, "text/html; charset=utf-8", f.read())
+        if path.startswith("/static/") and path[8:] in STATIC:
+            with open(os.path.join(STATIC_DIR, path[8:]), "rb") as f:
+                return self.send(200, STATIC[path[8:]], f.read(), cache="private, max-age=3600")
         person = self.person()
         if not person:
             return self.json(401, {"error": "Keine angemeldete Person."})
@@ -503,6 +596,18 @@ class Handler(BaseHTTPRequestHandler):
                 "teams_known": who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
                 "conversations": list_convs(person)})
+        if path == "/api/setup":
+            aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
+            a, _ = STORE.get(aid)
+            if a is None or not store.can_see(a, who):
+                return self.json(404, {"error": "Kein solcher Assistent."})
+            errs = store.problems(a)
+            if errs:
+                return self.json(200, {"assistant": aid, "items": [
+                    {"key": "assistant", "ok": False, "title": "Der Assistent ist gültig",
+                     "detail": " ".join(errs), "next": "Den Assistenten unter „Assistenten …“ korrigieren."}]})
+            return self.json(200, {"assistant": aid, "items": setup_report(
+                person, self.headers.get(ASSERTION, "").strip(), a)})
         if path == "/api/assistants/export":
             return self.json(200, STORE.export(who),
                              [("Content-Disposition", 'attachment; filename="assistenten.json"')])
@@ -581,7 +686,7 @@ class Handler(BaseHTTPRequestHandler):
                     "messages": []}
             save_conv(person, conv)
             return self.json(200, view_of(conv))
-        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete)$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")
         cid, action = m.groups()
@@ -595,6 +700,13 @@ class Handler(BaseHTTPRequestHandler):
             if action == "delete":
                 os.remove(conv_path(person, cid))
                 return self.json(200, {"deleted": cid})
+            if action == "rename":
+                title = " ".join(str(body.get("title") or "").split())[:80]
+                if not title:
+                    return self.json(400, {"error": "Ein Titel hat 1 bis 80 Zeichen."})
+                conv["title"] = title
+                save_conv(person, conv)
+                return self.json(200, view_of(conv))
             return self.round(person, who, conv, action, body)
         finally:
             lock.release()

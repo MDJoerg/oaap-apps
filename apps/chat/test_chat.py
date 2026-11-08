@@ -93,6 +93,8 @@ class Fake(BaseHTTPRequestHandler):
             if AUTHZ_DOWN["on"] or self.headers.get("Authorization") != "Bearer AZ":
                 return self.reply(503, {})
             return self.reply(200, {"user": uid, "grants": GRANTS.get(uid, []), "fresh_for": 0})
+        if self.path == "/v1/models":
+            return self.reply(200, {"object": "list", "data": [{"id": "standard"}, {"id": "klein"}]})
         if self.path == "/gw" and self.headers.get("Authorization") == "Bearer " + CK:
             port = self.server.server_address[1]
             return self.reply(200, {"v": 1, "gateways": [
@@ -106,6 +108,9 @@ class Fake(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != "Bearer " + CK or not a.startswith("ZS-") \
                     or BAD_ASSERTION["on"]:
                 return self.reply(401, {"error": "nein"})
+            if self.path == "/via/gw1/ohne-profil":
+                return self.reply(403, {"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32000, "message": "Angemeldet, aber kein Zugangsprofil erlaubt diese Sicht."}})
             if self.path != "/via/gw1/kp-i":
                 return self.reply(404, {})
             m = body.get("method")
@@ -173,6 +178,7 @@ os.environ.update({
     "CHAT_ASSISTANT": json.dumps({"id": "projekte", "title": "Projekte", "view": "kp-i",
                                   "system": "Du hilfst bei Projekten.", "commands": True}),
     "OAAP_AUTHZ_URL": f"http://127.0.0.1:{FP}/authz", "OAAP_AUTHZ_KEY": "AZ",
+    "OAAP_INSTANCE_NAMES": "https://chat.example.org,https://chat.vuebung.node.example",
 })
 import app  # noqa: E402
 
@@ -444,6 +450,66 @@ check("Gespräch mit gelöschtem Assistenten: keine Runde (403)", st == 403, r)
 with open(os.path.join(DATA, "assistants.json"), encoding="utf-8") as f:
     check("assistants.json ist eine Austauschdatei von oaap.ai.assistants",
           assistants.check_document(json.load(f)) == [])
+
+# ------------------------------------------------ 0.3.0: Dateien, Umbenennen, Einrichtung
+def raw_get(path):
+    try:
+        with urllib.request.urlopen(BASE + path, timeout=10) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, "", b""
+
+
+st, ct, body = raw_get("/static/markdown.js")
+check("0.3.0: /static/markdown.js wird ausgeliefert (JavaScript)", st == 200 and "javascript" in ct
+      and b"ChatMarkdown" in body, (st, ct))
+st, ct, body = raw_get("/static/mermaid.min.js")
+check("... Mermaid ebenso (mitgeliefert, nichts von außen)", st == 200 and len(body) > 1_000_000, st)
+check("... nur die genannten Dateien: ../app.py, %2e%2e und andere Namen nie ausgeliefert",
+      all(raw_get(x)[0] != 200 for x in ("/static/../app.py", "/static/%2e%2e/app.py", "/static/MERMAID-LICENSE",
+                                         "/static/", "/static/app.py")))
+_, cr = req("POST", "/api/conv", {"assistant": "projekte"})
+st, r = req("POST", f"/api/conv/{cr['id']}/rename", {"title": "  Drucker   im Büro  "})
+check("umbenennen: Titel gesetzt, Leerraum zusammengezogen", st == 200 and r["title"] == "Drucker im Büro", r)
+st, r = req("POST", f"/api/conv/{cr['id']}/rename", {"title": "   "})
+check("leerer Titel: 400", st == 400, r)
+st, r = req("POST", f"/api/conv/{cr['id']}/rename", {"title": "fremd"}, person="bert")
+check("bert benennt annas Gespräch nicht um (404)", st == 404, r)
+
+items = lambda r: {i["key"]: i for i in r.get("items", [])}
+st, r = req("GET", "/api/setup?assistant=projekte")
+it = items(r)
+check("Einrichtung projekte: alles da -- Client, Gateway, Sicht mit 3 Werkzeugen, Destination, Modellname",
+      st == 200 and all(i["ok"] for i in r["items"]) and set(it) == {"client", "gateway", "view", "destination", "model"}
+      and "3 Werkzeug" in it["view"]["title"], r)
+req("POST", "/api/assistants", asst("ohneprofil", "private", view="ohne-profil"))
+st, r = req("GET", "/api/setup?assistant=ohneprofil")
+it = items(r)
+check("Sicht ohne Zugangsprofil: nicht ok, nächster Schritt nennt Profil, vermutete Gruppe @vuebung-chat und Zugang platform",
+      not it["view"]["ok"] and "Zugangsprofil" in it["view"]["next"] and "@vuebung-chat" in it["view"]["next"]
+      and "platform" in it["view"]["next"], it.get("view"))
+req("POST", "/api/assistants", asst("falschesmodell", "private", model="gross"))
+st, r = req("GET", "/api/setup?assistant=falschesmodell")
+it = items(r)
+check("Modellname nicht freigegeben: nicht ok, nennt die erreichbaren (standard, klein)",
+      not it["model"]["ok"] and "standard, klein" in it["model"]["detail"] and "gross" in it["next"] if False else
+      (not it["model"]["ok"] and "standard, klein" in it["model"]["detail"] and "gross" in it["model"]["next"]), it.get("model"))
+saved_ki = app.KI_URL
+app.KI_URL = ""
+st, r = req("GET", "/api/setup?assistant=projekte")
+it = items(r)
+app.KI_URL = saved_ki
+check("ohne Destination: nicht ok, sagt Kommandozeile; das Modell wird dann nicht mehr gefragt",
+      not it["destination"]["ok"] and "Kommandozeile" in it["destination"]["next"] and "model" not in it, r)
+st, r = req("GET", "/api/setup?assistant=projekte", assertion=False)
+it = items(r)
+check("ohne Zusicherung: die Sicht wird nicht als ok gemeldet", not it["view"]["ok"], it.get("view"))
+st, r = req("GET", "/api/setup?assistant=gibtsnicht")
+check("unbekannter Assistent: 404", st == 404, r)
+st, r = req("GET", "/api/setup?assistant=ohneprofil", person="bert")
+check("fremder privater Assistent: 404", st == 404, r)
+check("vermutete Instanz aus der automatischen Adresse", app.own_instance_guess() == "vuebung-chat",
+      app.own_instance_guess())
 
 srv.shutdown()
 fake.shutdown()
