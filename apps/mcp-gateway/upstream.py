@@ -470,6 +470,43 @@ def _list_all(server, url, session, method, field, timeout, max_bytes, start_id)
             return found, n
 
 
+def _read_ui_views(server, url, session, offers, timeout, max_bytes, n):
+    """Die Ansichten, die Tools nennen (MCP Apps, RFC-0075): lesen und mit Inhalt festhalten.
+
+    Ein Server darf eine Ansicht in resources/list weglassen; das Gateway liest
+    die URI, die das Tool nennt, und legt sie als Resource in den Katalog --
+    mit SHA-256 des Inhalts. Gibt die Sätze zu Ansichten zurück, die nicht
+    lesbar waren (das Tool bleibt im Katalog, ist aber nicht freigebbar)."""
+    import compose
+    uris = sorted({u["resourceUri"] for t in offers.get("tool") or []
+                   for u in [compose.tool_ui(t) or {}] if u.get("resourceUri")})
+    errors = {}
+    if not uris:
+        return errors
+    listed = {r.get("uri"): r for r in offers.get("resource") or [] if isinstance(r, dict)}
+    for uri in uris:
+        ex = post(server, url, {"jsonrpc": "2.0", "id": n, "method": "resources/read",
+                                "params": {"uri": uri}},
+                  session_id=session.id, version=session.version, timeout=timeout,
+                  max_bytes=max_bytes)
+        n += 1
+        answer = ex.messages[-1] if ex.messages else {}
+        if "error" in answer or not isinstance(answer.get("result"), dict):
+            errors[uri] = f"Die Ansicht {uri} ließ sich nicht lesen."
+            continue
+        entry, err = compose.ui_view_entry(uri, answer["result"])
+        if err:
+            errors[uri] = err
+            continue
+        if uri in listed:
+            for f in ("title", "description", "annotations"):
+                if f in listed[uri]:
+                    entry[f] = listed[uri][f]
+        offers.setdefault("resource", [])
+        offers["resource"] = [r for r in offers["resource"] if r.get("uri") != uri] + [entry]
+    return errors
+
+
 def list_catalog(server, url, timeout=30, max_bytes=8 << 20):
     """Alles, was der Server anbietet: {art: [einträge]}. Gibt (offers, session) zurück.
 
@@ -490,6 +527,7 @@ def list_catalog(server, url, timeout=30, max_bytes=8 << 20):
                 offers[kind] = []
                 continue
             offers[kind], n = _list_all(server, url, session, method, field, timeout, max_bytes, n)
+        offers["ui_errors"] = _read_ui_views(server, url, session, offers, timeout, max_bytes, n)
         return offers, session
     finally:
         delete(server, url, session.id)

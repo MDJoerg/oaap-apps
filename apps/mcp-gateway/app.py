@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.7.3"
+VERSION = "0.8.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -1620,6 +1620,19 @@ class Handler(BaseHTTPRequestHandler):
                                  exc.retry_after))
                 return
             failed = False
+            if kind == "resource" and "content_sha256" in doc:
+                # RFC-0075 D3: bei einer Ansicht ist der Inhalt Code -- er muss der
+                # freigegebene sein, sonst geht nichts an den Client.
+                plain_answer = answer
+
+                def answer(doc_out, status=200, headers=(), _doc=doc):
+                    if isinstance(doc_out, dict) and isinstance(doc_out.get("result"), dict) \
+                            and not compose.ui_content_matches(_doc, doc_out["result"]):
+                        done("refused", "ui_changed")
+                        doc_out = rpc_error(msg_id, -32002, "Diese Ansicht hat sich seit der Freigabe "
+                                                            "geändert; ein Betreiber muss sie neu "
+                                                            "bestätigen.")
+                    return plain_answer(doc_out, status, headers)
             out = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": out_params}
             inflight = json.dumps(msg_id)
             with sess.lock:

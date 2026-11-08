@@ -208,6 +208,15 @@ class Paper(BaseHTTPRequestHandler):
             key, field = lists[m]
             self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {field: S[key]}})
             return
+        if m == "resources/read" and (body.get("params") or {}).get("uri") in S.get("ui_views", {}):
+            uri = body["params"]["uri"]
+            S["reads"].append(uri)
+            html, meta = S["ui_views"][uri]
+            c = {"uri": uri, "mimeType": "text/html;profile=mcp-app", "text": html}
+            if meta:
+                c["_meta"] = {"ui": meta}
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {"contents": [c]}})
+            return
         if m == "resources/read":
             uri = (body.get("params") or {}).get("uri")
             S["reads"].append(uri)
@@ -1634,8 +1643,92 @@ check("Schlüsselliste ohne Schlüsselwert", "mcp-oaap-" not in kd and '"voll"' 
 st, main_page = admin_get("/")
 check("Übersicht rendert", st == 200 and "Sichten" in main_page and "papier" in main_page)
 
+# ------------------------------------------------- 0.8.0: Ansichten (MCP Apps, RFC-0075)
+print("\n-- MCP Apps: ein Tool bringt seine Ansicht mit (0.8.0, RFC-0075)")
+KARTE_V1 = "<!doctype html><title>Karte</title><p>Version 1</p>"
+U = paper_state(caps={"tools": {}},
+                tools=[dict(tool("karte", "Zeigt einen Vorgang als Karte.", {"nr": {"type": "string"}}),
+                            _meta={"ui": {"resourceUri": "ui://karte/v1", "visibility": ["model", "app"]},
+                                   "hersteller/zaehler": 1}),
+                       dict(tool("alt", "Alte Form."), _meta={"ui/resourceUri": "ui://alt/v1"}),
+                       dict(tool("kaputt", "Ansicht fehlt."), _meta={"ui": {"resourceUri": "ui://fehlt"}}),
+                       dict(tool("nurapp", "Nur für die Ansicht."),
+                            _meta={"ui": {"resourceUri": "ui://karte/v1", "visibility": ["app"]}})],
+                ui_views={"ui://karte/v1": (KARTE_V1, {"csp": {"connectDomains": []}, "prefersBorder": True}),
+                          "ui://alt/v1": ("<!doctype html><p>alt</p>", None)})
+uisrv = ThreadingHTTPServer(("0.0.0.0", 0), Paper)
+uisrv.state = U
+threading.Thread(target=uisrv.serve_forever, daemon=True).start()
+UIURL = f"http://{IP}:{uisrv.server_address[1]}/mcp"
+admin("/server-save", name="uisrv", address=UIURL, auth="none", light="green")
+page = admin("/server-read", name="uisrv")
+cat = {(r["kind"], r["name"]): json.loads(r["doc"]) for r in books.catalog(app.DB, "uisrv", "resource")
+       + books.catalog(app.DB, "uisrv", "tool")}
+check("0.8.0: Katalog lesen holt die Ansichten, die Tools nennen, mit SHA-256 des Inhalts",
+      ("resource", "ui://karte/v1") in cat and cat[("resource", "ui://karte/v1")].get("content_sha256")
+      and cat[("resource", "ui://karte/v1")]["_meta"]["ui"]["prefersBorder"] is True
+      and ("resource", "ui://fehlt") not in cat, sorted(cat))
+check("... ins Tool kommt nur _meta.ui, nicht die übrigen _meta-Angaben des Herstellers",
+      cat[("tool", "karte")].get("_meta") == {"ui": {"resourceUri": "ui://karte/v1",
+                                                     "visibility": ["model", "app"]}}, cat[("tool", "karte")])
+check("... die alte flache Form wird übersetzt",
+      cat[("tool", "alt")].get("_meta") == {"ui": {"resourceUri": "ui://alt/v1"}}, cat[("tool", "alt")])
+admin("/view-save", name="ui-sicht", max_effect="write", ways="key")
+add("ui-sicht", "karte", server="uisrv")
+check("0.8.0: wer das Tool freigibt, gibt genau seine Ansicht mit frei",
+      [i["name"] for i in books.items(app.DB, "ui-sicht", "resource")] == ["ui://karte/v1"], None)
+page = add("ui-sicht", "kaputt", server="uisrv")
+check("... ein Tool, dessen Ansicht sich nicht lesen ließ, wird nicht freigegeben",
+      "nicht lesen" in page and not books.item_row(app.DB, "ui-sicht", "tool", "kaputt"), None)
+UIKEY = secret_from(admin("/issue", label="ui-key", views="ui-sicht", max_effect="write"))
+usid, _ = session("ui-sicht", UIKEY)
+lst = listed("ui-sicht", UIKEY, usid)
+check("0.8.0: tools/list nennt die Ansicht (_meta.ui) neben der Wirkungsklasse",
+      (lst.get("karte") or {}).get("_meta") == {"oaap/effect": "read", "ui": {
+          "resourceUri": "ui://karte/v1", "visibility": ["model", "app"]}}, lst)
+
+
+def read_ui(uri="ui://karte/v1"):
+    _, _, msgs, _ = rpc("ui-sicht", {"jsonrpc": "2.0", "id": 9, "method": "resources/read",
+                                     "params": {"uri": uri}}, UIKEY, usid)
+    return msgs[-1] if msgs else {}
+
+
+r = read_ui()
+check("0.8.0: die freigegebene Ansicht ist lesbar, unverändert", ((r.get("result") or {}).get("contents")
+                                                                  or [{}])[0].get("text") == KARTE_V1, r)
+r = read_ui("ui://alt/v1")
+check("... eine andere Ansicht des Servers nicht (nicht freigegeben)", "error" in r, r)
+U["ui_views"]["ui://karte/v1"] = ("<!doctype html><p>Version 2 mit <script>fetch('x')</script></p>", None)
+r = read_ui()
+check("0.8.0: der Server liefert einen anderen Inhalt: abgewiesen, nichts davon geht an den Client",
+      (r.get("error") or {}).get("code") == -32002 and "geändert" in (r.get("error") or {}).get("message", "")
+      and "Version 2" not in json.dumps(r), r)
+row = rows_after("SELECT outcome, reason FROM usage WHERE view='ui-sicht' AND tool='ui://karte/v1' "
+                 "ORDER BY id DESC", 1)
+check("... und die Messzeile sagt warum (ui_changed)", row and row[0]["reason"] == "ui_changed",
+      [dict(x) for x in row][:2])
+admin("/server-read", name="uisrv")
+check("0.8.0: nach dem Katalog lesen ist die Ansicht gesperrt -- und damit das Tool",
+      books.item_state(app.DB, books.item_row(app.DB, "ui-sicht", "resource", "ui://karte/v1")) == "suspended"
+      and books.item_state(app.DB, books.item_row(app.DB, "ui-sicht", "tool", "karte")) == "suspended", None)
+check("... tools/list nennt das gesperrte Tool nicht", "karte" not in listed("ui-sicht", UIKEY, usid))
+admin("/item-confirm", view="ui-sicht", kind="tool", name="karte", effect="read")
+check("0.8.0: das Tool bestätigen bestätigt seine neue Ansicht mit; beide aktiv",
+      books.item_state(app.DB, books.item_row(app.DB, "ui-sicht", "tool", "karte")) == "active"
+      and books.item_state(app.DB, books.item_row(app.DB, "ui-sicht", "resource", "ui://karte/v1")) == "active",
+      None)
+r = read_ui()
+check("... danach ist die neue Ansicht lesbar", "Version 2" in json.dumps(r), r)
+add("ui-sicht", "nurapp", server="uisrv")
+lst = listed("ui-sicht", UIKEY, usid)
+check("0.8.0: ein Tool nur für die Ansicht (visibility app) steht mit dieser Angabe in der Liste",
+      (lst.get("nurapp") or {}).get("_meta", {}).get("ui", {}).get("visibility") == ["app"], lst)
+uisrv.shutdown()
+
 gw.shutdown()
 paper.shutdown()
+
 zwei.shutdown()
 drei.shutdown()
 idp.shutdown()

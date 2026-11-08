@@ -572,6 +572,7 @@ def store_catalog(db, server, offers):
     import compose
     stamp = now()
     before = {(i["view"], i["kind"], i["name"]): item_state(db, i) for i in approved_items(db, server)}
+    ui_errors = offers.pop("ui_errors", None) or {}
     for kind, raws in offers.items():
         seen = set()
         for raw in raws:
@@ -737,11 +738,33 @@ def approved_items(db, server):
 
 
 def item_state(db, item):
-    """`active`, `suspended` oder `missing` (Spec §4.2)."""
+    """`active`, `suspended` oder `missing` (Spec §4.2).
+
+    0.8.0 (RFC-0075 D3): ein Tool mit Ansicht ist nur aktiv, wenn auch seine
+    Ansicht in derselben Sicht aktiv ist -- eine geänderte Ansicht sperrt das Tool."""
     cat = catalog_row(db, item["server"], item["kind"], item["source"])
     if not cat or not cat["present"]:
         return "missing"
-    return "active" if cat["fingerprint"] == item["approved_fp"] else "suspended"
+    if cat["fingerprint"] != item["approved_fp"]:
+        return "suspended"
+    if item["kind"] == "tool":
+        uri = ui_uri(item)
+        if uri:
+            view_item = item_row(db, item["view"], "resource", uri)
+            if not view_item or item_state(db, view_item) != "active":
+                return "suspended"
+    return "active"
+
+
+def ui_uri(item):
+    """Die URI der freigegebenen Ansicht eines Tools, oder None."""
+    try:
+        doc = json.loads(item["approved_doc"] or "{}")
+    except ValueError:
+        return None
+    ui = (doc.get("_meta") or {}).get("ui") if isinstance(doc.get("_meta"), dict) else None
+    uri = ui.get("resourceUri") if isinstance(ui, dict) else None
+    return uri if isinstance(uri, str) and uri.startswith("ui://") else None
 
 
 def approve(db, actor, view, kind, server, source, name=None, effect="read"):
@@ -787,12 +810,28 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
             f"In der Sicht „{view}“ gibt es „{name}“ schon"
             + (" — derselbe Eintrag; ein geänderter Text wird auf der Seite der Sicht bestätigt."
                if same else f" (von Server „{taken['server']}“). Bitte einen anderen Namen wählen."))
+    ui = (doc.get("_meta") or {}).get("ui") if kind == "tool" else None
+    ui_cat = None
+    if ui:
+        # RFC-0075 D3: die Ansicht kommt mit dem Tool -- genau die eine, die es nennt.
+        ui_cat = catalog_row(db, server, "resource", ui["resourceUri"])
+        if not ui_cat or not ui_cat["present"]:
+            raise ValueError(f"„{source}“ bringt die Ansicht {ui['resourceUri']} mit, die sich "
+                             "nicht lesen ließ (Katalog neu lesen?). Ohne lesbare Ansicht keine "
+                             "Freigabe.")
     db.execute("INSERT INTO items (view,kind,name,server,source,effect,approved_fp,approved_doc,"
                "approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                (view, kind, name, server, source, effect, cat["fingerprint"], cat["doc"], actor,
                 now()))
     log(db, actor, "item.approve", f"{view}/{name}",
         f"{kind} {server}:{source} als {effect}, Fingerabdruck {cat['fingerprint'][:12]}")
+    if ui_cat and not item_row(db, view, "resource", ui["resourceUri"]):
+        db.execute("INSERT INTO items (view,kind,name,server,source,effect,approved_fp,approved_doc,"
+                   "approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (view, "resource", ui["resourceUri"], server, ui["resourceUri"], "read",
+                    ui_cat["fingerprint"], ui_cat["doc"], actor, now()))
+        log(db, actor, "item.approve", f"{view}/{ui['resourceUri']}",
+            f"Ansicht von {name}, Inhalt {json.loads(ui_cat['doc']).get('content_sha256', '')[:12]}")
     db.commit()
     return name
 
@@ -820,6 +859,23 @@ def confirm(db, actor, view, kind, name, effect=None):
     db.execute("UPDATE items SET effect=?,approved_fp=?,approved_doc=?,approved_by=?,approved_at=? "
                "WHERE view=? AND kind=? AND name=?",
                (effect, cat["fingerprint"], cat["doc"], actor, now(), view, kind, name))
+    if kind == "tool":
+        # RFC-0075: wer das Tool bestätigt, bestätigt seine Ansicht mit (die neue, falls geändert).
+        ui = (json.loads(cat["doc"]).get("_meta") or {}).get("ui") or {}
+        uri = ui.get("resourceUri")
+        ui_cat = catalog_row(db, item["server"], "resource", uri) if uri else None
+        if uri and (not ui_cat or not ui_cat["present"]):
+            raise ValueError(f"Die Ansicht {uri} ließ sich nicht lesen; ohne sie keine Bestätigung.")
+        if ui_cat:
+            if item_row(db, view, "resource", uri):
+                db.execute("UPDATE items SET approved_fp=?,approved_doc=?,approved_by=?,approved_at=? "
+                           "WHERE view=? AND kind='resource' AND name=?",
+                           (ui_cat["fingerprint"], ui_cat["doc"], actor, now(), view, uri))
+            else:
+                db.execute("INSERT INTO items (view,kind,name,server,source,effect,approved_fp,"
+                           "approved_doc,approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                           (view, "resource", uri, item["server"], uri, "read", ui_cat["fingerprint"],
+                            ui_cat["doc"], actor, now()))
     bits = []
     if item["approved_fp"] != cat["fingerprint"]:
         bits.append(f"Text bestätigt {item['approved_fp'][:12]} → {cat['fingerprint'][:12]}")

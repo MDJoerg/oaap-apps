@@ -229,6 +229,17 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
   <etikett> --views a,b`), ohne Widerruf. Eine 403 nennt den Grund (Sicht nicht
   im Profil, Zugang fehlt, Ampel zu hoch), und die Tabelle zeigt denselben Satz
   beim Profil. Knopf „Quellen jetzt einlesen“ bei den Servern.
+- **Seit 0.8.0: Ansichten (MCP Apps, RFC-0075).** Nennt ein Tool mit
+  `_meta.ui.resourceUri` eine Ansicht `ui://…`, liest das Gateway sie beim
+  Katalog-Lesen und hält ihren **Inhalt** fest (SHA-256, dazu MIME und die
+  CSP-Angaben). Wer das Tool in eine Sicht nimmt, nimmt genau diese eine
+  Ansicht mit; ein Tool, dessen Ansicht sich nicht lesen lässt, wird nicht
+  freigegeben. Liefert der Server später einen anderen Inhalt, geht nichts
+  davon an den Client (Messzeile `ui_changed`), und nach dem nächsten
+  Katalog-Lesen sind Ansicht **und Tool** gesperrt, bis jemand das Tool
+  bestätigt — das bestätigt die neue Ansicht mit. Ins festgehaltene Tool
+  kommt nur `_meta.ui` (`resourceUri`, `visibility`), keine anderen
+  `_meta`-Angaben des Herstellers.
 
 ## Der festgehaltene Text
 

@@ -37,7 +37,8 @@ KIND_WORDS = {"tool": "Tool", "resource": "Resource", "template": "Resource-Vorl
 # und der Inhalt geht das Gateway nichts an.
 FIELDS = {
     "tool": ("name", "title", "description", "inputSchema", "outputSchema", "annotations"),
-    "resource": ("uri", "name", "title", "description", "mimeType", "annotations"),
+    "resource": ("uri", "name", "title", "description", "mimeType", "annotations",
+                 "content_sha256", "_meta"),
     "template": ("uriTemplate", "name", "title", "description", "mimeType", "annotations"),
     "prompt": ("name", "title", "description", "arguments"),
 }
@@ -51,8 +52,82 @@ MAX_BOUND_VALUES = 200
 MAX_GLOB = 200
 
 
+UI_MIME = "text/html;profile=mcp-app"
+UI_TOOL_KEYS = ("resourceUri", "visibility")
+UI_RESOURCE_KEYS = ("csp", "permissions", "domain", "prefersBorder")
+
+
+def tool_ui(raw):
+    """`_meta.ui` eines Tools (MCP Apps, RFC-0075), nur resourceUri und visibility -- oder None.
+
+    Die alte flache Form `_meta["ui/resourceUri"]` wird gelesen und in die neue
+    übersetzt. Andere `_meta`-Angaben des Herstellers gehören nicht zum Text,
+    der festgehalten wird: Sonst kippte jede Freigabe, wenn ein Server ein
+    Feld ergänzt, das niemand liest."""
+    meta = raw.get("_meta") if isinstance(raw.get("_meta"), dict) else {}
+    ui = meta.get("ui") if isinstance(meta.get("ui"), dict) else {}
+    out = {k: ui[k] for k in UI_TOOL_KEYS if k in ui}
+    if "resourceUri" not in out and isinstance(meta.get("ui/resourceUri"), str):
+        out["resourceUri"] = meta["ui/resourceUri"]
+    uri = out.get("resourceUri")
+    if not (isinstance(uri, str) and uri.startswith("ui://")):
+        return None
+    vis = out.get("visibility")
+    if vis is not None and not (isinstance(vis, list) and set(vis) <= {"model", "app"} and vis):
+        out.pop("visibility")
+    return out
+
+
 def doc_of(kind, raw):
-    return {f: raw[f] for f in FIELDS[kind] if f in raw}
+    doc = {f: raw[f] for f in FIELDS[kind] if f in raw}
+    if kind == "tool":
+        ui = tool_ui(raw)
+        if ui:
+            doc["_meta"] = {"ui": ui}
+    return doc
+
+
+def ui_view_entry(uri, result):
+    """Aus der Antwort auf resources/read einer Ansicht den Katalogeintrag (RFC-0075 D3).
+
+    Festgehalten wird der INHALT (SHA-256 über Text bzw. Bytes): bei einer
+    Ansicht ist der Inhalt Code. Dazu MIME und die CSP-Angaben aus `_meta.ui`.
+    Gibt (eintrag, None) oder (None, Satz) zurück."""
+    import base64
+    import hashlib
+    contents = (result or {}).get("contents") if isinstance(result, dict) else None
+    hit = next((c for c in contents or [] if isinstance(c, dict) and c.get("uri") == uri), None)
+    if hit is None and contents and isinstance(contents[0], dict):
+        hit = contents[0]
+    if hit is None:
+        return None, f"Die Ansicht {uri} lieferte keinen Inhalt."
+    if (hit.get("mimeType") or "").replace(" ", "") != UI_MIME:
+        return None, f"Die Ansicht {uri} ist kein {UI_MIME} (sondern {hit.get('mimeType') or 'ohne Typ'})."
+    if isinstance(hit.get("text"), str):
+        body = hit["text"].encode("utf-8")
+    elif isinstance(hit.get("blob"), str):
+        try:
+            body = base64.b64decode(hit["blob"], validate=True)
+        except ValueError:
+            return None, f"Die Ansicht {uri} hat einen kaputten blob."
+    else:
+        return None, f"Die Ansicht {uri} hat weder text noch blob."
+    meta = hit.get("_meta") if isinstance(hit.get("_meta"), dict) else {}
+    ui = meta.get("ui") if isinstance(meta.get("ui"), dict) else {}
+    entry = {"uri": uri, "name": uri, "mimeType": UI_MIME,
+             "content_sha256": hashlib.sha256(body).hexdigest(), "size": len(body)}
+    ui = {k: ui[k] for k in UI_RESOURCE_KEYS if k in ui}
+    if ui:
+        entry["_meta"] = {"ui": ui}
+    return entry, None
+
+
+def ui_content_matches(doc, result):
+    """Stimmt der gelieferte Inhalt einer Ansicht mit dem festgehaltenen überein?"""
+    if "content_sha256" not in doc:
+        return True
+    entry, _ = ui_view_entry(doc.get("uri", ""), result)
+    return bool(entry) and entry["content_sha256"] == doc["content_sha256"]
 
 
 def source_of(kind, doc):
@@ -297,6 +372,9 @@ def shaped(kind, item, version):
             # nicht der Hinweis des Herstellers. Ein Chat fragt vor allem, was nicht
             # `read` ist (RFC-0074 D6).
             out["_meta"] = {EFFECT_META: item["effect"]}
+            # 0.8.0 (RFC-0075): die freigegebene Ansicht, wie festgehalten.
+            if isinstance((doc.get("_meta") or {}).get("ui"), dict):
+                out["_meta"]["ui"] = doc["_meta"]["ui"]
         return out
     if kind == "prompt":
         out = {"name": item["name"]}
@@ -309,6 +387,8 @@ def shaped(kind, item, version):
         return out
     field = "uri" if kind == "resource" else "uriTemplate"
     out = {field: item["name"], "name": doc.get("name") or item["name"]}
+    if kind == "resource" and new and isinstance((doc.get("_meta") or {}).get("ui"), dict):
+        out["_meta"] = {"ui": doc["_meta"]["ui"]}
     if desc:
         out["description"] = desc
     for f in ("mimeType", "annotations"):
