@@ -8,7 +8,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin vorgaenge
 
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
-COPY app.py store.py authz_client.py /srv/
+COPY app.py store.py authz_client.py mcp_door.py /srv/
 
 USER 10001
 EXPOSE 8000

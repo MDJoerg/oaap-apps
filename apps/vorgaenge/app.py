@@ -50,10 +50,11 @@ import urllib.error
 import urllib.request
 
 import authz_client
+import mcp_door
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   NEXT, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
+                   NEXT, OPEN, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -375,6 +376,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "ok", "text/plain")
         if p == "/platform/feedback/session":
             return self.feedback_session()
+        if p == "/mcp":
+            return self.send(405, "", "text/plain")
         if self.is_partner():
             return self.send(403, page("Nur Übergaben", "<p>Dieser Zugang liefert Übergaben, sonst nichts.</p>"))
         who = self.who()
@@ -413,6 +416,8 @@ class Handler(BaseHTTPRequestHandler):
         who = self.who()
         if not who:
             return self.send(401, "")
+        if p == "/mcp":
+            return self.mcp_post(who)
         if not self.same_origin():
             return self.send(403, page("Abgelehnt", "<p>Dieses Formular kam nicht von dieser Seite.</p>"))
         try:
@@ -431,6 +436,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, page("Nicht möglich", f"<p class=err>{esc(str(e))}</p>"
                                        "<p><a href='javascript:history.back()'>Zurück</a></p>"))
         return self.send(404, "")
+
+    # --- die MCP-Tür (0.4.0, RFC-0073): dieselbe Person, dieselben Regeln wie die Seite
+    def mcp_post(self, who):
+        # Nur JSON: ein fremdes Formular aus dem Browser (ohne CORS-Vorabfrage) kommt
+        # so nicht durch; die Tür der Plattform schickt immer application/json.
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self.json(415, {"error": "MCP spricht JSON."})
+        try:
+            msg = json.loads(self.body() or b"{}")
+        except ValueError:
+            return self.json(400, {"jsonrpc": "2.0", "id": None,
+                                   "error": {"code": -32700, "message": "Parse error"}})
+        out = mcp_door.answer(self.store, who, MCP_RULES, msg)
+        if out is None:
+            return self.send(202, "", "text/plain")
+        return self.json(200, out)
 
     # --- der Knopf (RFC-0061 §3.1)
     def attested(self):
@@ -910,6 +931,13 @@ Betreff und Text.</p>
         else:
             return self.send(404, "")
         return self.redirect(f"/v/{quote(c['number'])}")
+
+
+MCP_RULES = mcp_door.Rules(
+    can_see=can_see, can_comment=can_comment, refused=Refused, kinds=KINDS,
+    kind_label=KIND_LABEL, status_label=STATUS_LABEL, default_queue=DEFAULT_QUEUE,
+    open_statuses=OPEN,
+    attest=lambda who: {"app": APP_ID, "version": VERSION, "user_id": who.id, "via": "mcp"})
 
 
 def main():

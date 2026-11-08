@@ -196,6 +196,25 @@ Absender wird sie ein Eintrag „Antwort des Partners“, und der Vorgang
 geht von `übergeben` auf `beantwortet`. Antworten darf nur der Partner,
 an den übergeben wurde.
 
+## MCP-Tür (seit 0.4.0, RFC-0073/RFC-0074)
+
+Unter `/mcp` (Manifest `mcp: {path: /mcp}`) ist Vorgänge eine MCP-Quelle für
+das MCP-Gateway des Mandanten — und damit für den Chat. Die Tür antwortet als
+die Person, die die Plattform durchreicht, mit **denselben Prüfungen wie die
+Seite** (`can_see`, `can_comment`, Rechte aus „Rollen & Rechte“); einen
+zweiten Regelsatz gibt es nicht.
+
+| Werkzeug | Wirkung | Was |
+|---|---|---|
+| `list_cases` | lesen | von mir gemeldete und die meiner Bereiche (Standard: offene) |
+| `get_case` | lesen | ein Vorgang mit Verlauf, wie die Seite ihn zeigt — ohne die technischen Angaben aus dem Browser |
+| `list_queues` | lesen | die Bereiche (für `create_case`) |
+| `create_case` | schreiben | einen Vorgang melden; Herkunft `via: mcp` vermerkt |
+| `comment_case` | schreiben | kommentieren, wer es auf der Seite darf |
+
+Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
+kein Formular aus einem fremden Browser-Fenster.
+
 ## Was die App nicht tut (noch)
 
 - **Keine Benachrichtigung.** Der Posteingang ist die Übersicht.
@@ -231,6 +250,7 @@ Ein Vorgang wird nicht gelöscht, sondern geschlossen.
 
 ```bash
 python3 apps/vorgaenge/test_app.py
+python3 apps/vorgaenge/test_mcp.py
 python3 apps/vorgaenge/test_stage2.py   # zwei Mandanten, Übergabe und Antwort, Backend
 ```
 
