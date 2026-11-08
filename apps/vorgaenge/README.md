@@ -212,6 +212,8 @@ zweiten Regelsatz gibt es nicht.
 | `create_case` | schreiben | einen Vorgang melden; Herkunft `via: mcp` vermerkt |
 | `comment_case` | schreiben | kommentieren, wer es auf der Seite darf |
 
+**Seit 0.5.0** bringt `get_case` eine Ansicht mit (MCP Apps, `ui://vorgaenge/case`, RFC-0075): eine Karte des Vorgangs mit Verlauf und Kommentarfeld, das über den Chat `comment_case` ruft. Sie lädt nichts von außen (leere CSP) und setzt Daten nur als Text ein. `resources/templates/list` antwortet leer.
+
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 

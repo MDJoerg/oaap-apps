@@ -10,9 +10,20 @@ Angaben aus dem Browser zeigt sie gar nicht.
 JSON-RPC über Streamable HTTP, nur JSON-Antworten, keine Sitzung.
 """
 import json
+import os
 
 MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 MAX_LIST = 50
+
+# 0.5.0 (MCP Apps, RFC-0075): get_case bringt eine Ansicht mit -- eine Karte des
+# Vorgangs mit Kommentarfeld. Sie lädt nichts von außen (CSP leer) und setzt
+# Daten nur als Text ein. Ein MCP-Gateway hält ihren Inhalt fest.
+UI_MIME = "text/html;profile=mcp-app"
+CASE_VIEW = "ui://vorgaenge/case"
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "views", "case.html"),
+          encoding="utf-8") as _f:
+    CASE_VIEW_HTML = _f.read()
+VIEWS = {CASE_VIEW: CASE_VIEW_HTML}
 
 TOOLS = [
     {"name": "list_cases",
@@ -27,7 +38,8 @@ TOOLS = [
      "description": "Ein Vorgang mit Verlauf (Kommentare, Statuswechsel), z. B. 2026-0042.",
      "inputSchema": {"type": "object", "required": ["number"],
                      "properties": {"number": {"type": "string"}}},
-     "annotations": {"readOnlyHint": True}},
+     "annotations": {"readOnlyHint": True},
+     "_meta": {"ui": {"resourceUri": CASE_VIEW}}},
     {"name": "list_queues",
      "description": "Die Bereiche des Mandanten (für create_case).",
      "inputSchema": {"type": "object", "properties": {}},
@@ -142,12 +154,25 @@ def answer(store, who, rules, msg):
     if method == "initialize":
         asked = params.get("protocolVersion")
         return ok({"protocolVersion": asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
-                   "capabilities": {"tools": {}},
+                   "capabilities": {"tools": {}, "resources": {}},
                    "serverInfo": {"name": "vorgaenge", "version": rules.attest(who)["version"]}})
     if method == "ping":
         return ok({})
     if method == "tools/list":
         return ok({"tools": TOOLS})
+    if method == "resources/list":
+        return ok({"resources": [{"uri": CASE_VIEW, "name": "Vorgang als Karte",
+                                  "mimeType": UI_MIME}]})
+    if method == "resources/templates/list":
+        # Gehört zur Fähigkeit `resources`; ohne Antwort hielt ein Gateway den ganzen
+        # Katalog für unlesbar (gemessen 2026-11-08 an mcp-gateway 0.8.0).
+        return ok({"resourceTemplates": []})
+    if method == "resources/read":
+        uri = params.get("uri")
+        if uri not in VIEWS:
+            return err(-32002, "Resource not found")
+        return ok({"contents": [{"uri": uri, "mimeType": UI_MIME, "text": VIEWS[uri],
+                                 "_meta": {"ui": {"csp": {}, "prefersBorder": True}}}]})
     if method == "tools/call":
         name = params.get("name")
         if name not in {t["name"] for t in TOOLS}:

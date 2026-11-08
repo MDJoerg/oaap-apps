@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vorgang</title>
+<style>
+:root{--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--bg:#fff;--chip:#eef2ff;--accent:#1d4ed8;--err:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--ink:#e5e7eb;--muted:#9ca3af;--line:#374151;--bg:#1f2937;--chip:#1e3a8a;--accent:#93c5fd;--err:#fca5a5}}
+*{box-sizing:border-box}
+body{margin:0;padding:.8rem;font:14px/1.45 system-ui,sans-serif;color:var(--ink);background:var(--bg)}
+h1{font-size:1.05rem;margin:.1rem 0 .3rem}
+.meta{color:var(--muted);font-size:.85rem}
+.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:.05rem .55rem;margin-right:.3rem;font-size:.8rem}
+.desc{white-space:pre-wrap;margin:.6rem 0}
+ol{list-style:none;padding:0;margin:.6rem 0;border-top:1px solid var(--line)}
+li{padding:.35rem 0;border-bottom:1px solid var(--line)}
+li .who{color:var(--muted);font-size:.8rem;display:block}
+li .text{white-space:pre-wrap}
+textarea{width:100%;font:inherit;padding:.4rem;border:1px solid var(--line);border-radius:.3rem;background:transparent;color:var(--ink)}
+button{font:inherit;padding:.35rem .8rem;border-radius:.3rem;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;margin-top:.3rem}
+button:disabled{opacity:.5}
+.err{color:var(--err)} .hidden{display:none}
+</style>
+</head>
+<body>
+<div id="wait" class="meta">Vorgang wird geladen …</div>
+<div id="card" class="hidden">
+  <div class="meta"><span id="number"></span></div>
+  <h1 id="title"></h1>
+  <div><span class="chip" id="status"></span><span class="chip" id="kind"></span><span class="chip" id="queue"></span></div>
+  <div class="meta" id="by"></div>
+  <div class="desc" id="desc"></div>
+  <ol id="history"></ol>
+  <form id="f"><textarea id="t" rows="2" maxlength="10000" placeholder="Kommentar …"></textarea>
+  <button id="send">Kommentieren</button> <span id="note" class="meta"></span></form>
+</div>
+<div id="fail" class="err hidden"></div>
+<script>
+/* Ansicht der Vorgänge (MCP Apps, io.modelcontextprotocol/ui, Fassung 2026-01-26).
+ * Spricht nur mit dem Host (window.parent) per JSON-RPC; lädt nichts von außen;
+ * setzt Daten ausschließlich als Text ein (textContent), nie als HTML. */
+"use strict";
+let nextId = 1, current = null;
+const pending = new Map();
+const $ = id => document.getElementById(id);
+
+function send(msg) { window.parent.postMessage(msg, "*"); }
+function request(method, params) {
+  const id = nextId++;
+  send({jsonrpc: "2.0", id, method, params});
+  return new Promise((ok, no) => pending.set(id, {ok, no}));
+}
+function notify(method, params) { send({jsonrpc: "2.0", method, params}); }
+
+window.addEventListener("message", ev => {
+  if (ev.source !== window.parent) return;
+  const m = ev.data;
+  if (!m || m.jsonrpc !== "2.0") return;
+  if (m.id !== undefined && pending.has(m.id) && !m.method) {
+    const p = pending.get(m.id); pending.delete(m.id);
+    m.error ? p.no(new Error(m.error.message || "Fehler")) : p.ok(m.result);
+    return;
+  }
+  if (m.method === "ui/notifications/tool-result") show(m.params);
+  if (m.method === "ui/notifications/tool-cancelled") fail("Abgebrochen: " + ((m.params || {}).reason || ""));
+  if (m.method === "ui/resource-teardown" && m.id !== undefined) send({jsonrpc: "2.0", id: m.id, result: {}});
+});
+
+function textOf(result) {
+  const c = ((result || {}).content || []).find(x => x && x.type === "text");
+  return c ? c.text : "";
+}
+function fail(t) { $("wait").classList.add("hidden"); $("fail").textContent = t; $("fail").classList.remove("hidden"); size(); }
+
+function show(result) {
+  if (!result || result.isError) { fail(textOf(result) || "Der Vorgang ließ sich nicht laden."); return; }
+  let c;
+  try { c = JSON.parse(textOf(result)); } catch (e) { fail("Unerwartete Antwort."); return; }
+  current = c;
+  $("number").textContent = c.number || "";
+  $("title").textContent = c.title || "";
+  $("status").textContent = c.status || "";
+  $("kind").textContent = c.kind || "";
+  $("queue").textContent = c.queue || "";
+  $("by").textContent = "gemeldet von " + (c.reported_by || "?") + " · zuletzt " + (c.updated || "");
+  $("desc").textContent = c.description || "";
+  const ol = $("history"); ol.textContent = "";
+  for (const h of c.history || []) {
+    const li = document.createElement("li");
+    const who = document.createElement("span"); who.className = "who";
+    who.textContent = (h.at || "") + " · " + (h.by || "") + " · " + (h.type || "");
+    const tx = document.createElement("span"); tx.className = "text"; tx.textContent = h.text || "";
+    li.append(who, tx); ol.appendChild(li);
+  }
+  $("wait").classList.add("hidden"); $("card").classList.remove("hidden");
+  size();
+}
+
+$("f").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const text = $("t").value.trim();
+  if (!text || !current) return;
+  $("send").disabled = true; $("note").textContent = "wartet auf deine Zustimmung im Chat …";
+  try {
+    const r = await request("tools/call", {name: "comment_case", arguments: {number: current.number, text}});
+    if (r && r.isError) throw new Error(textOf(r));
+    $("t").value = ""; $("note").textContent = "Kommentar gespeichert.";
+    show(await request("tools/call", {name: "get_case", arguments: {number: current.number}}));
+  } catch (e) {
+    $("note").textContent = "Nicht gespeichert: " + e.message;
+  } finally { $("send").disabled = false; size(); }
+});
+
+function size() {
+  notify("ui/notifications/size-changed", {width: document.documentElement.scrollWidth,
+                                           height: document.documentElement.scrollHeight});
+}
+new ResizeObserver(size).observe(document.body);
+
+(async () => {
+  try {
+    await request("ui/initialize", {protocolVersion: "2026-01-26",
+                                    appCapabilities: {availableDisplayModes: ["inline"]},
+                                    clientInfo: {name: "vorgaenge-karte", version: "1"}});
+    notify("ui/notifications/initialized", {});
+  } catch (e) { fail("Der Chat hat die Ansicht nicht angenommen."); }
+})();
+</script>
+</body>
+</html>

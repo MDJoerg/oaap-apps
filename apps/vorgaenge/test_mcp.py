@@ -165,6 +165,26 @@ st, b = raw("POST", {"X-OAAP-User-Id": "m1", "X-OAAP-Roles": "user", "X-OAAP-Use
             {"jsonrpc": "2.0", "id": 99, "method": "tools/call",
              "params": {"name": "list_cases", "arguments": {}}})
 ok("ein Partner-Zugang bekommt die Tür nicht (403, wie jede Seite außer /handover)", st == 403, (st, b))
+st, d = rpc("anna", "resources/read", {"uri": "ui://vorgaenge/case"})
+c = ((d.get("result") or {}).get("contents") or [{}])[0]
+ok("0.5.0: get_case nennt die Ansicht ui://vorgaenge/case", tools["get_case"].get("_meta") ==
+   {"ui": {"resourceUri": "ui://vorgaenge/case"}}, tools["get_case"])
+ok("0.5.0: resources/read liefert sie als text/html;profile=mcp-app mit leerer CSP",
+   c.get("mimeType") == "text/html;profile=mcp-app" and c.get("text", "").startswith("<!doctype html>")
+   and c.get("_meta") == {"ui": {"csp": {}, "prefersBorder": True}}, c)
+html = c.get("text", "")
+ok("0.5.0: die Ansicht lädt nichts von außen und setzt Daten nie als HTML ein",
+   "http://" not in html and "https://" not in html and "innerHTML" not in html
+   and "<script src" not in html and "textContent" in html, None)
+ok("0.5.0: sie spricht das Protokoll der Fassung 2026-01-26",
+   all(x in html for x in ('"ui/initialize"', '"2026-01-26"', '"ui/notifications/initialized"',
+                           '"ui/notifications/tool-result"', '"ui/notifications/size-changed"',
+                           '"tools/call"')), None)
+st, d = rpc("anna", "resources/templates/list")
+ok("resources/templates/list antwortet (leer) -- gehört zur Fähigkeit resources",
+   (d.get("result") or {}).get("resourceTemplates") == [], d)
+st, d = rpc("anna", "resources/read", {"uri": "ui://vorgaenge/anderes"})
+ok("eine andere ui://-URI: nicht gefunden", (d.get("error") or {}).get("code") == -32002, d)
 st, d = rpc("anna", "frobnicate")
 ok("unbekannte Methode: -32601", d.get("error", {}).get("code") == -32601, d)
 err, r = tool("anna", "list_queues")
