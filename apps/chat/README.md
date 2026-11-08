@@ -1,7 +1,9 @@
-# Chat — der Plattform-Chat, erste Fassung (RFC-0074 Stufe 2)
+# Chat — der Plattform-Chat (RFC-0074 Stufen 2 und 3)
 
-Ein Assistent, die Werkzeuge **einer** Sicht des MCP-Gateways, ein Modell
-über das KI-Gateway, der Verlauf als Datei. Das ist I-41 Schritt 4 in
+Assistenten mit den Werkzeugen je einer Sicht des MCP-Gateways, ein Modell
+über das KI-Gateway, der Verlauf als Datei. Seit 0.2.0 legen die Leute
+Assistenten selbst an — privat, für ein Team oder (als `tenant_admin`) für
+den ganzen Mandanten. Das ist I-41 Schritt 4 in
 seiner kleinsten Form: Ein Chat ist eine App, und der Assistent hat keine
 Rechte.
 
@@ -32,6 +34,22 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
   JSON-Datei je Gespräch. Nur diese Person liest, schreibt und löscht ihn.
   Er enthält, was die Werkzeuge geantwortet haben — also Daten der
   Person; eine Sicherung von `/data` enthält sie auch.
+- **Wer welchen Assistenten sieht (D4).** *privat*: nur die Person, die ihn
+  angelegt hat. *Team*: wer im Team die Rolle „Assistenten des Teams
+  benutzen“ (`assistant.use`) hat; pflegen darf ihn, wer „… pflegen“
+  (`assistant.manage`) hat. *Mandant*: alle, angelegt nur von
+  `tenant_admin`. Geprüft wird bei **jeder Runde** — wem das Recht entzogen
+  wird, dessen nächste Runde läuft nicht mehr. Sind die Berechtigungen nicht
+  lesbar, sieht niemand einen Team-Assistenten.
+- **Die Assistenten** liegen in `/data/assistants.json`, im Austauschformat
+  von `oaap.ai.assistants` — Export und Import auf der Seite
+  („Assistenten …“). Ein Import gilt ganz oder gar nicht.
+- **/Befehle:** Hat ein Assistent `commands: true`, bietet der Chat die
+  Prompts seiner Sicht als `/name …` an (`/wochenbericht pA` oder
+  `/wochenbericht projekt=pA`); der Text des Prompts wird die Nachricht.
+- **Zustimmung im Gateway:** Ein bestätigter Aufruf trägt
+  `X-OAAP-Confirmed: yes`; das MCP-Gateway (ab 0.7.2) schreibt es in die
+  Messzeile (`confirmed`).
 - **Grenzen:** höchstens sechs Modellzüge je Nachricht, ein Modellzug
   höchstens `CHAT_MODEL_TIMEOUT` Sekunden (240).
 
@@ -54,7 +72,18 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
    sudo oaap app destination bind <mandant>-chat ki --tenant <mandant>
    ```
 
-3. Der Assistent als JSON in `CHAT_ASSISTANT` (Format `oaap.ai.assistants` 0.1):
+3. Rollen im Mandanten („Rollen & Rechte“ oder `oaap authz`): aus den
+   Vorlagen `assistant_user` und `assistant_keyuser` des Chats Rollen
+   bauen und Personen mit dem Team als Kontext zuordnen:
+
+   ```sh
+   oaap authz role-add --tenant <m> --app chat --template assistant_keyuser --name "Chat: pflegen"
+   oaap authz collection-add --tenant <m> --name "Chat Keyuser" --role "Chat: pflegen"
+   oaap authz assign --tenant <m> --user <m>.anna --collection "Chat Keyuser" --context team=service
+   ```
+
+4. Optional ein Assistent für alle aus der Konfiguration, `CHAT_ASSISTANT`
+   (Format `oaap.ai.assistants`); ihn ändert niemand im Chat:
 
    ```json
    {"id": "projekte", "title": "Projekt-Assistent", "view": "kp-i",
@@ -66,21 +95,21 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
    Ein Feld, das nach einem Recht aussieht (`token`, `roles`, …), macht
    den Assistenten ungültig; dann läuft keine Runde.
 
-4. `CHAT_MODEL_EXTRA` (optional): Felder, die jeder Modellzug zusätzlich
+5. `CHAT_MODEL_EXTRA` (optional): Felder, die jeder Modellzug zusätzlich
    trägt, z. B. `{"reasoning": {"effort": "none"}}` für `qwen3:8b` auf
    einer CPU (RFC-0074 §6 Befund 5).
 
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 37 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 68 Prüfpunkte gegen eine nachgebaute Plattform
 ```
 
-Die Messung am Knoten mit echtem Modell:
-`oaap-lab/assistent-probe/messung_stufe2.py`.
+Die Messungen am Knoten mit echtem Modell:
+`oaap-lab/assistent-probe/messung_stufe2.py` (23/23) und
+`messung_stufe3.py` (26/26).
 
-## Noch nicht (Stufe 3)
+## Noch nicht
 
-Mehrere Assistenten und ihre Sichtbarkeit nach Kontext (D4), `/commands`
-aus den Prompts der Sicht, das Vermerken der Zustimmung im Gateway
-(§5.6), Streaming der Antwort, Anhänge.
+Streaming der Antwort, Anhänge, Formulare, Sprache, mobile Ansicht als
+eigene Oberfläche; Kontexte außer `team`.

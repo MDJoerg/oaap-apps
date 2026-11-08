@@ -1,18 +1,21 @@
-"""Chat -- die erste Fassung des Plattform-Chats (RFC-0074 Stufe 2, I-41 Schritt 4).
+"""Chat -- der Plattform-Chat (RFC-0074 Stufen 2 und 3, I-41 Schritt 4).
 
-Ein Assistent (oaap.ai.assistants 0.1), die Werkzeuge EINER Sicht des
+Assistenten (oaap.ai.assistants 0.1) mit den Werkzeugen je einer Sicht des
 MCP-Gateways, ein Modell über das KI-Gateway, der Verlauf als Datei.
 
     Browser --Sitzung--> Chat               (die Plattform gibt die Zusicherung an DIESE Instanz)
     Chat --via-Tür auf der eigenen Seite--> MCP-Gateway --> App      (als die Person, Verfahren A)
     Chat --Destination ki--> KI-Gateway --> Modell                   (der Schlüssel bleibt auf der Plattform)
 
-- Der Assistent hat keine Rechte (D1): jeder Werkzeugaufruf läuft als die
+- Ein Assistent hat keine Rechte (D1): jeder Werkzeugaufruf läuft als die
   Person, die gerade schreibt; die Sicht begrenzt die Werkzeuge, die App die Daten.
+- Wer welchen Assistenten sieht und pflegt, sagt store.py (D4).
 - Der Browser treibt die Schleife (D7): jede Runde ist eine eigene Anfrage
   mit frischer Zusicherung. Die App speichert keine Zusicherung (§5.3) und
   hat keinen Rückfall auf einen eigenen Zugang (§5.2).
-- Ein Werkzeug, das schreibt, läuft erst nach Bestätigung, jedes Mal (D6).
+- Ein Werkzeug, das nicht liest, läuft erst nach Bestätigung, jedes Mal (D6);
+  dem Gateway sagt der Chat das mit `X-OAAP-Confirmed: yes` (§5.6).
+- `/name …` holt einen Prompt der Sicht (MCP prompts/get) als Nachricht.
 - Der Verlauf liegt unter /data, je Person ein Ordner; nur sie liest ihn.
 
 Nur Standardbibliothek.
@@ -21,6 +24,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sys
 import threading
 import time
@@ -29,10 +33,11 @@ import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import assistants
+import authz_client
 import loop
+import store
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -46,35 +51,42 @@ MAX_BODY = 64_000
 MAX_TEXT = 4_000
 PERSON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 CONV = re.compile(r"^[a-z0-9]{12}$")
+COMMAND = re.compile(r"^/([A-Za-z0-9_.-]{1,64})(?:\s+(.*))?$", re.S)
 WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
 
-DEFAULT_ASSISTANT = {
+# Was ein Assistent aus der Konfiguration erbt, wenn CHAT_ASSISTANT es nicht nennt.
+DEFAULTS = {
     "id": "assistent", "title": "Assistent",
     "greeting": "Hallo! Ich kann für dich in den angebundenen Anwendungen nachsehen.",
     "system": ("Du bist der Assistent eines kleinen Betriebs. Antworte kurz und auf Deutsch. "
                "Daten kennst du nur aus den Werkzeugen -- erfinde nichts. Fehlt für ein "
                "Werkzeug eine Angabe, frag nach, statt sie zu raten."),
-    "model": "standard", "view": "chat",
-    "visibility": {"scope": "tenant"}, "owner": "tenant", "commands": False,
+    "model": "standard", "visibility": {"scope": "tenant"}, "owner": "tenant", "commands": False,
 }
 
 
-def load_assistant():
+def configured_assistant():
+    """(Assistent, Fehler) aus CHAT_ASSISTANT -- oder None, wenn nichts gesetzt ist."""
     raw = (os.environ.get("CHAT_ASSISTANT") or "").strip()
+    if not raw:
+        return None
     try:
-        a = dict(DEFAULT_ASSISTANT, **json.loads(raw)) if raw else dict(DEFAULT_ASSISTANT)
+        a = dict(DEFAULTS, **json.loads(raw))
     except (ValueError, TypeError):
-        return dict(DEFAULT_ASSISTANT), ["CHAT_ASSISTANT ist kein JSON-Objekt."]
-    return a, assistants.check(a)
+        return dict(DEFAULTS), ["CHAT_ASSISTANT ist kein JSON-Objekt."]
+    return a, store.problems(a)
 
 
-ASSISTANT, ASSISTANT_ERRORS = load_assistant()
+CONFIGURED = configured_assistant()
+SETUP_ERRORS = list(CONFIGURED[1]) if CONFIGURED else []
 try:
     MODEL_EXTRA = json.loads(os.environ.get("CHAT_MODEL_EXTRA") or "{}")
     assert isinstance(MODEL_EXTRA, dict)
 except (ValueError, AssertionError):
     MODEL_EXTRA = {}
-    ASSISTANT_ERRORS.append("CHAT_MODEL_EXTRA ist kein JSON-Objekt.")
+    SETUP_ERRORS.append("CHAT_MODEL_EXTRA ist kein JSON-Objekt.")
+STORE = store.Store(os.path.join(DATA, "assistants.json"), CONFIGURED)
+AUTHZ = authz_client.Authz(app=None)
 
 
 class Stop(Exception):
@@ -132,7 +144,7 @@ def list_convs(person):
             c = load_conv(person, n[:-5])
             if c:
                 out.append({"id": c["id"], "title": c.get("title") or "Neues Gespräch",
-                            "updated": c.get("updated", "")})
+                            "assistant": c.get("assistant"), "updated": c.get("updated", "")})
     return sorted(out, key=lambda c: c["updated"], reverse=True)
 
 
@@ -145,7 +157,7 @@ def now():
 _MCP, _MCP_GUARD = {}, threading.Lock()     # (Person, Gateway, Sicht) -> Sitzungs-ID, nie eine Zusicherung
 
 
-def gateways():
+def gateway_for(name):
     if not (CLIENT_KEY and CLIENT_URL):
         raise Stop("Diese Instanz ist kein MCP-Client (Manifest ohne mcp_client, oder eine "
                    "Generalprobe).")
@@ -159,7 +171,6 @@ def gateways():
         raise Stop(f"Gateway-Liste nicht gelesen: {type(exc).__name__}") from None
     if not isinstance(doc, dict) or doc.get("v") != 1 or not isinstance(doc.get("gateways"), list):
         raise Stop("Die Gateway-Liste hat eine unbekannte Form.")
-    name = ASSISTANT.get("gateway") or ""
     gws = doc["gateways"]
     hit = [g for g in gws if g.get("name") == name] if name else (gws if len(gws) == 1 else [])
     if not hit:
@@ -168,11 +179,13 @@ def gateways():
     return hit[0]
 
 
-def mcp_post(url, msg, session, assertion):
+def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False):
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
                "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion,
-               "X-OAAP-Assistant": ASSISTANT["id"]}
+               "X-OAAP-Assistant": assistant_id}
+    if confirmed:
+        headers["X-OAAP-Confirmed"] = "yes"
     if session:
         headers["Mcp-Session-Id"] = session
         headers["MCP-Protocol-Version"] = MCP_VERSION
@@ -203,38 +216,40 @@ def mcp_post(url, msg, session, assertion):
 
 
 class McpWay:
-    """Die Werkzeuge der Sicht des Assistenten, als die Person dieser Anfrage."""
+    """Die Sicht eines Assistenten, als die Person dieser Anfrage."""
 
-    def __init__(self, person, assertion):
-        gw = gateways()
-        self.url = f'{gw["via"]}/{ASSISTANT["view"]}'
-        self.key = (person, gw["name"], ASSISTANT["view"])
+    def __init__(self, person, assertion, assistant):
+        gw = gateway_for(assistant.get("gateway") or "")
+        self.url = f'{gw["via"]}/{assistant["view"]}'
+        self.key = (person, gw["name"], assistant["view"])
         self.assertion = assertion
+        self.aid = assistant["id"]
 
     def _open(self):
         status, sess, msgs = mcp_post(self.url, {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": MCP_VERSION, "capabilities": {},
                        "clientInfo": {"name": "oaap-chat", "version": VERSION}}},
-            "", self.assertion)
+            "", self.assertion, self.aid)
         if status == 401:
             raise Stop("Die Plattform hat dich am MCP-Gateway nicht erkannt (401). Lade die "
                        "Seite neu und versuche es noch einmal.", 401)
         if status != 200 or not sess:
             raise Stop(f"Das MCP-Gateway hat keine Sitzung eröffnet ({status}).")
         mcp_post(self.url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sess,
-                 self.assertion)
+                 self.assertion, self.aid)
         with _MCP_GUARD:
             _MCP[self.key] = sess
         return sess
 
-    def rpc(self, method, params):
+    def rpc(self, method, params, confirmed=False):
         with _MCP_GUARD:
             sess = _MCP.get(self.key)
         for attempt in (0, 1):
             sess = sess or self._open()
             status, _, msgs = mcp_post(self.url, {"jsonrpc": "2.0", "id": 2, "method": method,
-                                                  "params": params}, sess, self.assertion)
+                                                  "params": params}, sess, self.assertion,
+                                       self.aid, confirmed)
             if status in (400, 404) and attempt == 0:     # Sitzung unbekannt oder abgelaufen
                 sess = None
                 continue
@@ -245,29 +260,44 @@ class McpWay:
             return msgs
         raise Stop("Das MCP-Gateway hat die Sitzung zweimal nicht angenommen.")
 
-    def tools(self):
-        for m in self.rpc("tools/list", {}):
+    def result(self, method, field):
+        for m in self.rpc(method, {}):
             if isinstance(m.get("result"), dict):
-                return m["result"].get("tools") or []
+                return m["result"].get(field) or []
             if "error" in m:
-                raise Stop("Das MCP-Gateway lehnte tools/list ab: "
+                raise Stop(f"Das MCP-Gateway lehnte {method} ab: "
                            + str((m["error"] or {}).get("message", "")))
-        raise Stop("Das MCP-Gateway hat keine Werkzeugliste geschickt.")
+        raise Stop(f"Das MCP-Gateway hat auf {method} nicht geantwortet.")
 
-    def call(self, name, args):
-        return loop.result_text(self.rpc("tools/call", {"name": name, "arguments": args}))
+    def tools(self):
+        return self.result("tools/list", "tools")
+
+    def prompts(self):
+        return self.result("prompts/list", "prompts")
+
+    def call(self, name, args, confirmed=False):
+        return loop.result_text(self.rpc("tools/call", {"name": name, "arguments": args},
+                                         confirmed))
+
+    def prompt(self, name, args):
+        for m in self.rpc("prompts/get", {"name": name, "arguments": args}):
+            if isinstance(m.get("result"), dict):
+                return m["result"].get("messages") or []
+            if "error" in m:
+                raise Stop(f"/{name}: " + str((m["error"] or {}).get("message", "abgelehnt")))
+        raise Stop(f"/{name}: keine Antwort.")
 
 
 # --------------------------------------------------------------- das Modell
 
-def ask_model(person_name, msgs, tools):
+def ask_model(assistant, person_name, msgs, tools):
     if not KI_URL:
         raise Stop("Keine Destination ki gebunden -- der Chat erreicht kein Modell.")
     d = datetime.now()
     today = WEEKDAYS[d.weekday()] + d.strftime(", %d.%m.%Y")
-    system = (ASSISTANT["system"] + f"\n\nHeute ist {today}. Du sprichst mit {person_name}. "
+    system = (assistant["system"] + f"\n\nHeute ist {today}. Du sprichst mit {person_name}. "
               "Werkzeuge, die etwas ändern, laufen erst, wenn die Person zustimmt.")
-    body = dict(MODEL_EXTRA, model=ASSISTANT["model"], stream=False,
+    body = dict(MODEL_EXTRA, model=assistant["model"], stream=False,
                 messages=[{"role": "system", "content": system}] + loop.for_model(msgs))
     body.setdefault("temperature", 0.2)
     if tools:
@@ -300,7 +330,51 @@ def ask_model(person_name, msgs, tools):
 
 # ---------------------------------------------------------------- eine Runde
 
-def step(person, person_name, assertion, conv, decision):
+def command_args(prompt, rest):
+    """`/name …` -> Argumente des Prompts: `a=1 b="zwei Worte"`, sonst der Rest für das eine."""
+    names = [a.get("name") for a in prompt.get("arguments") or [] if isinstance(a, dict)]
+    rest = (rest or "").strip()
+    if not rest:
+        return {}
+    try:
+        words = shlex.split(rest)
+    except ValueError:
+        words = rest.split()
+    if all("=" in w for w in words):
+        return dict(w.split("=", 1) for w in words)
+    if len(names) == 1:
+        return {names[0]: rest}
+    return dict(zip(names, words))
+
+
+def run_command(way, assistant, msgs, text):
+    """Ein Prompt der Sicht wird zu Nachrichten im Gespräch (MCP prompts/get, lesend)."""
+    m = COMMAND.match(text)
+    if not assistant.get("commands"):
+        raise Stop("Dieser Assistent hat keine /Befehle.", 400)
+    prompts = {p.get("name"): p for p in way.prompts() if isinstance(p, dict)}
+    if m.group(1) not in prompts:
+        raise Stop(f"/{m.group(1)} gibt es in dieser Sicht nicht. Vorhanden: "
+                   + (", ".join("/" + n for n in sorted(prompts)) or "keine") + ".", 400)
+    p = prompts[m.group(1)]
+    args = command_args(p, m.group(2))
+    missing = [a["name"] for a in p.get("arguments") or []
+               if isinstance(a, dict) and a.get("required") and a.get("name") not in args]
+    if missing:
+        raise Stop(f"/{p['name']} braucht noch: " + ", ".join(missing) + ".", 400)
+    added = 0
+    for pm in way.prompt(p["name"], args):
+        content = pm.get("content") if isinstance(pm, dict) else None
+        if isinstance(content, dict) and content.get("type") == "text" \
+                and pm.get("role") in ("user", "assistant"):
+            msgs.append({"role": pm["role"], "content": content.get("text", "")[:MAX_TEXT * 4],
+                         "command": p["name"], "at": now()})
+            added += 1
+    if not added:
+        raise Stop(f"/{p['name']} lieferte keinen Text.")
+
+
+def step(person, person_name, assertion, assistant, conv, decision):
     """Eine Runde: erst offene Werkzeugaufrufe (frische Zusicherung), dann ein Modellzug.
 
     Gibt den Zustand zurück: `confirm` (eine Bestätigung fehlt), `more` (das
@@ -323,8 +397,8 @@ def step(person, person_name, assertion, conv, decision):
         elif eff != "read" and not decision.get("ok"):
             result, note = loop.REFUSED, {"confirmed": False}
         else:
-            way = way or McpWay(person, assertion)
-            result = way.call(name, args)
+            way = way or McpWay(person, assertion, assistant)
+            result = way.call(name, args, confirmed=eff != "read")
             note = {"confirmed": True} if eff != "read" else {}
         msgs.append(dict({"role": "tool", "tool_call_id": c["id"], "name": name,
                           "content": result, "at": now()}, **note))
@@ -334,11 +408,11 @@ def step(person, person_name, assertion, conv, decision):
                      f"Ich habe nach {loop.MAX_MODEL_TURNS} Runden aufgehört, ohne fertig zu "
                      "werden. Formuliere die Frage bitte enger."})
         return "done"
-    way = way or McpWay(person, assertion)
+    way = way or McpWay(person, assertion, assistant)
     tools, effects_now = loop.tools_for_model(way.tools())
     effects.clear()
     effects.update(effects_now)
-    reply = ask_model(person_name, msgs, tools)
+    reply = ask_model(assistant, person_name, msgs, tools)
     reply["at"] = now()
     msgs.append(reply)
     return "more" if reply.get("tool_calls") else "done"
@@ -347,23 +421,26 @@ def step(person, person_name, assertion, conv, decision):
 # -------------------------------------------------------------------- Seite
 
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
+PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
 
 
-def public_assistant():
-    return {k: ASSISTANT.get(k) for k in ("id", "title", "greeting", "model", "view")}
+def public(a, origin, who):
+    return dict({k: a.get(k) for k in PUBLIC}, origin=origin,
+                manage=origin == "chat" and store.can_manage(a, who))
 
 
 def view_of(conv):
     """Was der Browser zeigt -- ohne eigene Vermerke, die er nicht braucht."""
     shown = []
     for m in conv["messages"]:
-        x = {k: m[k] for k in ("role", "content", "name", "confirmed", "seconds", "at") if k in m}
+        x = {k: m[k] for k in ("role", "content", "name", "confirmed", "seconds", "at", "command")
+             if k in m}
         if m.get("tool_calls"):
             x["calls"] = [{"name": c["function"]["name"],
                            "arguments": loop.call_args(c)[0]} for c in m["tool_calls"]]
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
-            "messages": shown, "confirm": conv.get("confirm")}
+            "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm")}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -372,47 +449,108 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s %s %s\n" % (self.command, self.path.split("?")[0], args[1]
                                          if len(args) > 1 else ""))
 
-    def send(self, status, ctype, body):
+    def send(self, status, ctype, body, extra=()):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in extra:
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
-    def json(self, status, doc):
-        self.send(status, "application/json; charset=utf-8", json.dumps(doc, ensure_ascii=False))
+    def json(self, status, doc, extra=()):
+        self.send(status, "application/json; charset=utf-8", json.dumps(doc, ensure_ascii=False),
+                  extra)
 
     def person(self):
         pid = self.headers.get("X-OAAP-User-Id", "").strip()
         return pid if PERSON.match(pid) else ""
 
+    def who(self):
+        uid = self.person()
+        roles = {r.strip() for r in self.headers.get("X-OAAP-Roles", "").split(",") if r.strip()}
+        return store.Who(uid, roles, AUTHZ.grants(uid) if uid else None)
+
     def person_name(self):
         return (self.headers.get("X-OAAP-Display-Name") or self.headers.get("X-OAAP-User")
                 or "der angemeldeten Person").strip()[:80]
+
+    def body(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(n)) if 0 < n <= MAX_BODY else {}
+        if not isinstance(body, dict):
+            raise ValueError
+        return body
 
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/healthz":
             return self.send(200, "text/plain", "ok")
-        person = self.person()
         if path == "/":
             with open(PAGE_FILE, encoding="utf-8") as f:
                 return self.send(200, "text/html; charset=utf-8", f.read())
+        person = self.person()
         if not person:
             return self.json(401, {"error": "Keine angemeldete Person."})
+        who = self.who()
         if path == "/api/state":
             return self.json(200, {
                 "user": self.headers.get("X-OAAP-User", ""), "version": VERSION,
-                "assistant": public_assistant(), "errors": ASSISTANT_ERRORS,
+                "assistants": [public(a, o, who) for a, o in STORE.visible(who)],
+                "errors": SETUP_ERRORS, "tenant_admin": "tenant_admin" in who.roles,
+                "teams_known": who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
                 "conversations": list_convs(person)})
-        m = re.match(r"^/api/conv/([a-z0-9]{12})$", path)
+        if path == "/api/assistants/export":
+            return self.json(200, STORE.export(who),
+                             [("Content-Disposition", 'attachment; filename="assistenten.json"')])
+        m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})$", path)
+        if m:
+            a, origin = STORE.get(m.group(1))
+            if a is None or not store.can_see(a, who):
+                return self.json(404, {"error": "Kein solcher Assistent."})
+            return self.json(200, dict(a, origin=origin, manage=origin == "chat"
+                                       and store.can_manage(a, who)))
+        m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands)?$", path)
         if m:
             conv = load_conv(person, m.group(1))
-            return self.json(200, view_of(conv)) if conv else self.json(404, {"error": "Kein solches Gespräch."})
+            if not conv:
+                return self.json(404, {"error": "Kein solches Gespräch."})
+            if not m.group(2):
+                return self.json(200, view_of(conv))
+            return self.commands(person, who, conv)
         return self.send(404, "text/plain", "nicht hier")
+
+    def commands(self, person, who, conv):
+        a = self.assistant_for(conv, who)
+        if isinstance(a, str):
+            return self.json(403, {"error": a})
+        if not a.get("commands"):
+            return self.json(200, {"commands": []})
+        assertion = self.headers.get(ASSERTION, "").strip()
+        if not assertion:
+            return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
+        try:
+            ps = McpWay(person, assertion, a).prompts()
+        except Stop as exc:
+            return self.json(200, {"commands": [], "said": exc.text})
+        return self.json(200, {"commands": [
+            {"name": p.get("name"), "description": p.get("description", ""),
+             "arguments": [{"name": x.get("name"), "required": bool(x.get("required"))}
+                           for x in p.get("arguments") or [] if isinstance(x, dict)]}
+            for p in ps if isinstance(p, dict)]})
+
+    def assistant_for(self, conv, who):
+        """Der Assistent des Gesprächs -- oder ein Satz, warum nicht (mehr)."""
+        a, _ = STORE.get(conv.get("assistant") or "")
+        if a is None:
+            return "Den Assistenten dieses Gesprächs gibt es nicht mehr."
+        if not store.can_see(a, who):
+            return "Diesen Assistenten darfst du nicht (mehr) benutzen."
+        errs = store.problems(a)
+        return ("Der Assistent ist ungültig: " + " ".join(errs)) if errs else a
 
     def do_POST(self):
         path = self.path.split("?")[0]
@@ -420,13 +558,26 @@ class Handler(BaseHTTPRequestHandler):
         if not person:
             return self.json(401, {"error": "Keine angemeldete Person."})
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n)) if 0 < n <= MAX_BODY else {}
-            assert isinstance(body, dict)
-        except (ValueError, AssertionError):
+            body = self.body()
+        except ValueError:
             return self.json(400, {"error": "Kein JSON-Objekt."})
+        who = self.who()
+        if path == "/api/assistants":
+            errs = STORE.save(body, who)
+            return self.json(400 if errs else 200, {"errors": errs} if errs else {"saved": body.get("id")})
+        if path == "/api/assistants/import":
+            errs = STORE.import_document(body, who)
+            return self.json(400 if errs else 200, {"errors": errs} if errs else
+                             {"imported": len(body.get("assistants") or [])})
+        m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})/delete$", path)
+        if m:
+            errs = STORE.delete(m.group(1), who)
+            return self.json(400 if errs else 200, {"errors": errs} if errs else {"deleted": m.group(1)})
         if path == "/api/conv":
-            conv = {"id": secrets.token_hex(6), "assistant": ASSISTANT["id"], "created": now(),
+            a, _ = STORE.get(str(body.get("assistant") or ""))
+            if a is None or not store.can_see(a, who):
+                return self.json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+            conv = {"id": secrets.token_hex(6), "assistant": a["id"], "created": now(),
                     "messages": []}
             save_conv(person, conv)
             return self.json(200, view_of(conv))
@@ -444,34 +595,41 @@ class Handler(BaseHTTPRequestHandler):
             if action == "delete":
                 os.remove(conv_path(person, cid))
                 return self.json(200, {"deleted": cid})
-            return self.round(person, conv, action, body)
+            return self.round(person, who, conv, action, body)
         finally:
             lock.release()
 
-    def round(self, person, conv, action, body):
+    def round(self, person, who, conv, action, body):
         # §5.2: ohne Zusicherung keine Runde -- nie ein Rückfall auf die App selbst.
         assertion = self.headers.get(ASSERTION, "").strip()
         if not assertion:
             return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage "
                                             "(keine Person, oder ein Schlüssel statt einer Sitzung)."})
-        if ASSISTANT_ERRORS:
-            return self.json(400, {"error": "Der Assistent ist ungültig: "
-                                            + " ".join(ASSISTANT_ERRORS)})
-        if action == "send":
-            text = str(body.get("text") or "").strip()
-            if not text or len(text) > MAX_TEXT:
-                return self.json(400, {"error": f"Eine Nachricht hat 1 bis {MAX_TEXT} Zeichen."})
-            if loop.pending_calls(conv["messages"]):
-                return self.json(409, {"error": "Erst den offenen Werkzeugaufruf bestätigen "
-                                                "oder ablehnen."})
-            conv["messages"].append({"role": "user", "content": text, "at": now()})
-            conv.setdefault("title", text[:60])
-            save_conv(person, conv)
-        decision = body.get("decision") if isinstance(body.get("decision"), dict) else None
+        a = self.assistant_for(conv, who)
+        if isinstance(a, str):
+            return self.json(403, {"error": a})
+        if "CHAT_MODEL_EXTRA ist kein JSON-Objekt." in SETUP_ERRORS:
+            return self.json(400, {"error": "CHAT_MODEL_EXTRA ist kein JSON-Objekt."})
         try:
-            state = step(person, self.person_name(), assertion, conv, decision)
+            if action == "send":
+                text = str(body.get("text") or "").strip()
+                if not text or len(text) > MAX_TEXT:
+                    return self.json(400, {"error": f"Eine Nachricht hat 1 bis {MAX_TEXT} Zeichen."})
+                if loop.pending_calls(conv["messages"]):
+                    return self.json(409, {"error": "Erst den offenen Werkzeugaufruf bestätigen "
+                                                    "oder ablehnen."})
+                if COMMAND.match(text):
+                    run_command(McpWay(person, assertion, a), a, conv["messages"], text)
+                else:
+                    conv["messages"].append({"role": "user", "content": text, "at": now()})
+                conv.setdefault("title", text[:60])
+                save_conv(person, conv)
+            decision = body.get("decision") if isinstance(body.get("decision"), dict) else None
+            state = step(person, self.person_name(), assertion, a, conv, decision)
         except Stop as exc:
             save_conv(person, conv)
+            if exc.status == 400:
+                return self.json(400, {"error": exc.text})
             return self.json(200, dict(view_of(conv), state="error", said=exc.text))
         save_conv(person, conv)
         return self.json(200, dict(view_of(conv), state=state))
@@ -481,8 +639,9 @@ def main():
     os.makedirs(DATA, exist_ok=True)
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"oaap-chat {VERSION} auf {PORT}; MCP-Client: {'ja' if CLIENT_KEY and CLIENT_URL else 'nein'}; "
-          f"Modell: {'ja' if KI_URL else 'nein'}; Assistent "
-          f"{ASSISTANT['id']} {'gültig' if not ASSISTANT_ERRORS else 'UNGÜLTIG: ' + ' '.join(ASSISTANT_ERRORS)}",
+          f"Modell: {'ja' if KI_URL else 'nein'}; Berechtigungen: "
+          f"{'ja' if AUTHZ.url else 'nein (Team-Assistenten unsichtbar)'}; Assistenten "
+          f"{len(STORE.all())}" + (f"; FEHLER: {' '.join(SETUP_ERRORS)}" if SETUP_ERRORS else ""),
           flush=True)
     srv.serve_forever()
 

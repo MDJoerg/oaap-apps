@@ -421,10 +421,10 @@ threading.Thread(target=gw.serve_forever, daemon=True).start()
 GW = f"http://127.0.0.1:{gw.server_address[1]}"
 
 
-def admin(path, **form):
+def admin(path, _headers=None, **form):
     req = urllib.request.Request(GW + path, data=urlencode(form).encode(), method="POST",
-                                 headers={"X-OAAP-User": "betreiber", "X-OAAP-Roles": "admin",
-                                          "Host": "gw.example"})
+                                 headers=dict({"X-OAAP-User": "betreiber", "X-OAAP-Roles": "admin",
+                                               "Host": "gw.example"}, **(_headers or {})))
     with urllib.request.urlopen(req, timeout=30) as resp:
         return resp.read().decode()
 
@@ -1301,6 +1301,15 @@ ok_, text_ = app.read_catalog("kp")
 check("Katalog ohne Menschen: nicht gelesen, Satz nennt Verfahren I", not ok_ and "Verfahren I" in text_, text_)
 ok_, text_ = app.read_catalog("kp", {"iss": ISS, "sub": "betreiber", "token": person_token("betreiber")})
 check("Katalog mit Token des Betreibers durch die Tür gelesen", ok_, text_)
+page = admin("/server-read", name="kp")
+check("0.7.2: Betreiberseite ohne Zusicherung: Katalog nicht gelesen, Satz nennt Verfahren I",
+      "nicht gelesen: Verfahren I braucht" in page, page[page.find("Katalog"):][:200])
+n_asrt = len(IS_["asrt"])
+page = admin("/server-read", {"X-OAAP-User-Id": "u-betreiber", "X-OAAP-User-Assertion": "ZS-BETREIBER"},
+             name="kp")
+check("0.7.2: Betreiberseite mit der Zusicherung der Plattform: Katalog gelesen, ohne Anmeldedienst",
+      "Katalog von „kp“ gelesen" in page and bool(IS_["asrt"][n_asrt:]) and set(IS_["asrt"][n_asrt:]) == {"ZS-BETREIBER"},
+      (IS_["asrt"][n_asrt:], page[page.find("Katalog"):][:200]))
 admin("/server-save", name="kp", address=TUER, auth="platform", light="green")
 page = add("alles", "whoami", server="kp")
 check("I-Server in einer Sicht mit Schlüsseln: abgewiesen", "Anmeldung" in page
@@ -1372,12 +1381,13 @@ ASRT = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJndyJ9.ZusicherungNurFuerDenTest012345678
 
 
 def rpc_a(view, msg, sid=None, client="chat", uid="u-anna", asrt=ASRT, assistant="reklamationen",
-          key=None):
+          key=None, confirmed=""):
     """Wie hinter der via-Tür: die sechs Kopfzeilen der Person und der Name des Chats."""
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     for h, v in (("X-OAAP-MCP-Client", client), ("X-OAAP-User-Id", uid),
                  ("X-OAAP-User-Assertion", asrt), ("X-OAAP-User", "vp-anna" if uid else ""),
-                 ("X-OAAP-Roles", "user"), ("X-OAAP-Assistant", assistant)):
+                 ("X-OAAP-Roles", "user"), ("X-OAAP-Assistant", assistant),
+                 ("X-OAAP-Confirmed", confirmed)):
         if v:
             headers[h] = v
     if key:
@@ -1467,6 +1477,13 @@ check("Messzeile: Verfahren A, Kennung der Person, Issuer platform, Chat, Assist
       and row[-1]["assistant"] == "reklamationen"
       and row[-1]["key_id"] == [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]["id"]
       and row[-1]["ctx_cost_center"] == "KS-CHAT", [dict(r) for r in row])
+check("0.7.2: ohne Angabe des Chats ist der Aufruf nicht als bestätigt vermerkt",
+      row and row[-1]["confirmed"] == "", [dict(r) for r in row][-1:])
+rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 33, "method": "tools/call",
+                  "params": {"name": "whoami", "arguments": {}}}, sid, confirmed="yes")
+row = rows_after("SELECT confirmed, procedure FROM usage WHERE view='a-sicht' ORDER BY id", 2)
+check("0.7.2: X-OAAP-Confirmed: yes vom Chat -> confirmed=yes in der Messzeile (Verfahren A)",
+      row and row[-1]["confirmed"] == "yes" and row[-1]["procedure"] == "A", [dict(r) for r in row][-2:])
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}, sid, uid="u-bert")
 check("dieselbe Sitzung mit einer ANDEREN Person: Sitzung unbekannt", st in (400, 404), (st, msgs))
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 5, "method": "tools/list"}, sid,

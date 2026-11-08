@@ -63,6 +63,14 @@ CK = "client-key-123"
 DOOR = []          # (Werkzeug, Zusicherung, Assistent)
 MODEL = []         # Rümpfe an das Modell
 BAD_ASSERTION = {"on": False}
+CONFIRMED = []     # X-OAAP-Confirmed je Aufruf an der Tür
+# fachliche Berechtigungen (RFC-0045) wie der Dienst der Plattform sie nennt
+GRANTS = {
+    "id-anna": [{"object": "assistant", "activities": ["use", "manage"], "fields": {"team": ["service"]}}],
+    "id-bert": [{"object": "assistant", "activities": ["use"], "fields": {"team": ["service"]}}],
+    "id-carl": [],
+}
+AUTHZ_DOWN = {"on": False}
 
 
 class Fake(BaseHTTPRequestHandler):
@@ -80,6 +88,11 @@ class Fake(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path.startswith("/authz/effective?user="):
+            uid = self.path.split("=", 1)[1]
+            if AUTHZ_DOWN["on"] or self.headers.get("Authorization") != "Bearer AZ":
+                return self.reply(503, {})
+            return self.reply(200, {"user": uid, "grants": GRANTS.get(uid, []), "fresh_for": 0})
         if self.path == "/gw" and self.headers.get("Authorization") == "Bearer " + CK:
             port = self.server.server_address[1]
             return self.reply(200, {"v": 1, "gateways": [
@@ -110,9 +123,21 @@ class Fake(BaseHTTPRequestHandler):
                     {"name": "add_entry", "inputSchema": {"type": "object"},
                      "_meta": {"oaap/effect": "write"}, "annotations": {"readOnlyHint": True}},
                     {"name": "legacy", "inputSchema": {"type": "object"}}]}})
+            if m == "prompts/list":
+                return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {"prompts": [
+                    {"name": "wochenbericht", "description": "Bericht für ein Projekt",
+                     "arguments": [{"name": "projekt", "required": True}]}]}})
+            if m == "prompts/get":
+                p = body["params"]
+                if p["name"] != "wochenbericht":
+                    return self.reply(200, {"jsonrpc": "2.0", "id": 2, "error": {"code": -32602, "message": "unbekannt"}})
+                return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {"messages": [
+                    {"role": "user", "content": {"type": "text",
+                                                 "text": f"Fasse die Woche in Projekt {p['arguments'].get('projekt')} zusammen."}}]}})
             if m == "tools/call":
                 p = body["params"]
                 DOOR.append((p["name"], a, self.headers.get("X-OAAP-Assistant"), p["arguments"]))
+                CONFIRMED.append(self.headers.get("X-OAAP-Confirmed", ""))
                 return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {
                     "content": [{"type": "text", "text": f"Ergebnis {p['name']} für {a.split('-')[1]}"}]}})
         if self.path == "/v1/chat/completions":
@@ -146,7 +171,8 @@ os.environ.update({
     "CHAT_DATA_DIR": DATA, "OAAP_MCP_CLIENT_KEY": CK, "OAAP_MCP_CLIENT_URL": f"http://127.0.0.1:{FP}/gw",
     "OAAP_DESTINATION_KI_URL": f"http://127.0.0.1:{FP}/v1/",
     "CHAT_ASSISTANT": json.dumps({"id": "projekte", "title": "Projekte", "view": "kp-i",
-                                  "system": "Du hilfst bei Projekten."}),
+                                  "system": "Du hilfst bei Projekten.", "commands": True}),
+    "OAAP_AUTHZ_URL": f"http://127.0.0.1:{FP}/authz", "OAAP_AUTHZ_KEY": "AZ",
 })
 import app  # noqa: E402
 
@@ -156,11 +182,12 @@ BASE = f"http://127.0.0.1:{srv.server_address[1]}"
 N = {"n": 0}
 
 
-def req(method, path, body=None, person="anna", assertion=True):
+def req(method, path, body=None, person="anna", assertion=True, roles="user"):
     h = {"Content-Type": "application/json"}
     if person:
         h["X-OAAP-User-Id"] = "id-" + person
         h["X-OAAP-User"] = person
+        h["X-OAAP-Roles"] = roles
     if assertion:
         N["n"] += 1
         h["X-OAAP-User-Assertion"] = f"ZS-{person}-{N['n']}"
@@ -173,14 +200,14 @@ def req(method, path, body=None, person="anna", assertion=True):
         return e.code, json.loads(e.read() or b"{}")
 
 
-check("Assistent aus CHAT_ASSISTANT gültig", app.ASSISTANT_ERRORS == [], app.ASSISTANT_ERRORS)
+check("Assistent aus CHAT_ASSISTANT gültig", app.SETUP_ERRORS == [], app.SETUP_ERRORS)
 st, _ = req("GET", "/api/state", person=None)
 check("ohne Person: 401", st == 401)
 st, s = req("GET", "/api/state")
 check("Zustand: Assistent, Client, Modell, keine Gespräche",
-      st == 200 and s["assistant"]["id"] == "projekte" and s["client"] and s["model"]
+      st == 200 and [a["id"] for a in s["assistants"]] == ["projekte"] and s["client"] and s["model"]
       and s["conversations"] == [], s)
-_, c = req("POST", "/api/conv", {})
+_, c = req("POST", "/api/conv", {"assistant": "projekte"})
 cid = c["id"]
 st, r = req("POST", f"/api/conv/{cid}/send", {"text": "Projekte?"}, assertion=False)
 check("ohne Zusicherung keine Runde: 401, kein Modellzug (§5.2)", st == 401 and not MODEL, r)
@@ -259,7 +286,7 @@ st, r = req("POST", f"/api/conv/{cid}/send", {"text": "Projekte?"}, person="bert
 check("bert schreibt nicht in annas Gespräch (404)", st == 404, r)
 
 # Tür lehnt ab -> Satz, kein Rückfall
-_, c2 = req("POST", "/api/conv", {})
+_, c2 = req("POST", "/api/conv", {"assistant": "projekte"})
 req("POST", f"/api/conv/{c2['id']}/send", {"text": "Projekte?"})
 BAD_ASSERTION["on"] = True
 app._MCP.clear()
@@ -280,7 +307,7 @@ check("fremde MCP-Sitzung: die Tür kennt sie nicht, der Chat eröffnet eine eig
       r["state"] == "done" and app._MCP[("id-anna", "gw1", "kp-i")] == "S-anna", r)
 
 # Schleife begrenzt
-_, c3 = req("POST", "/api/conv", {})
+_, c3 = req("POST", "/api/conv", {"assistant": "projekte"})
 st, r = req("POST", f"/api/conv/{c3['id']}/send", {"text": "Schleife"})
 rounds = 1
 while r.get("state") == "more" and rounds < 20:
@@ -298,12 +325,125 @@ check("anna löscht ihr Gespräch", st == 200 and not os.path.exists(app.conv_pa
 # ein Assistent mit einem Recht ist ungültig
 import assistants  # noqa: E402
 check("Assistent mit token: ungültig (D1)",
-      any("keine Rechte" in e for e in assistants.check(dict(app.ASSISTANT, token="x"))))
-saved = app.ASSISTANT_ERRORS[:]
-app.ASSISTANT_ERRORS[:] = ["kaputt"]
-st, r = req("POST", f"/api/conv/{c2['id']}/send", {"text": "Projekte?"})
-check("ungültiger Assistent: keine Runde (400)", st == 400, r)
-app.ASSISTANT_ERRORS[:] = saved
+      any("keine Rechte" in e for e in assistants.check(dict(app.CONFIGURED[0], token="x"))))
+
+# ------------------------------------------------ Stufe 3: Bestätigung am Gateway
+check("§5.6: bestätigter Schreibaufruf trägt X-OAAP-Confirmed: yes, lesende nicht",
+      [c for d, c in zip(DOOR, CONFIRMED) if d[0] == "add_entry"] == ["yes"]
+      and all(c == "" for d, c in zip(DOOR, CONFIRMED) if d[0] == "list_projects"),
+      list(zip([d[0] for d in DOOR], CONFIRMED)))
+
+# ------------------------------------------------ Stufe 3: /Befehle
+_, c4 = req("POST", "/api/conv", {"assistant": "projekte"})
+st, r = req("GET", f"/api/conv/{c4['id']}/commands")
+check("/Befehle: die Prompts der Sicht, mit Argumenten", st == 200 and r["commands"] == [
+    {"name": "wochenbericht", "description": "Bericht für ein Projekt",
+     "arguments": [{"name": "projekt", "required": True}]}], r)
+st, r = req("POST", f"/api/conv/{c4['id']}/send", {"text": "/wochenbericht"})
+check("/wochenbericht ohne Pflichtargument: 400 mit Satz, nichts im Gespräch",
+      st == 400 and "projekt" in r["error"] and not app.load_conv("id-anna", c4["id"])["messages"], r)
+st, r = req("POST", f"/api/conv/{c4['id']}/send", {"text": "/gibtsnicht"})
+check("unbekannter Befehl: 400, nennt die vorhandenen", st == 400 and "/wochenbericht" in r["error"], r)
+st, r = req("POST", f"/api/conv/{c4['id']}/send", {"text": "/wochenbericht pA"})
+first = (r.get("messages") or [{}])[0]
+check("/wochenbericht pA: der Text des Prompts wird die Nachricht, das Modell antwortet",
+      st == 200 and first.get("command") == "wochenbericht"
+      and first.get("content") == "Fasse die Woche in Projekt pA zusammen." and r["state"] == "done", r)
+st, r = req("POST", f"/api/conv/{c4['id']}/send", {"text": "/wochenbericht projekt=pB"})
+check("/wochenbericht projekt=pB: Argument mit Namen",
+      [m["content"] for m in r["messages"] if m.get("command")][-1].endswith("Projekt pB zusammen."), r)
+
+
+# ------------------------------------------------ Stufe 3: Assistenten und Sichtbarkeit (D4)
+def asst(aid, scope, team=None, **kw):
+    v = {"scope": scope}
+    if team:
+        v["context"] = {"team": team}
+    return dict({"id": aid, "title": aid, "system": "Du hilfst.", "model": "standard",
+                 "view": "kp-i", "visibility": v, "owner": "x"}, **kw)
+
+
+def ids(who, **k):
+    return [a["id"] for a in req("GET", "/api/state", person=who, **k)[1]["assistants"]]
+
+
+st, r = req("POST", "/api/assistants", asst("annas", "private"))
+check("anna legt einen privaten Assistenten an", st == 200, r)
+st, r = req("GET", "/api/assistants/annas")
+check("... Eigentümer ist anna, egal was sie als owner schickte", st == 200 and r["owner"] == "id-anna", r)
+check("privat: nur anna sieht ihn", "annas" in ids("anna") and "annas" not in ids("bert"))
+st, r = req("POST", "/api/assistants", asst("annas", "private", title="gekapert"), person="bert")
+check("bert überschreibt annas privaten Assistenten nicht", st == 400
+      and req("GET", "/api/assistants/annas")[1]["title"] == "annas", r)
+st, r = req("POST", "/api/conv", {"assistant": "annas"}, person="bert")
+check("bert beginnt kein Gespräch mit annas privatem Assistenten (404)", st == 404, r)
+
+st, r = req("POST", "/api/assistants", asst("service", "context", "service"))
+check("anna (assistant.manage in Team service) legt einen Team-Assistenten an", st == 200, r)
+st, r = req("POST", "/api/assistants", asst("lager", "context", "lager"))
+check("... für ein Team, in dem sie nichts verwaltet: abgelehnt", st == 400, r)
+st, r = req("POST", "/api/assistants", asst("x", "context", "service"), person="bert")
+check("bert (nur use) legt im Team service keinen an", st == 400, r)
+check("Team service: anna und bert sehen ihn, carl nicht",
+      "service" in ids("anna") and "service" in ids("bert") and "service" not in ids("carl"))
+AUTHZ_DOWN["on"] = True
+check("Berechtigungen nicht lesbar: niemand sieht den Team-Assistenten (geschlossen)",
+      "service" not in ids("bert") and req("GET", "/api/state", person="bert")[1]["teams_known"] is False)
+AUTHZ_DOWN["on"] = False
+st, r = req("POST", "/api/assistants", dict(asst("x", "private"),
+                                             visibility={"scope": "context", "context": {"abteilung": "a"}}))
+check("anderer Kontextschlüssel als team: abgelehnt mit Satz", st == 400 and "team" in " ".join(r["errors"]), r)
+
+st, r = req("POST", "/api/assistants", asst("alle", "tenant"))
+check("Mandanten-Assistent ohne tenant_admin: abgelehnt", st == 400, r)
+st, r = req("POST", "/api/assistants", asst("alle", "tenant"), roles="user,tenant_admin")
+check("... als tenant_admin: angelegt, alle sehen ihn", st == 200 and "alle" in ids("carl"), r)
+st, r = req("POST", "/api/assistants", asst("projekte", "tenant"), roles="user,tenant_admin")
+check("den Assistenten aus der Konfiguration ändert niemand im Chat",
+      st == 400 and "Konfiguration" in r["errors"][0], r)
+st, r = req("POST", "/api/assistants", asst("annas2", "private", token="geheim"))
+check("ein Assistent mit einem Recht wird nicht gespeichert (D1)",
+      st == 400 and "keine Rechte" in " ".join(r["errors"]), r)
+
+# Sichtbarkeit wird je Runde geprüft
+_, cb = req("POST", "/api/conv", {"assistant": "service"}, person="bert")
+st, r = req("POST", f"/api/conv/{cb['id']}/send", {"text": "Projekte?"}, person="bert")
+check("bert spricht mit dem Team-Assistenten", st == 200 and r["state"] == "more", r)
+GRANTS["id-bert"] = []
+n_door = len(DOOR)
+st, r = req("POST", f"/api/conv/{cb['id']}/step", {}, person="bert")
+check("Recht entzogen: die nächste Runde läuft nicht (403), kein Werkzeug",
+      st == 403 and "nicht (mehr)" in r["error"] and len(DOOR) == n_door, r)
+GRANTS["id-bert"] = [{"object": "assistant", "activities": ["use"], "fields": {"team": ["service"]}}]
+st, r = req("POST", f"/api/conv/{cb['id']}/step", {}, person="bert")
+check("Recht zurück: die Runde läuft, X-OAAP-Assistant nennt den Assistenten des Gesprächs",
+      r.get("state") == "done" and DOOR[-1][2] == "service", (r, DOOR[-1]))
+
+# Export und Import
+st, ex = req("GET", "/api/assistants/export")
+check("Export: was anna verwaltet (privat + Team), nicht Mandant und Konfiguration",
+      sorted(a["id"] for a in ex["assistants"]) == ["annas", "service"], ex)
+st, r = req("POST", "/api/assistants/import", ex, person="bert")
+check("bert importiert annas Datei: abgelehnt, nichts geändert (alles oder nichts)",
+      st == 400 and req("GET", "/api/assistants/annas")[1]["owner"] == "id-anna", r)
+mixed = {"v": 1, "assistants": [asst("ok1", "private"), asst("lager2", "context", "lager")]}
+st, r = req("POST", "/api/assistants/import", mixed)
+check("Import mit einem erlaubten und einem verbotenen: abgelehnt, auch der erlaubte nicht gespeichert",
+      st == 400 and "ok1" not in ids("anna"), r)
+doc = {"v": 1, "assistants": [asst("neu1", "private"), asst("neu2", "context", "service")]}
+st, r = req("POST", "/api/assistants/import", doc)
+check("anna importiert zwei: beide da", st == 200 and {"neu1", "neu2"} <= set(ids("anna")), r)
+st, r = req("POST", "/api/assistants/neu2/delete", {}, person="bert")
+check("bert löscht den Team-Assistenten nicht", st == 400 and "neu2" in ids("anna"), r)
+st, r = req("POST", "/api/assistants/neu2/delete", {})
+check("anna löscht ihn", st == 200 and "neu2" not in ids("anna"), r)
+_, cg = req("POST", "/api/conv", {"assistant": "neu1"})
+req("POST", "/api/assistants/neu1/delete", {})
+st, r = req("POST", f"/api/conv/{cg['id']}/send", {"text": "hallo"})
+check("Gespräch mit gelöschtem Assistenten: keine Runde (403)", st == 403, r)
+with open(os.path.join(DATA, "assistants.json"), encoding="utf-8") as f:
+    check("assistants.json ist eine Austauschdatei von oaap.ai.assistants",
+          assistants.check_document(json.load(f)) == [])
 
 srv.shutdown()
 fake.shutdown()

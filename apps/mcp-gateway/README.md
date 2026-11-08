@@ -218,6 +218,12 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
 - **Seit 0.7.1** nennt `tools/list` je Werkzeug die Wirkungsklasse aus der
   Sicht: `_meta: {"oaap/effect": "read" | "write" | "execute"}` (ab Protokoll
   2025-06-18). Der Chat (`apps/chat`) fragt vor allem, was nicht `read` ist.
+- **Seit 0.7.2** steht in der Messzeile `confirmed` = `yes`, wenn der Chat
+  meldet, die Person habe den Aufruf bestätigt (`X-OAAP-Confirmed`) — eine
+  Angabe des Chats, keine Erlaubnis. Und „Katalog lesen“ auf der
+  Betreiberseite nimmt für eine Quelle der Plattform die Zusicherung der
+  angemeldeten Betreiberin: auch ohne Keycloak lassen sich die Werkzeuge der
+  eigenen Apps in eine Sicht nehmen.
 
 ## Der festgehaltene Text
 

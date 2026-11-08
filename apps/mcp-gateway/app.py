@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -107,6 +107,9 @@ ACT_ASSERTION = "X-OAAP-Act-Assertion"
 CLIENT_HEADER = "X-OAAP-MCP-Client"
 ASSISTANT_HEADER = "X-OAAP-Assistant"
 ASSISTANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+# 0.7.2 (RFC-0074 §5.6): der Chat sagt, dass die Person DIESEN Aufruf bestätigt hat.
+# Nur zur Auskunft in der Messzeile, nur bei Verfahren A; nie eine Erlaubnis.
+CONFIRMED_HEADER = "X-OAAP-Confirmed"
 _TOKEN_URL = {}
 
 # Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
@@ -1284,6 +1287,8 @@ class Handler(BaseHTTPRequestHandler):
         assistant = (self.headers.get(ASSISTANT_HEADER) or "").strip()
         return {"iss": "platform", "sub": uid, "assertion": assertion, "client": client,
                 "assistant": assistant if ASSISTANT_RE.match(assistant) else "",
+                "confirmed": "yes" if (self.headers.get(CONFIRMED_HEADER) or "").strip().lower()
+                == "yes" else "",
                 "groups": ["@" + client], "procedure": "A"}
 
     def rate_id(self, key):
@@ -1816,6 +1821,20 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- Betreiber
 
+    def operator(self):
+        """Die angemeldete Betreiberin als Person für Verfahren I (0.7.2).
+
+        Die Plattform gibt jeder Anfrage einer Person an diese Seite ihre
+        Zusicherung, adressiert an DIESES Gateway. Damit liest das Gateway den
+        Katalog einer Quelle der Plattform -- auch in einem Mandanten ohne
+        Anmeldedienst, wo es kein Token zum Tauschen gibt. Ohne Zusicherung:
+        None, und der Katalog bleibt wie zuletzt gelesen."""
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        assertion = (self.headers.get("X-OAAP-User-Assertion") or "").strip()
+        if not (uid and assertion):
+            return None
+        return {"iss": "platform", "sub": uid, "assertion": assertion, "procedure": "A"}
+
     def handle_admin_post(self, path):
         raw = self.read_body(1 << 20) or b""
         if not self.is_admin():
@@ -1858,7 +1877,7 @@ class Handler(BaseHTTPRequestHandler):
                 books.delete_server(DB, user, form.get("name", ""))
                 notice = f"Server „{form.get('name', '')}“ gelöscht."
             elif path == "/server-read":
-                _, notice = read_catalog(form.get("name", ""))
+                _, notice = read_catalog(form.get("name", ""), self.operator())
                 back = ("server", form.get("name", ""))
             elif path == "/view-save":
                 reqs = {r: form["req_" + r] for r in books.REQUESTS if "req_" + r in form}

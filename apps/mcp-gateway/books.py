@@ -159,6 +159,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # Auskunft, keine Entscheidung hängt daran (RFC-0074 §5.5).
     ("usage", "client", "TEXT NOT NULL DEFAULT ''"),
     ("usage", "assistant", "TEXT NOT NULL DEFAULT ''"),
+    # 0.7.2 (RFC-0074 §5.6): `yes`, wenn der Chat sagt, die Person habe diesen
+    # Aufruf bestätigt -- eine Angabe des Chats, keine Prüfung des Gateways.
+    ("usage", "confirmed", "TEXT NOT NULL DEFAULT ''"),
 )
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
 # seit 0.7 die Plattform (Verfahren A: ein Chat trägt den Menschen, RFC-0074).
@@ -877,8 +880,8 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
               int(ms), int(bytes_up), int(bytes_down), (person or {}).get("sub", ""),
               (person or {}).get("iss", "")] + context.snapshot_values(key)
     if (person or {}).get("client"):
-        cols += ["client", "assistant"]
-        values += [person["client"], person.get("assistant", "")]
+        cols += ["client", "assistant", "confirmed"]
+        values += [person["client"], person.get("assistant", ""), person.get("confirmed", "")]
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()

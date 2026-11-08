@@ -10,119 +10,159 @@
 @media (prefers-color-scheme:dark){:root{--bg:#111827;--panel:#1f2937;--ink:#e5e7eb;--muted:#9ca3af;
 --line:#374151;--me:#1e3a8a;--accent:#93c5fd;--warn:#fcd34d;--warnbg:#422006;--err:#fca5a5;--tool:#111827}}
 *{box-sizing:border-box}
-body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;
-display:flex}
-aside{width:16rem;border-right:1px solid var(--line);background:var(--panel);display:flex;
-flex-direction:column;padding:.8rem;gap:.5rem}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex}
+aside{width:17rem;border-right:1px solid var(--line);background:var(--panel);display:flex;
+flex-direction:column;padding:.8rem;gap:.5rem;overflow-y:auto}
 aside h1{font-size:1.05rem;margin:.2rem 0 .4rem}
-aside .conv{display:block;width:100%;text-align:left;padding:.45rem .5rem;border:0;border-radius:.4rem;
-background:none;color:var(--ink);cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;
-white-space:nowrap}
-aside .conv.on,aside .conv:hover{background:var(--me)}
+.conv{display:block;width:100%;text-align:left;padding:.45rem .5rem;border:0;border-radius:.4rem;
+background:none;color:var(--ink);cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv.on,.conv:hover{background:var(--me)}
+.conv small{color:var(--muted)}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
 header{padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
 header .muted{font-size:.85rem}
 #log{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
-.msg{max-width:46rem;padding:.6rem .8rem;border-radius:.6rem;white-space:pre-wrap;word-break:break-word;
-line-height:1.45}
+.msg{max-width:46rem;padding:.6rem .8rem;border-radius:.6rem;white-space:pre-wrap;word-break:break-word;line-height:1.45}
 .user{align-self:flex-end;background:var(--me)}
 .assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.cmd{font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem}
 .call,.result{align-self:flex-start;font-size:.85rem;color:var(--muted);background:var(--tool);
 border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .result summary{cursor:pointer}
 .result pre{white-space:pre-wrap;margin:.4rem 0 0;font-size:.82rem}
-.confirm{align-self:flex-start;background:var(--warnbg);color:var(--warn);border-radius:.6rem;
-padding:.7rem .9rem;max-width:46rem}
+.confirm{align-self:flex-start;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem;max-width:46rem}
 .confirm pre{white-space:pre-wrap;color:var(--ink);background:var(--panel);padding:.5rem;border-radius:.3rem}
-.err{color:var(--err)}
-.muted{color:var(--muted)}
-form{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid var(--line);background:var(--panel)}
-textarea{flex:1;resize:none;font:inherit;padding:.5rem;border:1px solid var(--line);border-radius:.4rem;
-background:var(--bg);color:var(--ink)}
-button{font:inherit;padding:.45rem .9rem;border-radius:.4rem;border:1px solid var(--line);
-background:var(--panel);color:var(--ink);cursor:pointer}
+.err{color:var(--err)} .muted{color:var(--muted)}
+#cmds{font-size:.85rem;color:var(--muted);padding:0 1rem .3rem;background:var(--panel)}
+#cmds button{font-size:.8rem;padding:.15rem .5rem;margin:.15rem .2rem 0 0}
+form.send{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid var(--line);background:var(--panel)}
+textarea,input,select{font:inherit;padding:.45rem;border:1px solid var(--line);border-radius:.4rem;background:var(--bg);color:var(--ink)}
+form.send textarea{flex:1;resize:none}
+button{font:inherit;padding:.45rem .9rem;border-radius:.4rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
 button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 button:disabled{opacity:.5;cursor:default}
+dialog{border:1px solid var(--line);border-radius:.6rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
+dialog label{display:block;font-size:.85rem;margin:.6rem 0 .2rem;color:var(--muted)}
+dialog input,dialog textarea,dialog select{width:100%}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.alist div{display:flex;justify-content:space-between;gap:.5rem;padding:.35rem 0;border-bottom:1px solid var(--line)}
 @media (max-width:700px){body{flex-direction:column;height:auto;min-height:100vh}
-aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:30vh;overflow-y:auto}
-#log{min-height:50vh}}
+aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:35vh}#log{min-height:50vh}}
 </style>
 </head>
 <body>
 <aside>
-  <h1 id="atitle">Chat</h1>
+  <h1>Chat</h1>
+  <select id="pick" aria-label="Assistent für ein neues Gespräch"></select>
   <button id="new" class="primary">Neues Gespräch</button>
+  <button id="manage">Assistenten …</button>
   <div id="convs"></div>
   <div class="muted" style="margin-top:auto;font-size:.8rem" id="who"></div>
 </aside>
 <main>
-  <header><b id="ctitle">—</b><div class="muted" id="hint">Jede Runde läuft als du: der Assistent
-  sieht nur, was du sehen darfst. Was etwas ändert, läuft erst nach deiner Zustimmung.</div></header>
+  <header><b id="ctitle">—</b> <span class="muted" id="cassist"></span>
+  <div class="muted">Jede Runde läuft als du: der Assistent sieht nur, was du sehen darfst.
+  Was etwas ändert, läuft erst nach deiner Zustimmung.</div></header>
   <div id="log"></div>
-  <form id="f"><textarea id="t" rows="2" placeholder="Nachricht …" maxlength="4000"></textarea>
+  <div id="cmds"></div>
+  <form id="f" class="send"><textarea id="t" rows="2" placeholder="Nachricht … (/ für Befehle)" maxlength="4000"></textarea>
   <button class="primary" id="go">Senden</button></form>
 </main>
+
+<dialog id="dlg">
+  <div class="row" style="justify-content:space-between"><b>Assistenten</b>
+    <button id="dclose" type="button">Schließen</button></div>
+  <div class="alist" id="alist"></div>
+  <form id="af">
+    <label>Kennung (Kleinbuchstaben, Ziffern, Bindestrich)</label><input name="id" required pattern="[a-z0-9][a-z0-9-]{0,47}">
+    <label>Titel</label><input name="title" required maxlength="80">
+    <label>Begrüßung</label><input name="greeting" maxlength="500">
+    <label>Anweisung an das Modell (Systemprompt)</label><textarea name="system" rows="5" required maxlength="8000"></textarea>
+    <div class="row">
+      <div style="flex:1"><label>Modellname des KI-Gateways</label><input name="model" value="standard" required></div>
+      <div style="flex:1"><label>Sicht des MCP-Gateways</label><input name="view" required></div>
+      <div style="flex:1"><label>Gateway (leer = das einzige)</label><input name="gateway"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1"><label>Wer sieht ihn?</label><select name="scope">
+        <option value="private">nur ich</option><option value="context">ein Team</option>
+        <option value="tenant">alle im Mandanten</option></select></div>
+      <div style="flex:1"><label>Team (bei „ein Team“)</label><input name="team"></div>
+    </div>
+    <label><input type="checkbox" name="commands" style="width:auto"> /Befehle aus den Prompts der Sicht anbieten</label>
+    <p class="err" id="aerr"></p>
+    <div class="row"><button class="primary">Speichern</button><button type="button" id="anew">Leeren</button>
+      <a id="aexp" href="api/assistants/export" download="assistenten.json">Exportieren</a>
+      <label style="margin:0">Importieren <input type="file" id="aimp" accept="application/json" style="width:auto"></label></div>
+  </form>
+</dialog>
+
 <script>
 "use strict";
-let S = null, C = null, busy = false;
+let S = null, C = null, busy = false, CMDS = [];
 const $ = id => document.getElementById(id);
-
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
   if(text!==undefined) e.textContent=text; return e;}
-
 async function api(method, path, body){
   const r = await fetch(path, {method, headers: {"Content-Type": "application/json"},
                                body: body === undefined ? undefined : JSON.stringify(body)});
   let doc = {};
   try { doc = await r.json(); } catch (e) { doc = {error: "Antwort " + r.status + " ohne JSON."}; }
-  if (!r.ok && !doc.error) doc.error = "Antwort " + r.status;
+  if (!r.ok && !doc.error && !doc.errors) doc.error = "Antwort " + r.status;
   return doc;
 }
+const assistant = id => (S.assistants || []).find(a => a.id === id);
+const scopeWord = a => a.visibility.scope === "private" ? "privat" :
+  a.visibility.scope === "tenant" ? "Mandant" : "Team " + a.visibility.context.team;
 
-function renderConvs(){
+function renderSide(){
+  const pick = $("pick"); const was = pick.value; pick.textContent = "";
+  for (const a of S.assistants) { const o = el("option", "", a.title + " · " + scopeWord(a)); o.value = a.id; pick.appendChild(o); }
+  if (was && assistant(was)) pick.value = was;
+  $("new").disabled = !S.assistants.length;
   const box = $("convs"); box.textContent = "";
   for (const c of S.conversations) {
-    const b = el("button", "conv" + (C && C.id === c.id ? " on" : ""), c.title);
+    const a = assistant(c.assistant);
+    const b = el("button", "conv" + (C && C.id === c.id ? " on" : ""), c.title + " ");
+    b.appendChild(el("small", "", a ? a.title : "(Assistent nicht verfügbar)"));
     b.onclick = () => openConv(c.id); box.appendChild(b);
   }
 }
 
 function render(status){
   const log = $("log"); log.textContent = "";
+  const a = C ? assistant(C.assistant) : null;
   $("ctitle").textContent = C ? C.title : "—";
-  if (S && S.assistant && S.assistant.greeting) log.appendChild(el("div", "msg assistant", S.assistant.greeting));
+  $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
+  if (a && a.greeting) log.appendChild(el("div", "msg assistant", a.greeting));
   if (!C) return;
   for (const m of C.messages) {
-    if (m.role === "user") log.appendChild(el("div", "msg user", m.content));
-    else if (m.role === "assistant") {
-      if (m.content) log.appendChild(el("div", "msg assistant", m.content));
-      for (const c of m.calls || []) log.appendChild(el("div", "call",
-        "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
-    } else if (m.role === "tool") {
-      const d = el("details", "result"); const s = el("summary", "",
-        "Ergebnis " + (m.name || "") + (m.confirmed === true ? " · von dir freigegeben" :
-                                        m.confirmed === false ? " · von dir abgelehnt" : ""));
-      d.appendChild(s); d.appendChild(el("pre", "", m.content)); log.appendChild(d);
+    if (m.role === "user" || (m.role === "assistant" && m.content)) {
+      const d = el("div", "msg " + m.role);
+      if (m.command) d.appendChild(el("span", "cmd", "/" + m.command));
+      d.appendChild(document.createTextNode(m.content)); log.appendChild(d);
+    }
+    for (const c of m.calls || []) log.appendChild(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
+    if (m.role === "tool") {
+      const d = el("details", "result");
+      d.appendChild(el("summary", "", "Ergebnis " + (m.name || "") + (m.confirmed === true ? " · von dir freigegeben" :
+                                                               m.confirmed === false ? " · von dir abgelehnt" : "")));
+      d.appendChild(el("pre", "", m.content)); log.appendChild(d);
     }
   }
   if (C.confirm && !busy) {
     const k = C.confirm, box = el("div", "confirm");
-    box.appendChild(el("div", "", "Der Assistent möchte etwas " +
-      (k.effect === "execute" ? "ausführen" : "ändern") + " — als du:"));
+    box.appendChild(el("div", "", "Der Assistent möchte etwas " + (k.effect === "execute" ? "ausführen" : "ändern") + " — als du:"));
     box.appendChild(el("pre", "", k.name + " " + JSON.stringify(k.arguments, null, 2)));
     const ok = el("button", "primary", "Ausführen"), no = el("button", "", "Ablehnen");
     ok.onclick = () => decide(k.call, true); no.onclick = () => decide(k.call, false);
-    box.appendChild(ok); box.appendChild(document.createTextNode(" ")); box.appendChild(no);
-    log.appendChild(box);
+    box.append(ok, " ", no); log.appendChild(box);
   }
   if (status) log.appendChild(status);
   log.scrollTop = log.scrollHeight;
 }
 
-function setBusy(b, text){
-  busy = b; $("go").disabled = b; $("t").disabled = b;
-  render(b ? el("div", "muted", text) : null);
-}
+function setBusy(b, text){ busy = b; $("go").disabled = b; $("t").disabled = b; render(b ? el("div", "muted", text) : null); }
 
 // D7: der Browser treibt die Schleife -- jede Runde eine eigene Anfrage.
 async function drive(path, body, text){
@@ -137,43 +177,118 @@ async function drive(path, body, text){
   let status = null;
   if (doc.state === "error" || doc.error) {
     status = el("div", "err", doc.said || doc.error);
-    const again = el("button", "", "Erneut versuchen");
-    again.onclick = () => drive("api/conv/" + C.id + "/step", {}, "Erneuter Versuch …");
-    if (C) { status.appendChild(document.createTextNode(" ")); status.appendChild(again); }
+    if (doc.state === "error") {
+      const again = el("button", "", "Erneut versuchen");
+      again.onclick = () => drive("api/conv/" + C.id + "/step", {}, "Erneuter Versuch …");
+      status.append(" ", again);
+    }
   }
   render(status);
   await refreshState();
 }
-
 function decide(call, ok){
-  drive("api/conv/" + C.id + "/step", {decision: {call, ok}},
-        ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
+  drive("api/conv/" + C.id + "/step", {decision: {call, ok}}, ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
 }
 
-async function refreshState(){ S = await api("GET", "api/state"); renderConvs(); }
+async function loadCommands(){
+  CMDS = []; $("cmds").textContent = "";
+  const a = C ? assistant(C.assistant) : null;
+  if (!a || !a.commands) return;
+  const r = await api("GET", "api/conv/" + C.id + "/commands");
+  CMDS = r.commands || [];
+  if (r.said) $("cmds").textContent = r.said;
+  showCommands();
+}
+function showCommands(){
+  const box = $("cmds"), t = $("t").value; box.textContent = "";
+  if (!t.startsWith("/") || !CMDS.length) return;
+  for (const c of CMDS.filter(c => ("/" + c.name).startsWith(t.split(/\s/)[0]))) {
+    const b = el("button", "", "/" + c.name + c.arguments.map(x => " " + (x.required ? x.name : "[" + x.name + "]")).join(""));
+    b.title = c.description; b.type = "button";
+    b.onclick = () => { $("t").value = "/" + c.name + " "; $("t").focus(); showCommands(); };
+    box.appendChild(b);
+  }
+}
 
-async function openConv(id){ C = await api("GET", "api/conv/" + id); render(); renderConvs(); }
+async function refreshState(){ S = await api("GET", "api/state"); renderSide(); }
+async function openConv(id){ C = await api("GET", "api/conv/" + id); render(); renderSide(); loadCommands(); }
 
-$("new").onclick = async () => { C = await api("POST", "api/conv", {}); await refreshState(); render(); };
-
+$("new").onclick = async () => {
+  const r = await api("POST", "api/conv", {assistant: $("pick").value});
+  if (r.error) { render(el("div", "err", r.error)); return; }
+  C = r; await refreshState(); render(); loadCommands();
+};
 $("f").onsubmit = async ev => {
   ev.preventDefault();
   const text = $("t").value.trim(); if (!text || busy) return;
-  if (!C || !C.id) { C = await api("POST", "api/conv", {}); }
-  $("t").value = "";
+  if (!C || !C.id) { const r = await api("POST", "api/conv", {assistant: $("pick").value});
+    if (r.error) { render(el("div", "err", r.error)); return; } C = r; loadCommands(); }
+  $("t").value = ""; showCommands();
   await drive("api/conv/" + C.id + "/send", {text}, "Das Modell denkt …");
 };
-$("t").addEventListener("keydown", ev => {
-  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("f").requestSubmit(); }
-});
+$("t").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("f").requestSubmit(); } });
+$("t").addEventListener("input", showCommands);
+
+// ---- Assistenten pflegen
+const F = $("af");
+function fill(a){
+  F.reset(); $("aerr").textContent = "";
+  if (!a) return;
+  for (const k of ["id", "title", "greeting", "system", "model", "view", "gateway"]) F.elements[k].value = a[k] || "";
+  F.elements.scope.value = a.visibility.scope;
+  F.elements.team.value = (a.visibility.context || {}).team || "";
+  F.elements.commands.checked = !!a.commands;
+}
+async function renderList(){
+  const box = $("alist"); box.textContent = "";
+  for (const a of S.assistants) {
+    const row = el("div"); row.appendChild(el("span", "", a.title + " (" + a.id + ") · " + scopeWord(a) +
+      (a.origin === "config" ? " · aus der Konfiguration" : "")));
+    const acts = el("span");
+    if (a.manage) {
+      const e = el("button", "", "Ändern"); e.type = "button";
+      e.onclick = async () => fill(await api("GET", "api/assistants/" + a.id));
+      const d = el("button", "", "Löschen"); d.type = "button";
+      d.onclick = async () => { if (!confirm("Assistent " + a.title + " löschen?")) return;
+        const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
+        $("aerr").textContent = (r.errors || []).join(" "); await refreshState(); renderList(); };
+      acts.append(e, " ", d);
+    }
+    row.appendChild(acts); box.appendChild(row);
+  }
+  if (!S.teams_known) box.appendChild(el("p", "muted", "Deine Team-Berechtigungen sind gerade nicht lesbar — Team-Assistenten fehlen in der Liste."));
+}
+$("manage").onclick = async () => { await refreshState(); fill(null); renderList(); $("dlg").showModal(); };
+$("dclose").onclick = () => $("dlg").close();
+$("anew").onclick = () => fill(null);
+F.onsubmit = async ev => {
+  ev.preventDefault();
+  const v = {scope: F.elements.scope.value};
+  if (v.scope === "context") v.context = {team: F.elements.team.value.trim()};
+  const a = {id: F.elements.id.value.trim(), title: F.elements.title.value.trim(), system: F.elements.system.value,
+             model: F.elements.model.value.trim(), view: F.elements.view.value.trim(), visibility: v,
+             owner: "-", commands: F.elements.commands.checked};
+  if (F.elements.greeting.value.trim()) a.greeting = F.elements.greeting.value.trim();
+  if (F.elements.gateway.value.trim()) a.gateway = F.elements.gateway.value.trim();
+  const r = await api("POST", "api/assistants", a);
+  $("aerr").textContent = r.errors ? r.errors.join(" ") : (r.error || "Gespeichert.");
+  await refreshState(); renderList();
+};
+$("aimp").onchange = async ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  let doc; try { doc = JSON.parse(await f.text()); } catch (e) { $("aerr").textContent = "Die Datei ist kein JSON."; return; }
+  const r = await api("POST", "api/assistants/import", doc);
+  $("aerr").textContent = r.errors ? r.errors.join(" ") : (r.error || r.imported + " importiert.");
+  ev.target.value = ""; await refreshState(); renderList();
+};
 
 (async () => {
   await refreshState();
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
-  $("atitle").textContent = S.assistant.title;
   $("who").textContent = (S.user || "") + " · Chat " + S.version;
-  for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));
   if (S.conversations.length) await openConv(S.conversations[0].id); else render();
+  for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));
+  if (!S.assistants.length) $("log").appendChild(el("div", "muted", "Für dich ist noch kein Assistent sichtbar. Lege unter „Assistenten …“ einen eigenen an."));
 })();
 </script>
 </body>
