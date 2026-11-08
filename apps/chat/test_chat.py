@@ -504,8 +504,9 @@ app.KI_URL = ""
 st, r = req("GET", "/api/setup?assistant=projekte")
 it = items(r)
 app.KI_URL = saved_ki
-check("ohne Destination: nicht ok, sagt Kommandozeile; das Modell wird dann nicht mehr gefragt",
-      not it["destination"]["ok"] and "Kommandozeile" in it["destination"]["next"] and "model" not in it, r)
+check("ohne Destination: nicht ok, nennt Portal (zuordnen) und Betreiber (anlegen); das Modell wird dann nicht mehr gefragt",
+      not it["destination"]["ok"] and "Portal" in it["destination"]["next"]
+      and "Betreiber" in it["destination"]["next"] and "model" not in it, r)
 st, r = req("GET", "/api/setup?assistant=projekte", assertion=False)
 it = items(r)
 check("ohne Zusicherung: die Sicht wird nicht als ok gemeldet", not it["view"]["ok"], it.get("view"))

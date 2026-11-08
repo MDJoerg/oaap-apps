@@ -40,7 +40,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -505,8 +505,9 @@ def setup_report(person, assertion, a):
             "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
     if not add("destination", bool(KI_URL), "Ein Modell ist angebunden (Destination ki)",
                "" if KI_URL else "Dieser Instanz ist keine Destination ki zugeordnet.",
-               "" if KI_URL else "Ein Server-Admin legt eine Destination auf ein KI-Gateway an und ordnet sie "
-               "dieser Instanz als ki zu (heute nur über die Kommandozeile: oaap destination add / bind)."):
+               "" if KI_URL else "Im Portal: Instanz → Destinationen → beim Bedarf „ki“ eine Destination des "
+               "Mandanten zuordnen. Hat der Mandant keine, legt der Betreiber des Knotens eine an (Ziel: ein "
+               "KI-Gateway, mit einem Schlüssel nur für den Modellnamen -- oaap destination add)."):
         return items
     req = urllib.request.Request(KI_URL.rstrip("/") + "/models", headers={"Accept": "application/json"})
     try:
