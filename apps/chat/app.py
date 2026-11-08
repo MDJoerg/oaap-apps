@@ -19,6 +19,10 @@ MCP-Gateways, ein Modell über das KI-Gateway, der Verlauf als Datei.
 - Antworten werden im Browser als Markdown dargestellt, ```mermaid als Diagramm
   (static/markdown.js, Mermaid mitgeliefert, nichts von außen geladen).
 - „Einrichtung prüfen“ (0.3.0) nennt, welches Teil fehlt und was der nächste Schritt ist.
+- Ansichten von MCP Apps (0.4.0, RFC-0075): bei Assistenten mit `views: true` zeigt
+  der Chat die Ansicht eines Tools über den Sandbox-Proxy auf seiner zweiten
+  Herkunft (`/ui-sandbox`, Manifest 0.13); Aufrufe aus der Ansicht laufen über
+  dieselben Türen, schreibende nur nach Zustimmung im Chat (D4).
 - Der Verlauf liegt unter /data, je Person ein Ordner; nur sie liest ihn.
 
 Nur Standardbibliothek.
@@ -40,12 +44,17 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.3.3"
+VERSION = "0.4.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
 CLIENT_URL = (os.environ.get("OAAP_MCP_CLIENT_URL") or "").strip()
 KI_URL = (os.environ.get("OAAP_DESTINATION_KI_URL") or "").strip()
+SANDBOX_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_UI_SANDBOX_ORIGINS") or "").split(",")
+                   if o.strip()]
+OWN_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_INSTANCE_NAMES") or "").split(",") if o.strip()]
+UI_EXTENSION = "io.modelcontextprotocol/ui"
+UI_MIME = "text/html;profile=mcp-app"
 MODEL_TIMEOUT = int(os.environ.get("CHAT_MODEL_TIMEOUT", "240"))
 ASSERTION = "X-OAAP-User-Assertion"
 ACT_ASSERTION = "X-OAAP-Act-Assertion"
@@ -222,6 +231,7 @@ class McpWay:
     """Die Sicht eines Assistenten, als die Person dieser Anfrage."""
 
     def __init__(self, person, assertion, assistant):
+        self.views = bool(assistant.get("views"))
         gw = gateway_for(assistant.get("gateway") or "")
         self.url = f'{gw["via"]}/{assistant["view"]}'
         self.key = (person, gw["name"], assistant["view"])
@@ -231,7 +241,9 @@ class McpWay:
     def _open(self):
         status, sess, msgs = mcp_post(self.url, {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": MCP_VERSION, "capabilities": {},
+            "params": {"protocolVersion": MCP_VERSION,
+                       "capabilities": ({"extensions": {UI_EXTENSION: {"mimeTypes": [UI_MIME]}}}
+                                        if self.views else {}),
                        "clientInfo": {"name": "oaap-chat", "version": VERSION}}},
             "", self.assertion, self.aid)
         if status == 401:
@@ -285,6 +297,20 @@ class McpWay:
     def call(self, name, args, confirmed=False):
         return loop.result_text(self.rpc("tools/call", {"name": name, "arguments": args},
                                          confirmed))
+
+    def call_raw(self, name, args, confirmed=False):
+        """(Text für das Modell, CallToolResult für eine Ansicht)."""
+        msgs = self.rpc("tools/call", {"name": name, "arguments": args}, confirmed)
+        return loop.result_text(msgs), loop.raw_result(msgs)
+
+    def read(self, uri):
+        """resources/read als die Person -- das Gateway liefert nur Freigegebenes."""
+        for m in self.rpc("resources/read", {"uri": uri}):
+            if isinstance(m.get("result"), dict):
+                return m["result"]
+            if "error" in m:
+                raise Stop(f"{uri}: " + str((m["error"] or {}).get("message", "abgelehnt")), 403)
+        raise Stop(f"{uri}: keine Antwort.")
 
     def prompt(self, name, args):
         for m in self.rpc("prompts/get", {"name": name, "arguments": args}):
@@ -405,8 +431,13 @@ def step(person, person_name, assertion, assistant, conv, decision):
             result, note = loop.REFUSED, {"confirmed": False}
         else:
             way = way or McpWay(person, assertion, assistant)
-            result = way.call(name, args, confirmed=eff != "read")
-            note = {"confirmed": True} if eff != "read" else {}
+            if assistant.get("views") and name in conv.get("ui", {}):
+                result, raw = way.call_raw(name, args, confirmed=eff != "read")
+                note = {"view": conv["ui"][name]["resourceUri"], "raw": raw, "arguments": args}
+            else:
+                result, note = way.call(name, args, confirmed=eff != "read"), {}
+            if eff != "read":
+                note["confirmed"] = True
         msgs.append(dict({"role": "tool", "tool_call_id": c["id"], "name": name,
                           "content": result, "at": now()}, **note))
         conv.pop("confirm", None)
@@ -416,9 +447,11 @@ def step(person, person_name, assertion, assistant, conv, decision):
                      "werden. Formuliere die Frage bitte enger."})
         return "done"
     way = way or McpWay(person, assertion, assistant)
-    tools, effects_now = loop.tools_for_model(way.tools())
+    listed = way.tools()
+    tools, effects_now = loop.tools_for_model(listed)
     effects.clear()
     effects.update(effects_now)
+    conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
     reply = ask_model(assistant, person_name, msgs, tools)
     reply["at"] = now()
     msgs.append(reply)
@@ -529,7 +562,7 @@ PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "
 
 
 def public(a, origin, who):
-    return dict({k: a.get(k) for k in PUBLIC}, origin=origin,
+    return dict({k: a.get(k) for k in PUBLIC + ("views",)}, origin=origin,
                 manage=origin == "chat" and store.can_manage(a, who))
 
 
@@ -537,8 +570,10 @@ def view_of(conv):
     """Was der Browser zeigt -- ohne eigene Vermerke, die er nicht braucht."""
     shown = []
     for m in conv["messages"]:
-        x = {k: m[k] for k in ("role", "content", "name", "confirmed", "seconds", "at", "command")
-             if k in m}
+        x = {k: m[k] for k in ("role", "content", "name", "confirmed", "seconds", "at", "command",
+                               "tool_call_id") if k in m}
+        if m.get("view"):
+            x["view"] = m["view"]
         if m.get("tool_calls"):
             x["calls"] = [{"name": c["function"]["name"],
                            "arguments": loop.call_args(c)[0]} for c in m["tool_calls"]]
@@ -595,6 +630,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             with open(PAGE_FILE, encoding="utf-8") as f:
                 return self.send(200, "text/html; charset=utf-8", f.read())
+        if path == "/ui-sandbox":
+            # Der Sandbox-Proxy (RFC-0075 D6) -- auf der zweiten Herkunft ohne Person.
+            # Er spricht nur mit den eigenen Adressen dieser Instanz.
+            with open(os.path.join(STATIC_DIR, "sandbox.html"), encoding="utf-8") as f:
+                page = f.read().replace("__HOSTS__", json.dumps(OWN_ORIGINS))
+            return self.send(200, "text/html; charset=utf-8", page)
         if path.startswith("/static/") and path[8:] in STATIC:
             with open(os.path.join(STATIC_DIR, path[8:]), "rb") as f:
                 return self.send(200, STATIC[path[8:]], f.read(), cache="private, max-age=3600")
@@ -609,6 +650,7 @@ class Handler(BaseHTTPRequestHandler):
                 "errors": SETUP_ERRORS, "tenant_admin": "tenant_admin" in who.roles,
                 "teams_known": who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
+                "sandbox_origins": SANDBOX_ORIGINS,
                 "conversations": list_convs(person)})
         if path == "/api/setup":
             aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
@@ -632,13 +674,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(404, {"error": "Kein solcher Assistent."})
             return self.json(200, dict(a, origin=origin, manage=origin == "chat"
                                        and store.can_manage(a, who)))
-        m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands)?$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands|/view)?$", path)
         if m:
             conv = load_conv(person, m.group(1))
             if not conv:
                 return self.json(404, {"error": "Kein solches Gespräch."})
             if not m.group(2):
                 return self.json(200, view_of(conv))
+            if m.group(2) == "/view":
+                return self.view_doc(person, who, conv)
             return self.commands(person, who, conv)
         return self.send(404, "text/plain", "nicht hier")
 
@@ -660,6 +704,71 @@ class Handler(BaseHTTPRequestHandler):
              "arguments": [{"name": x.get("name"), "required": bool(x.get("required"))}
                            for x in p.get("arguments") or [] if isinstance(x, dict)]}
             for p in ps if isinstance(p, dict)]})
+
+    # ---- Ansichten (MCP Apps, RFC-0075)
+    def view_doc(self, person, who, conv):
+        """Die Ansicht zu einem Werkzeugergebnis: HTML (vom Gateway, festgehalten), Aufruf, Ergebnis."""
+        a = self.assistant_for(conv, who)
+        if isinstance(a, str):
+            return self.json(403, {"error": a})
+        if not a.get("views"):
+            return self.json(403, {"error": "Dieser Assistent zeigt keine Ansichten."})
+        call = (self.path.split("call=", 1)[1].split("&")[0] if "call=" in self.path else "")
+        msg = next((x for x in conv["messages"] if x.get("role") == "tool"
+                    and x.get("tool_call_id") == call and x.get("view")), None)
+        if msg is None:
+            return self.json(404, {"error": "Zu diesem Aufruf gibt es keine Ansicht."})
+        assertion = self.headers.get(ASSERTION, "").strip()
+        if not assertion:
+            return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
+        try:
+            res = McpWay(person, assertion, a).read(msg["view"])
+        except Stop as exc:
+            return self.json(exc.status if exc.status in (400, 401, 403) else 502, {"error": exc.text})
+        c = next((x for x in res.get("contents") or [] if isinstance(x, dict)), {})
+        if (c.get("mimeType") or "").replace(" ", "") != UI_MIME or not isinstance(c.get("text"), str):
+            return self.json(502, {"error": "Die Ansicht hat keine Form, die der Chat zeigen kann."})
+        meta = (c.get("_meta") or {}).get("ui") if isinstance(c.get("_meta"), dict) else {}
+        return self.json(200, {
+            "html": c["text"], "uri": msg["view"], "tool": {"name": msg.get("name")},
+            "arguments": msg.get("arguments") or {}, "result": msg.get("raw") or {},
+            # Stufe 2: keine fremden Domains, egal was die Ansicht erklärt (RFC-0075 §2.3).
+            "csp": {}, "permissions": {}, "prefersBorder": bool((meta or {}).get("prefersBorder")),
+            "sandbox": next((o for o in SANDBOX_ORIGINS), "")})
+
+    def view_call(self, person, who, conv, body):
+        """tools/call oder resources/read aus einer Ansicht -- als die Person, durch dieselbe Tür.
+
+        Nur Tools der Sicht, deren visibility "app" enthält; was nicht liest, nur mit
+        `confirmed: true` -- die Karte im Chat fragt, nicht die Ansicht (D4)."""
+        a = self.assistant_for(conv, who)
+        if isinstance(a, str):
+            return self.json(403, {"error": a})
+        if not a.get("views"):
+            return self.json(403, {"error": "Dieser Assistent zeigt keine Ansichten."})
+        assertion = self.headers.get(ASSERTION, "").strip()
+        if not assertion:
+            return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
+        try:
+            way = McpWay(person, assertion, a)
+            if body.get("method") == "resources/read":
+                return self.json(200, {"result": way.read(str(body.get("uri") or ""))})
+            name = str(body.get("name") or "")
+            args = body.get("arguments") if isinstance(body.get("arguments"), dict) else {}
+            listed = {t.get("name"): t for t in way.tools() if isinstance(t, dict)}
+            if name not in listed:
+                return self.json(403, {"error": f"Ein Werkzeug {name} gibt es in dieser Sicht nicht."})
+            ui = loop.tool_ui(listed[name])
+            if ui is not None and "app" not in ui["visibility"]:
+                return self.json(403, {"error": f"{name} ist nicht für Ansichten freigegeben."})
+            eff = loop.effect_of(listed[name])
+            if eff != "read" and body.get("confirmed") is not True:
+                return self.json(409, {"error": "Zustimmung fehlt.", "confirm": {
+                    "name": name, "effect": eff, "arguments": args}})
+            _text, raw = way.call_raw(name, args, confirmed=eff != "read")
+            return self.json(200, {"result": raw})
+        except Stop as exc:
+            return self.json(exc.status if exc.status in (400, 401, 403) else 502, {"error": exc.text})
 
     def assistant_for(self, conv, who):
         """Der Assistent des Gesprächs -- oder ein Satz, warum nicht (mehr)."""
@@ -700,6 +809,12 @@ class Handler(BaseHTTPRequestHandler):
                     "messages": []}
             save_conv(person, conv)
             return self.json(200, view_of(conv))
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/view-call$", path)
+        if m:
+            conv = load_conv(person, m.group(1))
+            if conv is None:
+                return self.json(404, {"error": "Kein solches Gespräch."})
+            return self.view_call(person, who, conv, body)
         m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")

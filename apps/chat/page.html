@@ -106,6 +106,7 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
       <div style="flex:1"><label>Team (bei „ein Team“)</label><input name="team"></div>
     </div>
     <label><input type="checkbox" name="commands" style="width:auto"> /Befehle aus den Prompts der Sicht anbieten</label>
+    <label><input type="checkbox" name="views" style="width:auto"> Ansichten der Werkzeuge zeigen (MCP Apps)</label>
     <p class="err" id="aerr"></p>
     <div class="row"><button class="primary">Speichern</button><button type="button" id="anew">Leeren</button>
       <a id="aexp" href="api/assistants/export" download="assistenten.json">Exportieren</a>
@@ -174,42 +175,158 @@ function renderSide(){
   }
 }
 
+// Neu zeichnen, ohne Ansichten neu zu laden: Nachrichten werden nur angehängt, solange
+// es dasselbe Gespräch ist (ein iframe, das man umhängt, lädt neu).
+let SHOWN = {id: null, n: 0};
+function msgNodes(m){
+  const out = [];
+  if (m.role === "user") {
+    const d = el("div", "msg user");
+    if (m.command) d.appendChild(el("span", "cmd", "/" + m.command));
+    d.appendChild(document.createTextNode(m.content)); out.push(d);
+  } else if (m.role === "assistant" && m.content) {
+    out.push(mdEl(m.content));
+  }
+  for (const c of m.calls || []) out.push(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
+  if (m.role === "tool") {
+    const d = el("details", "result");
+    d.appendChild(el("summary", "", "Ergebnis " + (m.name || "") + (m.confirmed === true ? " · von dir freigegeben" :
+                                                             m.confirmed === false ? " · von dir abgelehnt" : "")));
+    d.appendChild(el("pre", "", m.content)); out.push(d);
+    const a = C ? assistant(C.assistant) : null;
+    if (m.view && a && a.views) out.push(viewFrame(m));
+  }
+  return out;
+}
+
 function render(status){
-  const log = $("log"); log.textContent = "";
+  const log = $("log");
   const a = C ? assistant(C.assistant) : null;
   $("ctitle").textContent = C ? C.title : "—";
   $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
-  if (a && a.greeting) log.appendChild(mdEl(a.greeting));
-  if (SETUP && C && SETUP.assistant === C.assistant) log.appendChild(setupBox(SETUP));
-  if (!C) return;
-  for (const m of C.messages) {
-    if (m.role === "user") {
-      const d = el("div", "msg user");
-      if (m.command) d.appendChild(el("span", "cmd", "/" + m.command));
-      d.appendChild(document.createTextNode(m.content)); log.appendChild(d);
-    } else if (m.role === "assistant" && m.content) {
-      log.appendChild(mdEl(m.content));
-    }
-    for (const c of m.calls || []) log.appendChild(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
-    if (m.role === "tool") {
-      const d = el("details", "result");
-      d.appendChild(el("summary", "", "Ergebnis " + (m.name || "") + (m.confirmed === true ? " · von dir freigegeben" :
-                                                               m.confirmed === false ? " · von dir abgelehnt" : "")));
-      d.appendChild(el("pre", "", m.content)); log.appendChild(d);
-    }
+  let head = $("loghead"), msgs = $("logmsgs"), tail = $("logtail");
+  if (!head) {
+    log.textContent = "";
+    head = el("div"); head.id = "loghead"; msgs = el("div"); msgs.id = "logmsgs"; tail = el("div"); tail.id = "logtail";
+    for (const x of [head, msgs, tail]) { x.style.display = "flex"; x.style.flexDirection = "column"; x.style.gap = ".6rem"; log.appendChild(x); }
   }
+  head.textContent = "";
+  if (a && a.greeting) head.appendChild(mdEl(a.greeting));
+  if (SETUP && C && SETUP.assistant === C.assistant) head.appendChild(setupBox(SETUP));
+  if (!C) { msgs.textContent = ""; tail.textContent = ""; SHOWN = {id: null, n: 0}; return; }
+  if (SHOWN.id !== C.id || C.messages.length < SHOWN.n) { msgs.textContent = ""; SHOWN = {id: C.id, n: 0}; dropFrames(); }
+  for (const m of C.messages.slice(SHOWN.n)) for (const node of msgNodes(m)) msgs.appendChild(node);
+  SHOWN.n = C.messages.length;
+  tail.textContent = "";
   if (C.confirm && !busy) {
     const k = C.confirm, box = el("div", "confirm");
     box.appendChild(el("div", "", "Der Assistent möchte etwas " + (k.effect === "execute" ? "ausführen" : "ändern") + " — als du:"));
     box.appendChild(el("pre", "", k.name + " " + JSON.stringify(k.arguments, null, 2)));
     const ok = el("button", "primary", "Ausführen"), no = el("button", "", "Ablehnen");
     ok.onclick = () => decide(k.call, true); no.onclick = () => decide(k.call, false);
-    box.append(ok, " ", no); log.appendChild(box);
+    box.append(ok, " ", no); tail.appendChild(box);
   }
-  if (status) log.appendChild(status);
+  if (status) tail.appendChild(status);
   log.scrollTop = log.scrollHeight;
-  drawMermaid(log).then(() => { log.scrollTop = log.scrollHeight; });
+  drawMermaid(msgs).then(() => { log.scrollTop = log.scrollHeight; });
 }
+
+// ---- Ansichten von MCP Apps (RFC-0075): der Chat ist der Host. Die Ansicht läuft im
+// Sandbox-Proxy auf der zweiten Herkunft dieser Instanz; jede Nachricht wird hier
+// geprüft, Aufrufe gehen durch die Türen des Chats -- als du, schreibend nur nach Zustimmung.
+const FRAMES = [];
+function sandboxOrigin(){
+  const list = (S && S.sandbox_origins) || [];
+  const rest = location.host.split(".").slice(1).join(".");
+  return list.find(o => o.split("://")[1].split(".").slice(1).join(".") === rest) || list[0] || "";
+}
+function dropFrames(){ FRAMES.length = 0; }
+function viewFrame(m){
+  const box = el("div", "view");
+  const origin = sandboxOrigin();
+  if (!origin) { box.appendChild(el("div", "muted", "Ansicht nicht verfügbar: dieser Chat hat keine zweite Herkunft (Plattform ab 0.1.245).")); return box; }
+  const f = document.createElement("iframe");
+  f.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
+  f.setAttribute("title", "Ansicht " + (m.name || ""));
+  f.style.cssText = "width:100%;height:120px;border:1px solid var(--line);border-radius:.5rem;background:var(--panel)";
+  f.src = origin + "/ui-sandbox";
+  box.appendChild(f);
+  FRAMES.push({frame: f, origin, conv: C.id, call: m.tool_call_id, name: m.name, doc: null, ready: false});
+  return box;
+}
+function toView(st, msg){ st.frame.contentWindow.postMessage(msg, st.origin); }
+function reply(st, id, result){ toView(st, {jsonrpc: "2.0", id, result}); }
+function fail(st, id, code, message){ toView(st, {jsonrpc: "2.0", id, error: {code, message}}); }
+
+async function viewCall(st, body){
+  let r = await api("POST", "api/conv/" + st.conv + "/view-call", body);
+  if (r.confirm) {
+    const k = r.confirm;
+    // D4: die Zustimmung fragt der Chat selbst -- nicht die Ansicht.
+    const yes = confirm("Die Ansicht von " + st.name + " möchte etwas " + (k.effect === "execute" ? "ausführen" : "ändern") +
+                        " — als du:\n\n" + k.name + " " + JSON.stringify(k.arguments, null, 2) + "\n\nAusführen?");
+    if (!yes) return {error: "Von dir abgelehnt."};
+    r = await api("POST", "api/conv/" + st.conv + "/view-call", Object.assign({}, body, {confirmed: true}));
+  }
+  return r;
+}
+
+window.addEventListener("message", async ev => {
+  const st = FRAMES.find(x => x.frame.contentWindow === ev.source);
+  if (!st || ev.origin !== st.origin) return;
+  const m = ev.data;
+  if (!m || m.jsonrpc !== "2.0") return;
+  if (m.method === "ui/notifications/sandbox-proxy-ready") {
+    const doc = await api("GET", "api/conv/" + st.conv + "/view?call=" + encodeURIComponent(st.call));
+    if (doc.error) { st.frame.replaceWith(el("div", "err", "Ansicht: " + doc.error)); return; }
+    st.doc = doc;
+    toView(st, {jsonrpc: "2.0", method: "ui/notifications/sandbox-resource-ready",
+                params: {html: doc.html, csp: {}, permissions: {}}});
+    return;
+  }
+  if (m.method === "ui/notifications/initialized" && st.doc && !st.ready) {
+    st.ready = true;
+    toView(st, {jsonrpc: "2.0", method: "ui/notifications/tool-input", params: {arguments: st.doc.arguments || {}}});
+    toView(st, {jsonrpc: "2.0", method: "ui/notifications/tool-result", params: st.doc.result || {}});
+    return;
+  }
+  if (m.method === "ui/notifications/size-changed" && m.params) {
+    st.frame.style.height = Math.min(Math.max(Number(m.params.height) || 0, 60), 900) + 2 + "px";
+    return;
+  }
+  if (m.id === undefined || typeof m.method !== "string") return;
+  const p = m.params || {};
+  if (m.method === "ui/initialize") {
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    return reply(st, m.id, {protocolVersion: "2026-01-26",
+      hostCapabilities: {openLinks: {}, serverTools: {}, serverResources: {}},
+      hostInfo: {name: "oaap-chat", version: (S && S.version) || ""},
+      hostContext: {toolInfo: {tool: {name: st.name}}, theme: dark ? "dark" : "light",
+                    displayMode: "inline", availableDisplayModes: ["inline"], locale: "de-DE"}});
+  }
+  if (m.method === "ping") return reply(st, m.id, {});
+  if (m.method === "tools/call") {
+    const r = await viewCall(st, {name: p.name, arguments: p.arguments || {}});
+    return r.error ? fail(st, m.id, -32000, r.error) : reply(st, m.id, r.result);
+  }
+  if (m.method === "resources/read") {
+    const r = await api("POST", "api/conv/" + st.conv + "/view-call", {method: "resources/read", uri: p.uri});
+    return r.error ? fail(st, m.id, -32000, r.error) : reply(st, m.id, r.result);
+  }
+  if (m.method === "ui/open-link") {
+    if (!/^https?:\/\//i.test(String(p.url || ""))) return fail(st, m.id, -32000, "Invalid URL");
+    window.open(p.url, "_blank", "noopener,noreferrer");
+    return reply(st, m.id, {});
+  }
+  if (m.method === "ui/message") {
+    // D5: der Vorschlag landet im Eingabefeld -- gesendet wird nur von dir.
+    const text = ((p.content || {}).text || "").slice(0, 4000);
+    if (text) { $("t").value = text; $("t").focus(); }
+    return reply(st, m.id, {});
+  }
+  if (m.method === "ui/request-display-mode") return reply(st, m.id, {mode: "inline"});
+  return fail(st, m.id, -32601, "Dieser Chat kann " + m.method + " noch nicht.");
+});
 
 // „Einrichtung prüfen“: was fehlt, und der nächste Schritt
 function setupBox(r){
@@ -283,7 +400,7 @@ function showCommands(){
 }
 
 async function refreshState(){ S = await api("GET", "api/state"); renderSide(); }
-async function openConv(id){ C = await api("GET", "api/conv/" + id); render(); renderSide(); loadCommands(); }
+async function openConv(id){ C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); }
 
 $("chk").onclick = () => checkSetup(C ? C.assistant : $("pick").value);
 $("ren").onclick = async () => {
@@ -325,6 +442,7 @@ function fill(a){
   F.elements.scope.value = a.visibility.scope;
   F.elements.team.value = (a.visibility.context || {}).team || "";
   F.elements.commands.checked = !!a.commands;
+  F.elements.views.checked = !!a.views;
 }
 async function renderList(){
   const box = $("alist"); box.textContent = "";
@@ -354,7 +472,7 @@ F.onsubmit = async ev => {
   if (v.scope === "context") v.context = {team: F.elements.team.value.trim()};
   const a = {id: F.elements.id.value.trim(), title: F.elements.title.value.trim(), system: F.elements.system.value,
              model: F.elements.model.value.trim(), view: F.elements.view.value.trim(), visibility: v,
-             owner: "-", commands: F.elements.commands.checked};
+             owner: "-", commands: F.elements.commands.checked, views: F.elements.views.checked};
   if (F.elements.greeting.value.trim()) a.greeting = F.elements.greeting.value.trim();
   if (F.elements.gateway.value.trim()) a.gateway = F.elements.gateway.value.trim();
   const r = await api("POST", "api/assistants", a);

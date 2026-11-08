@@ -16,7 +16,7 @@ MODEL = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 INSTANCE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 CONTEXT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 FIELDS = {"id", "title", "greeting", "system", "model", "view", "gateway", "visibility",
-          "owner", "commands"}
+          "owner", "commands", "views"}
 REQUIRED = ("id", "title", "system", "model", "view", "visibility", "owner")
 # Was nach einem Recht aussieht (D1): ausdrücklich abgelehnt.
 RIGHTS = {"key", "api_key", "token", "secret", "roles", "role", "on_behalf_of", "principal",
@@ -52,6 +52,8 @@ def check(a):
         errs.append("gateway: der Name einer Gateway-Instanz des Mandanten.")
     if "commands" in a and not isinstance(a["commands"], bool):
         errs.append("commands: true oder false.")
+    if "views" in a and not isinstance(a["views"], bool):
+        errs.append("views: true oder false (Ansichten von MCP Apps zeigen, RFC-0075 D2).")
     v = a.get("visibility")
     if "visibility" in a:
         if not isinstance(v, dict) or v.get("scope") not in SCOPES:

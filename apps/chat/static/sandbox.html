@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ansicht</title>
+<style>html,body{margin:0;padding:0;background:transparent}iframe{border:0;width:100%;display:block}</style>
+</head>
+<body>
+<script>
+/* Sandbox-Proxy des Chats (MCP Apps, io.modelcontextprotocol/ui, Fassung 2026-01-26, RFC-0075 D6).
+ *
+ * Läuft auf der zweiten Herkunft der Chat-Instanz (<instanz>--ui...), ohne Anmeldung
+ * und ohne Kekse. Spricht nur mit den eigenen Adressen des Chats (HOSTS, von der App
+ * eingesetzt). Lädt die Ansicht in ein inneres iframe OHNE allow-same-origin (eigene,
+ * undurchsichtige Herkunft) mit einer strengen CSP vorn im Dokument: in dieser Stufe
+ * keine fremden Domains, egal was die Ansicht erklärt. Reicht Nachrichten in beide
+ * Richtungen durch, außer ui/notifications/sandbox-*. Erzeugt selbst keine Anfragen. */
+"use strict";
+const HOSTS = __HOSTS__;
+const HOST = HOSTS.find(o => document.referrer.startsWith(o + "/")) || HOSTS[0] || "";
+let inner = null;
+
+function strictCsp() {
+  return ["default-src 'none'", "script-src 'unsafe-inline'", "style-src 'unsafe-inline'",
+          "img-src data: blob:", "font-src data:", "media-src data: blob:", "connect-src 'none'",
+          "frame-src 'none'", "child-src 'none'", "worker-src 'none'", "object-src 'none'",
+          "base-uri 'none'", "form-action 'none'"].join("; ");
+}
+
+function withCsp(html) {
+  const meta = '<meta http-equiv="Content-Security-Policy" content="' + strictCsp() + '">';
+  const m = /<head[^>]*>/i.exec(html);
+  if (m) return html.slice(0, m.index + m[0].length) + meta + html.slice(m.index + m[0].length);
+  return "<!doctype html><html><head>" + meta + "</head><body>" + html + "</body></html>";
+}
+
+window.addEventListener("message", ev => {
+  const m = ev.data;
+  if (!m || m.jsonrpc !== "2.0") return;
+  if (ev.source === window.parent) {
+    if (ev.origin !== HOST) return;                       // nur der eigene Chat
+    if (m.method === "ui/notifications/sandbox-resource-ready") {
+      const p = m.params || {};
+      if (inner || typeof p.html !== "string") return;    // genau eine Ansicht je Rahmen
+      inner = document.createElement("iframe");
+      inner.setAttribute("sandbox", "allow-scripts allow-forms");
+      inner.setAttribute("referrerpolicy", "no-referrer");
+      inner.srcdoc = withCsp(p.html);
+      document.body.appendChild(inner);
+      return;
+    }
+    if (typeof m.method === "string" && m.method.startsWith("ui/notifications/sandbox-")) return;
+    if (inner) inner.contentWindow.postMessage(m, "*");   // in die Ansicht
+    return;
+  }
+  if (inner && ev.source === inner.contentWindow) {
+    if (typeof m.method === "string" && m.method.startsWith("ui/notifications/sandbox-")) return;
+    if (m.method === "ui/notifications/size-changed" && m.params) {
+      inner.style.height = Math.min(Math.max(Number(m.params.height) || 0, 40), 4000) + "px";
+    }
+    window.parent.postMessage(m, HOST);                   // zum Chat, nur an seine Herkunft
+  }
+});
+
+if (HOST && window.parent !== window) {
+  window.parent.postMessage({jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {}}, HOST);
+}
+</script>
+</body>
+</html>

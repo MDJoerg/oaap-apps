@@ -108,6 +108,8 @@ class Fake(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != "Bearer " + CK or not a.startswith("ZS-") \
                     or BAD_ASSERTION["on"]:
                 return self.reply(401, {"error": "nein"})
+            if self.path == "/via/gw1/vg":
+                return self.vg(body, a)
             if self.path == "/via/gw1/zu-rot":
                 return self.reply(403, {"jsonrpc": "2.0", "id": None, "error": {
                     "code": -32000, "message": "Angemeldet, aber die Ampel der Sicht zu-rot ist red, "
@@ -159,7 +161,7 @@ class Fake(BaseHTTPRequestHandler):
             if q == "Schleife":
                 call = ("list_projects", "{}")
             elif last["role"] == "user":
-                call = {"Projekte?": ("list_projects", "{}"),
+                call = {"Projekte?": ("list_projects", "{}"), "Karte?": ("karte", '{"nr": "V-1"}'),
                         "Eintrag": ("add_entry", '{"project": "pA", "text": "neu"}'),
                         "Alt": ("legacy", "{}"), "Erfunden": ("delete_all", "{}"),
                         "Kaputt": ("list_projects", "{nicht json")}.get(q)
@@ -173,6 +175,43 @@ class Fake(BaseHTTPRequestHandler):
         self.reply(404, {})
 
 
+VG_INIT, VG_CALLS = [], []
+VG_HTML = "<!doctype html><html><head><title>Karte</title></head><body><p>Karte</p></body></html>"
+
+
+def _vg(self, body, a):
+    m = body.get("method")
+    if m == "initialize":
+        VG_INIT.append(body["params"].get("capabilities"))
+        return self.reply(200, {"jsonrpc": "2.0", "id": 1, "result": {}}, [("Mcp-Session-Id", "V-" + a.split("-")[1])])
+    if m == "notifications/initialized":
+        return self.reply(202, {})
+    if m == "tools/list":
+        return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {"tools": [
+            {"name": "karte", "inputSchema": {"type": "object"},
+             "_meta": {"oaap/effect": "read", "ui": {"resourceUri": "ui://karte/v1"}}},
+            {"name": "nur_app", "inputSchema": {"type": "object"},
+             "_meta": {"oaap/effect": "read", "ui": {"resourceUri": "ui://karte/v1", "visibility": ["app"]}}},
+            {"name": "nur_modell", "inputSchema": {"type": "object"},
+             "_meta": {"oaap/effect": "read", "ui": {"resourceUri": "ui://karte/v1", "visibility": ["model"]}}},
+            {"name": "schreiben", "inputSchema": {"type": "object"}, "_meta": {"oaap/effect": "write"}}]}})
+    if m == "resources/read":
+        uri = body["params"]["uri"]
+        if uri != "ui://karte/v1":
+            return self.reply(200, {"jsonrpc": "2.0", "id": 2, "error": {"code": -32002, "message": "nicht freigegeben"}})
+        return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {"contents": [
+            {"uri": uri, "mimeType": "text/html;profile=mcp-app", "text": VG_HTML,
+             "_meta": {"ui": {"csp": {"connectDomains": ["https://evil.example"]}, "prefersBorder": True}}}]}})
+    if m == "tools/call":
+        p_ = body["params"]
+        VG_CALLS.append((p_["name"], p_["arguments"], self.headers.get("X-OAAP-Confirmed", ""), a))
+        return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {
+            "content": [{"type": "text", "text": json.dumps({"nr": "V-1", "titel": "Drucker"})}],
+            "structuredContent": {"nr": "V-1"}}})
+    return self.reply(200, {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "?"}})
+
+
+Fake.vg = _vg
 fake = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
 threading.Thread(target=fake.serve_forever, daemon=True).start()
 FP = fake.server_address[1]
@@ -522,6 +561,66 @@ check("0.3.1: der Grund des Gateways (Ampel) steht im Bericht, der Schritt nennt
       and "Ampel" in it["view"]["next"] and "anlegen" not in it["view"]["next"], it.get("view"))
 check("vermutete Instanz aus der automatischen Adresse", app.own_instance_guess() == "vuebung-chat",
       app.own_instance_guess())
+
+# ------------------------------------------------ 0.4.0: Ansichten (MCP Apps, RFC-0075)
+req("POST", "/api/assistants", asst("mitansicht", "private", view="vg", views=True))
+req("POST", "/api/assistants", asst("ohneansicht", "private", view="vg"))
+st, sbx = 0, ""
+try:
+    with urllib.request.urlopen(BASE + "/ui-sandbox", timeout=10) as r_:
+        st, sbx = r_.status, r_.read().decode()
+except urllib.error.HTTPError as e:
+    st = e.code
+check("0.4.0: /ui-sandbox wird ohne Person ausgeliefert, mit den eigenen Adressen als erlaubten Eltern",
+      st == 200 and '["https://chat.example.org", "https://chat.vuebung.node.example"]' in sbx
+      and "__HOSTS__" not in sbx and "allow-same-origin" not in sbx.split("inner.setAttribute(\"sandbox\"")[1][:60], st)
+_, cv = req("POST", "/api/conv", {"assistant": "mitansicht"})
+n_model = len(MODEL)
+st, r = req("POST", f"/api/conv/{cv['id']}/send", {"text": "Karte?"})
+names = [t["function"]["name"] for t in MODEL[n_model]["tools"]]
+check("0.4.0: das Modell sieht Tools nur mit visibility model -- nur_app fehlt, nur_modell ist da",
+      "karte" in names and "nur_modell" in names and "nur_app" not in names, names)
+check("... der Chat sagt die Erweiterung io.modelcontextprotocol/ui beim Gateway an",
+      VG_INIT and VG_INIT[-1] == {"extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}},
+      VG_INIT[-1:])
+st, r = req("POST", f"/api/conv/{cv['id']}/step", {})
+tm = [m for m in r["messages"] if m["role"] == "tool"][-1]
+check("0.4.0: das Ergebnis eines Tools mit Ansicht trägt die Ansicht und die Aufrufkennung",
+      tm.get("view") == "ui://karte/v1" and tm.get("tool_call_id"), tm)
+st, v = req("GET", f"/api/conv/{cv['id']}/view?call={tm['tool_call_id']}")
+check("0.4.0: die Tür /view liefert HTML, Argumente und das CallToolResult",
+      st == 200 and v["html"] == VG_HTML and v["arguments"] == {"nr": "V-1"}
+      and v["result"]["structuredContent"] == {"nr": "V-1"}, v)
+check("... und gibt keine fremden Domains weiter, egal was die Ansicht erklärt (Stufe 2)",
+      v["csp"] == {} and "evil" not in json.dumps(v), v.get("csp"))
+st, v = req("GET", f"/api/conv/{cv['id']}/view?call={tm['tool_call_id']}", assertion=False)
+check("... ohne Zusicherung keine Ansicht (401)", st == 401, st)
+st, v = req("GET", f"/api/conv/{cv['id']}/view?call={tm['tool_call_id']}", person="bert")
+check("... bert bekommt annas Ansicht nicht (404)", st == 404, st)
+_, co = req("POST", "/api/conv", {"assistant": "ohneansicht"})
+st, v = req("POST", f"/api/conv/{co['id']}/view-call", {"name": "karte", "arguments": {}})
+check("0.4.0: ein Assistent ohne views: keine Aufrufe aus Ansichten (403)", st == 403, v)
+
+n = len(VG_CALLS)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"name": "nur_app", "arguments": {"x": 1}})
+check("0.4.0: die Ansicht ruft ein Tool nur für Ansichten -- als die Person, ohne Zustimmung (lesend)",
+      st == 200 and VG_CALLS[-1][0] == "nur_app" and VG_CALLS[-1][2] == "" and VG_CALLS[-1][3].startswith("ZS-anna"), v)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"name": "nur_modell", "arguments": {}})
+check("... ein Tool nur für das Modell darf die Ansicht nicht rufen (403)", st == 403 and VG_CALLS[-1][0] != "nur_modell", v)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"name": "gibtsnicht", "arguments": {}})
+check("... ein Tool, das die Sicht nicht hat: 403", st == 403, v)
+n = len(VG_CALLS)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"name": "schreiben", "arguments": {"t": "neu"}})
+check("0.4.0: ein schreibendes Tool aus der Ansicht ohne Zustimmung: 409 mit Karte, nichts gerufen (D4)",
+      st == 409 and v["confirm"]["name"] == "schreiben" and v["confirm"]["effect"] == "write" and len(VG_CALLS) == n, v)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"name": "schreiben", "arguments": {"t": "neu"}, "confirmed": True})
+check("... mit Zustimmung: genau ein Aufruf, X-OAAP-Confirmed: yes",
+      st == 200 and len(VG_CALLS) == n + 1 and VG_CALLS[-1][2] == "yes", v)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"method": "resources/read", "uri": "ui://karte/v1"})
+check("0.4.0: resources/read aus der Ansicht -- durch die Tür, als die Person", st == 200
+      and v["result"]["contents"][0]["text"] == VG_HTML, v)
+st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"method": "resources/read", "uri": "ui://anderes"})
+check("... was das Gateway nicht freigibt, kommt nicht (403)", st == 403, v)
 
 srv.shutdown()
 fake.shutdown()

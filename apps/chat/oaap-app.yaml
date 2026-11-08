@@ -1,12 +1,12 @@
-oaap_manifest: "0.12"
+oaap_manifest: "0.13"
 
 app:
   id: chat
   name: Chat
-  version: 0.3.3
+  version: 0.4.0
   type: native
   class: frontend
-  description: "Der Plattform-Chat, erste Fassung (RFC-0074 Stufe 2): ein Assistent (oaap.ai.assistants 0.1) mit den Werkzeugen einer Sicht des MCP-Gateways und einem Modell des KI-Gateways. Jeder Werkzeugaufruf laeuft als die Person, die schreibt (Verfahren A); was etwas aendert, erst nach ihrer Zustimmung. Verlauf je Person unter /data. Seit 0.3.0 Markdown und Mermaid in Antworten, Gespraeche umbenennen/loeschen, Einrichtung pruefen. Seit 0.2.0 mehrere Assistenten (privat, Team, Mandant), /Befehle aus den Prompts der Sicht, Zustimmung ans Gateway gemeldet. Plattform ab 0.1.243"
+  description: "Der Plattform-Chat, erste Fassung (RFC-0074 Stufe 2): ein Assistent (oaap.ai.assistants 0.1) mit den Werkzeugen einer Sicht des MCP-Gateways und einem Modell des KI-Gateways. Jeder Werkzeugaufruf laeuft als die Person, die schreibt (Verfahren A); was etwas aendert, erst nach ihrer Zustimmung. Verlauf je Person unter /data. Seit 0.4.0 Ansichten von MCP Apps (Sandbox-Proxy auf zweiter Herkunft, Plattform ab 0.1.245). Seit 0.3.0 Markdown und Mermaid in Antworten, Gespraeche umbenennen/loeschen, Einrichtung pruefen. Seit 0.2.0 mehrere Assistenten (privat, Team, Mandant), /Befehle aus den Prompts der Sicht, Zustimmung ans Gateway gemeldet. Plattform ab 0.1.243"
 
 care:
   # RFC-0071 §15: nur Standardbibliothek, beim Bau wird nichts nachgeladen.
@@ -30,6 +30,12 @@ storage:
 # er braucht die Zusicherung der Person aus derselben Anfrage.
 mcp_client:
   use: true
+
+# Manifest 0.13 (RFC-0075 D6): die Seite des Sandbox-Proxys fuer Ansichten von MCP
+# Apps. Die Plattform gibt ihr eine zweite Herkunft (<instanz>--ui...) ohne
+# Anmeldung und ohne Kekse; einbetten darf sie nur der Chat selbst.
+ui_sandbox:
+  path: /ui-sandbox
 
 # Das Modell: eine Destination auf ein KI-Gateway (der Schluessel bleibt auf
 # der Plattform). Im geschlossenen Mandanten nur ein Schluessel mit Ampel gruen.

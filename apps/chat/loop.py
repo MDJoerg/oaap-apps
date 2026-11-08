@@ -32,11 +32,34 @@ def effect_of(tool):
     return eff if eff in EFFECTS else "write"
 
 
+def tool_ui(tool):
+    """`_meta.ui` eines Tools (MCP Apps): {resourceUri, visibility} oder None."""
+    meta = tool.get("_meta") if isinstance(tool.get("_meta"), dict) else {}
+    ui = meta.get("ui") if isinstance(meta.get("ui"), dict) else None
+    if not ui or not str(ui.get("resourceUri") or "").startswith("ui://"):
+        return None
+    vis = ui.get("visibility")
+    vis = [v for v in vis if v in ("model", "app")] if isinstance(vis, list) else ["model", "app"]
+    return {"resourceUri": ui["resourceUri"], "visibility": vis or ["model", "app"]}
+
+
+def visible_to_model(tool):
+    """MCP Apps: ein Tool, dessen visibility "model" nicht enthält, sieht das Modell nicht."""
+    ui = tool_ui(tool)
+    return ui is None or "model" in ui["visibility"]
+
+
 def tools_for_model(mcp_tools):
-    """MCP-Werkzeuge -> (Werkzeuge für das Modell, {Name: Wirkungsklasse})."""
+    """MCP-Werkzeuge -> (Werkzeuge für das Modell, {Name: Wirkungsklasse}).
+
+    Die Wirkungsklassen gelten für ALLE Tools der Sicht (auch die nur für eine
+    Ansicht); die Liste für das Modell lässt die weg, die nur die Ansicht ruft."""
     out, effects = [], {}
     for t in mcp_tools or []:
         if not isinstance(t, dict) or not isinstance(t.get("name"), str):
+            continue
+        effects[t["name"]] = effect_of(t)
+        if not visible_to_model(t):
             continue
         schema = t.get("inputSchema") if isinstance(t.get("inputSchema"), dict) else {}
         schema = dict(schema) or {"type": "object", "properties": {}}
@@ -44,8 +67,29 @@ def tools_for_model(mcp_tools):
         out.append({"type": "function", "function": {
             "name": t["name"], "description": (t.get("description") or "")[:1024],
             "parameters": schema}})
-        effects[t["name"]] = effect_of(t)
     return out, effects
+
+
+def ui_map(mcp_tools):
+    """{Name: {resourceUri, visibility}} der Tools mit Ansicht."""
+    return {t["name"]: tool_ui(t) for t in mcp_tools or []
+            if isinstance(t, dict) and isinstance(t.get("name"), str) and tool_ui(t)}
+
+
+MAX_RAW = 60_000
+
+
+def raw_result(msgs):
+    """Das CallToolResult einer Antwort, gekürzt -- für die Ansicht (tool-result)."""
+    for m in msgs:
+        res = m.get("result")
+        if isinstance(res, dict):
+            keep = {k: res[k] for k in ("content", "structuredContent", "isError") if k in res}
+            return keep if len(json.dumps(keep, ensure_ascii=False)) <= MAX_RAW else \
+                {"content": [{"type": "text", "text": result_text(msgs)}], "isError": bool(res.get("isError"))}
+        if "error" in m:
+            return {"content": [{"type": "text", "text": result_text(msgs)}], "isError": True}
+    return {"content": [{"type": "text", "text": "Fehler: keine Antwort des Werkzeugs."}], "isError": True}
 
 
 def last_user_index(msgs):
