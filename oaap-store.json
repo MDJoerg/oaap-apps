@@ -315,6 +315,58 @@
       ]
     },
     {
+      "id": "chat",
+      "name": "Chat",
+      "type": "native",
+      "version": "0.2.0",
+      "released": "2026-11-08",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/chat"
+      },
+      "roles": [
+        "admin",
+        "keyuser",
+        "user"
+      ],
+      "categories": [
+        "ai",
+        "productivity"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "everyone",
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "ki",
+        "chat",
+        "assistent",
+        "mcp",
+        "souveraen",
+        "lokal"
+      ],
+      "summary": "Der Plattform-Chat: Assistenten mit den Werkzeugen einer Sicht des MCP-Gateways und einem Modell des KI-Gateways. Jeder Werkzeugaufruf läuft als die Person, die schreibt; was etwas ändert, erst nach ihrer Zustimmung. Assistenten privat, für ein Team oder den Mandanten, /Befehle aus den Prompts der Sicht.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/chat"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/spec/oaap.ai.assistants.md",
+          "label": "Capability oaap.ai.assistants"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0074-assistants.md",
+          "label": "RFC-0074 — Assistenten"
+        }
+      ]
+    },
+    {
       "id": "ollama-models",
       "name": "OAAP Ollama-Modelle",
       "type": "native",
