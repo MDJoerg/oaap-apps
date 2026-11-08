@@ -1443,6 +1443,62 @@ check("ein *-Profil gilt NICHT für Menschen aus einem Chat: 403", st == 403, st
 admin("/issue", label="a-chat", kind="profile", groups="@chat", views="a-sicht", cost_center="KS-CHAT")
 st, sid = session_a("a-sicht")
 check("Profil @chat: Sitzung eröffnet", st == 200 and bool(sid), st)
+
+# ---- 0.7.3: Grenzen ändern, Gründe nennen, Quellen einlesen
+admin("/view-save", name="a-zwei", max_effect="read", ways="key")
+
+
+def init_a(view):
+    st, _, msgs = rpc_a(view, {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                               "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                          "clientInfo": {"name": "probe", "version": "1"}}})
+    return st, ((msgs[-1].get("error") or {}).get("message", "") if msgs else "")
+
+
+st, why = init_a("a-zwei")
+check("0.7.3: Sicht nicht im Profil: 403 „kein Zugangsprofil“", st == 403 and "kein Zugangsprofil" in why, why)
+page = admin("/key-limits", label="a-chat", views="a-sicht,a-zwei", max_effect="read", ceiling="yellow")
+row = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]
+check("0.7.3: Sichten eines Zugangsprofils auf der Betreiberseite geändert, ohne Widerruf",
+      "geändert: Sichten" in page and row["views"] == "a-sicht,a-zwei" and not row["revoked"], (row["views"], page[-300:]))
+check("... in der Prüfspur alt → neu", any(a["action"] == "key.limits" and "a-sicht,a-zwei" in a["detail"]
+                                         for a in app.DB.execute("SELECT * FROM audit")), None)
+st, why = init_a("a-zwei")
+check("0.7.3: Sicht ohne Zugang Plattform: 403 nennt genau das, nicht „kein Zugangsprofil“",
+      st == 403 and "Zugang „Plattform“" in why and "kein Zugangsprofil" not in why, why)
+st_p, page = admin_get("/")
+check("0.7.3: die Tabelle warnt beim Profil: a-zwei ohne Zugang Plattform",
+      "a-zwei: die Sicht a-zwei hat den Zugang" in page, None)
+admin("/server-save", name="kp", address=TUER, auth="platform", light="red")
+st, why = init_a("a-sicht")
+check("0.7.3: Ampel der Sicht über der des Profils: 403 nennt Ampel und Abhilfe",
+      st == 403 and "Ampel der Sicht a-sicht ist red" in why and "bis yellow" in why, why)
+st_p, page = admin_get("/")
+check("... und die Tabelle warnt ebenso", "a-sicht: die Ampel der Sicht a-sicht ist red" in page, None)
+admin("/server-save", name="kp", address=TUER, auth="platform", light="green")
+page = admin("/key-limits", label="a-chat", views="a-sicht,gibtsnicht", max_effect="read", ceiling="yellow")
+row = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]
+check("0.7.3: unbekannte Sicht: abgewiesen mit Satz, nichts geändert",
+      "gibt es nicht" in page and row["views"] == "a-sicht,a-zwei", row["views"])
+_out, sys.stdout = sys.stdout, io.StringIO()
+try:
+    rc = app.cli(["key", "set", "a-chat", "--views", "a-sicht"])
+    said = sys.stdout.getvalue()
+finally:
+    sys.stdout = _out
+row = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]
+check("0.7.3: Kommandozeile key set: zurück auf a-sicht, Rest bleibt",
+      rc == 0 and row["views"] == "a-sicht" and row["max_effect"] == "read" and "Sichten" in said, (rc, said, row["views"]))
+st, sid = session_a("a-sicht")
+check("... danach öffnet das Profil a-sicht wieder", st == 200 and bool(sid), st)
+_saved = (app.SOURCES_URL, app.fetch_sources)
+app.SOURCES_URL = "http://quellen.invalid/list"
+app.fetch_sources = lambda: list(books.servers(app.DB)) and [{"name": "kp", "app": "kontext-probe", "version": "0.1.4", "door": TUER, "instance": "kp"}]
+st_p, page = admin_get("/")
+check("0.7.3: Betreiberseite zeigt den Knopf „Quellen jetzt einlesen“ und wann zuletzt", "Quellen jetzt" in page and "zuletzt" in page, None)
+page = admin("/source-sync")
+check("0.7.3: der Knopf gleicht sofort ab und sagt das Ergebnis", "Quelle(n) in der Liste" in page, page[page.find("Quelle"):][:200])
+app.SOURCES_URL, app.fetch_sources = _saved
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid)
 names = [t["name"] for t in ((msgs[-1].get("result") or {}).get("tools") or [])] if msgs else []
 check("… tools/list nennt das freigegebene Tool", names == ["whoami"], msgs)

@@ -312,6 +312,36 @@ def set_profile_groups(db, actor, label, groups):
         db.commit()
 
 
+def set_key_limits(db, actor, label, views, max_effect, ceiling):
+    """Sichten und Grenzen eines Schlüssels oder Zugangsprofils ändern (0.7.3).
+
+    Der Wert eines Schlüssels bleibt derselbe -- wer ihn benutzt, merkt nur die
+    neue Reichweite. Dieselben Regeln wie beim Ausstellen; Prüfspur mit alt → neu."""
+    row = db.execute("SELECT * FROM keys WHERE label=? AND revoked=''", (label,)).fetchone()
+    if not row:
+        raise ValueError(f"„{label}“ gibt es nicht, oder es ist widerrufen.")
+    views = [v.strip() for v in (views.split(",") if isinstance(views, str) else views) if v and v.strip()]
+    if not views:
+        raise ValueError("Mindestens eine Sicht -- ohne genannte Sicht erreicht es nichts.")
+    known = {r["name"] for r in db.execute("SELECT name FROM views")}
+    unknown = [v for v in views if v not in known]
+    if unknown:
+        raise ValueError("Diese Sichten gibt es nicht: " + ", ".join(unknown) + ".")
+    if max_effect not in EFFECT_RANK:
+        raise ValueError("Höchste Wirkungsklasse ist read, write oder execute.")
+    if ceiling not in LIGHT_RANK:
+        raise ValueError("Ampel ist green, yellow oder red.")
+    new = (",".join(views), max_effect, ceiling)
+    old = (row["views"], row["max_effect"], row["ceiling"])
+    if new == old:
+        return []
+    db.execute("UPDATE keys SET views=?, max_effect=?, ceiling=? WHERE id=?", new + (row["id"],))
+    log(db, actor, "key.limits", label,
+        f"sichten={old[0]} bis={old[1]} ampel={old[2]} → sichten={new[0]} bis={new[1]} ampel={new[2]}")
+    db.commit()
+    return [w for w, a, b in zip(("Sichten", "Wirkungsklasse", "Ampel"), old, new) if a != b]
+
+
 def match_profile(db, groups, view, wildcard="*"):
     """Das Profil für einen Menschen mit diesen Gruppen in dieser Sicht (Spec §2.3) — oder None.
 

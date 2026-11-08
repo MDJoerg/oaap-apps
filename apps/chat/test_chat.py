@@ -108,6 +108,11 @@ class Fake(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != "Bearer " + CK or not a.startswith("ZS-") \
                     or BAD_ASSERTION["on"]:
                 return self.reply(401, {"error": "nein"})
+            if self.path == "/via/gw1/zu-rot":
+                return self.reply(403, {"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32000, "message": "Angemeldet, aber die Ampel der Sicht zu-rot ist red, "
+                                               "das Zugangsprofil reicht bis yellow -- die Ampel der Quelle "
+                                               "senken oder die des Profils erhöhen."}})
             if self.path == "/via/gw1/ohne-profil":
                 return self.reply(403, {"jsonrpc": "2.0", "id": None, "error": {
                     "code": -32000, "message": "Angemeldet, aber kein Zugangsprofil erlaubt diese Sicht."}})
@@ -487,7 +492,7 @@ st, r = req("GET", "/api/setup?assistant=ohneprofil")
 it = items(r)
 check("Sicht ohne Zugangsprofil: nicht ok, nächster Schritt nennt Profil, vermutete Gruppe @vuebung-chat und Zugang platform",
       not it["view"]["ok"] and "Zugangsprofil" in it["view"]["next"] and "@vuebung-chat" in it["view"]["next"]
-      and "platform" in it["view"]["next"], it.get("view"))
+      and "Plattform" in it["view"]["next"], it.get("view"))
 req("POST", "/api/assistants", asst("falschesmodell", "private", model="gross"))
 st, r = req("GET", "/api/setup?assistant=falschesmodell")
 it = items(r)
@@ -508,6 +513,12 @@ st, r = req("GET", "/api/setup?assistant=gibtsnicht")
 check("unbekannter Assistent: 404", st == 404, r)
 st, r = req("GET", "/api/setup?assistant=ohneprofil", person="bert")
 check("fremder privater Assistent: 404", st == 404, r)
+req("POST", "/api/assistants", asst("zurot", "private", view="zu-rot"))
+st, r = req("GET", "/api/setup?assistant=zurot")
+it = items(r)
+check("0.3.1: der Grund des Gateways (Ampel) steht im Bericht, der Schritt nennt die Ampel, nicht ein neues Profil",
+      not it["view"]["ok"] and "Ampel der Sicht zu-rot ist red" in it["view"]["detail"]
+      and "Ampel" in it["view"]["next"] and "anlegen" not in it["view"]["next"], it.get("view"))
 check("vermutete Instanz aus der automatischen Adresse", app.own_instance_guess() == "vuebung-chat",
       app.own_instance_guess())
 

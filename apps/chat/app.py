@@ -40,7 +40,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -238,7 +238,11 @@ class McpWay:
             raise Stop("Die Plattform hat dich am MCP-Gateway nicht erkannt (401). Lade die "
                        "Seite neu und versuche es noch einmal.", 401)
         if status != 200 or not sess:
-            raise Stop(f"Das MCP-Gateway hat keine Sitzung eröffnet ({status}).")
+            # Ab Gateway 0.7.3 nennt die 403 den Grund (Profil, Zugang, Ampel) -- weitergeben.
+            said = next((str((m.get("error") or {}).get("message") or "") for m in msgs
+                         if isinstance(m, dict) and m.get("error")), "")
+            raise Stop(f"Das MCP-Gateway hat keine Sitzung eröffnet ({status})"
+                       + (f": {said}" if said else "."))
         mcp_post(self.url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sess,
                  self.assertion, self.aid)
         with _MCP_GUARD:
@@ -480,12 +484,21 @@ def setup_report(person, assertion, a):
                     "Auf der Betreiberseite des Gateways: Quelle → „Katalog lesen“, Werkzeuge in die Sicht "
                     "nehmen; die Ampel der Quelle darf nicht über der des Zugangsprofils liegen.")
         except Stop as exc:
-            hint = ("Auf der Betreiberseite des Gateways ein Zugangsprofil anlegen: Gruppe "
-                    + (f"@{group}" if group else "@<Name dieser Instanz>")
-                    + (" (vermutet aus der Adresse)" if group else "") + f", Sicht {a['view']}. "
-                    f"Die Sicht {a['view']} braucht den Zugang „platform“.") if "403" in exc.text else (
-                    "Seite neu laden (die Anmeldung ist älter als fünf Minuten)." if "401" in exc.text
-                    else f"Gibt es die Sicht {a['view']} im Gateway {gw['name']}?")
+            if "Ampel" in exc.text:
+                hint = ("Auf der Betreiberseite des Gateways: die Ampel der Quelle senken (Server → "
+                        "Ampel) oder beim Zugangsprofil „Ändern“ → Ampel höher.")
+            elif "Zugang" in exc.text and "kein Zugangsprofil" not in exc.text:
+                hint = (f"Auf der Betreiberseite des Gateways bei der Sicht {a['view']} den Zugang "
+                        "„Plattform“ einschalten.")
+            elif "403" in exc.text:
+                hint = ("Auf der Betreiberseite des Gateways ein Zugangsprofil anlegen oder ändern: Gruppe "
+                        + (f"@{group}" if group else "@<Name dieser Instanz>")
+                        + (" (vermutet aus der Adresse)" if group else "") + f", Sicht {a['view']}. "
+                        f"Die Sicht {a['view']} braucht den Zugang „Plattform“.")
+            elif "401" in exc.text:
+                hint = "Seite neu laden (die Anmeldung ist älter als fünf Minuten)."
+            else:
+                hint = f"Gibt es die Sicht {a['view']} im Gateway {gw['name']}?"
             add("view", False, f"Sicht {a['view']} als du", exc.text, hint)
     elif gw:
         add("view", False, f"Sicht {a['view']} als du", "Keine Zusicherung der Plattform in dieser Anfrage.",

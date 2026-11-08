@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.7.2"
+VERSION = "0.7.3"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -503,10 +503,34 @@ def refusal(vrow, kind, name):
 
 
 def entitled(key, vrow, way):
-    if not vrow or vrow["name"] not in books.key_views(key) or way not in books.view_ways(vrow):
-        return False
+    return why_not(key, vrow, way) is None
+
+
+WAY_NAMES = {"platform": "„Plattform“ (Menschen aus einem Chat)", "signin": "„Anmeldung“",
+             "key": "„Schlüssel“"}
+
+
+def why_not(key, vrow, way):
+    """Warum dieser Schlüssel/dieses Profil diese Sicht auf diesem Weg nicht öffnet -- oder None.
+
+    Ein Satz für den, der es einrichtet (0.7.3): vorher hieß jeder Fall „kein
+    Zugangsprofil“, auch wenn es das Profil gab und nur Ampel oder Zugang nicht passten."""
+    if not vrow or vrow["name"] not in books.key_views(key):
+        return "kein Zugangsprofil erlaubt diese Sicht."
+    if way not in books.view_ways(vrow):
+        return (f"die Sicht {vrow['name']} hat den Zugang {WAY_NAMES.get(way, way)} nicht -- "
+                "auf der Betreiberseite bei der Sicht einschalten.")
     light = books.view_light(DB, vrow["name"])
-    return books.LIGHT_RANK[light] <= books.LIGHT_RANK.get(key["ceiling"], 1)
+    if books.LIGHT_RANK[light] > books.LIGHT_RANK.get(key["ceiling"], 1):
+        return (f"die Ampel der Sicht {vrow['name']} ist {light}, das Zugangsprofil reicht bis "
+                f"{key['ceiling']} -- die Ampel der Quelle senken oder die des Profils erhöhen.")
+    return None
+
+
+def forbidden(sentence):
+    return json.dumps({"jsonrpc": "2.0", "id": None,
+                       "error": {"code": -32000, "message": "Angemeldet, aber " + sentence}},
+                      ensure_ascii=False).encode("utf-8")
 
 
 # ------------------------------------------------------------- Optik
@@ -647,6 +671,18 @@ def endpoint(host, view):
     return f"https://{host}/mcp/{view}"
 
 
+def sources_line():
+    """Die Quellen der Plattform: wann zuletzt abgeglichen, und ein Knopf für jetzt (0.7.3)."""
+    if not SOURCES_URL:
+        return ""
+    at = SOURCES_STATE["at"] or "noch nie"
+    err = (f' <span class="err">{esc(SOURCES_STATE["error"])}</span>' if SOURCES_STATE["error"] else "")
+    return (f'<form class="inline" method="post" action="source-sync"><span class="hint">Apps des Mandanten '
+            f'mit MCP-Tür (Quellen der Plattform) werden alle 15 Minuten abgeglichen, zuletzt {esc(at)}.'
+            f'{err} Eine neue Quelle startet mit Ampel rot.</span> <button class="quiet">Quellen jetzt '
+            f'einlesen</button></form>')
+
+
 def admin_page(user, roles, host, notice="", secret=None):
     parts = []
     if notice:
@@ -684,6 +720,7 @@ def admin_page(user, roles, host, notice="", secret=None):
     parts.append(f'''<div class="card"><h2>Server</h2>
 <p class="hint">MCP-Server mit Streamable HTTP. Adresse als URL oder <code>destination:&lt;name&gt;</code>
 — dann setzt die Plattform die Zugangsdaten ein, und das Gateway hält kein Geheimnis.</p>
+{sources_line()}
 <div class="scroll"><table><tr><th>Name</th><th>Adresse</th><th>Ampel</th><th>Protokoll</th>
 <th>Katalog gelesen</th><th>Last</th></tr>{"".join(rows) or '<tr><td colspan=6 class=muted>Noch kein Server.</td></tr>'}</table></div>
 <h2 style="margin-top:1.2rem">Server anlegen</h2>{server_form()}</div>''')
@@ -725,6 +762,23 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
         if k["kind"] == "profile":
             state += " " + badge("yellow", "Zugangsprofil") + f'<br><span class="muted">Gruppen: ' \
                 f'{esc(", ".join(books.profile_groups(k)))}</span>'
+        if not k["revoked"]:
+            ways = (["platform"] if any(g.startswith("@") for g in books.profile_groups(k)) else []) + \
+                   (["signin"] if any(not g.startswith("@") for g in books.profile_groups(k)) else []) \
+                if k["kind"] == "profile" else ["key"]
+            for vn in books.key_views(k):
+                vr = books.view_row(DB, vn)
+                for w in ways:
+                    r = why_not(k, vr, w) if vr else f"die Sicht {vn} gibt es nicht mehr."
+                    if r:
+                        state += f'<br><span class="err">{esc(vn)}: {esc(r)}</span>'
+            action += (f'<details><summary class="quiet">Ändern</summary><form method="post" action="key-limits">'
+                       f'<input type="hidden" name="label" value="{esc(k["label"])}">'
+                       f'<label>Sichten (Komma)</label><input type="text" name="views" value="{esc(k["views"])}" required>'
+                       f'<label>Höchste Wirkungsklasse</label><select name="max_effect">'
+                       f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select>'
+                       f'<label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select>'
+                       f'<button>Speichern</button></form></details>')
         krows.append(f'<tr><td><b>{esc(k["label"])}</b><br>{state}</td>'
                      f'<td>{esc(", ".join(books.key_views(k)))}</td>'
                      f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
@@ -1241,8 +1295,10 @@ class Handler(BaseHTTPRequestHandler):
             # Zusicherung für diese Person) und trägt den Menschen her. Wer zahlt,
             # sagt ein Zugangsprofil mit @<chat> oder @*; ohne eines 403.
             profile = books.match_profile(DB, carried["groups"], view_name or "", "@*")
-            if not profile or not entitled(profile, vrow, "platform"):
-                self.send_bytes(403, "application/json; charset=utf-8", FORBIDDEN)
+            reason = why_not(profile, vrow, "platform") if profile else None
+            if not profile or reason:
+                self.send_bytes(403, "application/json; charset=utf-8",
+                                forbidden(reason) if reason else FORBIDDEN)
                 return None, None
             self.person = carried
             return profile, vrow
@@ -1256,7 +1312,8 @@ class Handler(BaseHTTPRequestHandler):
             person = {"iss": claims["iss"], "sub": claims["sub"], "token": value,
                       "groups": sorted(signin.groups_of(claims))}
             profile = books.match_profile(DB, person["groups"], view_name or "")
-            if not profile or not entitled(profile, vrow, "signin"):
+            reason = why_not(profile, vrow, "signin") if profile else None
+            if not profile or reason:
                 # Gültig angemeldet, aber nicht für diese Sicht: 403, nicht 401 — eine 401
                 # schickte den Client in eine neue Anmeldung, die nichts ändert (Spec §2.3).
                 self.send_bytes(403, "application/json; charset=utf-8", FORBIDDEN)
@@ -1313,7 +1370,8 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/mcp/"):
             self.handle_mcp_post()
             return
-        if path in ("/issue", "/revoke", "/context", "/server-save", "/server-delete",
+        if path in ("/issue", "/revoke", "/key-limits", "/source-sync", "/context", "/server-save",
+                    "/server-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
                     "/item-confirm", "/item-tailor"):
             self.handle_admin_post(path)
@@ -1867,6 +1925,14 @@ class Handler(BaseHTTPRequestHandler):
                 label = form.get("label", "")
                 notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."
                           if books.revoke(DB, label, user) else f"Nichts zu widerrufen: „{label}“.")
+            elif path == "/key-limits":
+                label = form.get("label", "")
+                changed = books.set_key_limits(DB, user, label, form.get("views", ""),
+                                               form.get("max_effect", "read"), form.get("ceiling", "yellow"))
+                notice = (f"„{label}“ geändert: {', '.join(changed)}. Gilt ab dem nächsten Aufruf."
+                          if changed else f"„{label}“ unverändert.")
+            elif path == "/source-sync":
+                _, notice = sync_sources()
             elif path == "/context":
                 changed = books.update_context(DB, form.get("label", ""), user,
                                                **{n: form[n] for n in books.CONTEXT_FIELDS if n in form})
@@ -1991,6 +2057,7 @@ def cli(argv):
              "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
              "[--fixed JSON] [--bounds JSON] [--effect E] | view remove <sicht> <name> [--kind K]\n"
+             "        app.py key set <etikett> [--views a,b] [--max-effect E] [--ceiling L] (auch Zugangsprofile)\n"
              "        app.py key issue <etikett> --views a,b [--max-effect read] [--ceiling yellow] "
              "[--budget N] [--rate N] [--owner X ...] | key list | key revoke <etikett>\n"
              "        app.py profile create <etikett> --groups /a,/b|*|@chat|@* --views a,b [wie key issue] | "
@@ -2115,6 +2182,16 @@ def cli(argv):
                 print(f'{k["label"]:24} {"WIDERRUFEN" if k["revoked"] else "gültig":10} '
                       f'sichten={k["views"]} bis={k["max_effect"]} ampel={k["ceiling"]} '
                       f'| {context_line(k)}')
+            return 0
+        if area == "key" and action == "set" and pos:
+            row = next((k for k in books.keys(DB) if k["label"] == pos[0] and not k["revoked"]), None)
+            if not row:
+                print(f"„{pos[0]}“ gibt es nicht, oder es ist widerrufen.", file=sys.stderr)
+                return 1
+            changed = books.set_key_limits(DB, "cli", pos[0], opts.get("views", row["views"]),
+                                           opts.get("max-effect", row["max_effect"]),
+                                           opts.get("ceiling", row["ceiling"]))
+            print("geändert: " + ", ".join(changed) if changed else "unverändert")
             return 0
         if area == "key" and action == "revoke" and pos:
             print("widerrufen" if books.revoke(DB, pos[0], "cli") else "unbekannt oder schon widerrufen")

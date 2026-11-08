@@ -224,6 +224,11 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
   Betreiberseite nimmt für eine Quelle der Plattform die Zusicherung der
   angemeldeten Betreiberin: auch ohne Keycloak lassen sich die Werkzeuge der
   eigenen Apps in eine Sicht nehmen.
+- **Seit 0.7.3:** Sichten, Wirkungsklasse und Ampel eines Schlüssels oder
+  Zugangsprofils lassen sich ändern („Ändern“ in der Tabelle, `app.py key set
+  <etikett> --views a,b`), ohne Widerruf. Eine 403 nennt den Grund (Sicht nicht
+  im Profil, Zugang fehlt, Ampel zu hoch), und die Tabelle zeigt denselben Satz
+  beim Profil. Knopf „Quellen jetzt einlesen“ bei den Servern.
 
 ## Der festgehaltene Text
 

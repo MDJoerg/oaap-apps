@@ -264,7 +264,7 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "released": "2026-11-08",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -318,7 +318,7 @@
       "id": "chat",
       "name": "Chat",
       "type": "native",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "released": "2026-11-08",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
