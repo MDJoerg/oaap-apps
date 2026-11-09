@@ -18,10 +18,21 @@ aside h1{font-size:1.05rem;margin:.2rem 0 .4rem}
 background:none;color:var(--ink);cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv.on,.conv:hover{background:var(--me)}
 .conv small{color:var(--muted)}
-main{flex:1;display:flex;flex-direction:column;min-width:0}
+main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 header{padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
 header .muted{font-size:.85rem}
-#log{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
+header .hrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+header .hrow .acts{margin-left:auto;display:flex;flex-wrap:wrap}
+/* min-height:0: sonst wächst der Verlauf über die Höhe und schiebt Kopf- und Eingabezeile aus dem Bild */
+#log{flex:1;min-height:0;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
+.pending{opacity:.75}
+.thinking{align-self:flex-start;display:flex;align-items:center;gap:.6rem;color:var(--muted);font-size:.9rem;
+padding:.5rem .8rem;border:1px solid var(--line);border-radius:.6rem;background:var(--panel)}
+.dots{display:inline-flex;gap:.25rem}
+.dots i{width:.45rem;height:.45rem;border-radius:50%;background:var(--accent);opacity:.25;animation:blink 1.2s infinite ease-in-out}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.dots i{animation:none;opacity:.6}}
 .msg{max-width:46rem;padding:.6rem .8rem;border-radius:.6rem;white-space:pre-wrap;word-break:break-word;line-height:1.45}
 .user{align-self:flex-end;background:var(--me)}
 .assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line);white-space:normal}
@@ -48,8 +59,12 @@ border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .confirm{align-self:flex-start;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem;max-width:46rem}
 .confirm pre{white-space:pre-wrap;color:var(--ink);background:var(--panel);padding:.5rem;border-radius:.3rem}
 .err{color:var(--err)} .muted{color:var(--muted)}
-#cmds{font-size:.85rem;color:var(--muted);padding:0 1rem .3rem;background:var(--panel)}
-#cmds button{font-size:.8rem;padding:.15rem .5rem;margin:.15rem .2rem 0 0}
+#cmds{font-size:.85rem;color:var(--muted);background:var(--panel);max-height:40vh;overflow-y:auto}
+#cmds:not(:empty){padding:.4rem 1rem;border-top:1px solid var(--line)}
+#cmds .ci{display:block;width:100%;text-align:left;border:0;border-radius:.4rem;padding:.35rem .5rem;margin:0;background:none}
+#cmds .ci b{font-weight:600;color:var(--ink)} #cmds .ci span{color:var(--muted);margin-left:.5rem}
+#cmds .ci.sel,#cmds .ci:hover{background:var(--me)}
+#cmds .grp{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin:.3rem .5rem .1rem}
 form.send{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid var(--line);background:var(--panel)}
 textarea,input,select{font:inherit;padding:.45rem;border:1px solid var(--line);border-radius:.4rem;background:var(--bg);color:var(--ink)}
 form.send textarea{flex:1;resize:none}
@@ -62,7 +77,9 @@ dialog input,dialog textarea,dialog select{width:100%}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
 .alist div{display:flex;justify-content:space-between;gap:.5rem;padding:.35rem 0;border-bottom:1px solid var(--line)}
 @media (max-width:700px){body{flex-direction:column;height:auto;min-height:100vh}
-aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:35vh}#log{min-height:50vh}}
+aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:35vh}#log{min-height:50vh}
+header{position:sticky;top:0;z-index:2}form.send{position:sticky;bottom:0;z-index:2}}
+.setupdlg .setup{border:0;padding:0}
 </style>
 </head>
 <body>
@@ -75,8 +92,8 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
   <div class="muted" style="margin-top:auto;font-size:.8rem" id="who"></div>
 </aside>
 <main>
-  <header><b id="ctitle">—</b> <span class="muted" id="cassist"></span>
-  <span style="float:right"><button class="hbtn" id="ren" type="button">Umbenennen</button><button class="hbtn" id="del" type="button">Löschen</button><button class="hbtn" id="chk" type="button">Einrichtung prüfen</button></span>
+  <header><div class="hrow"><b id="ctitle">—</b> <span class="muted" id="cassist"></span>
+  <span class="acts"><button class="hbtn" id="ren" type="button">Umbenennen</button><button class="hbtn" id="del" type="button">Löschen</button><button class="hbtn" id="chk" type="button">Einrichtung prüfen</button></span></div>
   <div class="muted">Jede Runde läuft als du: der Assistent sieht nur, was du sehen darfst.
   Was etwas ändert, läuft erst nach deiner Zustimmung.</div></header>
   <div id="log"></div>
@@ -84,6 +101,8 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
   <form id="f" class="send"><textarea id="t" rows="2" placeholder="Nachricht … (/ für Befehle)" maxlength="4000"></textarea>
   <button class="primary" id="go">Senden</button></form>
 </main>
+
+<dialog id="sdlg" class="setupdlg"><div id="sbox"></div></dialog>
 
 <dialog id="dlg">
   <div class="row" style="justify-content:space-between"><b>Assistenten</b>
@@ -117,7 +136,7 @@ aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:3
 <script src="static/markdown.js"></script>
 <script>
 "use strict";
-let S = null, C = null, busy = false, CMDS = [], SETUP = null;
+let S = null, C = null, busy = false, CMDS = [], SETUP = null, PENDING = null, SEL = 0;
 // Mermaid nur laden, wenn eine Antwort ein Diagramm hat; jedes Diagramm nur einmal zeichnen.
 const SVG = new Map();
 let mermaidReady = null;
@@ -212,8 +231,10 @@ function render(status){
   }
   head.textContent = "";
   if (a && a.greeting) head.appendChild(mdEl(a.greeting));
-  if (SETUP && C && SETUP.assistant === C.assistant) head.appendChild(setupBox(SETUP));
-  if (!C) { msgs.textContent = ""; tail.textContent = ""; SHOWN = {id: null, n: 0}; return; }
+  if (!C) { msgs.textContent = ""; tail.textContent = ""; SHOWN = {id: null, n: 0};
+    if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
+    if (status) tail.appendChild(status);
+    return; }
   if (SHOWN.id !== C.id || C.messages.length < SHOWN.n) { msgs.textContent = ""; SHOWN = {id: C.id, n: 0}; dropFrames(); }
   for (const m of C.messages.slice(SHOWN.n)) for (const node of msgNodes(m)) msgs.appendChild(node);
   SHOWN.n = C.messages.length;
@@ -226,6 +247,7 @@ function render(status){
     ok.onclick = () => decide(k.call, true); no.onclick = () => decide(k.call, false);
     box.append(ok, " ", no); tail.appendChild(box);
   }
+  if (PENDING) { const d = el("div", "msg user pending"); d.appendChild(document.createTextNode(PENDING)); tail.appendChild(d); }
   if (status) tail.appendChild(status);
   log.scrollTop = log.scrollHeight;
   drawMermaid(msgs).then(() => { log.scrollTop = log.scrollHeight; });
@@ -339,24 +361,37 @@ function setupBox(r){
     ul.appendChild(li);
   }
   box.appendChild(ul);
-  const close = el("button", "hbtn", "Ausblenden"); close.type = "button";
-  close.onclick = () => { SETUP = null; render(); }; box.appendChild(close);
+  const close = el("button", "hbtn", "Schließen"); close.type = "button";
+  close.onclick = () => { SETUP = null; $("sdlg").close(); }; box.appendChild(close);
   return box;
+}
+// Als Dialog: im Verlauf stand das Ergebnis oben -- bei einem langen Gespräch außer Sicht.
+function showSetup(){
+  const b = $("sbox"); b.textContent = "";
+  if (!SETUP) return;
+  b.appendChild(setupBox(SETUP));
+  if (!$("sdlg").open) $("sdlg").showModal();
 }
 async function checkSetup(aid){
   if (!aid) return;
-  SETUP = {assistant: aid, items: [{ok: true, title: "Prüfe …", detail: "", next: ""}]}; render();
+  SETUP = {assistant: aid, items: [{ok: true, title: "Prüfe …", detail: "", next: ""}]}; showSetup();
   const r = await api("GET", "api/setup?assistant=" + encodeURIComponent(aid));
   SETUP = r.items ? r : {assistant: aid, items: [{ok: false, title: "Prüfung", detail: r.error || "fehlgeschlagen", next: ""}]};
-  render();
+  showSetup();
 }
 
-function setBusy(b, text){ busy = b; $("go").disabled = b; $("t").disabled = b; render(b ? el("div", "muted", text) : null); }
+// Warten sichtbar machen: die eigene Frage steht sofort da (PENDING), darunter drei Punkte.
+function thinking(text){
+  const d = el("div", "thinking"), dots = el("span", "dots");
+  dots.append(el("i"), el("i"), el("i")); d.append(dots, el("span", "", text)); return d;
+}
+function setBusy(b, text){ busy = b; $("go").disabled = b; $("t").disabled = b; render(b ? thinking(text) : null); }
 
 // D7: der Browser treibt die Schleife -- jede Runde eine eigene Anfrage.
 async function drive(path, body, text){
   setBusy(true, text);
   let doc = await api("POST", path, body);
+  PENDING = null;
   while (doc.state === "more") {
     C = doc; setBusy(true, "Werkzeug läuft, danach denkt das Modell …");
     doc = await api("POST", "api/conv/" + C.id + "/step", {});
@@ -379,24 +414,57 @@ function decide(call, ok){
   drive("api/conv/" + C.id + "/step", {decision: {call, ok}}, ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
 }
 
+let CMDSAID = "";
 async function loadCommands(){
-  CMDS = []; $("cmds").textContent = "";
+  CMDS = []; CMDSAID = ""; $("cmds").textContent = "";
   const a = C ? assistant(C.assistant) : null;
   if (!a || !a.commands) return;
   const r = await api("GET", "api/conv/" + C.id + "/commands");
   CMDS = r.commands || [];
-  if (r.said) $("cmds").textContent = r.said;
+  CMDSAID = r.said || "";
   showCommands();
 }
+// Befehle des Chats selbst -- laufen im Browser, gehen nie ans Modell.
+// Ein Prompt der Sicht mit demselben Namen geht vor.
+const OWN = [
+  {name: "neu", description: "Neues Gespräch mit dem gewählten Assistenten", run: () => $("new").click()},
+  {name: "pruefen", description: "Einrichtung prüfen", run: () => $("chk").click()},
+  {name: "umbenennen", description: "Dieses Gespräch umbenennen", run: () => $("ren").click()},
+  {name: "assistenten", description: "Assistenten anlegen und ändern", run: () => $("manage").click()},
+];
+const ownCmd = name => CMDS.some(c => c.name === name) ? null : OWN.find(o => o.name === name);
+function cmdMatches(){
+  const t = $("t").value;
+  if (!t.startsWith("/") || /\s/.test(t)) return null;
+  const q = t.slice(1).toLowerCase();
+  const hit = c => !q || c.name.toLowerCase().includes(q) || (c.description || "").toLowerCase().includes(q);
+  return {prompts: CMDS.filter(hit), own: OWN.filter(o => hit(o) && !CMDS.some(c => c.name === o.name))};
+}
+function pickCmd(c){
+  if (c.run) { $("t").value = ""; showCommands(); c.run(); return; }
+  $("t").value = "/" + c.name + " "; $("t").focus(); showCommands();
+}
 function showCommands(){
-  const box = $("cmds"), t = $("t").value; box.textContent = "";
-  if (!t.startsWith("/") || !CMDS.length) return;
-  for (const c of CMDS.filter(c => ("/" + c.name).startsWith(t.split(/\s/)[0]))) {
-    const b = el("button", "", "/" + c.name + c.arguments.map(x => " " + (x.required ? x.name : "[" + x.name + "]")).join(""));
-    b.title = c.description; b.type = "button";
-    b.onclick = () => { $("t").value = "/" + c.name + " "; $("t").focus(); showCommands(); };
-    box.appendChild(b);
-  }
+  const box = $("cmds"); box.textContent = "";
+  const m = cmdMatches();
+  if (!m) return;
+  const a = C ? assistant(C.assistant) : null;
+  const all = m.prompts.concat(m.own);
+  SEL = Math.min(SEL, Math.max(all.length - 1, 0));
+  let i = 0;
+  const item = c => {
+    const b = el("button", "ci" + (i === SEL ? " sel" : "")); b.type = "button";
+    b.appendChild(el("b", "", "/" + c.name + (c.arguments || []).map(x => " " + (x.required ? x.name : "[" + x.name + "]")).join("")));
+    if (c.description) b.appendChild(el("span", "", c.description));
+    b.onmousedown = ev => ev.preventDefault();
+    b.onclick = () => pickCmd(c); box.appendChild(b); i++;
+  };
+  box.appendChild(el("div", "grp", "Befehle des Assistenten"));
+  if (m.prompts.length) m.prompts.forEach(item);
+  else box.appendChild(el("div", "muted grp", !a ? "Kein Gespräch offen." :
+    !a.commands ? "Dieser Assistent bietet keine /Befehle an." :
+    CMDSAID || (CMDS.length ? "Kein Befehl passt." : "Die Sicht dieses Assistenten hat keine Prompts.")));
+  if (m.own.length) { box.appendChild(el("div", "grp", "Chat")); m.own.forEach(item); }
 }
 
 async function refreshState(){ S = await api("GET", "api/state"); renderSide(); }
@@ -425,13 +493,24 @@ $("new").onclick = async () => {
 $("f").onsubmit = async ev => {
   ev.preventDefault();
   const text = $("t").value.trim(); if (!text || busy) return;
+  const own = text.startsWith("/") && !/\s/.test(text) ? ownCmd(text.slice(1)) : null;
+  if (own) { $("t").value = ""; showCommands(); own.run(); return; }
   if (!C || !C.id) { const r = await api("POST", "api/conv", {assistant: $("pick").value});
     if (r.error) { render(el("div", "err", r.error)); return; } C = r; loadCommands(); }
   $("t").value = ""; showCommands();
+  PENDING = text;
   await drive("api/conv/" + C.id + "/send", {text}, "Das Modell denkt …");
 };
-$("t").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("f").requestSubmit(); } });
-$("t").addEventListener("input", showCommands);
+$("t").addEventListener("keydown", ev => {
+  const m = cmdMatches(), all = m ? m.prompts.concat(m.own) : [];
+  if (all.length && (ev.key === "ArrowDown" || ev.key === "ArrowUp")) {
+    ev.preventDefault(); SEL = (SEL + (ev.key === "ArrowDown" ? 1 : all.length - 1)) % all.length; showCommands(); return;
+  }
+  if (all.length && (ev.key === "Tab" || (ev.key === "Enter" && !ev.shiftKey))) { ev.preventDefault(); pickCmd(all[SEL]); return; }
+  if (m && ev.key === "Escape") { $("t").value = ""; showCommands(); return; }
+  if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("f").requestSubmit(); }
+});
+$("t").addEventListener("input", () => { SEL = 0; showCommands(); });
 
 // ---- Assistenten pflegen
 const F = $("af");

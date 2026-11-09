@@ -67,6 +67,13 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
   nächsten Schritt (bei fehlendem Zugangsprofil mit der vermuteten Gruppe
   `@<mandant>-<app>`). Fehlt Client oder Modell, zeigt die Seite das beim
   Öffnen von selbst.
+- **Bedienung (seit 0.4.1).** Die eigene Frage steht sofort im Verlauf, darunter
+  eine Denkanzeige. `/` öffnet eine Suchliste (Pfeiltasten, Enter/Tab, Esc): die
+  Prompts der Sicht und Befehle des Chats selbst (`/neu`, `/pruefen`, `/umbenennen`,
+  `/assistenten`), die im Browser laufen und nie ans Modell gehen; ein Prompt mit
+  gleichem Namen geht vor. Hat der Assistent keine Befehle, sagt die Liste das.
+  „Einrichtung prüfen“ antwortet in einem Dialog. Kopf- und Eingabezeile bleiben
+  stehen, nur der Verlauf scrollt.
 - **Ansichten von MCP Apps (seit 0.4.0, RFC-0075).** Bei Assistenten mit
   `views: true` zeigt der Chat die Ansicht, die ein Werkzeug mitbringt
   (`_meta.ui.resourceUri`), unter dem Ergebnis. Sie läuft im Sandbox-Proxy auf
