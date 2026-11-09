@@ -2,40 +2,81 @@
 <html lang="de">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Chat</title>
 <style>
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--me:#e8f0fe;
---accent:#1d4ed8;--warn:#92400e;--warnbg:#fef3c7;--err:#b91c1c;--tool:#f3f4f6}
-@media (prefers-color-scheme:dark){:root{--bg:#111827;--panel:#1f2937;--ink:#e5e7eb;--muted:#9ca3af;
---line:#374151;--me:#1e3a8a;--accent:#93c5fd;--warn:#fcd34d;--warnbg:#422006;--err:#fca5a5;--tool:#111827}}
+--accent:#1d4ed8;--accentink:#fff;--warn:#92400e;--warnbg:#fef3c7;--err:#b91c1c;--tool:#f3f4f6;--pat:rgba(17,24,39,.07);
+--gap:.6rem;--pad:.6rem .8rem;--fs:1rem;--col:56rem}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111827;--panel:#1f2937;--ink:#e5e7eb;--muted:#9ca3af;
+--line:#374151;--me:#1e3a8a;--accent:#93c5fd;--accentink:#111827;--warn:#fcd34d;--warnbg:#422006;--err:#fca5a5;--tool:#111827;--pat:rgba(255,255,255,.06)}}
+:root[data-theme=dark]{--bg:#111827;--panel:#1f2937;--ink:#e5e7eb;--muted:#9ca3af;
+--line:#374151;--me:#1e3a8a;--accent:#93c5fd;--accentink:#111827;--warn:#fcd34d;--warnbg:#422006;--err:#fca5a5;--tool:#111827;--pat:rgba(255,255,255,.06)}
+body[data-density=compact]{--gap:.3rem;--pad:.4rem .6rem}
+body[data-size=large]{--fs:1.12rem}
 *{box-sizing:border-box}
-body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex}
-aside{width:17rem;border-right:1px solid var(--line);background:var(--panel);display:flex;
-flex-direction:column;padding:.8rem;gap:.5rem;overflow-y:auto}
-aside h1{font-size:1.05rem;margin:.2rem 0 .4rem}
+/* Ein Bildschirm, nichts scrollt außer Verlauf, Gesprächsliste und Assistenten-Raster. */
+html,body{height:100%}
+body{margin:0;font-family:system-ui,sans-serif;font-size:var(--fs);background:var(--bg);color:var(--ink);
+height:100vh;height:100dvh;overflow:hidden;display:flex}
+button{font:inherit;padding:.45rem .9rem;border-radius:.4rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accentink);border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
+button.icon{border:0;background:none;padding:.35rem .55rem;font-size:1.15rem;line-height:1;border-radius:.4rem}
+button.icon:hover{background:var(--me)}
+textarea,input,select{font:inherit;padding:.45rem;border:1px solid var(--line);border-radius:.4rem;background:var(--bg);color:var(--ink)}
+.muted{color:var(--muted)} .err{color:var(--err)}
+
+/* ---- Seitenleiste */
+aside{width:17rem;flex:none;display:flex;flex-direction:column;min-height:0;background:var(--panel);border-right:1px solid var(--line)}
+body.side-off aside{display:none}
+.shead{display:flex;align-items:center;justify-content:space-between;padding:.6rem .8rem .2rem}
+.shead b{font-size:1.05rem}
+.sact{display:flex;flex-direction:column;gap:.45rem;padding:.4rem .8rem .5rem}
+#convs{flex:1;min-height:0;overflow-y:auto;padding:0 .5rem .5rem}
+.grp-h{display:flex;width:100%;align-items:center;gap:.3rem;border:0;background:none;padding:.6rem .4rem .2rem;
+font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.grp-h .n{margin-left:auto;text-transform:none}
 .conv{display:block;width:100%;text-align:left;padding:.45rem .5rem;border:0;border-radius:.4rem;
-background:none;color:var(--ink);cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+background:none;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv.on,.conv:hover{background:var(--me)}
-.conv small{color:var(--muted)}
+.conv small{color:var(--muted);margin-left:.3rem}
+.empty{padding:.6rem .4rem;font-size:.9rem}
+.sfoot{border-top:1px solid var(--line);padding:.4rem .5rem .6rem;display:flex;flex-direction:column;gap:.1rem}
+.sfoot button{text-align:left;border:0;background:none;padding:.45rem .5rem}
+.sfoot button:hover,.sfoot button.on{background:var(--me)}
+#who{font-size:.75rem;padding:.3rem .5rem 0}
+#scrim{display:none}
+
+/* ---- Arbeitsfläche */
 main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
-header{padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
-header .muted{font-size:.85rem}
-header .hrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
-header .hrow .acts{margin-left:auto;display:flex;flex-wrap:wrap}
-/* min-height:0: sonst wächst der Verlauf über die Höhe und schiebt Kopf- und Eingabezeile aus dem Bild */
-#log{flex:1;min-height:0;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:.6rem}
-.pending{opacity:.75}
-.thinking{align-self:flex-start;display:flex;align-items:center;gap:.6rem;color:var(--muted);font-size:.9rem;
-padding:.5rem .8rem;border:1px solid var(--line);border-radius:.6rem;background:var(--panel)}
-.dots{display:inline-flex;gap:.25rem}
-.dots i{width:.45rem;height:.45rem;border-radius:50%;background:var(--accent);opacity:.25;animation:blink 1.2s infinite ease-in-out}
-.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
-@keyframes blink{0%,80%,100%{opacity:.25;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
-@media (prefers-reduced-motion:reduce){.dots i{animation:none;opacity:.6}}
-.msg{max-width:46rem;padding:.6rem .8rem;border-radius:.6rem;white-space:pre-wrap;word-break:break-word;line-height:1.45}
+header{flex:none;display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid var(--line);background:var(--panel)}
+.htitle{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.htitle .muted{font-size:.88rem;margin-left:.4rem}
+details.menu{position:relative}
+details.menu>summary{list-style:none;padding:.35rem .55rem;font-size:1.15rem;line-height:1;border-radius:.4rem;cursor:pointer}
+details.menu>summary:hover{background:var(--me)}
+details.menu>summary::-webkit-details-marker{display:none}
+.mbody{position:absolute;right:0;top:calc(100% + .3rem);background:var(--panel);border:1px solid var(--line);border-radius:.5rem;
+box-shadow:0 8px 24px rgba(0,0,0,.18);min-width:14rem;z-index:20;padding:.3rem}
+.mbody button{display:block;width:100%;text-align:left;border:0;background:none;padding:.5rem .7rem}
+.mbody button:hover{background:var(--me)}
+.mbody hr{border:0;border-top:1px solid var(--line);margin:.25rem 0}
+.view{flex:1;display:flex;flex-direction:column;min-height:0}
+.view[hidden]{display:none}
+
+/* ---- Verlauf */
+#log{flex:1;min-height:0;overflow-y:auto;padding:1rem .8rem;display:flex;flex-direction:column;gap:var(--gap)}
+.stack{display:flex;flex-direction:column;gap:var(--gap);width:100%;max-width:var(--col);margin:0 auto}
+body[data-bg=dots] #log{background-image:radial-gradient(var(--pat) 1.2px,transparent 1.3px);background-size:16px 16px}
+body[data-bg=grid] #log{background-image:linear-gradient(var(--pat) 1px,transparent 1px),linear-gradient(90deg,var(--pat) 1px,transparent 1px);background-size:24px 24px}
+body[data-bg=lines] #log{background-image:repeating-linear-gradient(45deg,var(--pat) 0 2px,transparent 2px 14px)}
+body[data-bg=warm] #log{background-image:linear-gradient(160deg,rgba(251,191,36,.14),rgba(244,114,182,.12))}
+body[data-bg=cool] #log{background-image:linear-gradient(160deg,rgba(56,189,248,.14),rgba(129,140,248,.14))}
+.msg{max-width:46rem;padding:var(--pad);border-radius:.7rem;white-space:pre-wrap;word-break:break-word;line-height:1.45}
 .user{align-self:flex-end;background:var(--me)}
 .assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line);white-space:normal}
+.pending{opacity:.75}
 .md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
 .md p{margin:.45rem 0}.md h3,.md h4,.md h5,.md h6{margin:.7rem 0 .35rem;font-size:1rem}
 .md ul,.md ol{margin:.35rem 0;padding-left:1.4rem}
@@ -47,67 +88,160 @@ padding:.5rem .8rem;border:1px solid var(--line);border-radius:.6rem;background:
 .md blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--line);color:var(--muted)}
 .md a{color:var(--accent)} .md hr{border:0;border-top:1px solid var(--line)}
 .mermaid-src svg{max-width:100%;height:auto;background:#fff;border-radius:.3rem}
-.setup{align-self:stretch;background:var(--panel);border:1px solid var(--line);border-radius:.6rem;padding:.7rem .9rem}
-.setup li{margin:.35rem 0;list-style:none}.setup ul{padding:0;margin:.3rem 0}
-.setup .next{color:var(--muted);font-size:.88rem;display:block}
-.hbtn{font-size:.8rem;padding:.2rem .55rem;margin-left:.3rem}
+.thinking{align-self:flex-start;display:flex;align-items:center;gap:.6rem;color:var(--muted);font-size:.9rem;
+padding:.5rem .8rem;border:1px solid var(--line);border-radius:.7rem;background:var(--panel)}
+.dots{display:inline-flex;gap:.25rem}
+.dots i{width:.45rem;height:.45rem;border-radius:50%;background:var(--accent);opacity:.25;animation:blink 1.2s infinite ease-in-out}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.dots i{animation:none;opacity:.6}aside{transition:none!important}}
 .cmd{font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem}
 .call,.result{align-self:flex-start;font-size:.85rem;color:var(--muted);background:var(--tool);
 border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .result summary{cursor:pointer}
 .result pre{white-space:pre-wrap;margin:.4rem 0 0;font-size:.82rem}
+.view-box{align-self:stretch}
 .confirm{align-self:flex-start;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem;max-width:46rem}
 .confirm pre{white-space:pre-wrap;color:var(--ink);background:var(--panel);padding:.5rem;border-radius:.3rem}
-.err{color:var(--err)} .muted{color:var(--muted)}
-#cmds{font-size:.85rem;color:var(--muted);background:var(--panel);max-height:40vh;overflow-y:auto}
-#cmds:not(:empty){padding:.4rem 1rem;border-top:1px solid var(--line)}
+.hint{align-self:center;text-align:center;max-width:32rem;margin-top:2rem}
+
+/* ---- Eingabe */
+.composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:.5rem .8rem calc(.6rem + env(safe-area-inset-bottom))}
+.composer>*{max-width:var(--col);margin-left:auto;margin-right:auto}
+#cmds{font-size:.85rem;color:var(--muted);max-height:40vh;overflow-y:auto}
+#cmds:not(:empty){padding:.2rem 0 .4rem;border-bottom:1px solid var(--line);margin-bottom:.4rem}
 #cmds .ci{display:block;width:100%;text-align:left;border:0;border-radius:.4rem;padding:.35rem .5rem;margin:0;background:none}
 #cmds .ci b{font-weight:600;color:var(--ink)} #cmds .ci span{color:var(--muted);margin-left:.5rem}
 #cmds .ci.sel,#cmds .ci:hover{background:var(--me)}
 #cmds .grp{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin:.3rem .5rem .1rem}
-form.send{display:flex;gap:.5rem;padding:.8rem 1rem;border-top:1px solid var(--line);background:var(--panel)}
-textarea,input,select{font:inherit;padding:.45rem;border:1px solid var(--line);border-radius:.4rem;background:var(--bg);color:var(--ink)}
-form.send textarea{flex:1;resize:none}
-button{font:inherit;padding:.45rem .9rem;border-radius:.4rem;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
-button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-button:disabled{opacity:.5;cursor:default}
-dialog{border:1px solid var(--line);border-radius:.6rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
+form.send{display:flex;gap:.5rem;align-items:flex-end}
+form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
+.crow{display:flex;gap:.5rem;align-items:center;font-size:.8rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
+.crow select{font-size:.8rem;padding:.15rem .3rem;max-width:16rem}
+.crow .note{margin-left:auto}
+
+/* ---- Assistenten */
+.atool{flex:none;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
+.atool input[type=search]{flex:1;min-width:10rem}
+.atool label.imp{font-size:.88rem;color:var(--accent);cursor:pointer}
+.atool a{color:var(--accent);font-size:.88rem}
+.agrid{flex:1;min-height:0;overflow-y:auto;padding:1rem;display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:.8rem;align-content:start}
+.acard{background:var(--panel);border:1px solid var(--line);border-radius:.7rem;padding:.8rem .9rem;display:flex;flex-direction:column;gap:.35rem}
+.acard h3{margin:0;font-size:1rem}
+.acard p{margin:0;font-size:.88rem;color:var(--muted)}
+.acard .acts{margin-top:auto;display:flex;gap:.35rem;flex-wrap:wrap;padding-top:.5rem}
+.acard .acts button{font-size:.85rem;padding:.3rem .7rem}
+.badge{display:inline-block;font-size:.72rem;padding:.08rem .45rem;border-radius:.7rem;background:var(--tool);color:var(--muted);margin:0 .25rem .15rem 0}
+
+/* ---- Dialoge */
+dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
+dialog::backdrop{background:rgba(0,0,0,.35)}
 dialog label{display:block;font-size:.85rem;margin:.6rem 0 .2rem;color:var(--muted)}
 dialog input,dialog textarea,dialog select{width:100%}
+.dhead{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
-.alist div{display:flex;justify-content:space-between;gap:.5rem;padding:.35rem 0;border-bottom:1px solid var(--line)}
-@media (max-width:700px){body{flex-direction:column;height:auto;min-height:100vh}
-aside{width:auto;border-right:0;border-bottom:1px solid var(--line);max-height:35vh}#log{min-height:50vh}
-header{position:sticky;top:0;z-index:2}form.send{position:sticky;bottom:0;z-index:2}}
-.setupdlg .setup{border:0;padding:0}
+.setup li{margin:.35rem 0;list-style:none}.setup ul{padding:0;margin:.3rem 0}
+.setup .next{color:var(--muted);font-size:.88rem;display:block}
+.hbtn{font-size:.8rem;padding:.2rem .55rem}
+.seg{display:flex;flex-wrap:wrap;gap:.35rem}
+.seg button{font-size:.88rem;padding:.35rem .7rem}
+.seg button.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.sw{width:3.2rem;height:2.4rem;padding:0;border-radius:.4rem;background-color:var(--bg)}
+.sw[data-v=dots]{background-image:radial-gradient(var(--muted) 1px,transparent 1.2px);background-size:8px 8px}
+.sw[data-v=grid]{background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:10px 10px}
+.sw[data-v=lines]{background-image:repeating-linear-gradient(45deg,var(--line) 0 2px,transparent 2px 8px)}
+.sw[data-v=warm]{background-image:linear-gradient(160deg,rgba(251,191,36,.45),rgba(244,114,182,.4))}
+.sw[data-v=cool]{background-image:linear-gradient(160deg,rgba(56,189,248,.45),rgba(129,140,248,.45))}
+
+/* ---- Schmal: Leiste als Schublade, Vollbild ohne Seiten-Scrollen */
+@media (max-width:800px){
+  aside{position:fixed;inset:0 auto 0 0;z-index:30;width:min(20rem,86vw);transform:translateX(-102%);transition:transform .2s ease}
+  body.side-off aside{display:flex}
+  body.side-on aside{transform:none;box-shadow:0 0 30px rgba(0,0,0,.25)}
+  body.side-on #scrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:25}
+  #log{padding:.8rem .6rem}
+  .crow .note{display:none}
+}
 </style>
 </head>
 <body>
-<aside>
-  <h1>Chat</h1>
-  <select id="pick" aria-label="Assistent für ein neues Gespräch"></select>
-  <button id="new" class="primary">Neues Gespräch</button>
-  <button id="manage">Assistenten …</button>
+<aside id="side" aria-label="Gespräche">
+  <div class="shead"><b>Chat</b><button class="icon" id="sclose" type="button" title="Leiste einklappen" aria-label="Leiste einklappen">«</button></div>
+  <div class="sact">
+    <button id="new" class="primary" type="button">+ Neues Gespräch</button>
+    <input id="q" type="search" placeholder="Gespräche durchsuchen" aria-label="Gespräche durchsuchen">
+  </div>
   <div id="convs"></div>
-  <div class="muted" style="margin-top:auto;font-size:.8rem" id="who"></div>
+  <div class="sfoot">
+    <button id="manage" type="button">Assistenten</button>
+    <button id="nset" type="button">Einstellungen</button>
+    <div class="muted" id="who"></div>
+  </div>
 </aside>
+<div id="scrim"></div>
 <main>
-  <header><div class="hrow"><b id="ctitle">—</b> <span class="muted" id="cassist"></span>
-  <span class="acts"><button class="hbtn" id="ren" type="button">Umbenennen</button><button class="hbtn" id="del" type="button">Löschen</button><button class="hbtn" id="chk" type="button">Einrichtung prüfen</button></span></div>
-  <div class="muted">Jede Runde läuft als du: der Assistent sieht nur, was du sehen darfst.
-  Was etwas ändert, läuft erst nach deiner Zustimmung.</div></header>
-  <div id="log"></div>
-  <div id="cmds"></div>
-  <form id="f" class="send"><textarea id="t" rows="2" placeholder="Nachricht … (/ für Befehle)" maxlength="4000"></textarea>
-  <button class="primary" id="go">Senden</button></form>
+  <header>
+    <button class="icon" id="sopen" type="button" title="Gespräche ein- und ausblenden" aria-label="Gespräche ein- und ausblenden">☰</button>
+    <div class="htitle"><b id="ctitle">—</b><span class="muted" id="cassist"></span></div>
+    <details class="menu" id="menu"><summary role="button" aria-label="Menü" title="Menü">⋯</summary>
+      <div class="mbody">
+        <button id="ren" type="button">Umbenennen</button>
+        <button id="del" type="button">Löschen</button>
+        <hr>
+        <button id="chk" type="button">Einrichtung prüfen</button>
+        <button id="fs" type="button">Vollbild</button>
+        <button id="mset" type="button">Einstellungen</button>
+      </div>
+    </details>
+  </header>
+
+  <section class="view" id="chatview">
+    <div id="log"></div>
+    <div class="composer">
+      <div id="cmds"></div>
+      <form id="f" class="send"><textarea id="t" rows="1" placeholder="Nachricht … (/ für Befehle)" maxlength="4000" aria-label="Nachricht"></textarea>
+        <button class="primary" id="go">Senden</button></form>
+      <div class="crow"><label for="pick">Assistent</label><select id="pick"></select>
+        <span class="note">Jede Runde läuft als du. Was etwas ändert, läuft erst nach deiner Zustimmung.</span></div>
+    </div>
+  </section>
+
+  <section class="view" id="asstview" hidden>
+    <div class="atool">
+      <input type="search" id="aq" placeholder="Assistenten durchsuchen" aria-label="Assistenten durchsuchen">
+      <select id="ascope" aria-label="Filter">
+        <option value="all">alle</option><option value="mine">die ich ändern darf</option>
+        <option value="private">privat</option><option value="context">Team</option><option value="tenant">Mandant</option></select>
+      <button class="primary" id="anewbtn" type="button">+ Neuer Assistent</button>
+      <a id="aexp" href="api/assistants/export" download="assistenten.json">Exportieren</a>
+      <label class="imp">Importieren <input type="file" id="aimp" accept="application/json" hidden></label>
+    </div>
+    <p class="err" id="alisterr" style="margin:.5rem 1rem 0"></p>
+    <div class="agrid" id="alist"></div>
+  </section>
 </main>
 
-<dialog id="sdlg" class="setupdlg"><div id="sbox"></div></dialog>
+<dialog id="sdlg"><div id="sbox"></div></dialog>
+
+<dialog id="setdlg">
+  <div class="dhead"><b>Einstellungen</b><button type="button" class="hbtn" id="setclose">Schließen</button></div>
+  <p class="muted" style="font-size:.85rem">Gilt für diesen Browser.</p>
+  <label>Darstellung</label><div class="seg" data-k="theme">
+    <button type="button" data-v="system">wie das System</button><button type="button" data-v="light">hell</button><button type="button" data-v="dark">dunkel</button></div>
+  <label>Hintergrund des Verlaufs</label><div class="seg" data-k="bg">
+    <button type="button" class="sw" data-v="none" title="schlicht" aria-label="schlicht"></button><button type="button" class="sw" data-v="dots" title="Punkte" aria-label="Punkte"></button>
+    <button type="button" class="sw" data-v="grid" title="Raster" aria-label="Raster"></button><button type="button" class="sw" data-v="lines" title="Linien" aria-label="Linien"></button>
+    <button type="button" class="sw" data-v="warm" title="warm" aria-label="warm"></button><button type="button" class="sw" data-v="cool" title="kühl" aria-label="kühl"></button></div>
+  <label>Dichte</label><div class="seg" data-k="density">
+    <button type="button" data-v="normal">normal</button><button type="button" data-v="compact">kompakt</button></div>
+  <label>Schriftgröße</label><div class="seg" data-k="size">
+    <button type="button" data-v="normal">normal</button><button type="button" data-v="large">groß</button></div>
+  <label>Gespräche gruppieren</label><div class="seg" data-k="group">
+    <button type="button" data-v="assistant">nach Assistent</button><button type="button" data-v="time">nach Zeit</button><button type="button" data-v="none">nicht</button></div>
+</dialog>
 
 <dialog id="dlg">
-  <div class="row" style="justify-content:space-between"><b>Assistenten</b>
-    <button id="dclose" type="button">Schließen</button></div>
-  <div class="alist" id="alist"></div>
+  <div class="dhead"><b id="dtitle">Neuer Assistent</b><button id="dclose" type="button" class="hbtn">Schließen</button></div>
   <form id="af">
     <label>Kennung (Kleinbuchstaben, Ziffern, Bindestrich)</label><input name="id" required pattern="[a-z0-9][a-z0-9-]{0,47}">
     <label>Titel</label><input name="title" required maxlength="80">
@@ -127,9 +261,7 @@ header{position:sticky;top:0;z-index:2}form.send{position:sticky;bottom:0;z-inde
     <label><input type="checkbox" name="commands" style="width:auto"> /Befehle aus den Prompts der Sicht anbieten</label>
     <label><input type="checkbox" name="views" style="width:auto"> Ansichten der Werkzeuge zeigen (MCP Apps)</label>
     <p class="err" id="aerr"></p>
-    <div class="row"><button class="primary">Speichern</button><button type="button" id="anew">Leeren</button>
-      <a id="aexp" href="api/assistants/export" download="assistenten.json">Exportieren</a>
-      <label style="margin:0">Importieren <input type="file" id="aimp" accept="application/json" style="width:auto"></label></div>
+    <div class="row"><button class="primary">Speichern</button></div>
   </form>
 </dialog>
 
@@ -137,17 +269,48 @@ header{position:sticky;top:0;z-index:2}form.send{position:sticky;bottom:0;z-inde
 <script>
 "use strict";
 let S = null, C = null, busy = false, CMDS = [], SETUP = null, PENDING = null, SEL = 0;
+const $ = id => document.getElementById(id);
+function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
+  if(text!==undefined) e.textContent=text; return e;}
+const narrow = () => matchMedia("(max-width:800px)").matches;
+
+// ---- Einstellungen: nur in diesem Browser (localStorage); ohne Speicher gelten die Vorgaben.
+const SET = {theme: "system", bg: "none", density: "normal", size: "normal", group: "assistant"};
+function load(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
+function keep(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+Object.assign(SET, load("chat.settings", {}));
+const FOLD = new Set(load("chat.fold", []));
+let SIDE_OFF = !!load("chat.sideoff", false);
+const isDark = () => SET.theme === "dark" || (SET.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+function applySet(){
+  const r = document.documentElement;
+  if (SET.theme === "system") r.removeAttribute("data-theme"); else r.dataset.theme = SET.theme;
+  const b = document.body; b.dataset.bg = SET.bg; b.dataset.density = SET.density; b.dataset.size = SET.size;
+  for (const seg of document.querySelectorAll("#setdlg .seg"))
+    for (const x of seg.querySelectorAll("button")) x.classList.toggle("on", SET[seg.dataset.k] === x.dataset.v);
+}
+function setOne(k, v){
+  const was = isDark(); SET[k] = v; keep("chat.settings", SET); applySet();
+  if (k === "group") renderSide();
+  if (was !== isDark()) rethemeMermaid();
+}
+applySet();
+
 // Mermaid nur laden, wenn eine Antwort ein Diagramm hat; jedes Diagramm nur einmal zeichnen.
 const SVG = new Map();
 let mermaidReady = null;
 function loadMermaid(){
   if (!mermaidReady) mermaidReady = new Promise((ok, no) => {
     const sc = document.createElement("script"); sc.src = "static/mermaid.min.js";
-    sc.onload = () => { const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-      window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default"}); ok(); };
+    sc.onload = () => { window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: isDark() ? "dark" : "default"}); ok(); };
     sc.onerror = no; document.head.appendChild(sc);
   });
   return mermaidReady;
+}
+function rethemeMermaid(){
+  if (!window.mermaid) return;
+  window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: isDark() ? "dark" : "default"});
+  SVG.clear(); SHOWN = {id: null, n: 0}; render();
 }
 async function drawMermaid(root){
   const boxes = root.querySelectorAll(".mermaid-src");
@@ -165,9 +328,6 @@ async function drawMermaid(root){
   }
 }
 function mdEl(text){ const d = el("div", "msg assistant md"); d.innerHTML = window.ChatMarkdown.render(text); return d; }
-const $ = id => document.getElementById(id);
-function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
-  if(text!==undefined) e.textContent=text; return e;}
 async function api(method, path, body){
   const r = await fetch(path, {method, headers: {"Content-Type": "application/json"},
                                body: body === undefined ? undefined : JSON.stringify(body)});
@@ -176,22 +336,67 @@ async function api(method, path, body){
   if (!r.ok && !doc.error && !doc.errors) doc.error = "Antwort " + r.status;
   return doc;
 }
-const assistant = id => (S.assistants || []).find(a => a.id === id);
+const assistant = id => ((S && S.assistants) || []).find(a => a.id === id);
 const scopeWord = a => a.visibility.scope === "private" ? "privat" :
   a.visibility.scope === "tenant" ? "Mandant" : "Team " + a.visibility.context.team;
+// Der Assistent, der gerade gilt -- ohne offenes Gespräch der gewählte (Entwurf).
+const current = () => C ? assistant(C.assistant) : assistant($("pick").value);
 
+// ---- Seitenleiste: einklappbar, Gespräche durchsuchbar und gruppiert
+function toggleSide(force){
+  if (narrow()) { document.body.classList.toggle("side-on", force); return; }
+  SIDE_OFF = force === undefined ? !SIDE_OFF : !force; keep("chat.sideoff", SIDE_OFF);
+  document.body.classList.toggle("side-off", SIDE_OFF);
+}
+document.body.classList.toggle("side-off", SIDE_OFF);
+function closeDrawer(){ if (narrow()) document.body.classList.remove("side-on"); }
+
+function timeGroup(iso){
+  const d = new Date(iso); if (isNaN(d)) return "Älter";
+  const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d >= today) return "Heute";
+  const days = (today - d) / 86400000;
+  return days <= 1 ? "Gestern" : days <= 7 ? "Letzte 7 Tage" : days <= 30 ? "Letzte 30 Tage" : "Älter";
+}
+function when(iso){
+  const d = new Date(iso); if (isNaN(d)) return "";
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("de-DE", {hour: "2-digit", minute: "2-digit"})
+                                                        : d.toLocaleDateString("de-DE", {day: "2-digit", month: "2-digit"});
+}
 function renderSide(){
   const pick = $("pick"); const was = pick.value; pick.textContent = "";
   for (const a of S.assistants) { const o = el("option", "", a.title + " · " + scopeWord(a)); o.value = a.id; pick.appendChild(o); }
-  if (was && assistant(was)) pick.value = was;
+  if (C && assistant(C.assistant)) pick.value = C.assistant; else if (was && assistant(was)) pick.value = was;
+  pick.disabled = !!C;
+  pick.title = C ? "Der Assistent eines Gesprächs bleibt; für einen anderen ein neues Gespräch beginnen." : "";
   $("new").disabled = !S.assistants.length;
-  const box = $("convs"); box.textContent = "";
-  for (const c of S.conversations) {
-    const a = assistant(c.assistant);
-    const b = el("button", "conv" + (C && C.id === c.id ? " on" : ""), c.title + " ");
-    b.appendChild(el("small", "", a ? a.title : "(Assistent nicht verfügbar)"));
-    b.onclick = () => openConv(c.id); box.appendChild(b);
+  const q = $("q").value.trim().toLowerCase();
+  const titleOf = c => (assistant(c.assistant) || {}).title || "Assistent nicht verfügbar";
+  const list = S.conversations.filter(c => !q || (c.title || "").toLowerCase().includes(q) || titleOf(c).toLowerCase().includes(q))
+    .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")));
+  const groups = new Map();
+  for (const c of list) {
+    const k = SET.group === "time" ? timeGroup(c.updated) : SET.group === "assistant" ? titleOf(c) : "";
+    if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c);
   }
+  const box = $("convs"); box.textContent = "";
+  for (const [k, cs] of groups) {
+    const key = SET.group + ":" + k, folded = FOLD.has(key) && !q;
+    if (k) {
+      const h = el("button", "grp-h"); h.type = "button"; h.setAttribute("aria-expanded", String(!folded));
+      h.append(el("span", "", (folded ? "▸ " : "▾ ") + k), el("span", "n", String(cs.length)));
+      h.onclick = () => { if (FOLD.has(key)) FOLD.delete(key); else FOLD.add(key); keep("chat.fold", [...FOLD]); renderSide(); };
+      box.appendChild(h);
+    }
+    if (folded) continue;
+    for (const c of cs) {
+      const b = el("button", "conv" + (C && C.id === c.id ? " on" : ""), c.title + " "); b.type = "button";
+      b.appendChild(el("small", "", SET.group === "assistant" ? when(c.updated) : titleOf(c)));
+      b.title = c.title + " — " + titleOf(c);
+      b.onclick = () => { closeDrawer(); openConv(c.id); }; box.appendChild(b);
+    }
+  }
+  if (!list.length) box.appendChild(el("div", "muted empty", q ? "Kein Gespräch passt." : "Noch keine Gespräche."));
 }
 
 // Neu zeichnen, ohne Ansichten neu zu laden: Nachrichten werden nur angehängt, solange
@@ -219,22 +424,30 @@ function msgNodes(m){
 }
 
 function render(status){
+  if (!S) return;
   const log = $("log");
-  const a = C ? assistant(C.assistant) : null;
-  $("ctitle").textContent = C ? C.title : "—";
-  $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
+  const a = current();
+  if (VIEW === "chat") {
+    $("ctitle").textContent = C ? C.title : "Neues Gespräch";
+    $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
+  }
+  $("ren").disabled = $("del").disabled = !C;
   let head = $("loghead"), msgs = $("logmsgs"), tail = $("logtail");
   if (!head) {
     log.textContent = "";
-    head = el("div"); head.id = "loghead"; msgs = el("div"); msgs.id = "logmsgs"; tail = el("div"); tail.id = "logtail";
-    for (const x of [head, msgs, tail]) { x.style.display = "flex"; x.style.flexDirection = "column"; x.style.gap = ".6rem"; log.appendChild(x); }
+    head = el("div", "stack"); head.id = "loghead"; msgs = el("div", "stack"); msgs.id = "logmsgs"; tail = el("div", "stack"); tail.id = "logtail";
+    log.append(head, msgs, tail);
   }
   head.textContent = "";
   if (a && a.greeting) head.appendChild(mdEl(a.greeting));
-  if (!C) { msgs.textContent = ""; tail.textContent = ""; SHOWN = {id: null, n: 0};
+  if (!C) {
+    msgs.textContent = ""; tail.textContent = ""; SHOWN = {id: null, n: 0}; dropFrames();
+    if (!S.assistants.length) head.appendChild(el("div", "muted hint", "Für dich ist noch kein Assistent sichtbar. Lege unter „Assistenten“ einen eigenen an."));
+    else if (a && !a.greeting && !PENDING) head.appendChild(el("div", "muted hint", "Neues Gespräch mit " + a.title + ". Schreib deine erste Nachricht."));
     if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
     if (status) tail.appendChild(status);
-    return; }
+    return;
+  }
   if (SHOWN.id !== C.id || C.messages.length < SHOWN.n) { msgs.textContent = ""; SHOWN = {id: C.id, n: 0}; dropFrames(); }
   for (const m of C.messages.slice(SHOWN.n)) for (const node of msgNodes(m)) msgs.appendChild(node);
   SHOWN.n = C.messages.length;
@@ -247,7 +460,7 @@ function render(status){
     ok.onclick = () => decide(k.call, true); no.onclick = () => decide(k.call, false);
     box.append(ok, " ", no); tail.appendChild(box);
   }
-  if (PENDING) { const d = el("div", "msg user pending"); d.appendChild(document.createTextNode(PENDING)); tail.appendChild(d); }
+  if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
   if (status) tail.appendChild(status);
   log.scrollTop = log.scrollHeight;
   drawMermaid(msgs).then(() => { log.scrollTop = log.scrollHeight; });
@@ -264,7 +477,7 @@ function sandboxOrigin(){
 }
 function dropFrames(){ FRAMES.length = 0; }
 function viewFrame(m){
-  const box = el("div", "view");
+  const box = el("div", "view-box");
   const origin = sandboxOrigin();
   if (!origin) { box.appendChild(el("div", "muted", "Ansicht nicht verfügbar: dieser Chat hat keine zweite Herkunft (Plattform ab 0.1.245).")); return box; }
   const f = document.createElement("iframe");
@@ -319,11 +532,10 @@ window.addEventListener("message", async ev => {
   if (m.id === undefined || typeof m.method !== "string") return;
   const p = m.params || {};
   if (m.method === "ui/initialize") {
-    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
     return reply(st, m.id, {protocolVersion: "2026-01-26",
       hostCapabilities: {openLinks: {}, serverTools: {}, serverResources: {}},
       hostInfo: {name: "oaap-chat", version: (S && S.version) || ""},
-      hostContext: {toolInfo: {tool: {name: st.name}}, theme: dark ? "dark" : "light",
+      hostContext: {toolInfo: {tool: {name: st.name}}, theme: isDark() ? "dark" : "light",
                     displayMode: "inline", availableDisplayModes: ["inline"], locale: "de-DE"}});
   }
   if (m.method === "ping") return reply(st, m.id, {});
@@ -343,14 +555,15 @@ window.addEventListener("message", async ev => {
   if (m.method === "ui/message") {
     // D5: der Vorschlag landet im Eingabefeld -- gesendet wird nur von dir.
     const text = ((p.content || {}).text || "").slice(0, 4000);
-    if (text) { $("t").value = text; $("t").focus(); }
+    if (text) { $("t").value = text; grow(); $("t").focus(); }
     return reply(st, m.id, {});
   }
   if (m.method === "ui/request-display-mode") return reply(st, m.id, {mode: "inline"});
   return fail(st, m.id, -32601, "Dieser Chat kann " + m.method + " noch nicht.");
 });
 
-// „Einrichtung prüfen“: was fehlt, und der nächste Schritt
+// „Einrichtung prüfen“: was fehlt, und der nächste Schritt -- als Dialog, damit es
+// auch in einem langen Gespräch zu sehen ist.
 function setupBox(r){
   const box = el("div", "setup"), ok = r.items.every(i => i.ok);
   box.appendChild(el("b", "", ok ? "Einrichtung: alles da." : "Einrichtung: es fehlt noch etwas."));
@@ -365,7 +578,6 @@ function setupBox(r){
   close.onclick = () => { SETUP = null; $("sdlg").close(); }; box.appendChild(close);
   return box;
 }
-// Als Dialog: im Verlauf stand das Ergebnis oben -- bei einem langen Gespräch außer Sicht.
 function showSetup(){
   const b = $("sbox"); b.textContent = "";
   if (!SETUP) return;
@@ -409,11 +621,13 @@ async function drive(path, body, text){
   }
   render(status);
   await refreshState();
+  if (!narrow()) $("t").focus();
 }
 function decide(call, ok){
   drive("api/conv/" + C.id + "/step", {decision: {call, ok}}, ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
 }
 
+// ---- /Befehle: eine Suchliste, die immer etwas sagt
 let CMDSAID = "";
 async function loadCommands(){
   CMDS = []; CMDSAID = ""; $("cmds").textContent = "";
@@ -431,6 +645,7 @@ const OWN = [
   {name: "pruefen", description: "Einrichtung prüfen", run: () => $("chk").click()},
   {name: "umbenennen", description: "Dieses Gespräch umbenennen", run: () => $("ren").click()},
   {name: "assistenten", description: "Assistenten anlegen und ändern", run: () => $("manage").click()},
+  {name: "einstellungen", description: "Darstellung, Hintergrund, Gruppen", run: () => $("nset").click()},
 ];
 const ownCmd = name => CMDS.some(c => c.name === name) ? null : OWN.find(o => o.name === name);
 function cmdMatches(){
@@ -448,7 +663,7 @@ function showCommands(){
   const box = $("cmds"); box.textContent = "";
   const m = cmdMatches();
   if (!m) return;
-  const a = C ? assistant(C.assistant) : null;
+  const a = current();
   const all = m.prompts.concat(m.own);
   SEL = Math.min(SEL, Math.max(all.length - 1, 0));
   let i = 0;
@@ -461,15 +676,48 @@ function showCommands(){
   };
   box.appendChild(el("div", "grp", "Befehle des Assistenten"));
   if (m.prompts.length) m.prompts.forEach(item);
-  else box.appendChild(el("div", "muted grp", !a ? "Kein Gespräch offen." :
+  else box.appendChild(el("div", "muted grp", !a ? "Kein Assistent gewählt." :
     !a.commands ? "Dieser Assistent bietet keine /Befehle an." :
+    !C ? "Die Befehle des Assistenten gibt es, sobald das Gespräch läuft." :
     CMDSAID || (CMDS.length ? "Kein Befehl passt." : "Die Sicht dieses Assistenten hat keine Prompts.")));
   if (m.own.length) { box.appendChild(el("div", "grp", "Chat")); m.own.forEach(item); }
 }
 
-async function refreshState(){ S = await api("GET", "api/state"); renderSide(); }
-async function openConv(id){ C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); }
+async function refreshState(){ S = await api("GET", "api/state"); if (S.error) return; renderSide(); if (VIEW === "asst") renderAssistants(); }
+async function openConv(id){
+  showView("chat");
+  C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands();
+}
+function startDraft(aid){
+  showView("chat");
+  C = null; SETUP = null; PENDING = null; SHOWN = {id: null, n: 0};
+  renderSide(); if (aid && assistant(aid)) $("pick").value = aid;
+  render(); loadCommands(); closeDrawer(); if (!narrow()) $("t").focus();
+}
 
+// ---- Ansichten der Seite: Gespräch oder Assistenten (#assistenten; die Zurück-Taste geht)
+let VIEW = "chat";
+function showView(v){
+  VIEW = v;
+  $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst";
+  $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
+  if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) renderAssistants(); }
+  else render();
+  const want = v === "asst" ? "#assistenten" : "";
+  if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
+}
+window.addEventListener("popstate", () => showView(location.hash === "#assistenten" ? "asst" : "chat"));
+
+// ---- Kopfzeile und Menü
+$("sopen").onclick = () => toggleSide();
+$("sclose").onclick = () => toggleSide(false);
+$("scrim").onclick = closeDrawer;
+const MENU = $("menu");
+MENU.addEventListener("click", ev => { if (ev.target.closest(".mbody button")) MENU.open = false; });
+document.addEventListener("click", ev => { if (MENU.open && !MENU.contains(ev.target)) MENU.open = false; });
+$("fs").hidden = !document.documentElement.requestFullscreen;
+$("fs").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); };
+document.addEventListener("fullscreenchange", () => { $("fs").textContent = document.fullscreenElement ? "Vollbild beenden" : "Vollbild"; });
 $("chk").onclick = () => checkSetup(C ? C.assistant : $("pick").value);
 $("ren").onclick = async () => {
   if (!C) return;
@@ -483,22 +731,28 @@ $("del").onclick = async () => {
   const r = await api("POST", "api/conv/" + C.id + "/delete", {});
   if (r.error) { render(el("div", "err", r.error)); return; }
   C = null; SETUP = null; await refreshState();
-  if (S.conversations.length) await openConv(S.conversations[0].id); else render();
+  if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
 };
-$("new").onclick = async () => {
-  const r = await api("POST", "api/conv", {assistant: $("pick").value});
-  if (r.error) { render(el("div", "err", r.error)); return; }
-  C = r; await refreshState(); render(); loadCommands();
-};
+$("new").onclick = () => startDraft($("pick").value);
+$("pick").onchange = () => { if (!C) { render(); showCommands(); } };
+$("q").addEventListener("input", renderSide);
+
+// ---- Eingabe: wächst mit dem Text, Enter sendet, Umschalt+Enter macht eine neue Zeile
+function grow(){ const t = $("t"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 192) + "px"; }
 $("f").onsubmit = async ev => {
   ev.preventDefault();
   const text = $("t").value.trim(); if (!text || busy) return;
   const own = text.startsWith("/") && !/\s/.test(text) ? ownCmd(text.slice(1)) : null;
-  if (own) { $("t").value = ""; showCommands(); own.run(); return; }
-  if (!C || !C.id) { const r = await api("POST", "api/conv", {assistant: $("pick").value});
-    if (r.error) { render(el("div", "err", r.error)); return; } C = r; loadCommands(); }
-  $("t").value = ""; showCommands();
+  if (own) { $("t").value = ""; grow(); showCommands(); own.run(); return; }
+  $("t").value = ""; grow(); showCommands();
   PENDING = text;
+  if (!C || !C.id) {
+    setBusy(true, "Gespräch wird angelegt …");
+    const r = await api("POST", "api/conv", {assistant: $("pick").value});
+    if (r.error) { PENDING = null; busy = false; $("go").disabled = false; $("t").disabled = false;
+      $("t").value = text; grow(); render(el("div", "err", r.error)); return; }
+    C = r; loadCommands();
+  }
   await drive("api/conv/" + C.id + "/send", {text}, "Das Modell denkt …");
 };
 $("t").addEventListener("keydown", ev => {
@@ -510,12 +764,22 @@ $("t").addEventListener("keydown", ev => {
   if (m && ev.key === "Escape") { $("t").value = ""; showCommands(); return; }
   if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); $("f").requestSubmit(); }
 });
-$("t").addEventListener("input", () => { SEL = 0; showCommands(); });
+$("t").addEventListener("input", () => { SEL = 0; grow(); showCommands(); });
 
-// ---- Assistenten pflegen
+// ---- Einstellungen
+for (const seg of document.querySelectorAll("#setdlg .seg"))
+  seg.addEventListener("click", ev => { const b = ev.target.closest("button"); if (b) setOne(seg.dataset.k, b.dataset.v); });
+const openSettings = () => { applySet(); closeDrawer(); $("setdlg").showModal(); };
+$("nset").onclick = openSettings; $("mset").onclick = openSettings;
+$("setclose").onclick = () => $("setdlg").close();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (SET.theme === "system") rethemeMermaid(); });
+
+// ---- Assistenten: eigene Seite mit Suche, Filter und „Neuer Assistent“
 const F = $("af");
 function fill(a){
   F.reset(); $("aerr").textContent = "";
+  F.elements.id.readOnly = !!a;
+  $("dtitle").textContent = a ? "Assistent ändern" : "Neuer Assistent";
   if (!a) return;
   for (const k of ["id", "title", "greeting", "system", "model", "view", "gateway"]) F.elements[k].value = a[k] || "";
   F.elements.scope.value = a.visibility.scope;
@@ -523,28 +787,44 @@ function fill(a){
   F.elements.commands.checked = !!a.commands;
   F.elements.views.checked = !!a.views;
 }
-async function renderList(){
+function renderAssistants(){
   const box = $("alist"); box.textContent = "";
-  for (const a of S.assistants) {
-    const row = el("div"); row.appendChild(el("span", "", a.title + " (" + a.id + ") · " + scopeWord(a) +
-      (a.origin === "config" ? " · aus der Konfiguration" : "")));
-    const acts = el("span");
+  const q = $("aq").value.trim().toLowerCase(), f = $("ascope").value;
+  const list = S.assistants.filter(a =>
+    (!q || [a.title, a.id, a.view, a.model, a.greeting || ""].join(" ").toLowerCase().includes(q)) &&
+    (f === "all" || (f === "mine" ? a.manage : a.visibility.scope === f)));
+  for (const a of list) {
+    const card = el("div", "acard");
+    card.appendChild(el("h3", "", a.title));
+    const tags = el("div");
+    for (const t of [scopeWord(a), a.origin === "config" ? "aus der Konfiguration" : "", a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
+      if (t) tags.appendChild(el("span", "badge", t));
+    card.appendChild(tags);
+    const g = (a.greeting || "").replace(/[*_`#>\[\]]/g, "");
+    if (g) card.appendChild(el("p", "", g.length > 140 ? g.slice(0, 140) + " …" : g));
+    card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · Sicht " + a.view));
+    const acts = el("div", "acts");
+    const go = el("button", "primary", "Gespräch beginnen"); go.type = "button";
+    go.onclick = () => startDraft(a.id); acts.appendChild(go);
     if (a.manage) {
       const e = el("button", "", "Ändern"); e.type = "button";
-      e.onclick = async () => fill(await api("GET", "api/assistants/" + a.id));
+      e.onclick = async () => { fill(await api("GET", "api/assistants/" + a.id)); $("dlg").showModal(); };
       const d = el("button", "", "Löschen"); d.type = "button";
       d.onclick = async () => { if (!confirm("Assistent " + a.title + " löschen?")) return;
         const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
-        $("aerr").textContent = (r.errors || []).join(" "); await refreshState(); renderList(); };
-      acts.append(e, " ", d);
+        $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
+      acts.append(e, d);
     }
-    row.appendChild(acts); box.appendChild(row);
+    card.appendChild(acts); box.appendChild(card);
   }
+  if (!list.length) box.appendChild(el("p", "muted", S.assistants.length ? "Kein Assistent passt." : "Noch kein Assistent. Lege mit „Neuer Assistent“ einen an."));
   if (!S.teams_known) box.appendChild(el("p", "muted", "Deine Team-Berechtigungen sind gerade nicht lesbar — Team-Assistenten fehlen in der Liste."));
 }
-$("manage").onclick = async () => { await refreshState(); fill(null); renderList(); $("dlg").showModal(); };
+$("manage").onclick = async () => { closeDrawer(); showView("asst"); await refreshState(); };
+$("aq").addEventListener("input", renderAssistants);
+$("ascope").onchange = renderAssistants;
+$("anewbtn").onclick = () => { fill(null); $("dlg").showModal(); };
 $("dclose").onclick = () => $("dlg").close();
-$("anew").onclick = () => fill(null);
 F.onsubmit = async ev => {
   ev.preventDefault();
   const v = {scope: F.elements.scope.value};
@@ -555,26 +835,27 @@ F.onsubmit = async ev => {
   if (F.elements.greeting.value.trim()) a.greeting = F.elements.greeting.value.trim();
   if (F.elements.gateway.value.trim()) a.gateway = F.elements.gateway.value.trim();
   const r = await api("POST", "api/assistants", a);
-  $("aerr").textContent = r.errors ? r.errors.join(" ") : (r.error || "Gespeichert.");
-  await refreshState(); renderList();
+  if (r.errors || r.error) { $("aerr").textContent = r.errors ? r.errors.join(" ") : r.error; return; }
+  $("dlg").close(); $("alisterr").textContent = "„" + a.title + "“ gespeichert.";
+  await refreshState();
 };
 $("aimp").onchange = async ev => {
   const f = ev.target.files[0]; if (!f) return;
-  let doc; try { doc = JSON.parse(await f.text()); } catch (e) { $("aerr").textContent = "Die Datei ist kein JSON."; return; }
+  let doc; try { doc = JSON.parse(await f.text()); } catch (e) { $("alisterr").textContent = "Die Datei ist kein JSON."; return; }
   const r = await api("POST", "api/assistants/import", doc);
-  $("aerr").textContent = r.errors ? r.errors.join(" ") : (r.error || r.imported + " importiert.");
-  ev.target.value = ""; await refreshState(); renderList();
+  $("alisterr").textContent = r.errors ? r.errors.join(" ") : (r.error || r.imported + " importiert.");
+  ev.target.value = ""; await refreshState();
 };
 
 (async () => {
   await refreshState();
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
   $("who").textContent = (S.user || "") + " · Chat " + S.version;
-  if (S.conversations.length) await openConv(S.conversations[0].id); else render();
+  if (location.hash === "#assistenten") showView("asst");
+  else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
   if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);
   for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));
-  if (!S.assistants.length) $("log").appendChild(el("div", "muted", "Für dich ist noch kein Assistent sichtbar. Lege unter „Assistenten …“ einen eigenen an."));
 })();
 </script>
 </body>

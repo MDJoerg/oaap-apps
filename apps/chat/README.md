@@ -67,6 +67,16 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
   nächsten Schritt (bei fehlendem Zugangsprofil mit der vermuteten Gruppe
   `@<mandant>-<app>`). Fehlt Client oder Modell, zeigt die Seite das beim
   Öffnen von selbst.
+- **Layout (seit 0.5.0).** Kopfzeile (Leiste ein/aus, Gesprächstitel, Menü ⋯ mit
+  Umbenennen, Löschen, Einrichtung prüfen, Vollbild, Einstellungen) und Eingabe
+  (mit der Wahl des Assistenten für ein neues Gespräch) stehen fest, nur der
+  Verlauf scrollt. Die Leiste lässt sich einklappen, auf schmalen Bildschirmen ist
+  sie eine Schublade. Gespräche sind durchsuchbar und nach Assistent oder Zeit
+  gruppiert, jede Gruppe einklappbar. Assistenten haben eine eigene Seite
+  (`#assistenten`) mit Karten, Suche, Filter und „Neuer Assistent“.
+  **Einstellungen** (hell/dunkel/System, Hintergrund des Verlaufs, Dichte,
+  Schriftgröße, Gruppierung) gelten je Browser (localStorage) -- ohne Speicher
+  gelten die Vorgaben.
 - **Bedienung (seit 0.4.1).** Die eigene Frage steht sofort im Verlauf, darunter
   eine Denkanzeige. `/` öffnet eine Suchliste (Pfeiltasten, Enter/Tab, Esc): die
   Prompts der Sicht und Befehle des Chats selbst (`/neu`, `/pruefen`, `/umbenennen`,
