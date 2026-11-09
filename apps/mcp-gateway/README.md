@@ -229,6 +229,14 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
   <etikett> --views a,b`), ohne Widerruf. Eine 403 nennt den Grund (Sicht nicht
   im Profil, Zugang fehlt, Ampel zu hoch), und die Tabelle zeigt denselben Satz
   beim Profil. Knopf „Quellen jetzt einlesen“ bei den Servern.
+- **Seit 0.9.0: Betreiberseite in Reitern.** Übersicht (Kacheln, „Zu tun“ mit
+  allem, was Aufmerksamkeit braucht: gesperrte oder fehlende Einträge, leere
+  Sichten, ungelesene Kataloge, Zugänge, die an einer Sicht scheitern; dazu der
+  Zusammenhang Server → Sicht → Zugang), Server, Sichten, Schlüssel & Profile,
+  Anmeldung, Aufrufe & Prüfspur, Auswertung (`./?tab=…`). „Quellen jetzt
+  einlesen“ ist ein eigener Kasten oben bei den Servern und in der Übersicht;
+  Formulare zum Anlegen sind hinter „+ …“ eingeklappt. Nach einer Handlung
+  zeigt die Seite den passenden Reiter.
 - **Seit 0.8.0: Ansichten (MCP Apps, RFC-0075).** Nennt ein Tool mit
   `_meta.ui.resourceUri` eine Ansicht `ui://…`, liest das Gateway sie beim
   Katalog-Lesen und hält ihren **Inhalt** fest (SHA-256, dazu MIME und die

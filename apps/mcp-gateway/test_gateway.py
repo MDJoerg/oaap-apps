@@ -1475,14 +1475,14 @@ check("... in der Prüfspur alt → neu", any(a["action"] == "key.limits" and "a
 st, why = init_a("a-zwei")
 check("0.7.3: Sicht ohne Zugang Plattform: 403 nennt genau das, nicht „kein Zugangsprofil“",
       st == 403 and "Zugang „Plattform“" in why and "kein Zugangsprofil" not in why, why)
-st_p, page = admin_get("/")
+st_p, page = admin_get("/?tab=zugaenge")
 check("0.7.3: die Tabelle warnt beim Profil: a-zwei ohne Zugang Plattform",
       "a-zwei: die Sicht a-zwei hat den Zugang" in page, None)
 admin("/server-save", name="kp", address=TUER, auth="platform", light="red")
 st, why = init_a("a-sicht")
 check("0.7.3: Ampel der Sicht über der des Profils: 403 nennt Ampel und Abhilfe",
       st == 403 and "Ampel der Sicht a-sicht ist red" in why and "bis yellow" in why, why)
-st_p, page = admin_get("/")
+st_p, page = admin_get("/?tab=zugaenge")
 check("... und die Tabelle warnt ebenso", "a-sicht: die Ampel der Sicht a-sicht ist red" in page, None)
 admin("/server-save", name="kp", address=TUER, auth="platform", light="green")
 page = admin("/key-limits", label="a-chat", views="a-sicht,gibtsnicht", max_effect="read", ceiling="yellow")
@@ -1591,7 +1591,7 @@ sig_parts = [t.split(".")[2][:40] for t in (T1, T2, TX, TI, *XS["tokens"], *[a f
 check("keine Unterschrift eines Tokens in der Datenbank", not any(p.encode() in db_bytes for p in sig_parts))
 check("keine Zusicherung der Plattform in der Datenbank", ASRT.split(".")[2].encode() not in db_bytes)
 check("und nicht im Protokoll", not any(p in LOG.getvalue() for p in sig_parts))
-_, pg = admin_get("/")
+_, pg = admin_get("/?tab=anmeldung")
 check("Übersicht: Anmeldung mit Issuer und Befehl für Claude Code",
       ISS in pg and "--client-id mcp-claude --callback-port 33418" in pg)
 req = urllib.request.Request(f"{GW}/report/v1/usage?from={time.strftime('%Y-%m-%d', time.gmtime())}"
@@ -1641,7 +1641,26 @@ req = urllib.request.Request(f"{GW}/report/v1/keys", headers={"X-OAAP-Roles": "a
 kd = urllib.request.urlopen(req).read().decode()
 check("Schlüsselliste ohne Schlüsselwert", "mcp-oaap-" not in kd and '"voll"' in kd)
 st, main_page = admin_get("/")
-check("Übersicht rendert", st == 200 and "Sichten" in main_page and "papier" in main_page)
+check("Übersicht rendert", st == 200 and "Sichten" in main_page and "Zu tun" in main_page)
+
+# ---- 0.9.0: Betreiberseite in Reitern (Jörgs Browsertest 08.11.: „sehr unübersichtlich“)
+print("\n-- Betreiberseite in Reitern (0.9.0)")
+check("0.9.0: Übersicht hat Kacheln und den Zusammenhang Server → Sicht → Zugang",
+      'class="tiles"' in main_page and "So hängt es zusammen" in main_page, None)
+check("0.9.0: Übersicht zeigt keine Tabellen der Reiter",
+      "Schlüssel ausstellen" not in main_page and "Prüfspur" not in main_page.split("</nav>", 1)[1], None)
+for tab, word in (("server", "+ Server anlegen"), ("sichten", "+ Sicht anlegen"),
+                  ("zugaenge", "+ Schlüssel ausstellen"), ("anmeldung", "Anmeldung von Menschen"),
+                  ("aufrufe", "Prüfspur")):
+    st_t, pg_t = admin_get("/?tab=" + tab)
+    check(f"0.9.0: Reiter {tab} zeigt „{word}“ und ist markiert",
+          st_t == 200 and word in pg_t and f'?tab={tab}" class=on' in pg_t, st_t)
+_, sv = admin_get("/?tab=sichten")
+check("0.9.0: der Server papier steht im Reiter Server", "papier" in admin_get("/?tab=server")[1], None)
+st_x, px = admin_get("/?tab=gibtsnicht")
+check("0.9.0: unbekannter Reiter fällt auf die Übersicht zurück", st_x == 200 and "Zu tun" in px, st_x)
+_, detail = admin_get("/server?name=papier")
+check("0.9.0: Detailseite eines Servers markiert den Reiter Server", '?tab=server" class=on' in detail, None)
 
 # ------------------------------------------------- 0.8.0: Ansichten (MCP Apps, RFC-0075)
 print("\n-- MCP Apps: ein Tool bringt seine Ansicht mit (0.8.0, RFC-0075)")

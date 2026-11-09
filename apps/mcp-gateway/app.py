@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -549,7 +549,34 @@ STYLE = """<style>
   .brand small{display:block;font-size:.62rem;opacity:.75}
   .userbox{margin-left:auto;font-size:.9rem;text-align:right;line-height:1.2}
   .userbox small{opacity:.75}
-  nav.tabs{display:flex;gap:1rem;margin:0 0 1rem}
+  /* Reiter (0.9.0): eine Seite je Aufgabe statt einer langen Liste. */
+  nav.tabs{display:flex;gap:.1rem;overflow-x:auto;background:var(--oaap-surface);
+       border-bottom:1px solid var(--oaap-border);padding:0 1.2rem;position:sticky;top:0;z-index:5}
+  nav.tabs a{padding:.85rem .9rem .7rem;text-decoration:none;color:var(--oaap-muted);
+       border-bottom:3px solid transparent;white-space:nowrap;font-size:.93rem}
+  nav.tabs a:hover{color:var(--oaap-text)}
+  nav.tabs a.on{color:var(--oaap-blue-900);border-bottom-color:var(--oaap-blue-600);font-weight:600}
+  .chead{display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;
+       margin-bottom:.6rem}
+  .chead h2{margin:0}
+  details.add{margin-top:1rem;border-top:1px solid var(--oaap-border);padding-top:1rem}
+  details.add>summary{display:inline-block;list-style:none;padding:.5rem 1.1rem;border-radius:.4rem;
+       background:var(--oaap-blue-600);color:#fff;font-size:.92rem;margin:0}
+  details.add>summary::-webkit-details-marker{display:none}
+  details.add[open]>summary{background:#f3f4f6;color:#374151;margin-bottom:1rem}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.8rem;margin-bottom:1.2rem}
+  a.tile{background:var(--oaap-surface);border:1px solid var(--oaap-border);border-radius:.6rem;
+       padding:1rem 1.1rem;text-decoration:none;color:var(--oaap-text);display:block}
+  a.tile:hover{border-color:var(--oaap-blue-600)}
+  a.tile b{display:block;font-size:1.7rem;line-height:1.1;margin-bottom:.2rem}
+  a.tile span{color:var(--oaap-muted);font-size:.85rem}
+  ul.todo{margin:0;padding:0;list-style:none}
+  ul.todo li{padding:.55rem 0;border-bottom:1px solid var(--oaap-border);display:flex;gap:.6rem;
+       align-items:baseline;flex-wrap:wrap}
+  ul.todo li:last-child{border-bottom:0}
+  ol.steps{margin:.2rem 0 0;padding-left:1.2rem}ol.steps li{margin:.35rem 0}
+  .card.sources{display:flex;gap:1rem;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .card.sources p{margin:0;max-width:48rem}
   main{max-width:68rem;margin:1.6rem auto;padding:0 1.2rem}
   h1{font-size:1.35rem;margin:.2rem 0 1rem} h2{font-size:1.02rem;margin:0 0 .8rem}
   .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);border-radius:.6rem;
@@ -613,7 +640,15 @@ LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
                "red": "rot — Daten können abfließen"}
 
 
-def page(title, body, user, roles):
+TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
+        ("sichten", "./?tab=sichten", "Sichten"), ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
+        ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
+        ("auswertung", "auswertung", "Auswertung"))
+
+
+def page(title, body, user, roles, active="start"):
+    nav = "".join(f'<a href="{href}"{" class=on" if key == active else ""}>{label}</a>'
+                  for key, href, label in TABS)
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)} — OAAP MCP-Gateway</title>
@@ -623,8 +658,8 @@ def page(title, body, user, roles):
     <span><b>OAAP MCP-GATEWAY</b><small>Eine Sicht, ein Schlüssel, freigegebene Werkzeuge</small></span></a>
   <div class="userbox">{esc(user)}<br><small>{esc(roles)}</small></div>
 </header>
+<nav class="tabs" aria-label="Bereiche">{nav}</nav>
 <main>
-<nav class="tabs"><a href="./">Übersicht</a><a href="auswertung">Auswertung</a></nav>
 {body}</main>
 <footer class="oaap">OAAP MCP-Gateway {VERSION} — zählt Aufrufe, speichert keine Argumente
 und keine Ergebnisse</footer></html>"""
@@ -671,37 +706,98 @@ def endpoint(host, view):
     return f"https://{host}/mcp/{view}"
 
 
-def sources_line():
-    """Die Quellen der Plattform: wann zuletzt abgeglichen, und ein Knopf für jetzt (0.7.3)."""
+def sources_card():
+    """Die Quellen der Plattform (0.7.3): wann zuletzt abgeglichen, und ein Knopf für jetzt.
+    Seit 0.9.0 ein eigener Kasten -- in der Server-Tabelle hat ihn niemand gefunden."""
     if not SOURCES_URL:
         return ""
     at = SOURCES_STATE["at"] or "noch nie"
-    err = (f' <span class="err">{esc(SOURCES_STATE["error"])}</span>' if SOURCES_STATE["error"] else "")
-    return (f'<form class="inline" method="post" action="source-sync"><span class="hint">Apps des Mandanten '
-            f'mit MCP-Tür (Quellen der Plattform) werden alle 15 Minuten abgeglichen, zuletzt {esc(at)}.'
-            f'{err} Eine neue Quelle startet mit Ampel rot.</span> <button class="quiet">Quellen jetzt '
-            f'einlesen</button></form>')
+    err = (f'<br><span class="err">{esc(SOURCES_STATE["error"])}</span>' if SOURCES_STATE["error"] else "")
+    return (f'<div class="card sources"><p><b>Quellen der Plattform</b><br><span class="muted">Apps des '
+            f'Mandanten mit MCP-Tür werden alle 15 Minuten abgeglichen, zuletzt {esc(at)}. Eine neue Quelle '
+            f'startet mit Ampel rot.</span>{err}</p><form class="inline" method="post" action="source-sync">'
+            f'<button>Quellen jetzt einlesen</button></form></div>')
 
 
-def admin_page(user, roles, host, notice="", secret=None):
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
-    if secret:
-        views = secret["views"]
-        cmd = "\n".join(f'claude mcp add --transport http {v} {endpoint(host, v)} \\\n'
-                        f'  --header "Authorization: Bearer {secret["value"]}"' for v in views)
-        parts.append(f'''<div class="card secretbox"><h2>Schlüssel „{esc(secret["label"])}“</h2>
-<p><b>Nur jetzt sichtbar.</b> Gespeichert ist nur ein Hash; wer den Wert verliert, bekommt einen neuen.</p>
-<pre>{esc(secret["value"])}</pre><p class="hint">Zum Beispiel für Claude Code:</p>
-<pre>{esc(cmd)}</pre></div>''')
-    parts.append(signin_card(host))
-    if not VAULT.usable(MASTER):
-        parts.append('<div class="card attention"><p><b>MCPGW_MASTER_KEY fehlt.</b> Server ohne '
-                     'Zugangsdaten und Server hinter einer Destination lassen sich pflegen; eigene '
-                     'Zugangsdaten verweigert die App, bis der Tresorschlüssel gesetzt ist (Portal → '
-                     'Instanz → Konfiguration → erzeugen).</p></div>')
+def key_problems(k):
+    """Warum ein gültiger Schlüssel oder ein Profil an einer seiner Sichten scheitert -- ein Satz je Sicht."""
+    out = []
+    if k["revoked"]:
+        return out
+    ways = (["platform"] if any(g.startswith("@") for g in books.profile_groups(k)) else []) + \
+           (["signin"] if any(not g.startswith("@") for g in books.profile_groups(k)) else []) \
+        if k["kind"] == "profile" else ["key"]
+    for vn in books.key_views(k):
+        vr = books.view_row(DB, vn)
+        for w in ways:
+            r = why_not(k, vr, w) if vr else f"die Sicht {vn} gibt es nicht mehr."
+            if r:
+                out.append(f"{vn}: {r}")
+    return out
 
+
+def view_states(name):
+    states = {}
+    for item in books.items(DB, name):
+        st = books.item_state(DB, item)
+        states[st] = states.get(st, 0) + 1
+    return states
+
+
+def add_box(label, inner):
+    """Ein Formular zum Anlegen, eingeklappt hinter einem Knopf."""
+    return f'<details class="add"><summary>{label}</summary>{inner}</details>'
+
+
+def start_tab(host):
+    servers, views, keys = list(books.servers(DB)), list(books.views(DB)), list(books.keys(DB))
+    lights = {}
+    for x in servers:
+        lights[x["light"]] = lights.get(x["light"], 0) + 1
+    light_text = " · ".join(f"{lights[w]} {t}" for w, t in (("green", "grün"), ("yellow", "gelb"), ("red", "rot")) if lights.get(w))
+    live = [k for k in keys if not k["revoked"]]
+    calls = sum(t["calls"] for t in books.totals(DB).values())
+    tiles = (f'<div class="tiles">'
+             f'<a class="tile" href="./?tab=server"><b>{len(servers)}</b><span>Server{" · " + esc(light_text) if light_text else ""}</span></a>'
+             f'<a class="tile" href="./?tab=sichten"><b>{len(views)}</b><span>Sichten (MCP-Endpunkte)</span></a>'
+             f'<a class="tile" href="./?tab=zugaenge"><b>{len(live)}</b><span>gültige Schlüssel und Profile</span></a>'
+             f'<a class="tile" href="./?tab=aufrufe"><b>{calls}</b><span>Aufrufe gezählt</span></a></div>')
+    todo = []
+    if SOURCES_URL and SOURCES_STATE["error"]:
+        todo.append(("Quellen", f'Abgleich gescheitert: {esc(SOURCES_STATE["error"])}', "./?tab=server"))
+    for x in servers:
+        if x["gone"]:
+            todo.append(("Server", f'<b>{esc(x["name"])}</b> steht seit {esc(x["gone"])} nicht mehr in der Quellenliste',
+                         f'server?name={quote(x["name"])}'))
+        elif x["last_error"]:
+            todo.append(("Server", f'<b>{esc(x["name"])}</b>: Katalog nicht gelesen — {esc(x["last_error"])}',
+                         f'server?name={quote(x["name"])}'))
+        elif not x["last_read"]:
+            todo.append(("Server", f'<b>{esc(x["name"])}</b>: Katalog noch nie gelesen',
+                         f'server?name={quote(x["name"])}'))
+    for v in views:
+        st = view_states(v["name"])
+        if st.get("suspended") or st.get("missing"):
+            bits = ", ".join(f"{st[k]} {STATE_WORDS[k][1]}" for k in ("suspended", "missing") if st.get(k))
+            todo.append(("Sicht", f'<b>{esc(v["name"])}</b>: {esc(bits)}', f'view?name={quote(v["name"])}'))
+        elif not st:
+            todo.append(("Sicht", f'<b>{esc(v["name"])}</b> ist leer — noch nichts freigegeben', f'view?name={quote(v["name"])}'))
+    for k in live:
+        for p in key_problems(k):
+            todo.append(("Zugang", f'<b>{esc(k["label"])}</b> — {esc(p)}', "./?tab=zugaenge"))
+    rows = "".join(f'<li>{badge("yellow", what)} <span>{text}</span> <a href="{href}">ansehen</a></li>'
+                   for what, text, href in todo)
+    todo_card = (f'<div class="card{" attention" if todo else ""}"><h2>Zu tun</h2>'
+                 + (f'<ul class="todo">{rows}</ul>' if todo else '<p class="muted">Nichts zu tun.</p>') + '</div>')
+    guide = """<div class="card"><h2>So hängt es zusammen</h2><ol class="steps">
+<li><b>Server</b> — ein MCP-Server, den das Gateway erreicht (URL, Destination oder Quelle der Plattform), mit Ampel.</li>
+<li><b>Sicht</b> — ein MCP-Endpunkt; du gibst darin einzelne Werkzeuge der Server frei. Neues erscheint nie von selbst.</li>
+<li><b>Schlüssel oder Zugangsprofil</b> — wer die Sicht benutzen darf: ein Agent mit Schlüssel, angemeldete Menschen
+per Gruppe, oder ein Chat der Plattform (<code>@&lt;chat&gt;</code>).</li></ol></div>"""
+    return tiles + todo_card + sources_card() + guide
+
+
+def servers_tab(host):
     rows = []
     for s in books.servers(DB):
         g = GUARDS.get(s["name"])
@@ -717,20 +813,18 @@ def admin_page(user, roles, host, notice="", secret=None):
                     f'<td>{esc(s["last_read"] or "nie")}'
                     f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
                     f'</td><td>{esc(load)}</td></tr>')
-    parts.append(f'''<div class="card"><h2>Server</h2>
+    return sources_card() + f'''<div class="card"><div class="chead"><h2>Server</h2></div>
 <p class="hint">MCP-Server mit Streamable HTTP. Adresse als URL oder <code>destination:&lt;name&gt;</code>
 — dann setzt die Plattform die Zugangsdaten ein, und das Gateway hält kein Geheimnis.</p>
-{sources_line()}
 <div class="scroll"><table><tr><th>Name</th><th>Adresse</th><th>Ampel</th><th>Protokoll</th>
 <th>Katalog gelesen</th><th>Last</th></tr>{"".join(rows) or '<tr><td colspan=6 class=muted>Noch kein Server.</td></tr>'}</table></div>
-<h2 style="margin-top:1.2rem">Server anlegen</h2>{server_form()}</div>''')
+{add_box("+ Server anlegen", server_form())}</div>'''
 
+
+def views_tab(host):
     vrows = []
     for v in books.views(DB):
-        states = {}
-        for item in books.items(DB, v["name"]):
-            st = books.item_state(DB, item)
-            states[st] = states.get(st, 0) + 1
+        states = view_states(v["name"])
         summary = ", ".join(f"{n} {STATE_WORDS[s][1]}" for s, n in sorted(states.items())) or "leer"
         light = books.view_light(DB, v["name"])
         vrows.append(f'<tr><td><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a></td>'
@@ -738,18 +832,20 @@ def admin_page(user, roles, host, notice="", secret=None):
                      f'<td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}<br>'
                      f'<span class="muted">{esc(books.WAY_WORDS.get(v["ways"], v["ways"]))}</span></td>'
                      f'<td>{esc(summary)}</td><td><code>{esc(endpoint(host, v["name"]))}</code></td></tr>')
-    parts.append(f'''<div class="card"><h2>Sichten</h2>
+    return f'''<div class="card"><div class="chead"><h2>Sichten</h2></div>
 <p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie bündelt, was hier freigegeben ist — aus einem
 Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst.</p>
 <div class="scroll"><table><tr><th>Sicht</th><th>Server, Ampel</th><th>Höchste Klasse</th><th>Einträge</th>
 <th>Endpunkt</th></tr>{"".join(vrows) or '<tr><td colspan=5 class=muted>Noch keine Sicht.</td></tr>'}</table></div>
-<h2 style="margin-top:1.2rem">Sicht anlegen</h2>
+<details class="add"><summary>+ Sicht anlegen</summary>
 <form class="grid" method="post" action="view-save">
 <div><label>Name (Pfad)</label><input type="text" name="name" required></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
 <div><label>Zugänge</label><select name="ways">{options(books.WAYS, "key", books.WAY_WORDS)}</select></div>
-<div><button>Anlegen</button></div></form></div>''')
+<div><button>Anlegen</button></div></form></details></div>'''
 
+
+def keys_tab(host):
     totals = books.totals(DB)
     krows = []
     for k in books.keys(DB):
@@ -763,15 +859,8 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
             state += " " + badge("yellow", "Zugangsprofil") + f'<br><span class="muted">Gruppen: ' \
                 f'{esc(", ".join(books.profile_groups(k)))}</span>'
         if not k["revoked"]:
-            ways = (["platform"] if any(g.startswith("@") for g in books.profile_groups(k)) else []) + \
-                   (["signin"] if any(not g.startswith("@") for g in books.profile_groups(k)) else []) \
-                if k["kind"] == "profile" else ["key"]
-            for vn in books.key_views(k):
-                vr = books.view_row(DB, vn)
-                for w in ways:
-                    r = why_not(k, vr, w) if vr else f"die Sicht {vn} gibt es nicht mehr."
-                    if r:
-                        state += f'<br><span class="err">{esc(vn)}: {esc(r)}</span>'
+            for p in key_problems(k):
+                state += f'<br><span class="err">{esc(p)}</span>'
             action += (f'<details><summary class="quiet">Ändern</summary><form method="post" action="key-limits">'
                        f'<input type="hidden" name="label" value="{esc(k["label"])}">'
                        f'<label>Sichten (Komma)</label><input type="text" name="views" value="{esc(k["views"])}" required>'
@@ -786,14 +875,14 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
                      f'<td>{esc(used)}{" / Budget " + str(k["budget_calls"]) if k["budget_calls"] else ""}</td>'
                      f'<td class="muted">{esc(context_line(k))}</td><td>{action}</td></tr>')
     vnames = [v["name"] for v in books.views(DB)]
-    parts.append(f'''<div class="card"><h2>Schlüssel und Zugangsprofile</h2>
+    return f'''<div class="card"><div class="chead"><h2>Schlüssel und Zugangsprofile</h2></div>
 <p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert:
 Es gilt für angemeldete Menschen der genannten Gruppen (volle Pfade wie /sap-dev, oder * für alle)
 — und mit <code>@&lt;chat-instanz&gt;</code> oder <code>@*</code> für Menschen, die ein Chat der
 Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattform“).</p>
 <div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
 <th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
-<h2 style="margin-top:1.2rem">Schlüssel ausstellen oder Zugangsprofil anlegen</h2>
+<details class="add"><summary>+ Schlüssel ausstellen oder Zugangsprofil anlegen</summary>
 <form class="grid" method="post" action="issue">
 <div><label>Etikett</label><input type="text" name="label" required></div>
 <div><label>Art</label><select name="kind">{options(("key", "profile"), "key", {"key": "Schlüssel", "profile": "Zugangsprofil"})}</select></div>
@@ -804,8 +893,10 @@ Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattfo
 <div><label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, "yellow")}</select></div>
 <div><label>Budget (Aufrufe, 0 = ohne)</label><input type="number" name="budget" value="0" min="0"></div>
 <div><label>Rate je Minute (0 = {DEFAULT_RATE})</label><input type="number" name="rate" value="0" min="0"></div>
-{context_inputs()}<div><button>Ausstellen</button></div></form></div>''')
+{context_inputs()}<div><button>Ausstellen</button></div></form></details></div>'''
 
+
+def calls_tab(host):
     labels = {k["id"]: k["label"] for k in books.keys(DB)}
     urows = "".join(
         f'<tr><td>{esc(r["time"])}</td><td>{esc(labels.get(r["key_id"], r["key_id"]))}</td>'
@@ -815,18 +906,47 @@ Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattfo
         f'<td class="num">{r["ms"]} ms</td><td class="num">{esc(fmt_bytes(r["bytes_up"]))} / '
         f'{esc(fmt_bytes(r["bytes_down"]))}</td></tr>' for r in books.recent(DB, limit=40))
     proto = ", ".join(f'{r["method"]} {r["n"]}' for r in books.protocol_totals(DB)) or "—"
-    parts.append(f'''<div class="card"><h2>Letzte Aufrufe</h2>
+    out = f'''<div class="card"><h2>Letzte Aufrufe</h2>
 <p class="hint">Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
 Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
 <div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Sicht</th><th>Eintrag</th><th>Ausgang</th>
-<th>Dauer</th><th>Bytes hoch/runter</th></tr>{urows or '<tr><td colspan=7 class=muted>Noch keine.</td></tr>'}</table></div></div>''')
+<th>Dauer</th><th>Bytes hoch/runter</th></tr>{urows or '<tr><td colspan=7 class=muted>Noch keine.</td></tr>'}</table></div></div>'''
 
     arows = "".join(f'<tr><td>{esc(r["time"])}</td><td>{esc(r["actor"])}</td><td>{esc(r["action"])}</td>'
                     f'<td>{esc(r["subject"])}</td><td class="muted">{esc(r["detail"])}</td></tr>'
                     for r in books.audit(DB, 40))
-    parts.append(f'<div class="card"><h2>Prüfspur</h2><div class="scroll"><table><tr><th>Zeit</th>'
-                 f'<th>Wer</th><th>Was</th><th>Woran</th><th>Einzelheiten</th></tr>{arows}</table></div></div>')
-    return page("Übersicht", "".join(parts), user, roles)
+    return out + (f'<div class="card"><h2>Prüfspur</h2><div class="scroll"><table><tr><th>Zeit</th>'
+                  f'<th>Wer</th><th>Was</th><th>Woran</th><th>Einzelheiten</th></tr>{arows}</table></div></div>')
+
+
+TAB_PAGES = lambda: {"start": ("Übersicht", start_tab), "server": ("Server", servers_tab),
+             "sichten": ("Sichten", views_tab), "zugaenge": ("Schlüssel und Profile", keys_tab),
+             "anmeldung": ("Anmeldung", signin_card), "aufrufe": ("Aufrufe und Prüfspur", calls_tab)}
+
+
+def admin_page(user, roles, host, notice="", secret=None, tab="start"):
+    pages = TAB_PAGES()   # signin_card steht weiter unten
+    if tab not in pages:
+        tab = "start"
+    parts = []
+    if notice:
+        parts.append(f'<div class="card attention"><p>{esc(notice)}</p></div>')
+    if secret:
+        views = secret["views"]
+        cmd = "\n".join(f'claude mcp add --transport http {v} {endpoint(host, v)} \\\n'
+                        f'  --header "Authorization: Bearer {secret["value"]}"' for v in views)
+        parts.append(f'''<div class="card secretbox"><h2>Schlüssel „{esc(secret["label"])}“</h2>
+<p><b>Nur jetzt sichtbar.</b> Gespeichert ist nur ein Hash; wer den Wert verliert, bekommt einen neuen.</p>
+<pre>{esc(secret["value"])}</pre><p class="hint">Zum Beispiel für Claude Code:</p>
+<pre>{esc(cmd)}</pre></div>''')
+    if not VAULT.usable(MASTER) and tab in ("start", "server"):
+        parts.append('<div class="card attention"><p><b>MCPGW_MASTER_KEY fehlt.</b> Server ohne '
+                     'Zugangsdaten und Server hinter einer Destination lassen sich pflegen; eigene '
+                     'Zugangsdaten verweigert die App, bis der Tresorschlüssel gesetzt ist (Portal → '
+                     'Instanz → Konfiguration → erzeugen).</p></div>')
+    title, build = pages[tab]
+    parts.append(build(host))
+    return page(title, "".join(parts), user, roles, tab)
 
 
 CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code (D15)
@@ -994,7 +1114,7 @@ Betreiber; die Angaben des Servers sind nur ein Vorschlag.</p>
 <div class="card"><h2>Ändern</h2>{server_form(s)}
 <form method="post" action="server-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
 <button class="quiet">Server löschen</button></form></div>''')
-    return page(f"Server {name}", "".join(parts), user, roles)
+    return page(f"Server {name}", "".join(parts), user, roles, "server")
 
 
 REQUEST_WORDS = {"elicitation": "Rückfrage an den Menschen (elicitation)",
@@ -1097,7 +1217,7 @@ Muster mit <code>*</code> und <code>?</code>.</p>
 {"".join(rows) or '<tr><td colspan=6 class=muted>Leer.</td></tr>'}</table></div>
 <form method="post" action="view-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
 <button class="quiet">Sicht löschen</button></form></div>''')
-    return page(f"Sicht {name}", "".join(parts), user, roles)
+    return page(f"Sicht {name}", "".join(parts), user, roles, "sichten")
 
 
 # ------------------------------------------------------------- Auswertung
@@ -1155,7 +1275,7 @@ def charts_page(user, roles, params):
 {CHARTS.stacked_bars(over, step, by, metric)}</div>
 <div class="card"><h2>Einträge nach {esc(CHARTS.metric_labels[metric])}</h2>{CHARTS.top_list(ranked, "tool", metric)}</div>
 <div class="card"><h2>Ausgänge</h2>{CHARTS.outcome_list(outcomes)}</div>'''
-    return page("Auswertung", body, user, roles)
+    return page("Auswertung", body, user, roles, "auswertung")
 
 
 def keys_doc():
@@ -1863,7 +1983,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/auswertung":
             self.send_html(200, charts_page(user, roles, query))
         else:
-            self.send_html(200, admin_page(user, roles, host))
+            self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start")))
 
     def handle_report(self, path):
         if not self.is_admin():
@@ -1993,7 +2113,13 @@ class Handler(BaseHTTPRequestHandler):
         elif back and back[0] == "view" and books.view_row(DB, back[1]):
             self.send_html(200, view_page(user, roles, host, back[1], notice))
         else:
-            self.send_html(200, admin_page(user, roles, host, notice, secret))
+            self.send_html(200, admin_page(user, roles, host, notice, secret, POST_TAB.get(path, "start")))
+
+
+# Nach einer Handlung zeigt die Seite den Reiter, zu dem sie gehört (0.9.0).
+POST_TAB = {"/issue": "zugaenge", "/revoke": "zugaenge", "/key-limits": "zugaenge", "/context": "zugaenge",
+            "/source-sync": "server", "/server-delete": "server", "/server-save": "server",
+            "/view-delete": "sichten", "/view-save": "sichten"}
 
 
 def json_field(form, name):
