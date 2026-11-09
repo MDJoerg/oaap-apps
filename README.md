@@ -78,7 +78,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 0.3.4   |
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.2   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.3   |
-| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.6   |
+| [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.7   |
 | [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.5.3   |
 | [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.8.0   |
 | [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.5.0   |

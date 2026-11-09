@@ -416,8 +416,8 @@
       "id": "keycloak",
       "name": "Keycloak (Anmeldedienst)",
       "type": "wrapped",
-      "version": "0.1.6",
-      "released": "2026-11-07",
+      "version": "0.1.7",
+      "released": "2026-11-09",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/keycloak"

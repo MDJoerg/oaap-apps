@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: keycloak
   name: Keycloak (Anmeldedienst)
-  version: 0.1.6
+  version: 0.1.7
   type: wrapped
   # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
   # keine App, die jemand "benutzt" — es ist die Tür, durch die andere
@@ -62,6 +62,20 @@ storage:
 #   /admin/realms, /admin/serverinfo  die Verwaltungs-SCHNITTSTELLE, die der
 #                                     Konnektor benutzt; sie verlangt ein
 #                                     Keycloak-Token, sonst 401
+#   /admin/master/console/whoami      (seit 0.1.7) die Frage der Konsole
+#                                     „was darf ich?“; sie trägt das
+#                                     Keycloak-Token der Konsole als
+#                                     Bearer. Hinter der OAAP-Anmeldung
+#                                     las das Gateway dieses Token als
+#                                     OAAP-API-Schlüssel und wies es ab
+#                                     („malformed key“, 401) -- die
+#                                     Konsole zeigte dann nur noch
+#                                     „Manage realms“ (oaapx02, 09.11.).
+#                                     Keycloak prüft das Token selbst.
+#                                     Nur master: die Konsole eines
+#                                     anderen Realms (/admin/<realm>/
+#                                     console) hat dasselbe Problem und
+#                                     wird von OAAP nicht benutzt.
 #   /realms/<realm>/...               jede Anmeldung eines Mandanten, auch
 #                                     die von Claude Code; der Token-
 #                                     Endpunkt von master (Konnektor)
@@ -84,6 +98,9 @@ routes:
     roles: [public]
     service: keycloak
   - path: /admin/serverinfo
+    roles: [public]
+    service: keycloak
+  - path: /admin/master/console/whoami
     roles: [public]
     service: keycloak
   - path: /realms/master/protocol/openid-connect/auth

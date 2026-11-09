@@ -257,10 +257,19 @@ Mandantengrenze):
 | `/admin` (jede `/admin/<realm>/console`) | OAAP-Anmeldung, Rolle `admin` |
 | `/realms/master/protocol/openid-connect/auth`, `…/login-actions`, `…/account` | OAAP-Anmeldung, Rolle `admin` |
 | `/admin/realms`, `/admin/serverinfo` (Verwaltungs-**Schnittstelle**) | offen, verlangt ein Keycloak-Token (sonst 401) |
+| `/admin/master/console/whoami` (seit 0.1.7) | offen, verlangt ein Keycloak-Token (sonst 401) |
 | alles andere, auch `/realms/master/protocol/openid-connect/token` | offen |
 
 Danach meldet sich der Verwalter **zweimal** an: erst bei OAAP, dann bei
 Keycloak.
+
+**Warum `whoami` offen ist (0.1.7):** Die Konsole fragt nach dem Laden
+mit ihrem eigenen Keycloak-Token unter `/admin/master/console/whoami`,
+was der Angemeldete darf. Liegt dieser Pfad hinter der OAAP-Anmeldung,
+liest das Gateway das Token als OAAP-API-Schlüssel und weist es ab; die
+Konsole lädt dann zwar, zeigt aber nur „Manage realms“ und lässt keine
+Benutzer- oder Gruppenpflege zu. Gemessen auf oaapx02 am 09.11.; auf
+oaap-test war in 0.1.6 nur das Laden der Konsole geprüft worden.
 
 Warum eine Rolle und keine LAN-Sperre: Der Konnektor (`oaap idp`) und
 das MCP-Gateway sprechen Keycloak über seine öffentliche Adresse an,
