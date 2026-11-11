@@ -1,0 +1,61 @@
+oaap_manifest: "0.11"
+
+app:
+  id: help
+  name: OAAP-Hilfe
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufe 1): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen.
+  rebuild: self
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Der längere Pfad gewinnt. Die Verwaltung (Abruf, eigene Notizen) nur für admin.
+  - path: /admin
+    roles: [admin]
+  # Zentrale Instanz (RFC-0078 D8): öffentlich, ohne Anmeldung, ungefiltert -- der
+  # Inhalt ist die öffentliche Doku. Die Plattform bremst je Client-Adresse
+  # (RFC-0010). Seite, API und MCP-Tür liegen alle hier.
+  - path: /
+    roles: [public]
+
+# RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route. Auf der
+# zentralen Instanz erreicht sie ein Client auch direkt.
+mcp:
+  path: /mcp
+
+destinations:
+  - name: docs-origin
+    kind: http
+    purpose: "Archiv des Doku-Repositorys (tar.gz), z. B. https://codeload.github.com/MDJoerg/oaap-docs"
+
+storage:
+  # Index (SQLite), zuletzt angenommenes Archiv, Abrufzustand, eigene Notizen.
+  - name: data
+    mount: /data
+
+config:
+  - key: HELP_ARCHIVE_PATH
+    label: "Pfad des Archivs hinter der Destination docs-origin (GitHub codeload: /tar.gz/refs/heads/main; Forgejo: /archive/main.tar.gz)"
+    default: "/tar.gz/refs/heads/main"
+  - key: HELP_WEB_TEMPLATE
+    label: "Vorlage für Links zum Original, {path} = Pfad im Repository, z. B. https://github.com/MDJoerg/oaap-docs/blob/main/{path} (leer = keine Links)"
+    default: ""
+  - key: HELP_FETCH_HOURS
+    label: "Abstand der Abrufe in Stunden"
+    default: "6"
+  - key: HELP_AUDIENCE_FILTER
+    label: "Zielgruppenfilter (on/off). Zentrale Instanz: off. Der Filter auf Kundenknoten kommt mit Stufe 2."
+    default: "off"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10
