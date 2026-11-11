@@ -1,4 +1,4 @@
-"""Marketplace 0.1 -- digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen (RFC-0077 Stufe 1).
+"""Marketplace 0.2 -- digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen (RFC-0077 Stufe 1).
 
 Ein Asset hat unveränderliche Releases und Kanäle (stable, beta), die auf
 Releases zeigen. Ob jemand ein Asset SIEHT und ob er es BEKOMMT, sind zwei
@@ -26,10 +26,12 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import access
 import blobs
 import db
+import images
 import multipart
+import views
 import zipinfo
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 DATA_DIR = os.environ.get("MARKET_DATA_DIR", "/data")
 NAME = (os.environ.get("MARKET_NAME") or "Marketplace").strip()[:60]
@@ -46,7 +48,7 @@ EXTENSIONS = {e.strip().lower().lstrip(".") for e in
               (os.environ.get("MARKET_FILE_EXTENSIONS") or "zip,pdf,png,jpg,txt,md").split(",")
               if e.strip()}
 MAX_FORM = 64 * 1024
-PUBLIC_PREFIXES = ("/assets", "/d/", "/api/public/", "/static/")
+PUBLIC_PREFIXES = ("/assets", "/d/", "/img/", "/api/public/", "/static/")
 SAFE_INLINE = {"application/pdf", "image/png", "image/jpeg", "text/plain"}
 
 esc = html.escape
@@ -60,19 +62,9 @@ def is_public_path(path):
 
 
 # ---------------------------------------------------------------- views -----
-def visible_assets(p, q=""):
-    """Filtern VOR dem Zählen und Ordnen (§5): ein verborgenes Asset ändert keine Zahl."""
-    ents = M.entitlements()
-    out = []
-    for a in M.assets():
-        mine = [e for e in ents if e["asset"] == a["id"]]
-        if not access.can_see(p, a, mine):
-            continue
-        if q and q.lower() not in " ".join([a["id"], a.get("title") or "",
-                                            a.get("summary") or ""]).lower():
-            continue
-        out.append((a, mine))
-    return out
+def visible_assets(p, q="", chosen=None):
+    """Filtern VOR dem Zählen und Ordnen (§5) -- dieselbe Suche wie die Seite."""
+    return views.search(M, p, q, chosen)[0]
 
 
 def asset_view(p, a, ents, detail=False):
@@ -85,7 +77,11 @@ def asset_view(p, a, ents, detail=False):
                        "obtainable": access.can_obtain(p, a, ch, ents)}
     v = {"id": a["id"], "type": a["type"], "title": a.get("title") or a["id"],
          "summary": a.get("summary") or "", "state": st, "channels": per,
-         "free_channels": sorted(access.free_channels(a))}
+         "free_channels": sorted(access.free_channels(a)),
+         "tags": a.get("tags_list", []), "categories": a.get("categories_list", []),
+         "publisher": a.get("publisher") or "", "license": a.get("license") or "",
+         "links": a.get("links_list", []), "icon": a.get("icon") or "",
+         "screenshots": a.get("screenshots_list", [])}
     if detail:
         v["description"] = a.get("description") or ""
         rels = []
@@ -186,109 +182,6 @@ def page(title, body, base, signed):
             f"<header><span>{esc(NAME)}</span>{login}</header><main>{body}</main></html>")
 
 
-STATE_BADGE = {"obtainable": ('free', "beziehbar"), "locked": ('locked', "freischalten")}
-
-
-def render_list(p, base, q):
-    items = visible_assets(p, q)
-    cards = []
-    for a, ents in items:
-        v = asset_view(p, a, ents)
-        cls, label = STATE_BADGE.get(v["state"], ("", ""))
-        vers = " · ".join(f"{ch} {x['version']}" for ch, x in v["channels"].items())
-        cards.append(f'<a class="card" style="text-decoration:none;color:inherit" '
-                     f'href="{base}/assets/{quote(a["id"])}"><h2>{esc(v["title"])}</h2>'
-                     f'<p class=muted style="margin:.2rem 0">{esc(v["summary"][:160])}</p>'
-                     f'<p style="margin:.4rem 0 0"><span class="badge {cls}">{label}</span> '
-                     f'<span class=muted>{esc(vers)}</span></p></a>')
-    body = (f'<form method=get action="{base}/"><input type=text name=q value="{esc(q)}" '
-            'placeholder="Suchen" size=30> <button>Suchen</button></form>'
-            f'<p class=muted>{len(items)} Asset(s)</p>'
-            f'<div class=grid>{"".join(cards) or "<p class=muted>Nichts zu sehen.</p>"}</div>')
-    return page("Übersicht", body, base, not p["anon"])
-
-
-def render_detail(p, base, a, ents):
-    v = asset_view(p, a, ents, detail=True)
-    rows = []
-    dl = "/d/" if p["anon"] else "/my/d/"
-    for r in v["releases"]:
-        files = " ".join(f'<a class=btn href="{dl}{f["sha256"]}">Laden ({f["size"] / 1048576:.1f} MB)</a>'
-                         for f in r.get("files") or [])
-        rows.append(f'<tr><td><strong>{esc(r["version"])}</strong>'
-                    f'{" <span class=err>zurückgerufen</span>" if r["yanked"] else ""}</td>'
-                    f'<td>{esc(", ".join(r["channels"]) or "–")}</td>'
-                    f'<td>{esc(r["notes"][:300])}</td><td>{files or "<span class=muted>–</span>"}</td></tr>')
-    cls, label = STATE_BADGE.get(v["state"], ("", ""))
-    locked = ("<p class=muted>Gesperrt: Dieses Asset ist sichtbar, aber nur mit einer "
-              "Berechtigung beziehbar. Wende dich an den Betreiber dieses Marketplace.</p>"
-              if v["state"] == "locked" else "")
-    body = (f'<div class=card><h1>{esc(v["title"])} <span class="badge {cls}">{label}</span></h1>'
-            f'<p class=muted><code>{esc(a["id"])}</code> · {esc(a["type"])}</p>'
-            f'<p>{esc(v["summary"])}</p><pre style="white-space:pre-wrap;font:inherit">'
-            f'{esc(v["description"])}</pre>{locked}</div>'
-            '<div class=card><h2>Releases</h2><table><tr><th>Version</th><th>Kanäle</th>'
-            f'<th>Notizen</th><th></th></tr>{"".join(rows)}</table></div>')
-    return page(v["title"], body, base, not p["anon"])
-
-
-def mode_options(current):
-    return "".join(f'<option{" selected" if m == current else ""}>{m}</option>'
-                   for m in ("anyone", "signed-in", "principals"))
-
-
-def render_admin(p, msg=""):
-    a_rows = []
-    for a in M.assets():
-        vis = access.visibility_of(a)
-        cur = ", ".join(f"{ch} {M.current(a['id'], ch)['version']}" for ch in M.channels
-                        if M.current(a["id"], ch))
-        a_rows.append(
-            f'<tr><td><code>{esc(a["id"])}</code><br><span class=muted>{esc(a["type"])}</span></td>'
-            f'<td>{esc(cur or "–")}</td><td>{esc(vis["mode"])}</td>'
-            f'<td>{esc(", ".join(sorted(access.free_channels(a))) or "–")}</td>'
-            f'<td><form class=inline method=post action="/admin/asset">'
-            f'<input type=hidden name=asset value="{esc(a["id"])}">'
-            f'<select name=mode>{mode_options(vis["mode"])}</select> '
-            f'<input type=text name=free value="{esc(",".join(sorted(access.free_channels(a))))}" '
-            'placeholder="frei: stable" size=10> <button>Setzen</button></form></td></tr>')
-    e_rows = "".join(
-        f'<tr><td><code>{esc(e["asset"])}</code></td><td>{esc(e["principal_kind"])}: '
-        f'{esc(e["principal"])}</td><td>{esc(", ".join(json.loads(e["channels"])))}</td>'
-        f'<td><form class=inline method=post action="/admin/revoke"><input type=hidden name=id '
-        f'value="{e["id"]}"><button>Entziehen</button></form></td></tr>' for e in M.entitlements())
-    p_rows = "".join(
-        f'<tr><td><code>{esc(r["asset_pattern"])}</code></td><td>{esc(r["principal_kind"])}: '
-        f'{esc(r["principal"])}</td><td>{esc(", ".join(json.loads(r["channels"])))}</td>'
-        f'<td><form class=inline method=post action="/admin/publisher-remove"><input type=hidden '
-        f'name=id value="{r["id"]}"><button>Entfernen</button></form></td></tr>' for r in M.publishers())
-    r_rows = "".join(
-        f'<tr><td>{esc(r["principal"])}</td><td>{esc(r["channel"])}</td>'
-        f'<td>{esc(_date(r["last_poll"]))}</td><td class=muted>{esc(r["offered"])}</td></tr>'
-        for r in M.recipients())
-    kind_sel = '<select name=kind><option>user</option><option>group</option></select>'
-    note = f'<div class=card><p style="margin:0">{esc(msg)}</p></div>' if msg else ""
-    body = (note +
-            '<h1>Verwaltung</h1>'
-            f'<div class=card><h2>Assets</h2><table><tr><th>Asset</th><th>Aktuell</th>'
-            f'<th>Sichtbar</th><th>Frei</th><th></th></tr>{"".join(a_rows)}</table></div>'
-            f'<div class=card><h2>Berechtigungen</h2><table>{e_rows}</table>'
-            '<form method=post action="/admin/grant"><p>'
-            f'<input type=text name=asset placeholder=Asset size=14 required> {kind_sel} '
-            '<input type=text name=name placeholder="Benutzer/Gruppe" size=16 required> '
-            '<input type=text name=channels placeholder="Kanäle (leer = alle)" size=16> '
-            '<button>Berechtigen</button></p></form></div>'
-            f'<div class=card><h2>Veröffentlichen dürfen</h2><table>{p_rows}</table>'
-            '<form method=post action="/admin/publisher"><p>'
-            f'<input type=text name=pattern placeholder="hbvp oder oaap-*" size=14 required> {kind_sel} '
-            '<input type=text name=name placeholder="Benutzer/Gruppe" size=16 required> '
-            '<input type=text name=channels placeholder="Kanäle (leer = alle)" size=16> '
-            '<button>Erlauben</button></p></form></div>'
-            f'<div class=card><h2>Empfänger</h2><p class=muted>Angeboten und abgerufen -- nicht '
-            f'„installiert“.</p><table>{r_rows}</table></div>')
-    return page("Verwaltung", body, "/my", True)
-
-
 # ---------------------------------------------------------------- handler ---
 class Handler(BaseHTTPRequestHandler):
     server_version = f"marketplace/{VERSION}"
@@ -373,11 +266,12 @@ class Handler(BaseHTTPRequestHandler):
         p = self.who(path)
         try:
             # Seiten: öffentlich unter /, angemeldet unter /my
+            chosen = {k: one(k)[:40] for k, _l in views.FACETS}
             if path in ("/", "/my", "/my/"):
                 base = "" if path == "/" else "/my"
                 if base and p["anon"]:
                     return self.send(401, page("Anmeldung", "<p>Bitte anmelden.</p>", "", False))
-                return self.send(200, render_list(p, base, one("q")[:80]))
+                return self.send(200, views.render_list(M, NAME, p, base, one("q")[:80], chosen))
             for base in ("", "/my"):
                 if path.startswith(base + "/assets/"):
                     aid = unquote(path[len(base + "/assets/"):]).strip("/")
@@ -385,16 +279,24 @@ class Handler(BaseHTTPRequestHandler):
                     ents = M.entitlements(aid) if a else []
                     if not a or not access.can_see(p, a, ents):
                         return self.not_found()
-                    return self.send(200, render_detail(p, base, a, ents))
+                    return self.send(200, views.render_detail(M, NAME, p, base, a, ents,
+                                                              one("m")[:300], not one("err")))
                 if path.startswith(base + "/d/"):
                     sha = path[len(base + "/d/"):].strip("/")
                     return self.download(p, sha)
+                if path.startswith(base + "/img/"):
+                    return self.image(p, path[len(base + "/img/"):].strip("/"))
             if path == "/admin" or path.startswith("/admin/"):
                 if not access.is_admin(p):
                     return self.not_found()
-                return self.send(200, render_admin(p, one("m")[:300]))
+                if path.startswith("/admin/assets/"):
+                    a = M.asset(unquote(path[len("/admin/assets/"):]).strip("/"))
+                    if not a:
+                        return self.not_found()
+                    return self.send(200, views.render_asset_edit(M, NAME, p, a, one("m")[:300]))
+                return self.send(200, views.render_admin(M, NAME, p, one("m")[:300]))
             if path in ("/api/public/v1/assets", "/api/v1/assets"):
-                items = [asset_view(p, a, e) for a, e in visible_assets(p, one("q")[:80])]
+                items = [asset_view(p, a, e) for a, e in visible_assets(p, one("q")[:80], chosen)]
                 return self.json(200, {"count": len(items), "assets": items})
             for pre in ("/api/public/v1/assets/", "/api/v1/assets/"):
                 if path.startswith(pre):
@@ -421,6 +323,25 @@ class Handler(BaseHTTPRequestHandler):
         f = next(x for x in r["files"] if x["sha256"] == sha)
         M.event("download", a["id"], r["version"], principal=p["user"] or "anonymous")
         return self.send_file(sha, f["name"], f.get("media_type") or "")
+
+    def image(self, p, sha):
+        """Ein Bild sieht, wer EIN Asset sieht, das es trägt -- sonst 404."""
+        if not blobs.SHA_RE.match(sha or ""):
+            return self.not_found()
+        for aid in M.image_assets(sha):
+            a = M.asset(aid)
+            if a and access.can_see(p, a, M.entitlements(aid)):
+                row = M.image_row(aid, sha)
+                try:
+                    f = B.open(sha)
+                except (OSError, ValueError):
+                    return self.not_found()
+                with f:
+                    data = f.read()
+                return self.send(200, data, row["media_type"],
+                                 {"Content-Disposition": "inline",
+                                  "Content-Security-Policy": "default-src 'none'; sandbox"})
+        return self.not_found()
 
     def feed(self, p, channel):
         if p["anon"]:
@@ -460,13 +381,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self.publish(p)
             if path.startswith("/api/v1/assets/"):
                 return self.asset_write(p, method, path[len("/api/v1/assets/"):].strip("/").split("/"))
+            if path.startswith("/my/assets/") and path.endswith("/request") and method == "POST":
+                return self.request_access(p, unquote(path[len("/my/assets/"):-len("/request")]))
             if path.startswith("/admin/") and method == "POST":
                 if not access.is_admin(p):
                     return self.not_found()
                 return self.admin_form(p, path)
         except db.Refused as e:
+            if path.startswith("/admin/assets/"):
+                aid = path[len("/admin/assets/"):].split("/")[0]
+                return self.send(303, "", extra={"Location": f"/admin/assets/{aid}?m=" + quote(str(e))})
             if path.startswith("/admin/"):
                 return self.send(303, "", extra={"Location": "/admin?m=" + quote(str(e))})
+            if path.startswith("/my/assets/"):
+                aid = path[len("/my/assets/"):].split("/")[0]
+                return self.send(303, "", extra={"Location": f"/my/assets/{aid}?err=1&m=" + quote(str(e))})
             return self.json(e.status, {"error": str(e)})
         return self.not_found(api=True)
 
@@ -539,12 +468,64 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             multipart.cleanup(files)
 
+    def request_access(self, p, aid):
+        a = M.asset(aid)
+        if not a or not access.can_see(p, a, M.entitlements(aid)):
+            return self.not_found()
+        form = {k: v[0].strip() for k, v in parse_qs(self.body_bytes().decode("utf-8", "replace")).items()}
+        ch = form.get("channel", "")
+        _rid, new = M.request_access(aid, p["user"], [ch] if ch else [], form.get("note", ""))
+        msg = ("Anfrage gestellt. Der Betreiber entscheidet; du siehst die Antwort hier."
+               if new else "Deine offene Anfrage ist ergänzt.")
+        return self.send(303, "", extra={"Location": f"/my/assets/{quote(aid)}?m=" + quote(msg)})
+
+    def take_image(self, p, aid, role_default="screenshot"):
+        """Ein Bild aus einem multipart-Formular annehmen -> (sha, role)."""
+        files = {}
+        try:
+            try:
+                fields, files = multipart.parse(
+                    self.rfile, self.headers.get("Content-Type", ""),
+                    int(self.headers.get("Content-Length") or 0),
+                    images.MAX_IMAGE_BYTES + 64 * 1024, tmpdir=B.tmp_dir())
+            except multipart.MultipartError as e:
+                raise db.Refused(400, str(e))
+            up = files.get("file")
+            if not up:
+                raise db.Refused(400, "Es kam keine Datei an (Feld „file“).")
+            try:
+                mt = images.check(up["path"], up["bytes"])
+            except images.ImageRefused as e:
+                raise db.Refused(400, str(e))
+            role = (fields.get("role") or role_default).strip()
+            sha, size = B.put_file(up["path"])
+            files.pop("file", None)
+            M.add_image(aid, sha, mt, size, role, p["user"])
+            return sha, role
+        finally:
+            multipart.cleanup(files)
+
+    def drop_image(self, p, aid, sha):
+        M.remove_image(aid, sha, p["user"])
+        if M.blob_unreferenced(sha):
+            B.delete(sha)
+
     def asset_write(self, p, method, parts):
         aid = unquote(parts[0]) if parts else ""
         a = M.asset(aid)
         if not a or not access.can_see(p, a, M.entitlements(aid)):
             return self.not_found(api=True)
         pubs = M.publishers()
+        if len(parts) >= 2 and parts[1] == "images":
+            if not access.can_publish(p, aid, None, pubs):
+                raise db.Refused(403, f"Du darfst „{aid}“ nicht ändern.")
+            if len(parts) == 2 and method == "POST":
+                sha, role = self.take_image(p, aid)
+                return self.json(201, {"asset": aid, "sha256": sha, "role": role})
+            if len(parts) == 3 and method == "DELETE":
+                self.drop_image(p, aid, parts[2])
+                return self.json(200, {"asset": aid, "removed": parts[2]})
+            return self.not_found(api=True)
         if len(parts) == 1 and method == "PUT":
             if not access.can_publish(p, aid, None, pubs):
                 raise db.Refused(403, f"Du darfst „{aid}“ nicht ändern.")
@@ -582,6 +563,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.not_found(api=True)
 
     def admin_form(self, p, path):
+        if path.startswith("/admin/assets/"):
+            return self.admin_asset(p, path)
         form = {k: v[0].strip() for k, v in parse_qs(self.body_bytes().decode("utf-8", "replace")).items()}
         chans = [c.strip() for c in form.get("channels", "").split(",") if c.strip()]
         if path == "/admin/grant":
@@ -596,6 +579,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/admin/publisher-remove":
             M.remove_publisher(form.get("id", "0"), p["user"])
             msg = "Entfernt."
+        elif path == "/admin/request-grant":
+            chans = [c.strip() for c in form.get("channels", "").split(",") if c.strip()]
+            M.decide_request(form.get("id", "0"), True, p["user"], chans or None)
+            msg = "Freigeschaltet."
+        elif path == "/admin/request-reject":
+            M.decide_request(form.get("id", "0"), False, p["user"], answer=form.get("answer", ""))
+            msg = "Abgelehnt."
         elif path == "/admin/asset":
             free = [c.strip() for c in form.get("free", "").split(",") if c.strip()]
             M.update_asset(form.get("asset", ""), {"visibility": {"mode": form.get("mode", "anyone")},
@@ -604,6 +594,46 @@ class Handler(BaseHTTPRequestHandler):
         else:
             return self.not_found()
         return self.send(303, "", extra={"Location": "/admin?m=" + quote(msg)})
+
+
+def _links_from_text(text):
+    out = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        label, _, url = line.rpartition("|") if "|" in line else ("", "", line)
+        out.append({"label": label.strip() or url.strip(), "url": url.strip()})
+    return out
+
+
+def _admin_asset(self, p, path):
+    parts = path[len("/admin/assets/"):].split("/")
+    aid, action = unquote(parts[0]), (parts[1] if len(parts) > 1 else "")
+    if not M.asset(aid):
+        return self.not_found()
+    if action == "image":
+        self.take_image(p, aid)
+        msg = "Bild aufgenommen."
+    else:
+        form = {k: v[0] for k, v in parse_qs(self.body_bytes(256 * 1024).decode("utf-8", "replace"),
+                                             keep_blank_values=True).items()}
+        if action == "meta":
+            M.update_asset(aid, {"title": form.get("title", "").strip()[:120],
+                                 "summary": form.get("summary", "").strip()[:300],
+                                 "description": form.get("description", ""),
+                                 "tags": form.get("tags", ""), "categories": form.get("categories", ""),
+                                 "publisher": form.get("publisher", ""), "license": form.get("license", ""),
+                                 "links": _links_from_text(form.get("links", ""))}, p["user"])
+            msg = "Gespeichert."
+        elif action == "image-remove":
+            self.drop_image(p, aid, form.get("sha", ""))
+            msg = "Bild entfernt."
+        else:
+            return self.not_found()
+    return self.send(303, "", extra={"Location": f"/admin/assets/{quote(aid)}?m=" + quote(msg)})
+
+
+Handler.admin_asset = _admin_asset
 
 
 def make_server(data_dir=None, port=PORT):

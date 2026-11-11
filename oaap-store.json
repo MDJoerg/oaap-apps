@@ -652,7 +652,7 @@
       "id": "marketplace",
       "name": "Marketplace",
       "type": "native",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -682,7 +682,7 @@
         "feed",
         "download"
       ],
-      "summary": "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen; OAAP-Pakete per API einchecken, Paketkataloge ziehen sie über einen Feed.",
+      "summary": "Digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen; Schaufenster mit Suche, Facetten, Bildern und Freischalt-Anfragen; OAAP-Pakete per API einchecken, Paketkataloge ziehen sie über einen Feed.",
       "description": "Ein Asset hat unveränderliche Releases und Kanäle, die auf Releases zeigen. Ob jemand ein Asset sieht und ob er es bekommt, sind zwei Fragen (verborgen, sichtbar-gesperrt, beziehbar). Eine KI oder ein Skript checkt Releases mit dem API-Schlüssel eines Maschinenbenutzers ein (tools/publish.py); Paketkataloge der Knoten folgen dem Feed im Spiegelmodus. Rückruf mit Grund. Stufe 1 von RFC-0077.",
       "links": [
         {

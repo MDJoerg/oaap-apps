@@ -1,4 +1,4 @@
-# Marketplace (`marketplace`) — RFC-0077 Stufe 1
+# Marketplace (`marketplace`) — RFC-0077 Stufen 1 und 2
 
 Digitale Assets mit **Releases** (unveränderlich, nach SHA-256 abgelegt) und
 **Kanälen** (`stable`, `beta`, global, D12). OAAP-Pakete sind ein Asset-Typ
@@ -19,6 +19,29 @@ Die Regel steht an genau einer Stelle: `access.py`.
 | `/api/v1/…` | angemeldet / API-Schlüssel | Suche, Details, Einchecken, Kanäle, Rückruf |
 | `/feed/v1/oaap-apps?channel=stable`, `/feed/v1/files/<sha256>` | angemeldet / API-Schlüssel | Empfänger, z. B. ein Paketkatalog im Spiegelmodus |
 | `/admin` | admin | Sichtbarkeit, freie Kanäle, Berechtigungen, Rechte zum Veröffentlichen, Empfänger |
+
+## Schaufenster (Stufe 2)
+
+- **Übersicht** (`/` öffentlich, `/my/` angemeldet): Suche über Name,
+  Beschreibung und Schlagworte (Volltext, ohne Umlaute, als Präfix),
+  Facetten Typ, Kategorie, Schlagwort, Kanal, Karten mit Icon, Version,
+  Herausgeber und Zustand (*frei*, *berechtigt*, *freischalten*, *beta*).
+  Gezählt wird erst, was die Person sehen darf.
+- **Detailseite:** Icon, Laden je Kanal, Screenshots, Beschreibung in
+  Markdown (rohes HTML erscheint als Text), Fakten (Versionen, Größe,
+  Herausgeber, Lizenz, Links, Schlagworte), Versionsverlauf mit Notizen.
+- **Freischalt-Anfrage:** Angemeldete fragen auf der Detailseite an (eine
+  offene je Person und Asset). Der Betreiber schaltet unter `/admin` frei
+  (das erzeugt die Berechtigung) oder lehnt mit einer Antwort ab, die die
+  Person auf der Detailseite sieht.
+- **Bearbeiten** (`/admin/assets/<id>`): Titel, Kurzbeschreibung,
+  Beschreibung, Kategorien, Schlagworte, Herausgeber, Lizenz, Links, Bilder.
+  Bilder nur PNG/JPEG/WebP (am Inhalt erkannt), höchstens 5 MB, bis zu
+  8 Screenshots, kein SVG. Ein Bild ist so sichtbar wie sein Asset.
+  Veröffentlicher können per API: `POST /api/v1/assets/<id>/images`
+  (`file`, `role=icon|screenshot`), `DELETE /api/v1/assets/<id>/images/<sha256>`,
+  `PUT /api/v1/assets/<id>` mit `tags`, `categories`, `links`, `license`,
+  `publisher`.
 
 ## Einchecken (eine KI oder ein Skript)
 
@@ -70,7 +93,6 @@ Daten: `/data/market.db` (SQLite) und `/data/blobs/` — im Backup des Knotens.
 
 ## Noch nicht (spätere Stufen)
 
-Schaufenster mit Karten, Facetten, Bildern und Freischalt-Anfragen (Stufe 2);
 S3, MCP, Statistikseiten (Stufe 3); Partner, eigene Asset-Typen, Signaturen
 (Stufe 4).
 
@@ -78,4 +100,5 @@ S3, MCP, Statistikseiten (Stufe 3); Partner, eigene Asset-Typen, Signaturen
 
 ```sh
 python3 test_marketplace.py
+python3 test_storefront.py
 ```

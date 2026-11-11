@@ -3,10 +3,10 @@ oaap_manifest: "0.10"
 app:
   id: marketplace
   name: Marketplace
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufe 1). OAAP-Pakete sind ein Asset-Typ: eine KI oder ein Skript checkt sie per API ein, Paketkataloge der Knoten ziehen sie im Spiegelmodus über einen Feed."
+  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufen 1 und 2): Schaufenster mit Suche, Facetten, Bildern und Freischalt-Anfragen. OAAP-Pakete sind ein Asset-Typ: eine KI oder ein Skript checkt sie per API ein, Paketkataloge der Knoten ziehen sie im Spiegelmodus über einen Feed."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Beim Bau wird PyYAML "==6.*" geholt; heilen soll eine neue Version.

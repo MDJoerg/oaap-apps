@@ -37,7 +37,7 @@ def ok(label, cond, detail=""):
 # --- der Marketplace (eigene Module, eigener Namensraum) ---
 sys.path.insert(0, MARKET)
 mk = importlib.import_module("app")
-for n in ("app", "db", "access", "blobs", "zipinfo", "multipart"):
+for n in ("app", "db", "access", "blobs", "zipinfo", "multipart", "views", "render", "images"):
     sys.modules.pop(n, None)
 sys.path.remove(MARKET)
 msrv = mk.make_server(tempfile.mkdtemp(prefix="up-market-"), 0)
