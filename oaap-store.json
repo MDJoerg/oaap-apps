@@ -948,7 +948,7 @@
       "id": "help",
       "name": "OAAP-Hilfe",
       "type": "native",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -980,7 +980,7 @@
         "cli"
       ],
       "summary": "Die OAAP-Dokumentation für jede KI und jeden Menschen — Suche über MCP, API und Seite, nach Rolle gefiltert.",
-      "description": "OAAP-Hilfe (RFC-0078): die Plattform-Doku samt erzeugter CLI-Referenz als Volltextindex. Eine KI fragt über MCP (help_search, help_read, Prompt guide), Menschen über die Seite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; bringt eine Kopie im Paket mit (seed). Angemeldet zeigt sie jeder Person die Dokumente ihrer Rollen; eine zentrale Instanz kann sie zusätzlich öffentlich anbieten (HELP_PUBLIC). Keine eigene KI, kein Zustand des Knotens.",
+      "description": "OAAP-Hilfe (RFC-0078): die Plattform-Doku samt erzeugter CLI-Referenz als Volltextindex. Eine KI fragt über MCP (help_search, help_read, Prompt guide), Menschen über die Seite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; bringt eine Kopie im Paket mit (seed). Angemeldet zeigt sie jeder Person die Dokumente ihrer Rollen; eine zentrale Instanz kann sie zusätzlich öffentlich anbieten (HELP_PUBLIC). Keine eigene KI, kein Zustand des Knotens. Auf Wunsch fordert eine KI fehlende Anleitungen an (HELP_REQUESTS); gleiche Anfragen werden Stimmen.",
       "links": [
         {
           "rel": "source",

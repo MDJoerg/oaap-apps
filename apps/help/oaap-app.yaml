@@ -3,10 +3,10 @@ oaap_manifest: "0.11"
 app:
   id: help
   name: OAAP-Hilfe
-  version: 0.2.0
+  version: 0.3.0
   type: native
   class: frontend
-  description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufen 1+2): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
+  description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufen 1, 2, 2b): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen.
@@ -25,6 +25,11 @@ routes:
   # ungefiltert -- die App antwortet hier nur mit HELP_PUBLIC=on, sonst 404.
   # Die Plattform bremst je Client-Adresse (RFC-0010).
   - path: /public
+    roles: [public]
+  # Die Bearbeitungstür (RFC-0078 §15.3, D16): Anfragen nach Anleitungen lesen
+  # und schließen. `public`, weil die App selbst prüft: ein Schlüssel, dessen
+  # SHA-256 in HELP_MAINT_KEY_SHA256 steht -- ohne ihn 401, nie Daten.
+  - path: /maint
     roles: [public]
   # Angemeldet: Seite, API und MCP-Tür mit dem Zielgruppenfilter nach den
   # Rollen der Person (D5: Relevanz, keine Geheimhaltung). Über das
@@ -59,6 +64,12 @@ config:
   - key: HELP_FETCH_HOURS
     label: "Abstand der Abrufe in Stunden"
     default: "6"
+  - key: HELP_REQUESTS
+    label: "Anfragen nach fehlenden Anleitungen (on/off): die suchende KI bekommt help_request_guide; gleiche Anfragen werden Stimmen, gespeichert ohne Adresse und Identität (RFC-0078 §15)"
+    default: "off"
+  - key: HELP_MAINT_KEY_SHA256
+    label: "SHA-256 (hex) des Schlüssels für die Bearbeitungstür /maint/mcp -- nur der Digest, nie der Schlüssel; leer = Tür zu"
+    default: ""
   - key: HELP_PUBLIC
     label: "Öffentlicher Pfad /public/ (on/off): nur für eine zentrale Instanz -- dort antworten Seite, API und MCP ohne Anmeldung und ohne Zielgruppenfilter"
     default: "off"

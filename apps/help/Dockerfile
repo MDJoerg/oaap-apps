@@ -8,7 +8,8 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin help
 
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
-COPY app.py library.py index.py sources.py render.py mcp_door.py /srv/
+COPY app.py library.py index.py sources.py render.py mcp_door.py \
+     guide_requests.py maint_door.py /srv/
 # Die Doku im Paket (seed): antwortet bis zum ersten Abruf, und ohne Destination.
 COPY seed/ /srv/seed/
 

@@ -13,6 +13,7 @@ import json
 import os
 import threading
 
+import guide_requests
 import index as ix
 import sources as src
 
@@ -38,6 +39,7 @@ class Library:
         self.archive_file = os.path.join(data_dir, "archive.tar.gz")
         self.state_file = os.path.join(data_dir, "fetch.json")
         self.lock = threading.Lock()
+        self.requests = guide_requests.Requests(data_dir, env)
 
     # --- Einstellungen (Konfiguration der Instanz) ---------------------
     @property
@@ -172,6 +174,12 @@ class Library:
             m.update(section=h["section"], anchor=h["anchor"], snippet=h["snippet"],
                      url=self.url(d, h["anchor"]))
             hits.append(m)
+        # Lücke (§15.4): kein Abschnitt trägt alle Wörter -- ohne Personenbezug gezählt.
+        if query and not self.index.strict(query):
+            try:
+                self.requests.record_gap(query)
+            except Exception:
+                pass
         # Ein Text, der für die genannte Version nicht stimmt, rückt nach
         # hinten (zentrale Instanz: markieren, nicht weglassen -- §8).
         hits.sort(key=lambda m: m.get("applies_to_version") is False)
@@ -212,3 +220,12 @@ class Library:
         return [{"uri": f"help://{d['source']}/{d['id']}", "name": d["title"],
                  "mimeType": "text/markdown"}
                 for d in self.index.docs() if ix.visible(d, roles)]
+
+    # --- Anfragen (RFC-0078 §15) --------------------------------------------
+    def covered_by(self, text):
+        """Ein vorhandenes Dokument, in dem ein Abschnitt alle Wörter trägt."""
+        hits = self.index.strict(text)
+        return hits[0] if hits else None
+
+    def doc_exists(self, doc_id):
+        return bool(doc_id) and self.index.get(doc_id) is not None

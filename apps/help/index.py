@@ -369,6 +369,26 @@ class Index:
                     break
             return out
 
+    def strict(self, query):
+        """Die ids der antwortenden Dokumente, in denen EIN Abschnitt alle
+        Inhaltswörter der Frage trägt -- „ein guter Treffer“ (RFC-0078
+        §15.1 covered_by, §15.4 Lücken). Bestes zuerst."""
+        words = [w for w in WORD.findall(query or "") if len(w) > 1]
+        words = [w for w in words if w.lower() not in STOP][:12]
+        con = self._con()
+        if not con or not words:
+            return []
+        with closing(con):
+            fts = con.execute("SELECT value FROM meta WHERE key='fts5'").fetchone()[0] == "1"
+            rows = (self._fts if fts else self._like)(con, words, " AND ")
+            out = []
+            for r in rows:
+                d = con.execute("SELECT shadowed_by FROM doc WHERE source=? AND id=?",
+                                (r["source"], r["id"])).fetchone()
+                if d is not None and not d[0] and r["id"] not in out:
+                    out.append(r["id"])
+            return out
+
     @staticmethod
     def _fts(con, words, joiner):
         # Jedes Wort in Anführungszeichen (kein FTS-Operator aus der Frage),

@@ -1,4 +1,4 @@
-# OAAP-Hilfe (`help`) — RFC-0078 Stufen 1 und 2
+# OAAP-Hilfe (`help`) — RFC-0078 Stufen 1, 2 und 2b
 
 Statisches Hilfewissen für jede KI: die OAAP-Dokumentation (`oaap-docs`)
 samt der aus dem Code erzeugten CLI-Referenz (`oaap help --markdown`) als
@@ -32,6 +32,38 @@ ein fehlendes (404), nie mit „verboten“.
 
 **Folge für Autoren:** Ein Dokument für Anwender braucht im Kopf
 `audience: [user, …]` oder `public`. Ohne Kopf sieht ein `user` es nicht.
+
+## Fehlende Anleitungen anfordern (Stufe 2b, RFC-0078 §15)
+
+Mit `HELP_REQUESTS=on` bekommt die suchende KI das Werkzeug
+`help_request_guide`. Es ist als schreibend markiert, deshalb fragt der
+Client die Person vorher. Gleiche Anfragen werden **Stimmen**, und die KI
+erfährt sofort `new` oder `vote` samt Zahl. Passt ein vorhandenes Dokument,
+nennt die Antwort es (`covered_by`). Gespeichert wird in `/data/requests.db`
+ohne Adresse und ohne Identität. Geschlossene Anfragen werden nach 180 Tagen
+gelöscht. Grenzen: 200 offene, 20 neue pro Stunde, darüber zählen nur Stimmen.
+Nebenbei zählt `help` Suchen ohne guten Treffer, als Wortstämme ohne
+Mailadressen und lange Nummern, 90 Tage lang, danach verdichtet.
+
+**Bearbeitungstür** `/maint/mcp` (dazu `/maint/api/v1/requests`, `…/<id>`,
+`…/<id>/close`, `/maint/api/v1/gaps`): nur mit
+`Authorization: Bearer <schlüssel>`. In der Konfiguration steht allein der
+SHA-256 (`HELP_MAINT_KEY_SHA256`); ohne ihn ist die Tür zu (401).
+Werkzeuge: `requests_list`, `request_read`, `request_close` (`done` nur mit
+der `doc_id` eines Dokuments im Index, `rejected` mit Begründung,
+`duplicate` mit `duplicate_of`) und `gaps_report`.
+
+```sh
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"   # Schlüssel, sicher aufbewahren
+printf %s "<schlüssel>" | sha256sum                             # Digest
+sudo oaap app config set help HELP_MAINT_KEY_SHA256 <digest>
+sudo oaap app config set help HELP_REQUESTS on
+claude mcp add --transport http oaap-help-maint https://<adresse>/maint/mcp \
+     --header "Authorization: Bearer <schlüssel>"
+```
+
+Die Texte der Anfragen sind **fremder Inhalt**: ein Wunsch, den man prüft,
+nie eine Anweisung.
 
 ## Quellen
 
@@ -85,6 +117,8 @@ claude mcp add --transport http oaap-help https://<adresse-der-instanz>/public/m
 | `HELP_ARCHIVE_PATH` | `/tar.gz/refs/heads/main` | Pfad des Archivs hinter `docs-origin` |
 | `HELP_WEB_TEMPLATE` | leer | Link zum Original, `{path}` = Pfad im Repository; leer = keine Links |
 | `HELP_FETCH_HOURS` | `6` | Abstand der Abrufe |
+| `HELP_REQUESTS` | `off` | `on`: Anfragen nach fehlenden Anleitungen (D12) |
+| `HELP_MAINT_KEY_SHA256` | leer | Digest des Schlüssels der Bearbeitungstür; leer = zu |
 | `HELP_PUBLIC` | `off` | `on` öffnet `/public/` ohne Anmeldung und ohne Filter (nur zentrale Instanz) |
 
 ## Noch nicht gebaut
@@ -100,6 +134,7 @@ claude mcp add --transport http oaap-help https://<adresse-der-instanz>/public/m
 
 ```sh
 python3 test_help.py
+python3 test_requests.py
 ```
 
 Ohne Knoten: eine nachgebaute Destination liefert Archive; geprüft werden

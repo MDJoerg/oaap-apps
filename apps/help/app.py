@@ -23,6 +23,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import guide_requests
+import maint_door
 import mcp_door
 import render
 import sources as src
@@ -30,7 +32,7 @@ import index as ix
 from library import ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
@@ -179,6 +181,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/healthz":
             return self.json(200, {"ok": True, "version": VERSION,
                                    "documents": self.lib.index.count()})
+        if u.path == "/maint" or u.path.startswith("/maint/"):
+            return self.maint_get(u.path, q)
         p = self.route(u.path)
         if p is None:
             return self.send(404, self.page("Nicht gefunden", "<p>Diese Seite gibt es nicht.</p>"))
@@ -217,7 +221,10 @@ class Handler(BaseHTTPRequestHandler):
         body = self.read_body()
         if body is None:
             return self.json(413, {"error": "Rumpf zu groß"})
-        p = self.route(urlparse(self.path).path)
+        raw = urlparse(self.path).path
+        if raw == "/maint" or raw.startswith("/maint/"):
+            return self.maint_post(raw, body)
+        p = self.route(raw)
         if p is None:
             return self.send(404, "")
         if p == "/mcp":
@@ -259,6 +266,53 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(303, "", headers={"Location": "/admin?m=" + quote(m)})
         return self.send(404, "")
 
+    # --- die Bearbeitungstür (RFC-0078 §15.3): Schlüssel, nie die Plattform-Anmeldung
+    def maint_ok(self):
+        if maint_door.authorized(self.headers, self.lib.env):
+            return True
+        self.json(401, {"error": "Schlüssel fehlt oder stimmt nicht (Authorization: Bearer …)."})
+        return False
+
+    def maint_get(self, path, q):
+        if not self.maint_ok():
+            return None
+        one = lambda k, d="": (q.get(k) or [d])[0]  # noqa: E731
+        rq = self.lib.requests
+        try:
+            if path == "/maint/api/v1/requests":
+                return self.json(200, maint_door.call(self.lib, "requests_list",
+                                                      {"status": one("status", "open"), "limit": one("limit", "50")}))
+            if path.startswith("/maint/api/v1/requests/"):
+                r = rq.read(unquote(path[len("/maint/api/v1/requests/"):]))
+                return self.json(200, r) if r else self.json(404, {"error": "not found"})
+            if path == "/maint/api/v1/gaps":
+                return self.json(200, {"gaps": rq.gaps(one("days", "30"), one("limit", "50"))})
+        except guide_requests.Refused as e:
+            return self.json(400, {"error": str(e)})
+        if path == "/maint/mcp":
+            return self.send(405, "", "text/plain", {"Allow": "POST"})
+        return self.json(404, {"error": "not found"})
+
+    def maint_post(self, path, body):
+        if not self.maint_ok():
+            return None
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self.json(415, {"error": "JSON erwartet."})
+        try:
+            msg = json.loads(body or b"{}")
+        except ValueError:
+            return self.json(400, {"error": "kein JSON"})
+        if path == "/maint/mcp":
+            out = maint_door.answer(self.lib, VERSION, msg)
+            return self.send(202, "", "text/plain") if out is None else self.json(200, out)
+        if path.startswith("/maint/api/v1/requests/") and path.endswith("/close") and isinstance(msg, dict):
+            rid = unquote(path[len("/maint/api/v1/requests/"):-len("/close")])
+            try:
+                return self.json(200, maint_door.call(self.lib, "request_close", dict(msg, id=rid)))
+            except guide_requests.Refused as e:
+                return self.json(400, {"error": str(e)})
+        return self.json(404, {"error": "not found"})
+
     # --- Inhalte
     def status(self):
         st = self.lib.state()
@@ -266,6 +320,8 @@ class Handler(BaseHTTPRequestHandler):
                 "fts5": self.lib.index.fts5(), "destination": bool(src.destination_url(self.lib.env)),
                 "public_path": (self.lib.env.get("HELP_PUBLIC") or "").strip().lower() == "on",
                 "answering": st.get("answering", ""),
+                "requests": {"enabled": self.lib.requests.enabled,
+                             "maintainer_key": bool((self.lib.env.get("HELP_MAINT_KEY_SHA256") or "").strip())},
                 "sources": {k: st.get(k) for k in (ARCHIVE_SOURCE, LOCAL_SOURCE) if st.get(k)},
                 "last_good": st.get("last_good")}
 
@@ -364,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
 <table><tr><th>Quelle</th><th>Art</th><th>Letzter Abruf</th></tr>{''.join(rows)}</table>
 <form method=post action="/admin/fetch" style="margin:12px 0"><button>Jetzt holen</button></form>
 <p class=meta>{st['documents']} Dokumente · Suche: {'FTS5' if st['fts5'] else 'einfach (ohne FTS5)'} · Öffentlicher Pfad <code>/public/</code>: {'an' if st['public_path'] else 'aus'} · angemeldet gilt der Zielgruppenfilter</p>
+<h2>Anfragen nach Anleitungen</h2>
+<p>{'An' if self.lib.requests.enabled else 'Aus'} (<code>HELP_REQUESTS</code>) · offen: {self.lib.requests.counts()['open']} · Bearbeitungstür <code>/maint/mcp</code>: {'Schlüssel gesetzt' if st['requests']['maintainer_key'] else 'kein Schlüssel (HELP_MAINT_KEY_SHA256)'}</p>
 <h2>Eigene Notizen (local)</h2>
 <p>Eine Notiz mit derselben <code>id</code> wie ein Plattformtext überdeckt ihn auf diesem Knoten; das Original bleibt lesbar.</p>
 <ul class=plain>{files}</ul>
