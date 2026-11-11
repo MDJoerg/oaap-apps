@@ -103,15 +103,21 @@ def title_of(fm, body, path):
 
 # --- Sichtbarkeit -----------------------------------------------------------
 
-def visible(doc, roles, audience_filter):
-    """Die EINE Prüfung hinter jeder Tür (RFC-0078 §6). Auf der zentralen
-    Instanz ist der Filter aus (D8): Die Doku ist ohnehin öffentlich. Auf
-    einem Knoten (Stufe 2) zählt die Schnittmenge -- Relevanz, keine
-    Geheimhaltung (D5)."""
-    if not audience_filter:
+# Wer auf dem öffentlichen Pfad fragt (zentrale Instanz, D8), sieht alles:
+# der Inhalt ist die öffentliche Doku. Ausdrücklich zu übergeben -- es gibt
+# keine Voreinstellung, damit eine vergessene Angabe nicht „alles“ heißt.
+UNFILTERED = None
+
+
+def visible(doc, roles):
+    """Die EINE Prüfung hinter jeder Tür (RFC-0078 §6). `roles` ist
+    UNFILTERED (öffentlicher Pfad) oder die Rollen der angemeldeten Person:
+    dann zählt die Schnittmenge mit `audience` -- Relevanz, keine
+    Geheimhaltung (D5). Ohne Rollen bleibt nur, was `public` ist."""
+    if roles is UNFILTERED:
         return True
     aud = doc["audience"]
-    return "public" in aud or bool(set(aud) & set(roles or ()))
+    return "public" in aud or bool(set(aud) & set(roles))
 
 
 def version_tuple(v):

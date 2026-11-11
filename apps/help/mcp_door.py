@@ -126,7 +126,7 @@ def answer(lib, roles, version, msg):
         return ok({"description": next(p["description"] for p in PROMPTS if p["name"] == params["name"]),
                    "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
     if method == "resources/list":
-        return ok({"resources": lib.resources(roles)})
+        return ok({"resources": lib.resources(roles=roles)})
     if method == "resources/templates/list":
         return ok({"resourceTemplates": [{"uriTemplate": "help://{source}/{id}",
                                           "name": "Dokument der OAAP-Hilfe",

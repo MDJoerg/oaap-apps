@@ -17,6 +17,9 @@ import index as ix
 import sources as src
 
 ARCHIVE_SOURCE = "oaap-docs"
+# Die Doku im Paket (RFC-0078 §3 `seed`): antwortet, bis der erste Abruf
+# gelingt, und auf einem Knoten ohne Destination (M10).
+SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed", "oaap-docs.tar.gz")
 LOCAL_SOURCE = "local"
 PRIORITY = {ARCHIVE_SOURCE: 50, LOCAL_SOURCE: 90}
 TRUST = {ARCHIVE_SOURCE: "platform", LOCAL_SOURCE: "local"}
@@ -46,10 +49,6 @@ class Library:
         return (self.env.get("HELP_WEB_TEMPLATE") or "").strip()
 
     @property
-    def audience_filter(self):
-        return (self.env.get("HELP_AUDIENCE_FILTER") or "off").strip().lower() == "on"
-
-    @property
     def max_bytes(self):
         try:
             return int(self.env.get("HELP_MAX_BYTES") or src.MAX_BYTES)
@@ -71,13 +70,21 @@ class Library:
         os.replace(tmp, self.state_file)
 
     def _archive_docs(self, data=None):
-        if data is None:
+        """Die Dokumente des zuletzt angenommenen Archivs -- oder, solange es
+        keines gibt, die des seed im Paket. Gibt (Dokumente, Herkunft)."""
+        if data is not None:
+            return src.read_archive(data), "fetch"
+        for path, origin in ((self.archive_file, "fetch"), (self.seed, "seed")):
             try:
-                with open(self.archive_file, "rb") as f:
-                    data = f.read()
-            except OSError:
-                return []
-        return src.read_archive(data)
+                with open(path, "rb") as f:
+                    return src.read_archive(f.read()), origin
+            except (OSError, src.Refused):
+                continue
+        return [], ""
+
+    @property
+    def seed(self):
+        return self.env.get("HELP_SEED_FILE") or SEED
 
     def _documents(self, archive_docs):
         docs = [{"source": ARCHIVE_SOURCE, "priority": PRIORITY[ARCHIVE_SOURCE],
@@ -108,6 +115,15 @@ class Library:
                 st["last_good"] = entry
             except src.Refused as e:
                 entry["error"] = str(e)
+                # Noch nie etwas angenommen: dann antwortet der seed (M10),
+                # statt dass der Knoten ohne Doku dasteht.
+                if not os.path.exists(self.archive_file) and not st.get("answering") == "seed":
+                    docs, origin = self._archive_docs()
+                    if origin == "seed":
+                        ix.build(self.index.path, self._documents(docs))
+                        st["answering"] = "seed"
+            if entry["ok"]:
+                st["answering"] = "fetch"
             st[ARCHIVE_SOURCE] = entry
             st["documents"] = self.index.count()
             self._write_state(st)
@@ -117,12 +133,11 @@ class Library:
         """Nach einer Änderung an `local`: neu bauen aus dem zuletzt
         angenommenen Archiv, ohne neuen Abruf."""
         with self.lock:
-            try:
-                archive = self._archive_docs()
-            except src.Refused:
-                archive = []
+            archive, origin = self._archive_docs()
             ix.build(self.index.path, self._documents(archive))
             st = self.state()
+            if origin:
+                st["answering"] = origin
             st[LOCAL_SOURCE] = {"at": now(), "ok": True,
                                 "files": len(src.read_local(self.data_dir))}
             st["documents"] = self.index.count()
@@ -146,12 +161,12 @@ class Library:
             out["applies_to_version"] = a
         return out
 
-    def search(self, query, limit=8, source=None, tags=None, version=None, roles=()):
+    def search(self, query, *, roles, limit=8, source=None, tags=None, version=None):
         limit = max(1, min(int(limit or 8), ix.MAX_LIMIT))
         hits = []
         for h in self.index.search(query, limit=limit, source=source, tags=tags):
             d = h["doc"]
-            if not ix.visible(d, roles, self.audience_filter):
+            if not ix.visible(d, roles):
                 continue
             m = self._meta(d, version)
             m.update(section=h["section"], anchor=h["anchor"], snippet=h["snippet"],
@@ -162,11 +177,11 @@ class Library:
         hits.sort(key=lambda m: m.get("applies_to_version") is False)
         return hits[:limit]
 
-    def read(self, ref, section=None, roles=(), version=None):
+    def read(self, ref, *, roles, section=None, version=None):
         """Das Dokument (oder ein Abschnitt) mit Metadaten; None, wenn es
         fehlt ODER nicht sichtbar ist -- beides gleich beantwortet (§11)."""
         d = self.index.get(ref)
-        if not d or not ix.visible(d, roles, self.audience_filter):
+        if not d or not ix.visible(d, roles):
             return None
         out = self._meta(d, version)
         body = d["body"]
@@ -186,14 +201,14 @@ class Library:
         out["other_versions"] = [f"{s}:{d['id']}" for s in d["shadows"]]
         return out
 
-    def topics(self, prefix="", roles=()):
+    def topics(self, prefix="", *, roles):
         tree = {}
         for d in self.index.docs(prefix=prefix or ""):
-            if ix.visible(d, roles, self.audience_filter):
+            if ix.visible(d, roles):
                 tree.setdefault(d["source"], []).append({"id": d["id"], "title": d["title"], "tags": d["tags"]})
         return tree
 
-    def resources(self, roles=()):
+    def resources(self, *, roles):
         return [{"uri": f"help://{d['source']}/{d['id']}", "name": d["title"],
                  "mimeType": "text/markdown"}
-                for d in self.index.docs() if ix.visible(d, roles, self.audience_filter)]
+                for d in self.index.docs() if ix.visible(d, roles)]

@@ -3,10 +3,10 @@ oaap_manifest: "0.11"
 app:
   id: help
   name: OAAP-Hilfe
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufe 1): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
+  description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufen 1+2): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen.
@@ -21,11 +21,18 @@ routes:
   # Der längere Pfad gewinnt. Die Verwaltung (Abruf, eigene Notizen) nur für admin.
   - path: /admin
     roles: [admin]
-  # Zentrale Instanz (RFC-0078 D8): öffentlich, ohne Anmeldung, ungefiltert -- der
-  # Inhalt ist die öffentliche Doku. Die Plattform bremst je Client-Adresse
-  # (RFC-0010). Seite, API und MCP-Tür liegen alle hier.
-  - path: /
+  # Zentrale Instanz (RFC-0078 D8, O3): dieselben Türen öffentlich und
+  # ungefiltert -- die App antwortet hier nur mit HELP_PUBLIC=on, sonst 404.
+  # Die Plattform bremst je Client-Adresse (RFC-0010).
+  - path: /public
     roles: [public]
+  # Angemeldet: Seite, API und MCP-Tür mit dem Zielgruppenfilter nach den
+  # Rollen der Person (D5: Relevanz, keine Geheimhaltung). Über das
+  # MCP-Gateway des Mandanten erreicht eine KI die Tür als diese Person.
+  # In Routen stehen nur App-Rollen; server_admin und tenant_admin kommen über
+  # admin herein, X-OAAP-Roles trägt trotzdem alle ihre Rollen (identity 2.1).
+  - path: /
+    roles: [admin, keyuser, user, support]
 
 # RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route. Auf der
 # zentralen Instanz erreicht sie ein Client auch direkt.
@@ -52,8 +59,8 @@ config:
   - key: HELP_FETCH_HOURS
     label: "Abstand der Abrufe in Stunden"
     default: "6"
-  - key: HELP_AUDIENCE_FILTER
-    label: "Zielgruppenfilter (on/off). Zentrale Instanz: off. Der Filter auf Kundenknoten kommt mit Stufe 2."
+  - key: HELP_PUBLIC
+    label: "Öffentlicher Pfad /public/ (on/off): nur für eine zentrale Instanz -- dort antworten Seite, API und MCP ohne Anmeldung und ohne Zielgruppenfilter"
     default: "off"
 
 health:

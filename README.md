@@ -94,6 +94,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.2   |
 | [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.1   |
 | [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.1   |
+| [OAAP-Hilfe](apps/help/)           | Die Doku für jede KI (RFC-0078): Suche über MCP, API und Seite, nach Rolle gefiltert; holt über die Destination `docs-origin`, Kopie im Paket; zentral zusätzlich öffentlich (`HELP_PUBLIC`) | 0.2.0   |
 | [Kundenzufriedenheit](data_models/kundenzufriedenheit/) | `data_models`-Artefakt (kein App-Dienst): dritte Herkunftsgruppe auf Firma, gepflegt im Zwillings-Browser (RFC-0031) | 0.1.0   |
 
 ## Installation
