@@ -6,7 +6,15 @@
 # ein Paket für lesbar erklären, das der Knoten anders versteht.
 FROM python:3.13-slim
 
-RUN pip install --no-cache-dir "PyYAML==6.*"
+# Debians Sicherheitskorrekturen beim Bau einspielen (RFC-0071 §16): Das offizielle
+# Basis-Abbild erscheint oft erst Tage nach Debians Korrektur neu. Mit dieser Zeile
+# heilt "Neu bauen" solche Meldungen; der Knoten erkennt sie und baut ohne
+# Zwischenspeicher (ab Plattform 0.1.252).
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir "PyYAML==6.0.3"
 
 # Fester numerischer Benutzer: die Plattform macht die deklarierten
 # Mounts für genau diese UID beschreibbar (Contract-Garantie 4).

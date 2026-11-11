@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: projekt
   name: OAAP Projekt-App
-  version: 0.1.1
+  version: 0.1.2
   type: native
   class: frontend
   description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4, zweite Welle): definiert Projekt, konsumiert Firma als Referenz -- Partnerverwaltung legt auf demselben Typ eigene Instanzen an"

@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: ollama-models
   name: OAAP Ollama-Modelle
-  version: 0.1.1
+  version: 0.1.2
   type: native
   class: frontend
   description: "Die Betriebsoberfläche zu Ollama: welche Modelle liegen da, was ist gerade geladen, Modelle holen und löschen — und die Zeilen für den Anschluss ans KI-Gateway"

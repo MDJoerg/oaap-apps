@@ -31,7 +31,7 @@ import multipart
 import views
 import zipinfo
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PORT = 8000
 DATA_DIR = os.environ.get("MARKET_DATA_DIR", "/data")
 NAME = (os.environ.get("MARKET_NAME") or "Marketplace").strip()[:60]

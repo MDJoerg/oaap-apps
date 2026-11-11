@@ -25,7 +25,7 @@ import multipart
 import upstream
 import zipinfo
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:

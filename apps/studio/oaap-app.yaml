@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: studio
   name: OAAP Studio
-  version: 0.4.4
+  version: 0.4.5
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
@@ -11,8 +11,9 @@ app:
   description: "Entwicklungsvorhaben verwalten, KI-Briefings erzeugen, Pakete prüfen und ausrollen"
 
 care:
-  # RFC-0071 §15 (Manifest 0.10): Beim Bau wird PyYAML "==6.*" geholt; ein Neubau kann eine neuere 6.x bringen — heilen soll eine neue Version.
-  rebuild: release
+  # RFC-0071 §15 (Manifest 0.10): PyYAML fest auf 6.0.3, Debians Korrekturen per
+  # apt-get upgrade (§16) -- ein Neubau ändert nur die Basis.
+  rebuild: self
 
 services:
   web:

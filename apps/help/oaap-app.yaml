@@ -3,7 +3,7 @@ oaap_manifest: "0.11"
 app:
   id: help
   name: OAAP-Hilfe
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "Statisches Hilfewissen für jede KI (RFC-0078 Stufen 1, 2, 2b): die OAAP-Dokumentation samt erzeugter CLI-Referenz als Volltextindex, über MCP (help_search, help_read, help_topics, Prompts guide/cli), eine Lese-API und eine Such- und Leseseite. Holt die Doku über die Destination docs-origin, ohne Neuausrollen; keine eigene KI, kein Zustand des Knotens."
