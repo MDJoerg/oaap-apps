@@ -1,0 +1,65 @@
+oaap_manifest: "0.10"
+
+app:
+  id: marketplace
+  name: Marketplace
+  version: 0.1.0
+  type: native
+  class: frontend
+  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufe 1). OAAP-Pakete sind ein Asset-Typ: eine KI oder ein Skript checkt sie per API ein, Paketkataloge der Knoten ziehen sie im Spiegelmodus über einen Feed."
+
+care:
+  # RFC-0071 §15 (Manifest 0.10): Beim Bau wird PyYAML "==6.*" geholt; heilen soll eine neue Version.
+  rebuild: release
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Der längere Pfad gewinnt. Die App prüft jede Antwort noch einmal mit
+  # access.py -- verborgen heißt 404, nie 403 (RFC-0077 §5).
+  - path: /admin
+    roles: [admin]
+  # Angemeldet: dieselben Seiten mit Identität (eine öffentliche Route kennt keine).
+  - path: /my
+    roles: [user, admin]
+  # Suche, Details, Einchecken (Sitzung oder API-Schlüssel eines Maschinenbenutzers).
+  - path: /api/v1
+    roles: [user, admin]
+  # Empfänger, z. B. ein Paketkatalog im Spiegelmodus (Maschinenbenutzer, D10).
+  - path: /feed/v1
+    roles: [user, admin]
+  # Öffentlich: was `anyone` sehen darf. Die Plattform bremst je Adresse (RFC-0010).
+  - path: /
+    roles: [public]
+
+storage:
+  # market.db (SQLite, WAL) und blobs/ -- im Backup des Knotens (D9).
+  - name: data
+    mount: /data
+
+config:
+  - key: MARKET_NAME
+    label: "Name im Kopf der Seiten und im Feed"
+    default: "Marketplace"
+  - key: MARKET_MAX_FILE_MB
+    label: "Größte Datei in MB (ein Paketkatalog nimmt höchstens 256 MB an)"
+    default: "256"
+  - key: MARKET_CHANNELS
+    label: "Kanäle, kommagetrennt (global für alle Assets, D12)"
+    default: "stable,beta"
+  - key: MARKET_TYPES
+    label: "Eingeschaltete Asset-Typen: oaap-app, file"
+    default: "oaap-app,file"
+  - key: MARKET_FILE_EXTENSIONS
+    label: "Erlaubte Endungen für den Typ file"
+    default: "zip,pdf,png,jpg,txt,md"
+
+health:
+  path: /healthz
+  startup_grace_seconds: 15
+
+launchpad:
+  group: Werkzeuge

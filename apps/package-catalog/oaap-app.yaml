@@ -3,10 +3,10 @@ oaap_manifest: "0.10"
 app:
   id: package-catalog
   name: Paketkatalog
-  version: 0.1.1
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050)."
+  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050). Seit 0.2 auch Spiegel eines Marketplace-Feeds (RFC-0077)."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Beim Bau wird PyYAML "==6.*" geholt; ein Neubau kann eine neuere 6.x bringen — heilen soll eine neue Version.
@@ -32,7 +32,24 @@ storage:
   - name: data
     mount: /data
 
+# RFC-0077 §7.2: der Spiegelmodus. Ohne gebundene Destination ist der
+# Katalog genau 0.1. Der Maschinenschlüssel liegt in der Destination
+# (Bearer), nie in der Konfiguration oder im Speicher des Katalogs.
+destinations:
+  - name: upstream
+    kind: http
+    purpose: "Marketplace-Feed (RFC-0077), z. B. https://market.example -- Authentifizierung bearer mit dem API-Schlüssel eines Maschinenbenutzers"
+
 config:
+  - key: CATALOG_UPSTREAM_CHANNEL
+    label: "Spiegel: Kanal, dem der Katalog folgt"
+    default: "stable"
+  - key: CATALOG_UPSTREAM_RELEASE
+    label: "Spiegel: auto = beim Eintreffen freigeben; hold = der Betreiber gibt frei"
+    default: "auto"
+  - key: CATALOG_UPSTREAM_INTERVAL_MIN
+    label: "Spiegel: Abstand der Abrufe in Minuten"
+    default: "15"
   - key: CATALOG_MAX_PACKAGE_MB
     label: "Größtes Paket in MB (der Knoten nimmt höchstens 256 MB an)"
     default: "256"

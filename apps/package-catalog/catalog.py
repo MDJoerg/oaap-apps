@@ -132,7 +132,7 @@ class Catalog:
             self._save()
             return self.get(app["id"], app["version"])
 
-    def set_released(self, app_id, version, released, by):
+    def set_released(self, app_id, version, released, by, reason=""):
         with self.lock:
             r = self.get(app_id, version)
             if not r:
@@ -145,7 +145,8 @@ class Catalog:
             else:
                 r.pop("released_at", None)
                 r.pop("released_by", None)
-            self._audit("release" if released else "withdraw", app_id, version, by)
+            extra = {"reason": reason[:300]} if reason else {}
+            self._audit("release" if released else "withdraw", app_id, version, by, **extra)
             self._save()
             return r
 

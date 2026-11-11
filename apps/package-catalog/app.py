@@ -1,4 +1,5 @@
-"""Paketkatalog 0.1 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050).
+"""Paketkatalog 0.2 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
+seit 0.2 auch als Spiegel eines Marketplace-Feeds (RFC-0077 §7.2, upstream.py).
 
 Der Betreiber lädt Pakete hoch, gibt Versionen frei und kann jede
 gespeicherte ZIP wieder herunterladen. Der Katalog führt nie Code aus und
@@ -21,9 +22,10 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import catalog as cat
 import multipart
+import upstream
 import zipinfo
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:
@@ -36,6 +38,7 @@ ALLOWED_ROLES = {"admin", "server_admin"}
 
 esc = html.escape
 CATALOG = None
+MIRROR = None
 
 
 STYLE = """<style>
@@ -102,12 +105,16 @@ def render_index():
                 f'<td class=muted>{r["size"] / 1048576:.1f} MB<br>'
                 f'<code>{esc(r["sha256"][:12])}</code></td>'
                 f'<td class=muted>{esc(r["uploaded_at"][:10])}<br>{esc(r["uploaded_by"])}</td>'
-                f'<td>{esc(r.get("note", ""))}</td><td>{" ".join(actions)}</td></tr>')
+                f'<td>{esc(r.get("note", ""))}'
+                + (f'<br><span class=err>im Marketplace zurückgerufen: '
+                   f'{esc(r["withdrawn_upstream"])}</span>' if r.get("withdrawn_upstream") else "")
+                + f'</td><td>{" ".join(actions)}</td></tr>')
     table = ("<table><tr><th>App</th><th>Version</th><th>Paket</th><th>Hochgeladen</th>"
              "<th>Notiz</th><th></th></tr>" + "".join(rows) + "</table>") if rows else \
             '<p class="muted">Noch kein Paket. Lade unten die erste ZIP hoch.</p>'
     body = (
         "<h1>Pakete</h1>"
+        + mirror_card() +
         f'<div class="card">{table}</div>'
         '<div class="card"><h2>Neue Version hochladen</h2>'
         '<form method=post action="/upload" enctype="multipart/form-data">'
@@ -124,6 +131,25 @@ def render_index():
         'jedes Mandanten-Administrators; Installieren und Aktualisieren gehen wie bei jeder '
         'anderen Quelle. Der Knoten prüft jedes Paket vor dem Entpacken noch einmal.</p></div>')
     return page(body)
+
+
+def mirror_card():
+    """Der Spiegel (RFC-0077 §7.2) -- nur, wenn eine Destination gebunden ist."""
+    if not MIRROR or not MIRROR.enabled:
+        return ""
+    st = MIRROR.status()
+    err = st.get("last_error") or ""
+    taken = ", ".join(st.get("taken") or []) or "noch keine"
+    return ('<div class="card"><h2>Spiegel eines Marketplace</h2>'
+            f'<p style="margin:0">Feed <strong>{esc(st.get("feed_name") or "?")}</strong>, '
+            f'Kanal <code>{esc(MIRROR.channel)}</code>, Freigabe '
+            f'<code>{esc(MIRROR.mode)}</code>, alle {MIRROR.interval} min.</p>'
+            f'<p class=muted style="margin:.4rem 0">Zuletzt abgerufen {esc(st.get("last_poll") or "nie")}'
+            f' · zuletzt erfolgreich {esc(st.get("last_ok") or "nie")}'
+            f'{"<br><span class=err>" + esc(err) + "</span>" if err else ""}'
+            f'<br>Übernommen: {esc(taken)}</p>'
+            '<form method=post action="/upstream/poll" style="margin:0">'
+            '<button>Jetzt abrufen</button></form></div>')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -217,6 +243,13 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         if path == "/upload":
             return self.upload(who, length)
+        if path == "/upstream/poll":
+            if not MIRROR or not MIRROR.enabled:
+                return self.back("Kein Upstream gebunden (Destination „upstream“).", False)
+            st = MIRROR.poll()
+            return self.back(("Abgerufen." if not st.get("last_error")
+                              else "Abruf fehlgeschlagen: " + st["last_error"]),
+                             not st.get("last_error"))
         if length > MAX_FORM:
             return self.back("Das Formular ist zu groß.", False)
         form = {k: v[0] for k, v in parse_qs(
@@ -254,15 +287,18 @@ class Handler(BaseHTTPRequestHandler):
             multipart.cleanup(files)
 
 
-def make_server(data_dir=None, port=PORT):
-    global CATALOG
+def make_server(data_dir=None, port=PORT, env=None, opener=None):
+    global CATALOG, MIRROR
     CATALOG = cat.Catalog(data_dir or DATA_DIR)
+    MIRROR = upstream.Mirror(CATALOG, os.environ if env is None else env, MAX_BYTES, opener)
     return ThreadingHTTPServer(("0.0.0.0", port), Handler)
 
 
 def main():
     srv = make_server()
-    print(f"package-catalog {VERSION} on :{PORT}, data {DATA_DIR}", flush=True)
+    MIRROR.start()
+    print(f"package-catalog {VERSION} on :{PORT}, data {DATA_DIR}"
+          + (f", mirror {MIRROR.channel}/{MIRROR.mode}" if MIRROR.enabled else ""), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

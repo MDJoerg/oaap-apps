@@ -611,8 +611,8 @@
       "id": "package-catalog",
       "name": "Paketkatalog",
       "type": "native",
-      "version": "0.1.1",
-      "released": "2026-11-06",
+      "version": "0.2.0",
+      "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/package-catalog"
@@ -639,8 +639,51 @@
         "store-quelle",
         "betreiber"
       ],
-      "summary": "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens.",
-      "description": "Der Betreiber lädt Pakete (ZIP) hoch, gibt Versionen frei und kann jede gespeicherte ZIP wieder herunterladen. Die App liest nur das Manifest, entpackt nichts und führt nie Code aus. Freigegebene Pakete macht der Knoten zur Store-Quelle (`oaap store add-catalog`): Mandanten-Administratoren sehen sie im Store, installieren und aktualisieren wie bei jeder Quelle, wahlweise mit Test-Instanz. Der Knoten liest die Liste direkt aus dem Speicher der Instanz — ohne Netz, ohne Schlüssel — und prüft Größe, SHA-256 und die Angaben im Manifest an einer Kopie, bevor er etwas entpackt. Eine Version wird nie überschrieben; eine freigegebene zu löschen verlangt einen Grund. Nur für den Betreiber (Rolle admin): ein Paket ist Code, den ein Knoten baut und ausführt.",
+      "summary": "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens. Seit 0.2 auch Spiegel eines Marketplace-Feeds.",
+      "description": "Der Betreiber lädt Pakete (ZIP) hoch, gibt Versionen frei und kann jede gespeicherte ZIP wieder herunterladen. Die App liest nur das Manifest, entpackt nichts und führt nie Code aus. Freigegebene Pakete macht der Knoten zur Store-Quelle (`oaap store add-catalog`): Mandanten-Administratoren sehen sie im Store, installieren und aktualisieren wie bei jeder Quelle, wahlweise mit Test-Instanz. Der Knoten liest die Liste direkt aus dem Speicher der Instanz — ohne Netz, ohne Schlüssel — und prüft Größe, SHA-256 und die Angaben im Manifest an einer Kopie, bevor er etwas entpackt. Eine Version wird nie überschrieben; eine freigegebene zu löschen verlangt einen Grund. Nur für den Betreiber (Rolle admin): ein Paket ist Code, den ein Knoten baut und ausführt. Seit 0.2 kann er über die Destination `upstream` einem Marketplace folgen (RFC-0077): neue Versionen kommen geprüft herein und werden automatisch oder vom Betreiber freigegeben; Zurückgerufenes wird zurückgezogen.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/package-catalog"
+        }
+      ]
+    },
+    {
+      "id": "marketplace",
+      "name": "Marketplace",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-11-11",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/marketplace"
+      },
+      "roles": [
+        "admin",
+        "public",
+        "user"
+      ],
+      "categories": [
+        "tools",
+        "infrastructure"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "marketplace",
+        "pakete",
+        "assets",
+        "kanäle",
+        "berechtigungen",
+        "feed",
+        "download"
+      ],
+      "summary": "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen; OAAP-Pakete per API einchecken, Paketkataloge ziehen sie über einen Feed.",
+      "description": "Ein Asset hat unveränderliche Releases und Kanäle, die auf Releases zeigen. Ob jemand ein Asset sieht und ob er es bekommt, sind zwei Fragen (verborgen, sichtbar-gesperrt, beziehbar). Eine KI oder ein Skript checkt Releases mit dem API-Schlüssel eines Maschinenbenutzers ein (tools/publish.py); Paketkataloge der Knoten folgen dem Feed im Spiegelmodus. Rückruf mit Grund. Stufe 1 von RFC-0077.",
       "links": [
         {
           "rel": "source",

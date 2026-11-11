@@ -39,16 +39,34 @@ nicht geändert werden). Es gibt kein Netz, keinen Schlüssel und nichts, was vo
   Verknüpfungen, App-Id und Version gegen das Manifest im Paket. Die Datei `store.json` ist eine
   Behauptung, die er nachprüft — kein Befehl.
 
+## Spiegel eines Marketplace (seit 0.2, RFC-0077 §7.2)
+
+Bindet der Betreiber die Destination **`upstream`** (Ziel = ein Marketplace,
+Authentifizierung `bearer` mit dem API-Schlüssel eines Maschinenbenutzers
+dort), folgt der Katalog dessen Feed: alle 15 Minuten oder mit „Jetzt
+abrufen“. Für jede Version, die er noch nicht hat, lädt er das Paket über
+die Destination, prüft Größe und SHA-256 gegen den Feed und Id und Version
+gegen das Manifest im Paket, und nimmt es dann mit den Regeln oben auf
+(nie überschreiben). Mit `auto` gibt er es frei, mit `hold` wartet es auf
+den Betreiber. Eine im Marketplace **zurückgerufene** Version wird mit
+`auto` zurückgezogen (Grund im Protokoll), nie gelöscht; laufende Instanzen
+bleiben unberührt. Der Schlüssel liegt in der Destination, nie im Katalog.
+Ohne Destination ist der Katalog genau 0.1. Hochladen von Hand geht weiter.
+
 ## Konfiguration
 
 | Schlüssel | Bedeutung | Standard |
 |---|---|---|
 | `CATALOG_MAX_PACKAGE_MB` | größtes Paket (der Knoten nimmt höchstens 256 MB an) | 256 |
+| `CATALOG_UPSTREAM_CHANNEL` | Spiegel: Kanal, dem der Katalog folgt | stable |
+| `CATALOG_UPSTREAM_RELEASE` | Spiegel: `auto` (beim Eintreffen freigeben) oder `hold` | auto |
+| `CATALOG_UPSTREAM_INTERVAL_MIN` | Spiegel: Abstand der Abrufe | 15 |
 
 ## Test
 
 ```sh
 python3 test_package_catalog.py
+python3 test_upstream.py      # Spiegel, mit dem echten Marketplace daneben
 ```
 
 Ohne Docker. Liegt das Gesamt-Repository daneben, prüft der Test auch, dass der **Knoten** die

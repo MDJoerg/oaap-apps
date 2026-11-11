@@ -15,7 +15,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin catalog
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen, sonst startet der Container
 # nicht (die Dateien werden einzeln aufgezählt, nicht per COPY . kopiert).
-COPY app.py catalog.py zipinfo.py multipart.py /srv/
+COPY app.py catalog.py zipinfo.py multipart.py upstream.py /srv/
 
 USER 10001
 EXPOSE 8000
