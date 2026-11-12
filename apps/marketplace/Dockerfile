@@ -11,7 +11,7 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get -y upgrade \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "PyYAML==6.0.3"
+RUN pip install --no-cache-dir "PyYAML==6.0.3" "segno==1.6.6"
 
 # Fester numerischer Benutzer: die Plattform macht die deklarierten
 # Mounts für genau diese UID beschreibbar (Contract-Garantie 4).
@@ -20,7 +20,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin market
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
 COPY app.py db.py access.py blobs.py zipinfo.py multipart.py \
-     views.py render.py images.py /srv/
+     views.py render.py images.py i18n.py profileinfo.py secretguard.py /srv/
 
 USER 10001
 EXPOSE 8000

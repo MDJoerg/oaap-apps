@@ -83,8 +83,8 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.9.1   |
 | [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.5.1   |
 | [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.2   |
-| [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.2.1   |
-| [Marketplace](apps/marketplace/)   | Digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen; Schaufenster mit Suche, Facetten, Bildern, Freischalt-Anfragen; Einchecken per API, Feed für Paketkataloge (RFC-0077 Stufen 1–2) | 0.2.1   |
+| [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.3.0   |
+| [Marketplace](apps/marketplace/)   | Digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen; Schaufenster mit Suche, Facetten, Bildern, Freischalt-Anfragen; Einchecken per API, Feed für Paketkataloge (RFC-0077 Stufen 1–2) | 0.3.0   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.2   |
 | [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.5   |
 | [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.11   |

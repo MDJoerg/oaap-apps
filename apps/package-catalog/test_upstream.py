@@ -37,7 +37,8 @@ def ok(label, cond, detail=""):
 # --- der Marketplace (eigene Module, eigener Namensraum) ---
 sys.path.insert(0, MARKET)
 mk = importlib.import_module("app")
-for n in ("app", "db", "access", "blobs", "zipinfo", "multipart", "views", "render", "images"):
+for n in ("app", "db", "access", "blobs", "zipinfo", "multipart", "views", "render", "images",
+          "i18n", "profileinfo", "secretguard"):
     sys.modules.pop(n, None)
 sys.path.remove(MARKET)
 msrv = mk.make_server(tempfile.mkdtemp(prefix="up-market-"), 0)
@@ -67,9 +68,9 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def catalog(mode="auto"):
+def catalog(mode="auto", scope="all"):
     env = {"OAAP_DESTINATION_UPSTREAM_URL": MBASE, "CATALOG_UPSTREAM_CHANNEL": "stable",
-           "CATALOG_UPSTREAM_RELEASE": mode}
+           "CATALOG_UPSTREAM_RELEASE": mode, "CATALOG_UPSTREAM_SCOPE": scope}
     cat_app.make_server(tempfile.mkdtemp(prefix="up-cat-"), 0, env,
                         urllib.request.build_opener(AsNode(), NoRedirect()))
     return cat_app.CATALOG, cat_app.MIRROR
@@ -167,6 +168,7 @@ class LyingUpstream(__import__("http.server").server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        LIE.setdefault("seen", []).append(self.path)
         if self.path.startswith("/feed/v1/oaap-apps"):
             data = json.dumps(LIE["doc"]).encode()
         else:
@@ -211,6 +213,36 @@ st = MIR5.poll()
 ok("falsche Prüfsumme: abgelehnt", not C5.state["apps"] and "Prüfsumme" in st.get("last_error", ""), st)
 C6, MIR6 = lying({"schema": "etwas/9"}, {})
 ok("fremdes Feed-Format: abgelehnt", "Feed-Format" in MIR6.poll().get("last_error", ""))
+
+print("\nN9 Folgen-Liste: ein Link aus dem Marketplace (§15.8.7)")
+publish(zip_bytes("probe-b", "1.0.0"), "stable")
+publish(zip_bytes("probe-c", "1.0.0"), "stable")
+grant("probe-b")
+C7, MIR7 = catalog("auto", "followed")
+st = MIR7.poll()
+ok("N9 followed: ohne Liste wird nichts übernommen, obwohl beziehbar",
+   not C7.get("probe-b", "1.0.0") and "probe-b" in st.get("offered", []), st)
+ok("N9 der Feed nennt die Adresse des Marketplace", st.get("origin") == MBASE, st.get("origin"))
+foreign = f"http://127.0.0.1:{lsrv.server_address[1]}"
+LIE["seen"] = []
+good, msg = MIR7.follow(foreign + "/assets/probe-b", "joerg")
+ok("N9 fremder Marketplace: abgelehnt mit Schritt für den Betreiber",
+   not good and "nicht angebunden" in msg and "Destination" in msg, msg)
+ok("N9 …und der Katalog hat den fremden Link NICHT aufgerufen", LIE["seen"] == [], LIE["seen"])
+ok("N9 kein Link auf ein Asset: abgelehnt", not MIR7.follow("https://x.example/hallo", "joerg")[0])
+good, msg = MIR7.follow(MBASE + "/assets/probe-b?channel=stable", "joerg")
+ok("N9 angebundener Marketplace: gefolgt und gespiegelt",
+   good and (C7.get("probe-b", "1.0.0") or {}).get("released"), (msg, C7.state["apps"].keys()))
+ok("N9 probe-app (nicht gefolgt) bleibt draußen", not C7.state["apps"].get("probe-app"))
+good, msg = MIR7.follow(MBASE + "/my/assets/probe-c", "joerg")
+ok("N9 gefolgt, aber nicht beziehbar: auf der Liste, mit Hinweis",
+   good and "nicht beziehbar" in msg and not C7.get("probe-c", "1.0.0"), msg)
+grant("probe-c")
+MIR7.poll()
+ok("N9 nach der Freischaltung durch den Anbieter kommt es beim nächsten Abruf",
+   (C7.get("probe-c", "1.0.0") or {}).get("released"))
+ok("N9 die Karte zeigt das Feld und die Liste",
+   "Aus Zwischenablage" in cat_app.mirror_card() and "probe-c" in cat_app.mirror_card())
 
 print("\nOhne Destination: genau 0.1")
 cat_app.make_server(tempfile.mkdtemp(prefix="up-none-"), 0, {})

@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, unquote, urlparse
 
 import zipinfo
 
@@ -30,6 +31,26 @@ FEED_PATH = "/feed/v1/oaap-apps"
 SCHEMA = "oaap.marketplace.feed/0.1"
 PKG_URL_RE = re.compile(r"^files/([0-9a-f]{64})$")
 MAX_FEED_BYTES = 4 * 1024 * 1024
+
+
+ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d+)?$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+
+
+def parse_link(link):
+    """https://<host>/assets/<id>[?channel=x] (auch /my/assets/) -> (id, host, channel)
+    oder ("", "", "")."""
+    u = urlparse((link or "").strip())
+    if u.scheme not in ("http", "https") or not u.netloc:
+        return "", "", ""
+    path = u.path
+    for pre in ("/my/assets/", "/assets/"):
+        if path.startswith(pre):
+            aid = unquote(path[len(pre):]).strip("/")
+            if ID_RE.match(aid):
+                ch = (parse_qs(u.query).get("channel") or [""])[0]
+                return aid, u.netloc.lower(), ch if re.match(r"^[a-z][a-z0-9-]{0,19}$", ch) else ""
+    return "", "", ""
 
 
 class UpstreamError(Exception):
@@ -58,6 +79,8 @@ class Mirror:
             self.interval = max(1, int(env.get("CATALOG_UPSTREAM_INTERVAL_MIN") or 15))
         except ValueError:
             self.interval = 15
+        scope = (env.get("CATALOG_UPSTREAM_SCOPE") or "all").strip().lower()
+        self.scope = scope if scope in ("all", "followed") else "all"
         self.max_bytes = max_bytes
         self.opener = opener or urllib.request.build_opener(_NoRedirect)
         self.lock = threading.Lock()
@@ -131,8 +154,15 @@ class Mirror:
         if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
             raise UpstreamError(f"Unbekanntes Feed-Format (erwartet {SCHEMA}).")
         st["feed_name"] = str(doc.get("name") or "")[:60]
+        origin = str(doc.get("origin") or "")
+        st["origin"] = origin if ORIGIN_RE.match(origin) else ""
+        apps = [x for x in doc.get("apps") or [] if isinstance(x, dict)]
+        st["offered"] = sorted({str(x.get("id") or "") for x in apps})[:500]
+        follow = {f["id"] for f in self.follows()}
         taken = []
-        for app in doc.get("apps") or []:
+        for app in apps:
+            if self.scope == "followed" and app.get("id") not in follow:
+                continue                       # §15.8.7: nur, was auf der Folgen-Liste steht
             taken += self._take(app, st)
         for w in doc.get("withdrawn") or []:
             self._withdraw(w)
@@ -196,6 +226,63 @@ class Mirror:
         if self.mode == "auto" and r.get("released"):
             self.cat.set_released(aid, version, False, "upstream",
                                   reason="im Marketplace zurückgerufen: " + (reason or "ohne Grund"))
+
+    # -- §15.8.7: einem eingefügten Link folgen -----------------------------------
+    def follows(self):
+        return list(self.cat.state.setdefault("upstream", {}).get("follow") or [])
+
+    def follow(self, link, who):
+        """Einen Link aus dem Marketplace auf die Folgen-Liste setzen.
+
+        Der Link ist NUR ein Name: der Katalog ruft ihn nie selbst auf. Er vergleicht
+        dessen Adresse mit der, die der Marketplace über die Destination von sich
+        sagt (Feld origin im Feed). Abgerufen wird weiter nur über die Destination.
+        -> (ok, Satz)."""
+        if not self.enabled:
+            return False, ("Kein Marketplace angebunden. Schritt für den Betreiber: die Destination "
+                           "„upstream“ dieser Instanz an den Marketplace binden (bearer mit dem "
+                           "API-Schlüssel eines Maschinenbenutzers dort).")
+        aid, host, channel = parse_link(link)
+        if not aid:
+            return False, ("Das ist kein Link auf ein Asset eines Marketplace "
+                           "(erwartet https://<marketplace>/assets/<kennung>).")
+        st = self.status()
+        if not st.get("origin"):
+            st.pop("etag", None)               # voller Feed, nicht 304
+            self.poll()                        # Adresse über die Destination erfragen
+            st = self.status()
+        known = urlparse(st.get("origin") or "").netloc.lower()
+        if not known:
+            return False, ("Der angebundene Marketplace nennt seine Adresse nicht (älter als 0.3 "
+                           "oder nicht erreichbar) -- der Link lässt sich nicht prüfen.")
+        if host != known:
+            return False, (f"Dieser Marketplace ({host}) ist hier nicht angebunden; angebunden ist "
+                           f"{known}. Schritt für den Betreiber: eine Destination „upstream“ auf "
+                           f"{host} -- oder den Link aus dem angebundenen Marketplace nehmen.")
+        with self.lock:
+            fl = self.follows()
+            if not any(f["id"] == aid for f in fl):
+                fl.append({"id": aid, "added": _now(), "by": who})
+                st["follow"] = fl
+                self.cat._save()
+        note = ""
+        if channel and channel != self.channel:
+            note = f" Hinweis: der Link nennt Kanal {channel}, dieser Katalog folgt {self.channel}."
+        if self.scope != "followed":
+            note += (" Der Katalog spiegelt ohnehin alles Beziehbare (CATALOG_UPSTREAM_SCOPE=all); "
+                     "die Liste wirkt erst mit followed.")
+        self.status().pop("etag", None)        # neu Gefolgtes sofort holen, nicht 304
+        self.poll()
+        if aid not in (self.status().get("offered") or []):
+            return True, (f"{aid} steht auf der Folgen-Liste, ist für diesen Knoten aber (noch) nicht "
+                          "beziehbar -- z. B. bevor der Anbieter freischaltet." + note)
+        return True, f"{aid} steht auf der Folgen-Liste und wird gespiegelt." + note
+
+    def unfollow(self, aid):
+        with self.lock:
+            st = self.status()
+            st["follow"] = [f for f in self.follows() if f["id"] != aid]
+            self.cat._save()
 
     # -- the loop ---------------------------------------------------------------
     def start(self):

@@ -1,4 +1,4 @@
-# Marketplace (`marketplace`) — RFC-0077 Stufen 1 und 2
+# Marketplace (`marketplace`) — RFC-0077 Stufen 1 und 2 (0.3: MVP Aufbau-Vorlagen)
 
 Digitale Assets mit **Releases** (unveränderlich, nach SHA-256 abgelegt) und
 **Kanälen** (`stable`, `beta`, global, D12). OAAP-Pakete sind ein Asset-Typ
@@ -86,19 +86,76 @@ folgt dem Feed (siehe `apps/package-catalog/README.md`).
 | `MARKET_NAME` | `Marketplace` | Name im Kopf und im Feed |
 | `MARKET_MAX_FILE_MB` | `256` | größte Datei |
 | `MARKET_CHANNELS` | `stable,beta` | Kanäle |
-| `MARKET_TYPES` | `oaap-app,file` | eingeschaltete Typen |
-| `MARKET_FILE_EXTENSIONS` | `zip,pdf,png,jpg,txt,md` | Endungen für `file` |
+| `MARKET_TYPES` | `oaap-app,oaap-profile,file` | eingeschaltete Typen |
+| `MARKET_FILE_EXTENSIONS` | `zip,pdf,png,jpg,txt,md,json` | Endungen für `file` |
+| `MARKET_REVIEW` | `off` | `on` = vier Augen: ein Release zählt erst nach der Freigabe |
+| `MARKET_REVIEW_ESCALATE_HOURS` | `24` | danach gilt ein offener Fall als eskaliert |
+| `MARKET_DEFAULT_LANG` | `en` | Basissprache der Inhalte |
+| `MARKET_PUBLIC_URL` | leer | Adresse für Teilen-Links und Feed (leer = aus der Anfrage) |
 
 Daten: `/data/market.db` (SQLite) und `/data/blobs/` — im Backup des Knotens.
 
+## Seit 0.3: MVP Aufbau-Vorlagen (RFC-0077 §15.8)
+
+- **Landschaften und Kategorien** (`/admin/taxonomy`): `oaap` ist fest, weitere
+  (z. B. `bdt`) legt der Betreiber an. Kategorien gehören zu einer Landschaft oder
+  zu `default` (dann übergreifend). Logo, Titel und Beschreibung je Sprache. Beides
+  sind Facetten, dazu der **Inhaltstyp** (OAAP-App, Aufbau-Vorlage, PDF, JSON …).
+- **Aufbau-Vorlage** (`type=oaap-profile`): ein Mandanten-Profil
+  (`oaap.tenant-profile/1`); Kennung und Version kommen aus dem Profil.
+- **Texte je Sprache**: `texts = {en: {title, summary, description}, de: {…}}`,
+  Release-Notizen als `notes_i18n`. Englisch ist die Basis; die Seite wählt nach
+  `?lang=` (Cookie), `Accept-Language` oder der Vorgabe und sagt, wenn sie
+  zurückfällt. Die Oberfläche spricht Englisch und Deutsch, die Verwaltung Deutsch.
+- **Geheimnis-Sperre** (`secretguard.py`) vor jedem Speichern: Geheimnisdateien in
+  Paketen (Liste aus RFC-0084), Muster wie `oaapk_…`, PEM, Tokens, in Profilen kein
+  wörtlicher Wert für `…_PASSWORD`/`…_TOKEN`/… (stattdessen `generate: true` oder
+  ein `{param}`). Antwort 422 mit Ort und Regel, nie mit dem Wert. Bild-Metadaten
+  (EXIF/GPS, PNG-Text, XMP) werden entfernt.
+- **Review** (`MARKET_REVIEW=on`): ein neues Release zählt erst nach der Freigabe;
+  Prüfer trägt der Betreiber unter „Prüfungen“ ein (z. B. den Maschinenbenutzer
+  einer Prüf-KI). Wer einstellt, prüft nicht selbst. `GET /api/v1/reviews`,
+  `POST /api/v1/reviews/{id}` mit `{verdict: approve|reject|escalate, summary,
+  findings}`. Textänderungen sind sofort sichtbar und werden danach geprüft.
+  `tools/review.py` ist der Referenz-Prüfer: ohne Modell eskaliert er immer.
+- **Detailseite als ObjectPage**: oben Icon, Titel, Anbieter, Landschaft, die eine
+  Hauptaktion und **Teilen** (Link kopieren, QR-Code), darunter die Galerie;
+  Abschnitte Übersicht · Versionen · Technische Details.
+- **Startseite**: Empfohlen, Landschaften, Neu, Meistgeladen (90 Tage, ohne
+  Feed-Abrufe) -- Reihen, Akzentfarbe, Logo und Sprache unter „Einstellungen“.
+- **Partner light** (`/my/manage`): wer in ein Asset einstellen darf, beantwortet
+  dessen Anfragen (auch mit einem Link, z. B. einer Einladung) und vergibt
+  Berechtigungen -- nur für dieses Asset und nur in seinen Kanälen.
+
+### Einen Ordner abgleichen
+
+```sh
+python3 tools/publish.py --url https://market.example --key-file ~/.oaap/market.key \
+    sync vorlagen/handballverein
+```
+
+`market.json` im Ordner beschreibt das Asset (Datei, Kanäle, Landschaften,
+Kategorien, Schlagworte, Texte je Sprache mit `description_file`, Notizen,
+Bilder). Ein zweiter Lauf ändert nichts.
+
+### Prüf-KI
+
+```sh
+python3 tools/review.py --url https://market.example --key-file ~/.oaap/pruefer.key \
+    --llm-url https://ki.example/v1 --llm-key-file ~/.oaap/ki.key --llm-model NAME
+```
+
 ## Noch nicht (spätere Stufen)
 
-S3, MCP, Statistikseiten (Stufe 3); Partner, eigene Asset-Typen, Signaturen
-(Stufe 4).
+S3, MCP, Statistikseiten (Stufe 3); Partnerstufen, Kampagnen, Coupons,
+Sicherheitshinweise, Bewertungen, Support, kaskadierende Marketplaces (Folge-RFC
+„Marketplace als Plattform“, §15.8.10).
 
 ## Tests
 
 ```sh
 python3 test_marketplace.py
 python3 test_storefront.py
+python3 test_mvp.py        # §15.8: Sperre, Review, Sprachen, Landschaften, Teilen, Partner
+python3 test_tools.py      # publish.py sync, review.py
 ```

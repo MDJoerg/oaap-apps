@@ -3,10 +3,10 @@ oaap_manifest: "0.10"
 app:
   id: marketplace
   name: Marketplace
-  version: 0.2.1
+  version: 0.3.0
   type: native
   class: frontend
-  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufen 1 und 2): Schaufenster mit Suche, Facetten, Bildern und Freischalt-Anfragen. OAAP-Pakete sind ein Asset-Typ: eine KI oder ein Skript checkt sie per API ein, Paketkataloge der Knoten ziehen sie im Spiegelmodus über einen Feed."
+  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufen 1 und 2): Schaufenster mit Landschaften, Kategorien, Suche und Detailseite (ObjectPage, Teilen mit QR-Code). Asset-Typen OAAP-App, Aufbau-Vorlage und Datei, Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Review zählt ein Release erst nach der Freigabe durch einen zweiten Prinzipal (z. B. eine Prüf-KI). Paketkataloge der Knoten ziehen OAAP-Apps im Spiegelmodus über einen Feed."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): PyYAML fest auf 6.0.3, Debians Korrekturen per
@@ -52,11 +52,25 @@ config:
     label: "Kanäle, kommagetrennt (global für alle Assets, D12)"
     default: "stable,beta"
   - key: MARKET_TYPES
-    label: "Eingeschaltete Asset-Typen: oaap-app, file"
-    default: "oaap-app,file"
+    label: "Eingeschaltete Asset-Typen: oaap-app, oaap-profile (Aufbau-Vorlage), file"
+    default: "oaap-app,oaap-profile,file"
   - key: MARKET_FILE_EXTENSIONS
     label: "Erlaubte Endungen für den Typ file"
-    default: "zip,pdf,png,jpg,txt,md"
+    default: "zip,pdf,png,jpg,txt,md,json"
+  # RFC-0077 §15.8.5: vier Augen. on = ein neues Release zählt erst nach der Freigabe
+  # durch einen Prüfer (nicht den Einsteller); Eskalationen entscheidet der Betreiber.
+  - key: MARKET_REVIEW
+    label: "Review: on = Releases erst nach Freigabe durch einen Prüfer (vier Augen); off = sofort"
+    default: "off"
+  - key: MARKET_REVIEW_ESCALATE_HOURS
+    label: "Review: nach so vielen Stunden ohne Urteil gilt ein Fall als eskaliert"
+    default: "24"
+  - key: MARKET_DEFAULT_LANG
+    label: "Basissprache der Inhalte (en empfohlen)"
+    default: "en"
+  - key: MARKET_PUBLIC_URL
+    label: "Öffentliche Adresse für Teilen-Links und den Feed (leer = aus der Anfrage), z. B. https://market.example"
+    default: ""
 
 health:
   path: /healthz

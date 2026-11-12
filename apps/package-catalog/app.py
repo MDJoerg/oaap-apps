@@ -1,4 +1,4 @@
-"""Paketkatalog 0.2 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
+"""Paketkatalog 0.3 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
 seit 0.2 auch als Spiegel eines Marketplace-Feeds (RFC-0077 §7.2, upstream.py).
 
 Der Betreiber lädt Pakete hoch, gibt Versionen frei und kann jede
@@ -25,7 +25,7 @@ import multipart
 import upstream
 import zipinfo
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:
@@ -149,7 +149,28 @@ def mirror_card():
             f'{"<br><span class=err>" + esc(err) + "</span>" if err else ""}'
             f'<br>Übernommen: {esc(taken)}</p>'
             '<form method=post action="/upstream/poll" style="margin:0">'
-            '<button>Jetzt abrufen</button></form></div>')
+            '<button>Jetzt abrufen</button></form>'
+            + follow_block(st) + '</div>')
+
+
+def follow_block(st):
+    """§15.8.7: Aus Zwischenablage hinzufügen -- ein Link aus dem Marketplace."""
+    offered = set(st.get("offered") or [])
+    rows = "".join(
+        f'<tr><td><code>{esc(f["id"])}</code></td><td>'
+        f'{"<span class=ok>beziehbar</span>" if f["id"] in offered else "<span class=muted>(noch) nicht beziehbar</span>"}'
+        f'</td><td class=muted>{esc(f.get("added") or "")}</td><td><form class=inline method=post '
+        f'action="/upstream/unfollow"><input type=hidden name=app value="{esc(f["id"])}">'
+        f'<button class=quiet>Nicht mehr folgen</button></form></td></tr>' for f in MIRROR.follows())
+    scope = ("nur die Folgen-Liste" if MIRROR.scope == "followed"
+             else "alles Beziehbare (CATALOG_UPSTREAM_SCOPE=all)")
+    return ('<h2 style="margin-top:1.2rem">Aus Zwischenablage hinzufügen</h2>'
+            f'<p class=muted style="margin:.2rem 0">Gespiegelt wird: {esc(scope)}. Den Link einer Detailseite '
+            'im Marketplace („Teilen“ → „Link kopieren“) hier einfügen. Der Katalog ruft den Link nicht '
+            'auf; er prüft nur, dass er zum angebundenen Marketplace gehört.</p>'
+            '<form method=post action="/upstream/follow"><input type=text name=link size=60 '
+            'placeholder="https://market.example/assets/kennung" required> <button>Folgen</button></form>'
+            + (f'<table style="margin-top:.6rem">{rows}</table>' if rows else ""))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -255,6 +276,13 @@ class Handler(BaseHTTPRequestHandler):
         form = {k: v[0] for k, v in parse_qs(
             self.rfile.read(length).decode("utf-8", "replace")).items()}
         app, version = form.get("app", ""), form.get("version", "")
+        if path == "/upstream/follow":
+            good, msg = (MIRROR.follow(form.get("link", ""), who) if MIRROR else
+                         (False, "Kein Spiegel."))
+            return self.back(msg, good)
+        if path == "/upstream/unfollow" and MIRROR:
+            MIRROR.unfollow(app)
+            return self.back(f"{app} wird nicht mehr gefolgt (Vorhandenes bleibt).")
         try:
             if path == "/release":
                 CATALOG.set_released(app, version, form.get("released") == "1", who)

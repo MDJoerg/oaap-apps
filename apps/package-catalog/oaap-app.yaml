@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: package-catalog
   name: Paketkatalog
-  version: 0.2.1
+  version: 0.3.0
   type: native
   class: frontend
   description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050). Seit 0.2 auch Spiegel eines Marketplace-Feeds (RFC-0077)."
@@ -48,6 +48,11 @@ config:
   - key: CATALOG_UPSTREAM_RELEASE
     label: "Spiegel: auto = beim Eintreffen freigeben; hold = der Betreiber gibt frei"
     default: "auto"
+  # RFC-0077 §15.8.7: all = alles, was der Marketplace diesem Knoten anbietet;
+  # followed = nur, was der Betreiber per Link („Aus Zwischenablage hinzufügen“) folgt.
+  - key: CATALOG_UPSTREAM_SCOPE
+    label: "Spiegel: all = alles Beziehbare; followed = nur die Folgen-Liste (Links aus dem Marketplace)"
+    default: "all"
   - key: CATALOG_UPSTREAM_INTERVAL_MIN
     label: "Spiegel: Abstand der Abrufe in Minuten"
     default: "15"

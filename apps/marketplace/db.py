@@ -62,10 +62,41 @@ SCHEMA_2 = [
          channels TEXT, note TEXT, at REAL, state TEXT, decided_by TEXT,
          decided_at REAL, answer TEXT)""",
 ]
+# Stufe 2 abgeschlossen (§15.8): Landschaften, Kategorien, Texte je Sprache,
+# Review, Einstellungen, Hervorgehobenes.
+SCHEMA_3 = [
+    "ALTER TABLE asset ADD COLUMN texts TEXT DEFAULT '{}'",
+    "ALTER TABLE asset ADD COLUMN landscapes TEXT DEFAULT '[]'",
+    "ALTER TABLE asset ADD COLUMN featured INTEGER DEFAULT 0",
+    "ALTER TABLE release ADD COLUMN review TEXT DEFAULT 'approved'",
+    "ALTER TABLE release ADD COLUMN notes_i18n TEXT DEFAULT '{}'",
+    """CREATE TABLE landscape(id TEXT PRIMARY KEY, sort INTEGER DEFAULT 100, logo TEXT DEFAULT '',
+         texts TEXT DEFAULT '{}', fixed INTEGER DEFAULT 0)""",
+    """CREATE TABLE category(id TEXT PRIMARY KEY, landscape TEXT, sort INTEGER DEFAULT 100,
+         logo TEXT DEFAULT '', texts TEXT DEFAULT '{}')""",
+    "CREATE TABLE setting(key TEXT PRIMARY KEY, value TEXT)",
+    """CREATE TABLE review(id INTEGER PRIMARY KEY, kind TEXT, asset TEXT, version TEXT,
+         created_at REAL, created_by TEXT, state TEXT, precheck TEXT DEFAULT '{}',
+         decided_by TEXT, decided_at REAL, decided_as TEXT, summary TEXT,
+         findings TEXT DEFAULT '[]', detail TEXT DEFAULT '')""",
+    "CREATE TABLE reviewer(id INTEGER PRIMARY KEY, principal_kind TEXT, principal TEXT)",
+]
+OAAP_LANDSCAPE = {
+    "en": {"title": "OAAP",
+           "description": "Open Application & Automation Platform: apps, setup templates and "
+                          "building blocks for your own node or a cloud tenant."},
+    "de": {"title": "OAAP",
+           "description": "Open Application & Automation Platform: Apps, Aufbau-Vorlagen und "
+                          "Bausteine für den eigenen Knoten oder einen Cloud-Mandanten."},
+}
+DEFAULT_LANDSCAPE = "default"
+LANG_RE = re.compile(r"^[a-z]{2}$")
+TEXT_FIELDS = ("title", "summary", "description")
+TEXT_MAX = {"title": 120, "summary": 300, "description": 20000}
 FTS = ("CREATE VIRTUAL TABLE asset_fts USING fts5(id UNINDEXED, title, summary, "
        "description, tags, tokenize='unicode61 remove_diacritics 2')")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
-LIST_FIELDS = ("tags", "categories", "links", "screenshots")
+LIST_FIELDS = ("tags", "categories", "links", "screenshots", "landscapes")
 
 
 class Refused(Exception):
@@ -100,6 +131,11 @@ class Market:
                 for stmt in SCHEMA_2:
                     con.execute(stmt)
                 con.execute("PRAGMA user_version=2")
+            if con.execute("PRAGMA user_version").fetchone()[0] < 3:
+                for stmt in SCHEMA_3:
+                    con.execute(stmt)
+                self._migrate_3(con)
+                con.execute("PRAGMA user_version=3")
             try:
                 con.execute(FTS)
             except sqlite3.OperationalError as e:
@@ -111,6 +147,28 @@ class Market:
         if self.fts:
             for a in self.assets():
                 self._reindex(a)
+
+    @staticmethod
+    def _migrate_3(con):
+        """Stufe-2-Texte waren deutsch -> texts.de; freie Kategorien -> Landschaft
+        default; bestehende OAAP-Apps -> Landschaft oaap. Nichts geht verloren."""
+        con.execute("INSERT OR IGNORE INTO landscape(id, sort, texts, fixed) VALUES ('oaap', 0, ?, 1)",
+                    (json.dumps(OAAP_LANDSCAPE, ensure_ascii=False),))
+        cats = set()
+        for r in con.execute("SELECT id, type, title, summary, description, categories FROM asset").fetchall():
+            texts = {}
+            if any(r[k] for k in TEXT_FIELDS):
+                texts["de"] = {k: r[k] or "" for k in TEXT_FIELDS if r[k]}
+            try:
+                cats |= set(json.loads(r["categories"] or "[]"))
+            except ValueError:
+                pass
+            con.execute("UPDATE asset SET texts=?, landscapes=? WHERE id=?",
+                        (json.dumps(texts, ensure_ascii=False),
+                         json.dumps(["oaap"] if r["type"] == "oaap-app" else []), r["id"]))
+        for c in sorted(cats):
+            con.execute("INSERT OR IGNORE INTO category(id, landscape, texts) VALUES (?,?,?)",
+                        (c, DEFAULT_LANDSCAPE, json.dumps({"en": {"title": c}})))
 
     def _con(self):
         con = sqlite3.connect(self.path, timeout=10)
@@ -140,6 +198,7 @@ class Market:
                 a[k + "_list"] = json.loads(a.get(k) or "[]")
             except ValueError:
                 a[k + "_list"] = []
+        a["texts_map"] = _loads(a.get("texts"), {})
         return a
 
     def assets(self):
@@ -168,19 +227,29 @@ class Market:
                 pass
         out = []
         for a in self.assets():
-            hay = " ".join([a["id"], a.get("title") or "", a.get("summary") or "",
-                            a.get("description") or "", " ".join(a["tags_list"])]).lower()
+            hay = " ".join([a["id"], self._all_text(a), " ".join(a["tags_list"])]).lower()
             if all(w in hay for w in words):
                 out.append(a["id"])
         return out
+
+    @staticmethod
+    def _all_text(a, field=None):
+        """Alle Sprachen eines Feldes (oder aller Textfelder) -- für die Suche."""
+        a = Market._decode(dict(a))
+        keys = (field,) if field else TEXT_FIELDS
+        parts = [str((tx or {}).get(k) or "") for tx in a["texts_map"].values() for k in keys]
+        if not a["texts_map"]:
+            parts += [a.get(k) or "" for k in keys]
+        return " ".join(parts)
 
     def _reindex(self, a):
         if not self.fts:
             return
         self._x([("DELETE FROM asset_fts WHERE id=?", (a["id"],)),
                  ("INSERT INTO asset_fts(id, title, summary, description, tags) VALUES (?,?,?,?,?)",
-                  (a["id"], a.get("title") or "", a.get("summary") or "",
-                   a.get("description") or "", " ".join(self._decode(dict(a))["tags_list"])))])
+                  (a["id"], self._all_text(a, "title"), self._all_text(a, "summary"),
+                   self._all_text(a, "description"),
+                   " ".join(self._decode(dict(a))["tags_list"])))])
 
     def images(self, asset_id):
         return self._q("SELECT * FROM image WHERE asset=? ORDER BY added_at", (asset_id,))
@@ -207,6 +276,7 @@ class Market:
                                  "FROM release_file rf JOIN file f ON f.sha256=rf.sha256 "
                                  "WHERE rf.asset=? AND rf.version=? ORDER BY rf.role DESC",
                                  (asset_id, r["version"]))
+            r["notes_map"] = _loads(r.get("notes_i18n"), {})
             r["channels"] = [p["channel"] for p in self._q(
                 "SELECT channel FROM placement WHERE asset=? AND version=?",
                 (asset_id, r["version"]))]
@@ -216,9 +286,10 @@ class Market:
         return next((r for r in self.releases(asset_id) if r["version"] == version), None)
 
     def current(self, asset_id, channel):
-        """Das aktuelle Release eines Kanals: höchste nicht zurückgerufene Version darin."""
+        """Das aktuelle Release eines Kanals: höchste FREIGEGEBENE (Review, §15.8.5),
+        nicht zurückgerufene Version darin."""
         for r in self.releases(asset_id):
-            if channel in r["channels"] and not r["yanked_at"]:
+            if channel in r["channels"] and not r["yanked_at"] and counts(r):
                 return r
         return None
 
@@ -252,18 +323,24 @@ class Market:
             raise Refused(400, f"Den Kanal „{ch}“ gibt es nicht (Kanäle: "
                                + ", ".join(self.channels) + ").")
 
-    def create_asset(self, asset_id, typ, title, summary, description, by):
+    def create_asset(self, asset_id, typ, title, summary, description, by, lang="en"):
         """Neu: sichtbar für alle, beziehbar nur mit Berechtigung (D11)."""
+        texts = merge_texts({}, {lang: {"title": title, "summary": summary,
+                                        "description": description}})
         self._x([("INSERT INTO asset(id, type, title, summary, description, visibility, "
-                  "free_channels, created_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)",
+                  "free_channels, created_at, created_by, texts, landscapes) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                   (asset_id, typ, title, summary, description,
                    json.dumps({"mode": "anyone", "principals": []}), "[]",
-                   time.time(), by))])
+                   time.time(), by, json.dumps(texts, ensure_ascii=False),
+                   json.dumps(["oaap"] if typ in ("oaap-app", "oaap-profile") else [])))])
         self.event("asset", asset_id, principal=by, detail=f"type {typ}")
         self._reindex(self.asset(asset_id))
 
-    def add_release(self, asset_id, version, sha, size, name, media_type, notes, by):
-        """(release, created). Gleiche Bytes: idempotent. Andere Bytes: 409."""
+    def add_release(self, asset_id, version, sha, size, name, media_type, notes, by,
+                    review="approved", notes_i18n=None):
+        """(release, created). Gleiche Bytes: idempotent. Andere Bytes: 409.
+        review='pending': zählt erst nach der Freigabe (§15.8.5)."""
         with self.lock:
             old = self.release(asset_id, version)
             if old:
@@ -278,8 +355,10 @@ class Market:
             self._x([
                 ("INSERT OR IGNORE INTO file(sha256, size, media_type) VALUES (?,?,?)",
                  (sha, size, media_type)),
-                ("INSERT INTO release(asset, version, notes, created_at, created_by) "
-                 "VALUES (?,?,?,?,?)", (asset_id, version, (notes or "")[:4000], now, by)),
+                ("INSERT INTO release(asset, version, notes, created_at, created_by, review, "
+                 "notes_i18n) VALUES (?,?,?,?,?,?,?)",
+                 (asset_id, version, (notes or "")[:4000], now, by, review,
+                  json.dumps(clean_notes(notes_i18n), ensure_ascii=False))),
                 ("INSERT INTO release_file(asset, version, sha256, name, role) "
                  "VALUES (?,?,?,?,?)", (asset_id, version, sha, name, "primary")),
             ])
@@ -321,13 +400,44 @@ class Market:
         return True
 
     def update_asset(self, asset_id, fields, by):
-        allowed = {"title", "summary", "description", "visibility", "free_channels",
-                   "tags", "categories", "links", "license", "publisher"}
+        allowed = {"visibility", "free_channels", "tags", "categories", "landscapes", "links",
+                   "license", "publisher", "texts", "featured"}
+        fields = dict(fields)
+        lang = str(fields.pop("lang", "en"))
+        if not LANG_RE.match(lang):
+            raise Refused(400, "lang ist ein Sprachkürzel wie en oder de.")
+        # die alten Felder title/summary/description = Texte der Sprache `lang`
+        legacy = {k: fields.pop(k) for k in TEXT_FIELDS if k in fields}
+        if legacy:
+            tx = dict(fields.get("texts") or {})
+            tx[lang] = dict(tx.get(lang) or {}, **legacy)
+            fields["texts"] = tx
         sets, args = [], []
         for k, v in fields.items():
             if k not in allowed:
                 raise Refused(400, f"„{k}“ ist kein Feld eines Assets.")
-            if k == "visibility":
+            if k == "texts":
+                cur = self.asset(asset_id)
+                merged = merge_texts(cur["texts_map"] if cur else {}, v)
+                best = resolve(merged, "en")
+                sets += ["title=?", "summary=?", "description=?"]
+                args += [best.get("title", ""), best.get("summary", ""), best.get("description", "")]
+                v = json.dumps(merged, ensure_ascii=False)
+            elif k == "featured":
+                v = 1 if v in (True, 1, "1", "on", "true") else 0
+            elif k == "landscapes":
+                if isinstance(v, str):
+                    v = [x.strip() for x in v.split(",")]
+                if not isinstance(v, list):
+                    raise Refused(400, "landscapes ist eine Liste.")
+                clean = sorted({str(x).strip().lower() for x in v if str(x).strip()})
+                known = {r["id"] for r in self.landscapes()}
+                unknown = [x for x in clean if x not in known]
+                if unknown:
+                    raise Refused(400, f"Die Landschaft „{unknown[0]}“ gibt es nicht "
+                                       "(der Betreiber legt sie an).")
+                v = json.dumps(clean)
+            elif k == "visibility":
                 if not isinstance(v, dict) or v.get("mode") not in ("anyone", "signed-in", "principals"):
                     raise Refused(400, "visibility.mode ist anyone, signed-in oder principals.")
                 prs = [{"kind": x.get("kind"), "name": str(x.get("name") or "")}
@@ -349,6 +459,12 @@ class Market:
                 bad = [x for x in clean if not SLUG_RE.match(x)]
                 if bad:
                     raise Refused(400, f"{k}: nur Kleinbuchstaben, Ziffern, Bindestrich ({bad[0]}).")
+                if k == "categories":
+                    known = {r["id"] for r in self.categories()}
+                    unknown = [x for x in clean if x not in known]
+                    if unknown:
+                        raise Refused(400, f"Die Kategorie „{unknown[0]}“ gibt es nicht "
+                                           "(der Betreiber legt sie an).")
                 v = json.dumps(clean[:20])
             elif k == "links":
                 if not isinstance(v, list):
@@ -490,3 +606,252 @@ class Market:
                                  (answer or "")[:500], r["id"]))])
         self.event("request-" + ("grant" if grant else "reject"), r["asset"], principal=by,
                    detail=r["principal"])
+
+    # -- §15.8.1: Landschaften, Kategorien ----------------------------------------
+    def landscapes(self):
+        return [_dec_tx(r) for r in self._q("SELECT * FROM landscape ORDER BY sort, id")]
+
+    def categories(self, landscape=None):
+        """Alle Kategorien; mit landscape: die dieser Landschaft und die übergreifenden."""
+        rs = [_dec_tx(r) for r in self._q("SELECT * FROM category ORDER BY sort, id")]
+        if landscape:
+            rs = [r for r in rs if r["landscape"] in (landscape, DEFAULT_LANDSCAPE)]
+        return rs
+
+    def set_landscape(self, lid, texts, sort=100, by=""):
+        if not SLUG_RE.match(lid or "") or lid == DEFAULT_LANDSCAPE:
+            raise Refused(400, "Kennung: Kleinbuchstaben, Ziffern, Bindestrich (nicht „default“).")
+        old = next((r for r in self.landscapes() if r["id"] == lid), None)
+        merged = merge_texts(old["texts_map"] if old else {}, texts or {})
+        if not resolve(merged, "en").get("title"):
+            raise Refused(400, "Eine Landschaft braucht einen Titel.")
+        self._x([("INSERT INTO landscape(id, sort, texts) VALUES (?,?,?) ON CONFLICT(id) DO "
+                  "UPDATE SET sort=excluded.sort, texts=excluded.texts",
+                  (lid, int(sort), json.dumps(merged, ensure_ascii=False)))])
+        self.event("landscape", lid, principal=by)
+
+    def delete_landscape(self, lid, by):
+        row = next((r for r in self.landscapes() if r["id"] == lid), None)
+        if not row:
+            raise Refused(404, "Diese Landschaft gibt es nicht.")
+        if row["fixed"]:
+            raise Refused(409, f"„{lid}“ ist fest und bleibt.")
+        if any(lid in a["landscapes_list"] for a in self.assets()):
+            raise Refused(409, f"„{lid}“ ist noch Assets zugeordnet.")
+        if any(c["landscape"] == lid for c in self.categories()):
+            raise Refused(409, f"„{lid}“ hat noch Kategorien.")
+        self._x([("DELETE FROM landscape WHERE id=?", (lid,))])
+        self.event("landscape-remove", lid, principal=by)
+
+    def set_category(self, cid, landscape, texts, sort=100, by=""):
+        if not SLUG_RE.match(cid or ""):
+            raise Refused(400, "Kennung: Kleinbuchstaben, Ziffern, Bindestrich.")
+        if landscape != DEFAULT_LANDSCAPE and landscape not in {r["id"] for r in self.landscapes()}:
+            raise Refused(400, f"Die Landschaft „{landscape}“ gibt es nicht.")
+        old = next((r for r in self.categories() if r["id"] == cid), None)
+        merged = merge_texts(old["texts_map"] if old else {}, texts or {})
+        if not resolve(merged, "en").get("title"):
+            raise Refused(400, "Eine Kategorie braucht einen Titel.")
+        self._x([("INSERT INTO category(id, landscape, sort, texts) VALUES (?,?,?,?) ON CONFLICT(id) "
+                  "DO UPDATE SET landscape=excluded.landscape, sort=excluded.sort, texts=excluded.texts",
+                  (cid, landscape, int(sort), json.dumps(merged, ensure_ascii=False)))])
+        self.event("category", cid, principal=by)
+
+    def delete_category(self, cid, by):
+        if any(cid in a["categories_list"] for a in self.assets()):
+            raise Refused(409, f"„{cid}“ ist noch Assets zugeordnet.")
+        self._x([("DELETE FROM category WHERE id=?", (cid,))])
+        self.event("category-remove", cid, principal=by)
+
+    def set_logo(self, table, rid, sha, by):
+        if table not in ("landscape", "category"):
+            raise Refused(400, "unbekannt")
+        self._x([(f"UPDATE {table} SET logo=? WHERE id=?", (sha, rid))])
+        self.event(table + "-logo", rid, principal=by, detail=(sha or "")[:12])
+
+    def is_logo(self, sha):
+        """Ist sha ein Logo (Landschaft, Kategorie, Betreiber)? Logos sind öffentlich."""
+        if not sha:
+            return False
+        return bool(self._q("SELECT 1 FROM landscape WHERE logo=? UNION ALL SELECT 1 FROM category "
+                            "WHERE logo=? UNION ALL SELECT 1 FROM setting WHERE key='logo' AND value=?",
+                            (sha, sha, sha)))
+
+    # -- §15.8.6: Einstellungen ----------------------------------------------------
+    def settings(self):
+        return {r["key"]: r["value"] for r in self._q("SELECT key, value FROM setting")}
+
+    def set_setting(self, key, value, by):
+        self._x([("INSERT INTO setting(key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "value=excluded.value", (key, str(value)[:500]))])
+        self.event("setting", key, principal=by)
+
+    # -- §15.8.5: Review --------------------------------------------------------------
+    def reviewers(self):
+        return self._q("SELECT * FROM reviewer ORDER BY id")
+
+    def add_reviewer(self, kind, name, by):
+        if kind not in ("user", "group") or not name:
+            raise Refused(400, "Ein Prüfer ist ein Benutzer oder eine Gruppe.")
+        self._x([("INSERT INTO reviewer(principal_kind, principal) VALUES (?,?)", (kind, name))])
+        self.event("reviewer", principal=by, detail=f"{kind}:{name}")
+
+    def remove_reviewer(self, rid, by):
+        self._x([("DELETE FROM reviewer WHERE id=?", (int(rid),))])
+        self.event("reviewer-remove", principal=by, detail=str(rid))
+
+    def open_review(self, kind, asset_id, version, by, precheck=None, detail=""):
+        """Ein Fall je Release; ein offener Listing-Fall je Asset wird ergänzt."""
+        with self.lock:
+            if kind == "listing":
+                cur = self._q("SELECT id, detail FROM review WHERE kind='listing' AND asset=? "
+                              "AND state='open'", (asset_id,))
+                if cur:
+                    merged = sorted(set(filter(None, (cur[0]["detail"] or "").split(",")))
+                                    | set(filter(None, detail.split(","))))
+                    self._x([("UPDATE review SET detail=?, created_by=? WHERE id=?",
+                              (",".join(merged)[:300], by, cur[0]["id"]))])
+                    return cur[0]["id"]
+            self._x([("INSERT INTO review(kind, asset, version, created_at, created_by, state, "
+                      "precheck, detail) VALUES (?,?,?,?,?,'open',?,?)",
+                      (kind, asset_id, version or "", time.time(), by,
+                       json.dumps(precheck or {}, ensure_ascii=False), detail[:300]))])
+            rid = self._q("SELECT max(id) AS m FROM review")[0]["m"]
+        self.event("review-open", asset_id, version or "", principal=by, detail=f"{kind} #{rid}")
+        return rid
+
+    def reviews(self, state=None, asset_id=None, escalate_after_h=24, now=None):
+        """Fälle. Ein offener Fall, älter als escalate_after_h, gilt als eskaliert
+        (beim Lesen berechnet, kein Zeitgeber). state filtert auf den WIRKSAMEN Zustand."""
+        now = now or time.time()
+        sql, args = "SELECT * FROM review WHERE 1=1", []
+        if asset_id:
+            sql += " AND asset=?"
+            args.append(asset_id)
+        out = []
+        for r in self._q(sql + " ORDER BY id DESC", args):
+            r["findings_list"] = _loads(r.get("findings"), [])
+            r["precheck_map"] = _loads(r.get("precheck"), {})
+            r["overdue"] = (r["state"] == "open"
+                            and r["created_at"] is not None
+                            and now - float(r["created_at"]) > escalate_after_h * 3600)
+            r["effective"] = "escalated" if r["overdue"] else r["state"]
+            if state and r["effective"] != state:
+                continue
+            out.append(r)
+        return out
+
+    def review(self, rid):
+        r = self._q("SELECT id FROM review WHERE id=?", (int(rid),))
+        if not r:
+            return None
+        return next((x for x in self.reviews() if x["id"] == int(rid)), None)
+
+    def decide_review(self, rid, verdict, by, as_="reviewer", summary="", findings=None):
+        """approve | reject | escalate. Ein Listing-Fall, den der Prüfer ablehnt,
+        geht an den Menschen (die Änderung ist ja schon sichtbar)."""
+        r = self.review(rid)
+        if not r or r["state"] not in ("open", "escalated"):
+            raise Refused(404, "Diesen offenen Fall gibt es nicht.")
+        if verdict not in ("approve", "reject", "escalate"):
+            raise Refused(400, "verdict ist approve, reject oder escalate.")
+        if as_ == "reviewer" and r["effective"] == "escalated":
+            raise Refused(409, "Der Fall ist eskaliert; jetzt entscheidet ein Mensch (Betreiber).")
+        if as_ == "admin" and verdict == "escalate":
+            raise Refused(400, "Der Betreiber entscheidet: approve oder reject.")
+        clean = []
+        for f in (findings or [])[:50]:
+            if isinstance(f, dict):
+                sev = f.get("severity") if f.get("severity") in ("info", "warn", "block") else "info"
+                clean.append({"severity": sev, "text": str(f.get("text") or "")[:500]})
+        state = {"approve": "approved", "reject": "rejected", "escalate": "escalated"}[verdict]
+        if r["kind"] == "listing" and verdict == "reject" and as_ == "reviewer":
+            state = "escalated"
+        stmts = [("UPDATE review SET state=?, decided_by=?, decided_at=?, decided_as=?, summary=?, "
+                  "findings=? WHERE id=?", (state, by, time.time(), as_, (summary or "")[:2000],
+                                           json.dumps(clean, ensure_ascii=False), r["id"]))]
+        if r["kind"] == "release":
+            stmts.append(("UPDATE release SET review=? WHERE asset=? AND version=?",
+                          ("pending" if state == "escalated" else state, r["asset"], r["version"])))
+        self._x(stmts)
+        self.event("review-" + verdict, r["asset"], r["version"], principal=by,
+                   detail=f"#{r['id']} als {as_}")
+        return state
+
+    # -- §15.8.6: Zahlen für die Startseite -----------------------------------------
+    def download_counts(self, days=90):
+        """Downloads je Asset (ohne Feed-Abrufe der Kataloge: die heißen fetch)."""
+        since = time.time() - days * 86400
+        return {r["asset"]: r["n"] for r in self._q(
+            "SELECT asset, count(*) AS n FROM event WHERE kind='download' AND at>=? GROUP BY asset",
+            (since,))}
+
+
+def counts(release):
+    """Zählt ein Release für Kanal, Feed und Download? Nur freigegeben (§15.8.5)."""
+    return (release.get("review") or "approved") == "approved"
+
+
+def _loads(s, default):
+    try:
+        v = json.loads(s or "")
+    except (ValueError, TypeError):
+        return default
+    return v if isinstance(v, type(default)) else default
+
+
+def _dec_tx(r):
+    r["texts_map"] = _loads(r.get("texts"), {})
+    return r
+
+
+def resolve(texts, lang, default="en"):
+    """Der Text in `lang`, sonst `default`, sonst die erste vorhandene Sprache.
+    -> dict mit den Feldern und `_lang` (welche Sprache es wurde)."""
+    texts = texts or {}
+
+    def has(code):
+        return any(str((texts.get(code) or {}).get(k) or "").strip() for k in TEXT_FIELDS)
+    for code in (lang, default, *sorted(texts)):
+        if code in texts and has(code):
+            return dict(texts[code], _lang=code)
+    return {"_lang": lang}
+
+
+def merge_texts(cur, new):
+    """new = {lang: {feld: text}}. Nur genannte Felder ändern sich; ein leerer Text
+    löscht das Feld; eine Sprache ohne Felder verschwindet."""
+    if not isinstance(new, dict):
+        raise Refused(400, "texts ist ein Objekt {sprache: {title, summary, description}}.")
+    out = {code: dict(v) for code, v in (cur or {}).items() if isinstance(v, dict)}
+    for lang, fields in new.items():
+        if not LANG_RE.match(str(lang)):
+            raise Refused(400, f"„{lang}“ ist kein Sprachkürzel wie en oder de.")
+        if not isinstance(fields, dict):
+            raise Refused(400, f"texts.{lang} ist ein Objekt.")
+        tgt = out.setdefault(lang, {})
+        for k, v in fields.items():
+            if k not in TEXT_FIELDS:
+                raise Refused(400, f"texts.{lang}.{k}: erlaubt sind title, summary, description.")
+            v = str(v or "")
+            if v.strip():
+                tgt[k] = v[:TEXT_MAX[k]] if k == "description" else v.strip()[:TEXT_MAX[k]]
+            else:
+                tgt.pop(k, None)
+        if not tgt:
+            out.pop(lang)
+    return out
+
+
+def clean_notes(notes):
+    if not notes:
+        return {}
+    if not isinstance(notes, dict):
+        raise Refused(400, "notes ist ein Objekt {sprache: text}.")
+    out = {}
+    for lang, v in notes.items():
+        if not LANG_RE.match(str(lang)):
+            raise Refused(400, f"„{lang}“ ist kein Sprachkürzel.")
+        if str(v or "").strip():
+            out[lang] = str(v)[:4000]
+    return out

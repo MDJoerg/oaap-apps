@@ -61,6 +61,19 @@ Ohne Destination ist der Katalog genau 0.1. Hochladen von Hand geht weiter.
 | `CATALOG_UPSTREAM_CHANNEL` | Spiegel: Kanal, dem der Katalog folgt | stable |
 | `CATALOG_UPSTREAM_RELEASE` | Spiegel: `auto` (beim Eintreffen freigeben) oder `hold` | auto |
 | `CATALOG_UPSTREAM_INTERVAL_MIN` | Spiegel: Abstand der Abrufe | 15 |
+| `CATALOG_UPSTREAM_SCOPE` | Spiegel: `all` (alles Beziehbare) oder `followed` (nur die Folgen-Liste) | all |
+
+## Aus Zwischenablage hinzufügen (seit 0.3, RFC-0077 §15.8.7)
+
+Im Marketplace „Teilen“ → „Link kopieren“, hier unter „Spiegel“ einfügen. Der
+Katalog **ruft den Link nicht auf**: er liest daraus Asset-Kennung und Kanal und
+vergleicht die Adresse mit der, die der angebundene Marketplace über die
+Destination von sich sagt (Feld `origin` im Feed, ab Marketplace 0.3). Passt sie,
+kommt die App auf die Folgen-Liste und wird über die Destination geholt. Ein
+fremder Marketplace wird abgelehnt, mit dem Schritt für den Betreiber. Ist die App
+für diesen Knoten noch nicht beziehbar (der Anbieter hat noch nicht
+freigeschaltet), steht sie auf der Liste und kommt beim ersten Abruf danach.
+Wirksam mit `CATALOG_UPSTREAM_SCOPE=followed`.
 
 ## Test
 

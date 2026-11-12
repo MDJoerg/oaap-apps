@@ -61,6 +61,7 @@ OP = urllib.request.build_opener(NoRedir)
 
 def call(method, path, headers=None, body=None, ctype=None):
     h = dict(headers or {})
+    h.setdefault("Accept-Language", "de")
     if ctype:
         h["Content-Type"] = ctype
     try:
@@ -85,6 +86,13 @@ def multipart(path, headers, fields, filename, data):
     return call("POST", path, headers, b"".join(parts), f"multipart/form-data; boundary={bd}")
 
 
+def meta(aid, title, summary, description, **rest):
+    """0.3: Texte (je Sprache) und Meta sind zwei Formulare."""
+    form(f"/admin/assets/{aid}/texts", {"lang": "de", "title": title, "summary": summary,
+                                         "description": description})
+    return form(f"/admin/assets/{aid}/meta", rest)
+
+
 def zip_bytes(app_id, version):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -101,26 +109,25 @@ def png(seed=0):
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
 
+form("/admin/category", {"id": "sport", "landscape": "default", "title_en": "Sport"})
 form("/admin/publisher", {"pattern": "probe-*", "kind": "user", "name": "ci", "channels": ""})
 multipart("/api/v1/releases", CI, {"channels": "stable"}, "a.zip", zip_bytes("probe-verein", "1.0.0"))
 multipart("/api/v1/releases", CI, {"channels": "beta"}, "b.zip", zip_bytes("probe-werkzeug", "0.1.0"))
 multipart("/api/v1/releases", CI, {"channels": "stable"}, "c.zip", zip_bytes("probe-geheim", "1.0.0"))
 
 print("Beschreibung, Schlagworte, Links -- Markdown, nie aktives HTML")
-st, _, h = form("/admin/assets/probe-verein/meta", {
-    "title": "Vereinsportal", "summary": "Für Handballvereine",
-    "description": "## Funktionen\n**Spielpläne** und Ergebnisse.\n<script>alert(1)</script>\n"
-                   "[böse](javascript:alert(1)) [gut](https://example.org)",
-    "tags": "Handball, Verein", "categories": "sport", "publisher": "HBSHA", "license": "proprietär",
-    "links": "Webseite | https://example.org\nkaputt | javascript:alert(1)"})
+st, _, h = meta("probe-verein", "Vereinsportal", "Für Handballvereine",
+                "## Funktionen\n**Spielpläne** und Ergebnisse.\n<script>alert(1)</script>\n"
+                "[böse](javascript:alert(1)) [gut](https://example.org)",
+                tags="Handball, Verein", categories="sport", publisher="HBSHA", license="proprietär",
+                links="Webseite | https://example.org\nkaputt | javascript:alert(1)")
 ok("ein Link ohne http(s) wird abgelehnt (Speichern scheitert mit Satz)",
    st == 303 and "http" in urllib.parse.unquote(h.get("Location", "")), h.get("Location"))
-form("/admin/assets/probe-verein/meta", {
-    "title": "Vereinsportal", "summary": "Für Handballvereine",
-    "description": "## Funktionen\n**Spielpläne** und Ergebnisse.\n<script>alert(1)</script>\n"
-                   "[böse](javascript:alert(1)) [gut](https://example.org)",
-    "tags": "Handball, Verein", "categories": "sport", "publisher": "HBSHA", "license": "proprietär",
-    "links": "Webseite | https://example.org"})
+meta("probe-verein", "Vereinsportal", "Für Handballvereine",
+     "## Funktionen\n**Spielpläne** und Ergebnisse.\n<script>alert(1)</script>\n"
+     "[böse](javascript:alert(1)) [gut](https://example.org)",
+     tags="Handball, Verein", categories="sport", publisher="HBSHA", license="proprietär",
+     links="Webseite | https://example.org")
 st, body, _ = call("GET", "/assets/probe-verein")
 b = body.decode()
 ok("Detailseite: Markdown wird gesetzt", "<strong>Spielpläne</strong>" in b and "<h2" in b, b[:200])
@@ -138,9 +145,8 @@ ok("ein Schlagwort findet", [a["id"] for a in d["assets"]] == ["probe-verein"], 
 ok("Unsinn findet nichts", json.loads(call("GET", "/api/public/v1/assets?q=zzzz")[1])["count"] == 0)
 
 print("\nFacetten zählen nur Sichtbares")
-form("/admin/assets/probe-geheim/meta", {"title": "Geheim", "summary": "", "description": "",
-                                         "tags": "verein", "categories": "sport", "publisher": "",
-                                         "license": "", "links": ""})
+meta("probe-geheim", "Geheim", "", "", tags="verein", categories="sport", publisher="",
+     license="", links="")
 form("/admin/asset", {"asset": "probe-geheim", "mode": "principals", "free": ""})
 st, body, _ = call("GET", "/?tag=verein")
 b = body.decode()

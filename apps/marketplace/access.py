@@ -113,6 +113,18 @@ def state(p, asset, entitlements, channels):
     return "locked"
 
 
+def is_reviewer(p, reviewers):
+    """Prüfer (§15.8.5): ein Benutzer oder eine Gruppe, die der Betreiber benennt.
+    Der Betreiber selbst ist kein Prüfer -- er entscheidet Eskalationen."""
+    return any(_matches(p, r["principal_kind"], r["principal"]) for r in reviewers)
+
+
+def can_manage(p, asset_id, publishers):
+    """Partner light (§15.8.9): wer in ein Asset einstellen darf, beantwortet dessen
+    Anfragen und vergibt dessen Berechtigungen -- nur für dieses Asset."""
+    return can_publish(p, asset_id, None, publishers)
+
+
 def can_publish(p, asset_id, channel, publishers):
     """Ins Asset einchecken / in einen Kanal legen. channel=None: irgendeiner."""
     if is_admin(p):

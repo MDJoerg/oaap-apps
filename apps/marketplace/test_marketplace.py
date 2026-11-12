@@ -55,6 +55,7 @@ OPENER = urllib.request.build_opener(NoRedir)
 
 def call(method, path, headers=None, body=None, ctype=None):
     h = dict(headers or {})
+    h.setdefault("Accept-Language", "de")       # 0.3: die Oberfläche spricht en/de
     if ctype:
         h["Content-Type"] = ctype
     req = urllib.request.Request(BASE + path, data=body, method=method, headers=h)
