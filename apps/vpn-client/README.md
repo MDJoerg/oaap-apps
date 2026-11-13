@@ -25,6 +25,16 @@ das Ziel benutzt, merkt keinen Unterschied zu einem direkten Ziel.
 - **Keine Generalprobe mit Tunnel** (RFC-0060 D6): ohne `/dev/net/tun`
   sagt die Seite das und versucht es nicht erneut.
 
+## Einrichten im Portal (Plattform ab 0.1.276)
+
+1. Im **Store** installieren — als Server-Admin, mit eigenem Namen und Mandanten.
+   Der Knoten fragt einmal nach dem Tunnelrecht; das Häkchen setzt nur der Server-Admin.
+2. Auf der Instanzseite unter **Konfiguration** die `.ovpn`-Datei **hochladen**
+   (das Portal kodiert sie selbst), falls nötig den Zugang (`benutzer:passwort`) und
+   die **Ziele** eintragen, eines je Zeile: `gaming = http://10.8.0.5:11434`.
+3. Die Karte **Tunnel** zeigt, ob er steht, und die Ziele als
+   `through:<instanz>/<ziel>` — unter **Destinationen** schlägt das Formular sie vor.
+
 ## Einrichten (Betreiber, an der Kommandozeile)
 
 ```bash

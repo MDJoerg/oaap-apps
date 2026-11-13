@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.1.3
+  version: 0.1.4
   type: native
   class: service
   description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
@@ -17,7 +17,8 @@ services:
     build: .
     port: 8080
     # Laufzeit 2.23: /dev/net/tun und NET_ADMIN für genau diesen Container.
-    # Installieren kann das nur der Betreiber an der Kommandozeile:
+    # Bestätigen kann das nur der Betreiber (Server-Admin): im Store des
+    # Portals mit einem Häkchen (Plattform ab 0.1.276), an der Kommandozeile
     #   sudo oaap app install <paket> --name vpn --confirm-tun
     tun: true
 
@@ -29,13 +30,16 @@ routes:
     roles: [admin]
 
 config:
-  # Die .ovpn-Datei der Gegenstelle, als EINE Zeile base64 -- die Plattform
-  # trägt Konfigurationswerte einzeilig, eine .ovpn-Datei hat Zeilen,
-  # ;-Kommentare und Zertifikate:
+  # Die .ovpn-Datei der Gegenstelle. Gespeichert als EINE Zeile base64 --
+  # die Plattform trägt Konfigurationswerte einzeilig, eine .ovpn-Datei hat
+  # Zeilen, ;-Kommentare und Zertifikate. `file: true` (Laufzeit 2.8, ab
+  # Plattform 0.1.276): das Portal bietet einen Datei-Upload und kodiert
+  # selbst. Ältere Plattformen ignorieren das Feld; dort weiter:
   #   sudo oaap app config set vpn VPN_CONFIG "$(base64 -w0 client.ovpn)"
   - key: VPN_CONFIG
-    label: "OpenVPN-Datei (.ovpn) als base64, eine Zeile"
+    label: "OpenVPN-Datei (.ovpn)"
     secret: true
+    file: true
   # Benutzer und Passwort, falls die Gegenstelle sie verlangt.
   - key: VPN_AUTH
     label: "Zugang zur Gegenstelle (benutzer:passwort), falls verlangt"

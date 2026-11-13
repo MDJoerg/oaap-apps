@@ -698,8 +698,8 @@
       "id": "vpn-client",
       "name": "VPN-Client",
       "type": "native",
-      "version": "0.1.3",
-      "released": "2026-11-11",
+      "version": "0.1.4",
+      "released": "2026-11-13",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/vpn-client"
@@ -724,7 +724,7 @@
         "through"
       ],
       "summary": "Erreicht ein System hinter einem fremden OpenVPN: der Tunnel lebt in einem Container, was dahinter liegt, wird zur Destination (through:<instanz>/<name>).",
-      "description": "Ein Tunnel als App (RFC-0060). Hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container (Laufzeit 2.23: nur /dev/net/tun und NET_ADMIN, Manifest 0.8, Plattform ab 0.1.197) und bedient benannte Ziele unter /t/<name>/ als Reverse-Proxy mit Streaming. Traut der Gegenseite nichts: geschobene Routen, DNS und Skripte werden verworfen, ein Paketfilter lässt aus dem Tunnel nur Antworten herein und leitet nichts weiter. Den Schlüssel des Ziels trägt die Destination der Plattform (Zielart through, Plattform ab 0.1.198), nie die App. Installation nur durch den Betreiber an der Kommandozeile mit --confirm-tun; keine Generalprobe mit Tunnel.",
+      "description": "Ein Tunnel als App (RFC-0060). Hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container (Laufzeit 2.23: nur /dev/net/tun und NET_ADMIN, Manifest 0.8, Plattform ab 0.1.197) und bedient benannte Ziele unter /t/<name>/ als Reverse-Proxy mit Streaming. Traut der Gegenseite nichts: geschobene Routen, DNS und Skripte werden verworfen, ein Paketfilter lässt aus dem Tunnel nur Antworten herein und leitet nichts weiter. Den Schlüssel des Ziels trägt die Destination der Plattform (Zielart through, Plattform ab 0.1.198), nie die App. Installation nur durch den Betreiber (Server-Admin): im Store mit einem Häkchen (Plattform ab 0.1.276) oder an der Kommandozeile mit --confirm-tun; die .ovpn-Datei lädt man im Portal hoch. Keine Generalprobe mit Tunnel.",
       "links": [
         {
           "rel": "source",
