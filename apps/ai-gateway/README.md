@@ -27,11 +27,48 @@ Umsetzung der Capability [`oaap.ai.gateway`
   unbelastet). Geprüft wird im Dienst: **Der API-Schlüssel ist die
   Identität.** Keine Sitzung, keine Rollen, kein Kontakt zum
   Identitätsdienst. Derselbe Bau wie Deploy-Hook und Flotten-Auskunft.
-- **`/` ist `admin`.** Die Betreiber-Sicht: Aliasse, Bezugsquellen,
-  Schlüssel ausstellen und widerrufen, Verbrauch.
+- **`/` ist `admin`.** Die Betreiber-Sicht in sechs Reitern (seit 0.6,
+  siehe unten): Dashboard, Letzte Anfragen, Auswertung, Schlüssel,
+  Modelle, Bezugsquellen.
 
 Beim Installieren fragt die Plattform einmal nach, weil `/v1` ohne
 Login erreichbar wird. Das ist richtig so — und der Grund steht oben.
+
+## Die Betreiber-Sicht (seit 0.6)
+
+Sechs Reiter, Beobachten vorn, Einrichten hinten:
+
+| Reiter | Adresse | zeigt |
+| ------ | ------- | ----- |
+| **Dashboard** | `/` | Kennzahlen der letzten 24 h mit Verlaufslinie (Anfragen, Token, Erfolgsquote, Antwortzeit, zuletzt), Säulen je Stunde (beantwortet/nicht beantwortet) und darunter die **aktuelle Auswertung**: Zeitfenster 1 h · 4 h · 24 h · 7 d · 30 d, Rangliste nach Aufrufen, Token oder mittlerer Dauer, Filter nach Modellname, Schlüssel und Quelle; Top 10 Modellnamen, Schlüssel, Bezugsquellen und die Ausgänge. Aktualisiert sich jede Minute. |
+| **Letzte Anfragen** | `/anfragen` | die Messzeilen, neueste zuerst, filterbar nach Schlüssel, Modellname, Quelle und Ausgang (50/100/200) |
+| **Auswertung** | `/auswertung` | Tage und Monate für Rechnungen, dieselbe Abfrage wie `/report/v1/usage` |
+| **Schlüssel** | `/schluessel` | Schlüssel, Ausstellen, „So verbindet sich ein Client“ |
+| **Modelle** | `/modelle` | Modellnamen (Aliasse) mit **Test** je Name |
+| **Bezugsquellen** | `/quellen` | Quellen mit **Verbindungstest** je Quelle und „Alle testen“, Quellen aus Destinationen der Plattform |
+
+Das Dashboard rechnet in Stunden über dieselbe Tabelle `usage` (Modul
+`dash.py`); gezeigt wird Ortszeit (`Europe/Berlin`, sonst UTC mit
+Hinweis). Gespeichert bleibt UTC.
+
+**Verbindungstest einer Bezugsquelle** („testen“): `GET …/v1/models`
+mit den Zugangsdaten der Quelle, 15 s Wartezeit. Das ist ein Ping, der
+auch die Anmeldung prüft, aber kein Modell rechnen lässt. Das Ergebnis
+steht in Worten da:
+
+- **erreichbar** (HTTP 2xx) mit Dauer und den Modellen der Quelle;
+- **Anmeldung abgelehnt** (401/403): Der Weg steht, der Schlüssel nicht —
+  bei einem anderen KI-Gateway dessen API-Schlüssel;
+- **`…/models` unbekannt** (404): Adresse bis `/v1` prüfen;
+- **Gegenstelle antwortet nicht** (502/503/504): Über eine Destination
+  heißt das meist Tunnel nicht verbunden oder Angebot fehlt (Portal →
+  Connector);
+- **nicht erreichbar**: mit der Art des Fehlers (DNS, Verbindung,
+  Zeitüberschreitung, TLS), nie mit Zugangsdaten.
+
+**Test eines Modellnamens**: je Ziel eine Mini-Anfrage („ping“,
+höchstens 1 Token). Sie zählt nicht in den Verbrauch dieses Gateways —
+es gibt keinen Schlüssel, dem sie gehört —, die Quelle zählt sie.
 
 ## Bezugsquellen und Modellnamen (seit 0.4, RFC-0064 Stufe 2)
 
@@ -232,7 +269,7 @@ Mount danach durchsucht.
 
 ## Auswertung und Schnittstelle (seit 0.5, RFC-0064 Stufe 3)
 
-**Grafiken** unter `/auswertung` (Link auf der Übersicht), nur für die
+**Grafiken** unter `/auswertung` (Reiter Auswertung), nur für die
 Serververwaltung: Verlauf je Tag oder Monat gestapelt nach einer
 Dimension, Rangliste, Anteil der Ausgänge (dort wird `ok_no_counts`
 sichtbar). Filter nach Zeitraum und jeder Dimension. SVG vom Server,

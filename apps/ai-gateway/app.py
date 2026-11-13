@@ -1,4 +1,4 @@
-"""OAAP KI-Gateway 0.5 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
+"""OAAP KI-Gateway 0.6 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
 Umsetzung der Capability `oaap.ai.gateway` 0.3 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
@@ -13,9 +13,9 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
   (RFC-0010, einmal je Anfrage, ein Strom also unbelastet). Geprüft
   wird hier: **Der API-Schlüssel ist die Identität** — keine Sitzung,
   keine Rollen, kein Kontakt zum Identitätsdienst.
-- `/` ist `admin` — die Betreiber-Sicht: Aliasse, Bezugsquellen,
-  Schlüssel ausstellen und widerrufen, Verbrauch, Auswertung
-  (`/auswertung`) und die Schnittstelle für externe Berichte
+- `/` ist `admin` — die Betreiber-Sicht in Reitern (0.6): Dashboard,
+  Letzte Anfragen, Auswertung (`/auswertung`), Schlüssel, Modelle,
+  Bezugsquellen mit Verbindungstest und die Schnittstelle für externe Berichte
   (`/report/v1/…`, RFC-0064 §6) — die eine Maschine mit einem
   Plattform-API-Schlüssel abfragt, nicht mit einem Gateway-Schlüssel. Die Plattform
   liefert die geprüfte Identität als Kopfzeile (App Deployment
@@ -43,13 +43,14 @@ from urllib.parse import parse_qsl, urlencode
 
 import catalog
 import charts
+import dash
 import relay
 import report
 import store
 import supply
 import vault
 
-VERSION = "0.5.5"
+VERSION = "0.6.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -184,7 +185,7 @@ STYLE = """<style>
   .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
   .userbox .who{text-align:right;line-height:1.2}
   .userbox .who small{opacity:.75}
-  main{max-width:64rem;margin:1.6rem auto;padding:0 1.2rem}
+  main{max-width:72rem;margin:1.4rem auto;padding:0 1.2rem}
   h1{font-size:1.35rem;margin:.2rem 0 1rem}
   h2{font-size:1.02rem;margin:0 0 .8rem}
   .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
@@ -220,13 +221,13 @@ STYLE = """<style>
   form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));
        gap:.8rem 1rem;align-items:end}
   label{display:block;font-size:.82rem;color:var(--oaap-muted);margin-bottom:.25rem}
-  input[type=text],input[type=number]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
+  input[type=text],input[type=number],input[type=password]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
        border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
   fieldset{border:1px solid var(--oaap-border);border-radius:.4rem;padding:.5rem .8rem}
   fieldset legend{font-size:.78rem;color:var(--oaap-muted);padding:0 .3rem}
   fieldset label{display:inline-flex;align-items:center;gap:.35rem;margin-right:.9rem;
        font-size:.9rem;color:var(--oaap-text)}
-  footer.oaap{max-width:64rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
+  footer.oaap{max-width:72rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
        color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
   .legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:0 0 .5rem;font-size:.85rem}
   .lg{display:inline-flex;align-items:center;gap:.35rem}
@@ -247,7 +248,70 @@ STYLE = """<style>
        font-size:.95rem;min-height:44px;background:#fff}
   input[type=date]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
        border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
-  @media (max-width:640px){ .userbox .who{display:none} .hbar{grid-template-columns:1fr 1fr} }
+  /* 0.6: Reiter, Kennzahlen, Testergebnisse */
+  nav.tabs{background:var(--oaap-surface);border-bottom:1px solid var(--oaap-border);
+       display:flex;gap:.2rem;padding:0 1.2rem;overflow-x:auto;position:sticky;top:0;z-index:5;
+       box-shadow:0 1px 3px rgba(23,37,84,.05)}
+  nav.tabs a{padding:.85rem .95rem .75rem;color:var(--oaap-muted);text-decoration:none;
+       font-size:.93rem;white-space:nowrap;border-bottom:3px solid transparent}
+  nav.tabs a:hover{color:var(--oaap-blue-900);background:#f8fafc}
+  nav.tabs a.on{color:var(--oaap-blue-900);border-bottom-color:var(--oaap-blue-600);font-weight:600}
+  nav.tabs .count{display:inline-block;min-width:1.4rem;padding:0 .4rem;margin-left:.25rem;
+       border-radius:1rem;background:#eef2f7;color:var(--oaap-muted);font-size:.72rem;
+       text-align:center;font-weight:500}
+  nav.tabs a.on .count{background:var(--oaap-blue-100);color:var(--oaap-blue-900)}
+  .hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr));gap:1rem;
+       margin-bottom:1.2rem}
+  .kpi{position:relative;overflow:hidden;background:var(--oaap-surface);
+       border:1px solid var(--oaap-border);border-radius:.8rem;padding:1rem 1.1rem 0;
+       box-shadow:0 1px 3px rgba(23,37,84,.06);display:flex;flex-direction:column;min-height:9.2rem}
+  .kpi::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;
+       background:linear-gradient(90deg,var(--oaap-blue-600),#60a5fa)}
+  .kpi .kl{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--oaap-muted)}
+  .kpi b{font-size:1.9rem;line-height:1.15;margin:.25rem 0 .1rem;color:var(--oaap-blue-950);
+       font-variant-numeric:tabular-nums}
+  .kpi b.small{font-size:1.35rem}
+  .kpi .ks{font-size:.8rem;color:var(--oaap-muted)}
+  .kpi svg.spark{display:block;width:calc(100% + 2.2rem);height:2.6rem;margin:auto -1.1rem 0}
+  .kpi.ringed{flex-direction:row;align-items:center;justify-content:space-between;
+       padding-bottom:1rem;gap:.6rem}
+  .kpi.ringed>div{display:flex;flex-direction:column}
+  .kpi .chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:auto 0 1rem;text-decoration:none;
+       padding-top:.5rem}
+  .delta{font-weight:600}.delta.up{color:var(--ok)}.delta.down{color:var(--warn)}
+  .cardhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;
+       gap:.4rem 1rem;margin-bottom:.6rem}
+  .cardhead h2{margin:0}
+  .pills{display:inline-flex;background:#eef2f7;border-radius:2rem;padding:.2rem}
+  .pill{padding:.3rem .8rem;border-radius:2rem;text-decoration:none;color:var(--oaap-muted);
+       font-size:.85rem;font-variant-numeric:tabular-nums}
+  .pill.on{background:var(--oaap-surface);color:var(--oaap-blue-900);font-weight:600;
+       box-shadow:0 1px 2px rgba(23,37,84,.12)}
+  .summary{margin:.9rem 0 0;padding:.6rem .8rem;background:#f8fafc;border-radius:.4rem;
+       font-size:.9rem}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1.2rem}
+  td:first-child>code{word-break:normal;white-space:nowrap}
+  .rank{display:inline-block;width:1.3rem;color:var(--oaap-muted);font-size:.78rem;
+       font-variant-numeric:tabular-nums}
+  .empty{padding:.8rem 0}
+  .badge.st-good{background:#dcfce7;color:#166534}
+  .badge.st-warning{background:#fef3c7;color:#92400e}
+  .badge.st-serious{background:#ffedd5;color:#9a3412}
+  .badge.st-critical{background:#fee2e2;color:#991b1b}
+  .probe{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem .7rem;border-radius:.45rem;
+       margin-bottom:.45rem;border:1px solid var(--oaap-border)}
+  .probe .pm{font-weight:700;width:1.2rem;text-align:center}
+  .probe.good{background:#f0fdf4;border-color:#bbf7d0}.probe.good .pm{color:#15803d}
+  .probe.warning{background:#fffbeb;border-color:#fde68a}.probe.warning .pm{color:#b45309}
+  .probe.serious{background:#fff7ed;border-color:#fed7aa}.probe.serious .pm{color:#c2410c}
+  .probe.critical{background:#fef2f2;border-color:#fecaca}.probe.critical .pm{color:#b91c1c}
+  .rowactions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+  .rowactions form{margin:0}
+  th.num{text-align:right}.nowrap{white-space:nowrap}
+  tr.dim td{opacity:.6}
+  table tr:hover td{background:#fafbfd}
+  @media (max-width:640px){ .userbox .who{display:none} .hbar{grid-template-columns:1fr 1fr}
+       .grid2{grid-template-columns:1fr} .kpi b{font-size:1.6rem} }
 </style>"""
 
 FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
@@ -261,9 +325,11 @@ LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true
             'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
 
 
-def page(title, body, user, roles):
+def page(title, body, user, roles, tab=None, refresh=0):
+    nav = tabs_nav(tab) if tab else ""
+    meta = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">{meta}
 <link rel="icon" href="{FAVICON}">
 <title>{esc(title)} — OAAP KI-Gateway</title>
 {STYLE}
@@ -273,6 +339,7 @@ def page(title, body, user, roles):
   </a>
   <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
 </header>
+{nav}
 <main>{body}</main>
 <footer class="oaap">
   <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
@@ -430,10 +497,14 @@ def aliases_card():
                       f'<form method="post" action="alias-delete" style="margin:.4rem 0 0">'
                       f'<input type="hidden" name="name" value="{esc(name)}">'
                       f'<button class="quiet" type="submit">löschen</button></form></details>')
+        test = (f'<form method="post" action="alias-test">'
+                f'<input type="hidden" name="name" value="{esc(name)}">'
+                f'<button class="quiet" type="submit" title="Jedes Ziel mit einer Mini-Anfrage '
+                f'prüfen">testen</button></form>' if alias else "")
         order = "wie aufgeführt" if order_listed else "grün vor gelb vor rot"
         rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{worst}</td>'
                     f'<td>{"<br>".join(targets)}</td><td class="muted">{esc(order)}</td>'
-                    f'<td>{action}</td></tr>')
+                    f'<td><div class="rowactions">{test}{action}</div></td></tr>')
     table = (f'<table><tr><th>Modellname</th><th>Ampel</th><th>Bezugsquellen</th>'
              f'<th>Reihenfolge</th><th></th></tr>{"".join(rows)}</table>' if rows else
              '<p class="muted">Noch kein Modellname — ohne ihn kann kein Verbraucher etwas anfragen.</p>')
@@ -525,6 +596,10 @@ def suppliers_card():
                 '<span class="muted">keine (z. B. lokal)</span>')
         if not usable:
             cred = '<span class="badge err">nicht lesbar</span>'
+        test = (f'<form method="post" action="supplier-test">'
+                f'<input type="hidden" name="name" value="{esc(name)}">'
+                f'<button class="quiet" type="submit" title="Modellliste abfragen: erreichbar? '
+                f'Anmeldung gültig?">testen</button></form>' if usable else "")
         action = ""
         if editable:
             action = (f'<details><summary class="muted">ändern</summary>'
@@ -545,7 +620,8 @@ def suppliers_card():
         rows.append(f'<tr><td><code>{esc(name)}</code></td>'
                     f'<td>{light_badge(light)}<br>'
                     f'<span class="muted">{esc(supply.LIGHT_RULES.get(light, ""))}</span></td>'
-                    f'<td><code>{esc(url)}</code></td><td>{cred}</td><td>{action}</td></tr>')
+                    f'<td><code>{esc(url)}</code></td><td>{cred}</td>'
+                    f'<td><div class="rowactions">{test}{action}</div></td></tr>')
     table = (f'<table><tr><th>Name</th><th>Ampel</th><th>Adresse</th><th>Zugangsdaten</th>'
              f'<th></th></tr>{"".join(rows)}</table>' if rows else
              '<p class="muted">Noch keine Bezugsquelle.</p>')
@@ -567,8 +643,12 @@ def suppliers_card():
     ist nicht souverän. Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
     erreichbar (<code>oaap app link add</code>).</p>
   {destinations_form(entries, dests)}"""
+    test_all = ('<form method="post" action="supplier-test" style="margin:0">'
+                '<input type="hidden" name="name" value="*">'
+                '<button class="quiet" type="submit">Alle testen</button></form>'
+                if len(entries) > 1 else "")
     return f"""<div class="card">
-  <h2>Bezugsquellen</h2>
+  <div class="cardhead"><h2>Bezugsquellen</h2>{test_all}</div>
   <p class="hint">Zugangsdaten werden nur verschlüsselt gespeichert, lassen sich setzen
     oder ersetzen, aber <b>nie wieder anzeigen</b> — weder hier noch in einer Messzeile,
     Fehlermeldung oder der Prüfspur.</p>
@@ -576,11 +656,37 @@ def suppliers_card():
 </div>"""
 
 
-# ------------------------------------------------------------ Betreiber-Seite
+# ------------------------------------------------------------ Betreiber-Seiten
 
-def admin_page(user, roles, host, notice="", secret=None):
+# Die Reiter (0.6), in der Reihenfolge, in der ein Betreiber fragt: Was
+# passiert gerade? Was kam zuletzt? Wie viel war es? Wer darf? Was wird
+# angeboten? Woher kommt es? — Einrichten steht hinten, Beobachten vorn.
+TABS = (("dashboard", "./", "Dashboard"), ("anfragen", "anfragen", "Letzte Anfragen"),
+        ("auswertung", "auswertung", "Auswertung"), ("schluessel", "schluessel", "Schlüssel"),
+        ("modelle", "modelle", "Modelle"), ("quellen", "quellen", "Bezugsquellen"))
+
+
+def tab_counts():
+    try:
+        keys = sum(1 for r in store.keys(DB) if not r["revoked"])
+    except Exception:
+        keys = 0
+    return {"schluessel": keys, "modelle": len(ALIASES), "quellen": len(SUPPLIERS)}
+
+
+def tabs_nav(current):
+    counts = tab_counts()
+    out = []
+    for key, href, text in TABS:
+        on = ' class="on" aria-current="page"' if key == current else ""
+        count = f' <span class="count">{counts[key]}</span>' if key in counts else ""
+        out.append(f'<a href="{href}"{on}>{esc(text)}{count}</a>')
+    return f'<nav class="tabs" aria-label="Bereiche">{"".join(out)}</nav>'
+
+
+def top_cards(notice="", secret=None, host=""):
+    """Was über jedem Reiter stehen kann: der einmalige Schlüssel, ein Hinweis."""
     parts = []
-
     if secret:
         parts.append(f"""<div class="card secretbox">
   <h2>Schlüssel für „{esc(secret['label'])}“ — jetzt kopieren</h2>
@@ -591,12 +697,13 @@ def admin_page(user, roles, host, notice="", secret=None):
   <p class="hint">Im Client einzutragen als API-Key, mit der Basis-Adresse
     <code>https://{esc(host)}/v1</code>.</p>
 </div>""")
-
     if notice:
         parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
+    return parts
 
-    parts.extend(supply_notes())
 
+def config_cards():
+    parts = list(supply_notes())
     if CONFIG_ERRORS:
         items = "".join(f"<li>{esc(e)}</li>" for e in CONFIG_ERRORS)
         parts.append(f"""<div class="card attention">
@@ -605,11 +712,215 @@ def admin_page(user, roles, host, notice="", secret=None):
     nicht kaputt.</p>
   <ul>{items}</ul>
 </div>""")
+    return parts
 
-    parts.append(aliases_card())
-    parts.append(suppliers_card())
 
-    # --- Schlüssel
+def outcome_badge(outcome):
+    status = charts.outcome_status(outcome or "")
+    mark = charts.STATUS[status][1]
+    return (f'<span class="badge st-{status}" title="{esc(outcome)}">{mark} '
+            f'{esc(charts.outcome_word(outcome or ""))}</span>')
+
+
+def _delta(now_v, before_v):
+    if not before_v:
+        return '<span class="muted">vorher 0</span>' if now_v else '<span class="muted">ruhig</span>'
+    pct = round(100 * (now_v - before_v) / before_v)
+    cls = "up" if pct > 0 else "down" if pct < 0 else ""
+    arrow = "▲" if pct > 0 else "▼" if pct < 0 else "="
+    return f'<span class="delta {cls}">{arrow} {abs(pct)} %</span> <span class="muted">zu den 24 h davor</span>'
+
+
+def _qs(params, **change):
+    merged = {k: v for k, v in params.items() if v not in ("", "*")}
+    merged.update({k: v for k, v in change.items()})
+    return urlencode({k: v for k, v in merged.items() if v not in ("", "*", None)})
+
+
+def dashboard_page(user, roles, host, params, now=None):
+    now = now or datetime.now(timezone.utc)
+    day_ago, two_days = now - timedelta(hours=24), now - timedelta(hours=48)
+    cur = dash.totals(DB, dash.stamp(day_ago))
+    prev = dash.totals(DB, dash.stamp(two_days), dash.stamp(day_ago))
+    hours = dash.hourly(DB, 24, now)
+    ever = dash.totals(DB, "")
+    share = cur["answered"] / cur["calls"] if cur["calls"] else 1.0
+    good, bad = charts.STATUS["good"][0], charts.STATUS["critical"][0]
+    ring_color = good if share >= 0.95 else charts.STATUS["warning"][0] if share >= 0.8 else bad
+
+    hero = f"""<section class="hero">
+  <div class="kpi"><span class="kl">Anfragen · 24 h</span>
+    <b>{charts.fmt_num(cur['calls'])}</b>
+    <span class="ks">{_delta(cur['calls'], prev['calls'])}</span>
+    {dash.sparkline([h['calls'] for h in hours])}</div>
+  <div class="kpi"><span class="kl">Token · 24 h</span>
+    <b>{charts.fmt_num(cur['tokens'])}</b>
+    <span class="ks">{charts.fmt_num(cur['in_tokens'])} ein · {charts.fmt_num(cur['out_tokens'])} aus</span>
+    {dash.sparkline([h['tokens'] for h in hours], charts.SERIES[1])}</div>
+  <div class="kpi ringed"><div><span class="kl">Erfolg · 24 h</span>
+    <b>{'—' if not cur['calls'] else f"{100 * share:.0f} %".replace('.', ',')}</b>
+    <span class="ks">{charts.fmt_num(cur['failed'])} nicht beantwortet</span></div>
+    {dash.ring(share if cur['calls'] else 0, ring_color)}</div>
+  <div class="kpi"><span class="kl">Antwortzeit Ø · 24 h</span>
+    <b>{charts.fmt_num(cur['avg_ms'])} ms</b>
+    <span class="ks">nur beantwortete Anfragen</span>
+    {dash.sparkline([h['ms'] for h in hours], charts.SERIES[2])}</div>
+  <div class="kpi"><span class="kl">Zuletzt</span>
+    <b class="small">{esc(dash.ago(ever['last'], now))}</b>
+    <span class="ks">{cur['keys']} Schlüssel aktiv in 24 h · {tab_counts()['schluessel']} gültig</span>
+    {_supply_chips()}</div>
+</section>"""
+
+    chart = f"""<div class="card">
+  <div class="cardhead"><h2>Verlauf — letzte 24 Stunden</h2>
+    <span class="legend"><span class="lg"><i style="background:{good}"></i>beantwortet</span>
+    <span class="lg"><i style="background:{bad}"></i>nicht beantwortet</span>
+    <span class="muted">Stunden in {esc(dash.LOCAL_NAME)}</span></span></div>
+  {dash.hour_bars(hours)}
+</div>"""
+
+    # --- die aktuelle Auswertung mit Filtern
+    win = params.get("fenster", dash.DEFAULT_WINDOW)
+    if win not in dash.WINDOWS:
+        win = dash.DEFAULT_WINDOW
+    metric = params.get("mass", dash.DEFAULT_METRIC)
+    if metric not in dash.METRICS:
+        metric = dash.DEFAULT_METRIC
+    since = dash.stamp(now - timedelta(hours=dash.WINDOWS[win][0]))
+    filters = {d: params[d] for d in ("model", "key", "supplier") if params.get(d) not in (None, "", "*")}
+    keep = {"mass": metric, **filters}
+    pills = "".join(
+        f'<a class="pill{" on" if w == win else ""}" href="./?{esc(_qs(keep, fenster=w))}">'
+        f'{esc(w)}</a>' for w in dash.WINDOWS)
+    selects = []
+    for dim in ("model", "key", "supplier"):
+        vals = dash.values(DB, dim, since)
+        current = filters.get(dim, "*")
+        if current != "*" and current not in vals:
+            vals.append(current)
+        selects.append(f'<div><label for="d-{dim}">{esc(dash.DIMS[dim][1])}</label>'
+                       f'<select id="d-{dim}" name="{dim}"><option value="*">alle</option>'
+                       f'{options(vals, current, {v: v for v in vals})}</select></div>')
+    w_tot = dash.totals(DB, since, None, filters)
+
+    def fmt(v):
+        return f"{charts.fmt_num(v)} ms" if metric == "ms" else charts.fmt_num(v)
+
+    def block(dim, title, color):
+        rows, more = dash.top(DB, since, dim, metric, filters)
+        return (f'<div class="card"><h2>{esc(title)}</h2>'
+                f'{dash.bar_list(rows, more, fmt, color, share=metric != "ms")}</div>')
+
+    outcome_rows, _ = dash.top(DB, since, "outcome", "calls", filters, n=20)
+    o_total = sum(v for _, v in outcome_rows) or 1
+    o_html = "".join(
+        f'<div class="hbar"><span class="hl">{outcome_badge(name)}</span>'
+        f'<span class="ht"><i style="width:{100 * v / o_total:.1f}%;'
+        f'background:{charts.STATUS[charts.outcome_status(name)][0]}"></i></span>'
+        f'<span class="hv">{charts.fmt_num(v)} <small>{100 * v / o_total:.0f} %</small></span></div>'
+        for name, v in outcome_rows) or '<p class="muted empty">Keine Anfragen in diesem Fenster.</p>'
+
+    analysis = f"""<div class="card">
+  <div class="cardhead"><h2>Aktuelle Auswertung</h2>
+    <span class="pills" role="group" aria-label="Zeitfenster">{pills}</span></div>
+  <form class="grid" method="get" action="./">
+    <input type="hidden" name="fenster" value="{esc(win)}">
+    <div><label for="d-mass">Rangliste nach</label><select id="d-mass" name="mass">
+      {options(list(dash.METRICS), metric, {k: v[1] for k, v in dash.METRICS.items()})}</select></div>
+    {"".join(selects)}
+    <div><button type="submit">Filtern</button></div>
+  </form>
+  <p class="summary"><b>{esc(dash.WINDOWS[win][1])}</b>{' · gefiltert' if filters else ''}:
+    {charts.fmt_num(w_tot['calls'])} Anfragen · {charts.fmt_num(w_tot['tokens'])} Token ·
+    {charts.fmt_num(w_tot['failed'])} nicht beantwortet · Ø {charts.fmt_num(w_tot['avg_ms'])} ms
+    {f'· <a href="./?{esc(_qs({}, fenster=win))}">Filter zurücksetzen</a>' if filters else ''}</p>
+</div>
+<div class="grid2">
+  {block("model", "Top 10 Modellnamen", charts.SERIES[0])}
+  {block("key", "Top 10 Schlüssel", charts.SERIES[6])}
+  {block("supplier", "Top 10 Bezugsquellen", charts.SERIES[2])}
+  <div class="card"><h2>Ausgänge</h2>{o_html}</div>
+</div>"""
+
+    body = "".join(config_cards()) + hero + chart + analysis + (
+        f'<p class="hint">Aktualisiert sich jede Minute · Stand {esc(now.astimezone(dash.LOCAL).strftime("%H:%M:%S"))} '
+        f'{esc(dash.LOCAL_NAME)} · Rechnungen und lange Zeiträume: <a href="auswertung">Auswertung</a></p>')
+    return page("Dashboard", body, user, roles, tab="dashboard", refresh=60)
+
+
+def _supply_chips():
+    by = {}
+    for s in SUPPLIERS.values():
+        by[s["light"]] = by.get(s["light"], 0) + 1
+    if not SUPPLIERS:
+        return '<a class="chips" href="quellen"><span class="badge off">keine Bezugsquelle</span></a>'
+    chips = "".join(f'<span class="badge {esc(l)}">{n} {esc(supply.LIGHT_LABELS.get(l, l).split(" — ")[0])}</span>'
+                    for l, n in sorted(by.items(), key=lambda kv: supply.LIGHT_RANK.get(kv[0], 9)))
+    return f'<a class="chips" href="quellen" title="Bezugsquellen ansehen und testen">{chips}</a>'
+
+
+REQUEST_LIMITS = ("50", "100", "200")
+
+
+def requests_page(user, roles, params):
+    filters = {d: params[d] for d in ("model", "key", "supplier") if params.get(d) not in (None, "", "*")}
+    state = params.get("ausgang", "*")
+    limit = params.get("anzahl", "50")
+    if limit not in REQUEST_LIMITS:
+        limit = "50"
+    where, args = dash._where("", None, filters)
+    if state == "ok":
+        where += f" AND {dash.ANSWERED}"
+    elif state == "fehler":
+        where += f" AND NOT ({dash.ANSWERED})"
+    else:
+        state = "*"
+    rows = list(DB.execute(
+        f"SELECT u.*, COALESCE(k.label, u.key_id) AS key_label {dash.FROM} WHERE {where} "
+        f"ORDER BY u.id DESC LIMIT ?", args + [int(limit)]))
+    since = ""
+    selects = []
+    for dim in ("key", "model", "supplier"):
+        vals = dash.values(DB, dim, since)
+        current = filters.get(dim, "*")
+        selects.append(f'<div><label for="r-{dim}">{esc(dash.DIMS[dim][1])}</label>'
+                       f'<select id="r-{dim}" name="{dim}"><option value="*">alle</option>'
+                       f'{options(vals, current, {v: v for v in vals})}</select></div>')
+    lines = []
+    for row in rows:
+        lines.append(
+            f'<tr><td class="muted nowrap" title="{esc(row["time"])} (UTC)">{esc(dash.local(row["time"]))}</td>'
+            f'<td>{esc(row["key_label"])}</td>'
+            f'<td><code>{esc(row["alias"])}</code></td>'
+            f'<td>{esc(row["supplier"] or "—")}<br>'
+            f'<span class="muted">{esc(row["model"] or "")}</span></td>'
+            f'<td class="num">{fmt_tokens(row["in_tokens"])} / {fmt_tokens(row["out_tokens"])}</td>'
+            f'<td class="num">{fmt_bytes(row["bytes_up"])} / {fmt_bytes(row["bytes_down"])}</td>'
+            f'<td class="num">{charts.fmt_num(row["ms"])} ms</td><td>{outcome_badge(row["outcome"])}</td></tr>')
+    body = f"""<div class="card">
+  <form class="grid" method="get" action="anfragen">
+    {"".join(selects)}
+    <div><label for="r-ausgang">Ausgang</label><select id="r-ausgang" name="ausgang">
+      {options(["*", "ok", "fehler"], state, {"*": "alle", "ok": "beantwortet", "fehler": "nicht beantwortet"})}</select></div>
+    <div><label for="r-anzahl">Anzahl</label><select id="r-anzahl" name="anzahl">
+      {options(list(REQUEST_LIMITS), limit, {v: v for v in REQUEST_LIMITS})}</select></div>
+    <div><button type="submit">Anzeigen</button></div>
+  </form>
+</div>
+<div class="card">
+  <p class="hint">Gezählt wird, nicht mitgeschrieben: Zeit, Schlüssel, Modellname,
+    <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher,
+    Dauer und Ausgang. Prompts und Antworten stehen in keiner Zeile und in keiner Datei.
+    Zeiten in {esc(dash.LOCAL_NAME)}.</p>
+  <div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Modellname</th><th>Quelle</th>
+    <th class="num">Token ein/aus</th><th class="num">Bytes ↑/↓</th><th class="num">Dauer</th><th>Ausgang</th></tr>{"".join(lines) or
+    '<tr><td colspan="8" class="muted">Keine Anfrage passt.</td></tr>'}</table></div>
+</div>"""
+    return page("Letzte Anfragen", body, user, roles, tab="anfragen")
+
+
+def keys_page(user, roles, host, notice="", secret=None):
+    parts = top_cards(notice, secret, host)
     totals = store.totals(DB)
     rows = []
     for row in store.keys(DB):
@@ -620,12 +931,12 @@ def admin_page(user, roles, host, notice="", secret=None):
         aliases = esc(row["aliases"]) if row["aliases"] else "alle"
         light = light_badge(ceiling_of(row), short=True) + " und besser"
         if pbd_of(row):
-            light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>' 
+            light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
         if row["revoked"]:
             state = '<span class="badge err">widerrufen</span>'
             action = ""
         else:
-            state = '<span class="badge">gültig</span>'
+            state = '<span class="badge green">gültig</span>'
             action = (f'<form method="post" action="revoke" style="margin:0">'
                       f'<input type="hidden" name="label" value="{esc(row["label"])}">'
                       f'<button class="quiet" type="submit">widerrufen</button></form>'
@@ -635,14 +946,15 @@ def admin_page(user, roles, host, notice="", secret=None):
                       f'{context_inputs(row, prefix=row["id"] + "-")}'
                       f'<div><button class="quiet" type="submit">speichern</button></div>'
                       f'</form></details>')
+        last = t["last"] if t else ""
         rows.append(
-            f'<tr><td><b>{esc(row["label"])}</b><br>'
+            f'<tr{" class=dim" if row["revoked"] else ""}><td><b>{esc(row["label"])}</b><br>'
             f'<span class="muted">{esc(context_line(row))}</span></td>'
             f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
-            f'<td>{budget}</td>'
-            f'<td>{t["calls"] if t else 0}<br><span class="muted">'
-            f'{esc(t["last"]) if t else "noch nie"}</span></td>'
-            f'<td>{fmt_bytes(t["bytes_up"] if t else 0)} / '
+            f'<td class="num">{budget}</td>'
+            f'<td class="num">{t["calls"] if t else 0}<br><span class="muted" title="{esc(last or "")}">'
+            f'{esc(dash.ago(last)) if last else "noch nie"}</span></td>'
+            f'<td class="num">{fmt_bytes(t["bytes_up"] if t else 0)} / '
             f'{fmt_bytes(t["bytes_down"] if t else 0)}</td>'
             f'<td>{action}</td></tr>')
     parts.append(f"""<div class="card">
@@ -652,9 +964,9 @@ def admin_page(user, roles, host, notice="", secret=None):
     stehen in der Prüfspur; einzelne Anfragen stehen dort nicht. Ein geänderter
     Kontext gilt <b>ab der nächsten Anfrage</b> — gezählte Anfragen behalten den,
     mit dem sie kamen.</p>
-  <table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
-    <th>Token</th><th>Aufrufe</th><th>Daten ↑/↓</th><th></th></tr>{"".join(rows) or
-    '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table>
+  <div class="scroll"><table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
+    <th class="num">Token</th><th class="num">Aufrufe</th><th class="num">Daten ↑/↓</th><th></th></tr>{"".join(rows) or
+    '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table></div>
 </div>""")
 
     alias_hint = ", ".join(sorted(ALIASES)) or "—"
@@ -688,36 +1000,11 @@ def admin_page(user, roles, host, notice="", secret=None):
     das voraussetzte, wäre ein Versprechen, das wir nicht halten können.</p>
 </div>""")
 
-    # --- Verbrauch
-    labels = {r["id"]: r["label"] for r in store.keys(DB)}
-    rows = []
-    for row in store.recent(DB, limit=40):
-        rows.append(
-            f'<tr><td class="muted">{esc(row["time"])}</td>'
-            f'<td>{esc(labels.get(row["key_id"], row["key_id"]))}</td>'
-            f'<td><code>{esc(row["alias"])}</code></td>'
-            f'<td>{esc(row["supplier"] or "—")}<br>'
-            f'<span class="muted">{esc(row["model"] or "")}</span></td>'
-            f'<td>{fmt_tokens(row["in_tokens"])} / {fmt_tokens(row["out_tokens"])}</td>'
-            f'<td>{fmt_bytes(row["bytes_up"])} / {fmt_bytes(row["bytes_down"])}</td>'
-            f'<td>{row["ms"]} ms</td><td>{esc(row["outcome"])}</td></tr>')
-    parts.append(f"""<div class="card">
-  <h2>Letzte Anfragen</h2>
-  <p class="hint">Gezählt wird, nicht mitgeschrieben: Zeit, Schlüssel, Alias,
-    <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher,
-    Dauer, Ausgang und der Kontext des Schlüssels zu diesem Zeitpunkt.
-    Prompts und Antworten stehen in keiner Zeile und in keiner Datei.</p>
-  <p><a class="btn" href="auswertung">Auswertung: Grafiken und Schnittstelle</a></p>
-  <table><tr><th>Zeit</th><th>Schlüssel</th><th>Alias</th><th>Quelle</th>
-    <th>Token ein/aus</th><th>Bytes ↑/↓</th><th>Dauer</th><th>Ausgang</th></tr>{"".join(rows) or
-    '<tr><td colspan="8" class="muted">Noch keine Anfrage.</td></tr>'}</table>
-</div>""")
-
     parts.append(f"""<div class="card">
   <h2>So verbindet sich ein Client</h2>
   <p class="hint">Jeder OpenAI-kompatible Client — LM Studio, ein IDE-Plugin,
-    eine Bibliothek. Die Modellliste zeigt <b>die Aliasse</b>; welche Quelle
-    antwortet, entscheidet dieses Gateway.</p>
+    eine Bibliothek, ein anderes KI-Gateway. Die Modellliste zeigt <b>die Aliasse</b>;
+    welche Quelle antwortet, entscheidet dieses Gateway.</p>
   <pre>Basis-Adresse : https://{esc(host)}/v1
 API-Key       : der ausgestellte Schlüssel
 Modell        : {esc(alias_hint)}
@@ -727,8 +1014,171 @@ curl https://{esc(host)}/v1/chat/completions \\
   -d '{{"model":"{esc(sorted(ALIASES)[0] if ALIASES else "chat-default")}",
        "messages":[{{"role":"user","content":"Hallo"}}]}}'</pre>
 </div>""")
+    return page("Schlüssel", "".join(parts), user, roles, tab="schluessel")
 
-    return page("Übersicht", "".join(parts), user, roles)
+
+def models_page(user, roles, notice="", tests=None):
+    parts = top_cards(notice) + config_cards()
+    if tests:
+        parts.append(tests)
+    parts.append(aliases_card())
+    return page("Modelle", "".join(parts), user, roles, tab="modelle")
+
+
+def sources_page(user, roles, notice="", tests=None):
+    parts = top_cards(notice) + config_cards()
+    if tests:
+        parts.append(tests)
+    parts.append(suppliers_card())
+    return page("Bezugsquellen", "".join(parts), user, roles, tab="quellen")
+
+
+# ---- Verbindungstests (0.6)
+
+PROBE_TIMEOUT = 15
+ALIAS_TEST_TIMEOUT = 60
+
+
+def probe_supplier(name):
+    """Ein Ping an eine Bezugsquelle: `GET …/models` mit ihren Zugangsdaten."""
+    src = SUPPLIERS.get(name)
+    via = destination_of(src["url"], bound_destinations()) if src else ""
+    if src is None:
+        return {"name": name, "status": None, "ms": 0, "ids": [], "via": via,
+                "error": "nicht nutzbar (Zugangsdaten nicht lesbar oder Eintrag fehlerhaft)"}
+    status, ms, ids, error = relay.probe(src, timeout=PROBE_TIMEOUT)
+    return {"name": name, "status": status, "ms": ms, "ids": ids, "error": error, "via": via}
+
+
+def probe_all(names):
+    results = [None] * len(names)
+
+    def run(i, n):
+        results[i] = probe_supplier(n)
+
+    threads = [threading.Thread(target=run, args=(i, n), daemon=True) for i, n in enumerate(names)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(PROBE_TIMEOUT + 5)
+    return [r or {"name": names[i], "status": 0, "ms": PROBE_TIMEOUT * 1000, "ids": [],
+                  "error": "keine Antwort", "via": ""} for i, r in enumerate(results)]
+
+
+def probe_verdict(r):
+    """(Klasse, Satz, Rat) für ein Testergebnis — in Worten, nicht nur Zahlen."""
+    s, via = r["status"], r["via"]
+    said = r.get("error") or ""
+    # Was die Plattform auf dem Weg durch einen Tunnel sagt
+    # (services/connect, gemessen 13.11. auf oaap-test): fehlendes Angebot = 404
+    # "The inner node does not offer ... on this tunnel", Tunnel weg = 502.
+    if s == 404 and ("does not offer" in said or "is not offered by the inner node" in said):
+        return ("critical", f"der Tunnel steht, aber der innere Knoten bietet das Ziel nicht an "
+                            f"(HTTP 404, {charts.fmt_num(r['ms'])} ms)",
+                "Auf dem inneren Knoten im Portal unter Connector das Angebot anlegen — "
+                "Name wie im <code>via:&lt;tunnel&gt;/&lt;angebot&gt;</code> der Destination, "
+                "Ziel ohne <code>/v1</code>.")
+    if s == 502 and ("is not connected" in said or "There is no tunnel" in said):
+        return ("critical", f"der Tunnel ist nicht verbunden (HTTP 502, {charts.fmt_num(r['ms'])} ms)",
+                "Auf dem inneren Knoten im Portal unter Connector nachsehen: angelegt, nicht "
+                "pausiert, Schlüssel gültig? Auf dem äußeren Knoten: Schlüssel für diesen "
+                "Mandanten ausgestellt?")
+    where = (f" Die Quelle läuft über die Destination <code>{esc(via)}</code>: im Portal unter "
+             f"Destinationen die Anmeldung und unter Connector Tunnel und Angebot prüfen."
+             if via else "")
+    if s is None:
+        return "critical", esc(said), ""
+    if s == 0:
+        return ("critical", f"nicht erreichbar — {esc(said)}",
+                "Adresse und Netz prüfen; eine Quelle auf demselben Knoten braucht eine "
+                "App-zu-App-Verbindung oder eine Destination." + where)
+    if 200 <= s < 300:
+        n = len(r["ids"])
+        shown = ", ".join(r["ids"][:8]) + (" …" if n > 8 else "")
+        return ("good", f"erreichbar — HTTP {s} in {charts.fmt_num(r['ms'])} ms"
+                        + (f" · {n} Modell{'e' if n != 1 else ''}: <code>{esc(shown)}</code>" if n else
+                           " · die Quelle nennt keine Modelle"), "")
+    if s in (401, 403):
+        return ("serious", f"erreichbar, aber die Anmeldung wurde abgelehnt (HTTP {s}, "
+                           f"{charts.fmt_num(r['ms'])} ms)",
+                "Der Weg steht. Zugangsdaten prüfen — bei einem anderen KI-Gateway: dessen "
+                "API-Schlüssel." + where)
+    if s == 404:
+        return ("warning", f"erreichbar, aber <code>…/models</code> ist unbekannt (HTTP 404)",
+                "Adresse bis <code>/v1</code> prüfen — und kein doppeltes <code>/v1</code>: "
+                "Endet ein Connector-Angebot schon auf <code>/v1</code>, wird daraus "
+                "<code>/v1/v1</code>. Manche Quellen haben keine Modellliste — dann zeigt der "
+                "Test eines Modellnamens (Reiter Modelle), ob sie antwortet." + where)
+    if s in (502, 503, 504):
+        return ("critical", f"die Gegenstelle antwortet nicht (HTTP {s}, {charts.fmt_num(r['ms'])} ms)",
+                ("Die Plattform erreicht das Ziel hinter der Destination nicht — ist der Tunnel "
+                 "verbunden und das Angebot angelegt?" + where) if via else
+                "Die Quelle oder ein Proxy davor ist gestört.")
+    return ("warning", f"antwortet mit HTTP {s} ({charts.fmt_num(r['ms'])} ms)", where)
+
+
+def probe_card(results, title="Verbindungstest"):
+    rows = []
+    for r in results:
+        cls, text, advice = probe_verdict(r)
+        mark = charts.STATUS[cls][1]
+        rows.append(f'<div class="probe {cls}"><span class="pm">{mark}</span><div>'
+                    f'<b>{esc(r["name"])}</b> — {text}'
+                    f'{f"<br><span class=muted>{advice}</span>" if advice else ""}</div></div>')
+    stamp_ = datetime.now(timezone.utc).astimezone(dash.LOCAL).strftime("%H:%M:%S")
+    return (f'<div class="card"><div class="cardhead"><h2>{esc(title)}</h2>'
+            f'<span class="muted">{stamp_}</span></div>{"".join(rows)}'
+            f'<p class="hint" style="margin:.6rem 0 0">Gefragt wurde nach der Modellliste — '
+            f'ein Ping, der auch die Anmeldung prüft, aber nichts rechnen lässt.</p></div>')
+
+
+def test_alias(name):
+    """Ein Modellname, Ziel für Ziel: eine Mini-Anfrage („ping“, höchstens 1 Token).
+
+    Nicht in den Verbrauch gezählt — es gibt keinen Schlüssel, dem er gehört.
+    Die Quelle selbst zählt ihn (wenige Token).
+    """
+    alias = ALIASES.get(name)
+    if alias is None:
+        return [{"target": name, "cls": "critical", "text": "gibt es nicht (mehr)"}]
+    out = []
+    for target in alias["targets"]:
+        src = SUPPLIERS.get(target["supplier"])
+        label = f'{target["supplier"]} · {target["model"]}'
+        if src is None:
+            out.append({"target": label, "cls": "critical", "text": "Quelle nicht nutzbar"})
+            continue
+        started = time.monotonic()
+        up, counts = relay.call_json(src, "/v1/chat/completions",
+                                     {"model": target["model"], "max_tokens": 1, "stream": False,
+                                      "messages": [{"role": "user", "content": "ping"}]},
+                                     timeout=ALIAS_TEST_TIMEOUT)
+        ms = int((time.monotonic() - started) * 1000)
+        if 200 <= up.status < 300:
+            tok = (f" · {counts[0]} + {counts[1]} Token" if counts[0] is not None else "")
+            out.append({"target": label, "cls": "good",
+                        "text": f"antwortet — HTTP {up.status} in {charts.fmt_num(ms)} ms{tok}"})
+        elif up.status == 0:
+            out.append({"target": label, "cls": "critical",
+                        "text": f"nicht erreichbar — {esc(up.error[:200])}"})
+        else:
+            hint = {401: "Anmeldung abgelehnt", 403: "Anmeldung abgelehnt",
+                    404: "Modell oder Pfad unbekannt", 400: "Anfrage abgelehnt — "
+                    "ist es ein Chat-Modell? Ein Embedding-Modell antwortet hier nicht"}.get(up.status, "")
+            out.append({"target": label, "cls": "serious" if up.status < 500 else "critical",
+                        "text": f"HTTP {up.status} in {charts.fmt_num(ms)} ms"
+                                + (f" — {hint}" if hint else "")})
+    return out
+
+
+def alias_test_card(name, results):
+    rows = "".join(
+        f'<div class="probe {r["cls"]}"><span class="pm">{charts.STATUS[r["cls"]][1]}</span>'
+        f'<div><code>{esc(r["target"])}</code> — {r["text"]}</div></div>' for r in results)
+    return (f'<div class="card"><h2>Test „{esc(name)}“</h2>{rows}'
+            f'<p class="hint" style="margin:.6rem 0 0">Jedes Ziel bekam eine Mini-Anfrage '
+            f'(„ping“, höchstens 1 Token). Sie zählt nicht in den Verbrauch dieses Gateways; '
+            f'die Quelle zählt sie.</p></div>')
 
 
 # ------------------------------------------------------------ Auswertung
@@ -844,9 +1294,7 @@ def charts_page(user, roles, host, params):
         ("Token aus", charts.fmt_num(t["out_tokens"])),
         ("Bytes hoch", charts.fmt_metric(t["bytes_up"], "bytes_up")),
         ("Bytes runter", charts.fmt_metric(t["bytes_down"], "bytes_down"))))
-    body = f"""<p><a href="./">← Übersicht</a></p>
-<h1>Auswertung</h1>
-<p class="hint">Nur intern. Volumen, keine Preise. Gruppiert wird nach dem Kontext, den ein
+    body = f"""<p class="hint">Nur intern. Volumen, keine Preise. Gruppiert wird nach dem Kontext, den ein
   Schlüssel <b>zum Zeitpunkt der Anfrage</b> hatte; die Zeit einer Anfrage ist ihr Ende (UTC).</p>
 {form}
 {f'<div class="card attention"><ul>{notes}</ul></div>' if notes else ''}
@@ -879,7 +1327,7 @@ def charts_page(user, roles, host, params):
   <pre>curl -H "Authorization: Bearer $OAAP_API_KEY" \\
   "https://{esc(host)}/report/v1/usage?{esc(api_qs)}"</pre>
 </div>"""
-    return page("Auswertung", body, user, roles)
+    return page("Auswertung", body, user, roles, tab="auswertung")
 
 
 # --------------------------------------------------------------- HTTP
@@ -1050,12 +1498,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
+        params = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
         if path == "/auswertung":
-            query = self.path.partition("?")[2]
-            self.send_html(200, charts_page(user, roles, host,
-                                            dict(parse_qsl(query, keep_blank_values=True))))
-            return
-        self.send_html(200, admin_page(user, roles, host))
+            self.send_html(200, charts_page(user, roles, host, params))
+        elif path == "/anfragen":
+            self.send_html(200, requests_page(user, roles, params))
+        elif path == "/schluessel":
+            self.send_html(200, keys_page(user, roles, host))
+        elif path == "/modelle":
+            self.send_html(200, models_page(user, roles))
+        elif path == "/quellen":
+            self.send_html(200, sources_page(user, roles))
+        elif path == "/":
+            self.send_html(200, dashboard_page(user, roles, host, params))
+        else:
+            self.send_html(404, page("Unbekannt", '<div class="card"><p>Diese Seite gibt es '
+                                     'nicht. <a href="./">Zum Dashboard</a></p></div>',
+                                     user, roles, tab="dashboard"))
 
     def handle_report(self, path):
         """`/report/v1/…` — für ein Abrechnungssystem, nicht für einen Browser (RFC-0064 §6).
@@ -1107,7 +1566,7 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_inference(path)
             return
         if path in ("/issue", "/revoke", "/context", "/supplier", "/supplier-delete",
-                    "/alias", "/alias-delete"):
+                    "/alias", "/alias-delete", "/supplier-test", "/alias-test"):
             self.handle_admin_post(path)
             return
         self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
@@ -1138,6 +1597,22 @@ class Handler(BaseHTTPRequestHandler):
             multi.setdefault(name, []).append(value)
 
         notice, secret = "", None
+        if path == "/supplier-test":
+            name = form.get("name", "")
+            names = sorted(SUPPLIERS) if name == "*" else [name]
+            if not names:
+                self.send_html(200, sources_page(user, roles,
+                                                 notice="Noch keine Bezugsquelle zum Testen."))
+                return
+            title = "Verbindungstest" + ("" if name == "*" else f" „{name}“")
+            self.send_html(200, sources_page(user, roles,
+                                             tests=probe_card(probe_all(names), title)))
+            return
+        if path == "/alias-test":
+            name = form.get("name", "")
+            self.send_html(200, models_page(user, roles,
+                                            tests=alias_test_card(name, test_alias(name))))
+            return
         if path == "/issue":
             ceiling = form.get("ceiling") or supply.DEFAULT_CEILING
             if ceiling not in supply.LIGHT_RANK:
@@ -1177,7 +1652,12 @@ class Handler(BaseHTTPRequestHandler):
             notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."
                       if store.revoke(DB, label, user)
                       else f"Nichts zu widerrufen: „{label}“ ist unbekannt oder schon widerrufen.")
-        self.send_html(200, admin_page(user, roles, host, notice=notice, secret=secret))
+        if path in ("/supplier", "/supplier-delete"):
+            self.send_html(200, sources_page(user, roles, notice=notice))
+        elif path in ("/alias", "/alias-delete"):
+            self.send_html(200, models_page(user, roles, notice=notice))
+        else:
+            self.send_html(200, keys_page(user, roles, host, notice=notice, secret=secret))
 
     def change_supply(self, path, form, user):
         """Bezugsquellen und Modellnamen ändern — wirksam ohne Neustart."""

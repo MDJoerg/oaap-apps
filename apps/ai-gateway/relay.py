@@ -88,6 +88,48 @@ def call(supplier, path, payload, timeout=READ_TIMEOUT, stream=False):
     return Upstream(resp.status, ctype, body)
 
 
+def probe(supplier, timeout=15):
+    """Verbindungstest (0.6): `GET …/models` bei der Quelle -- ein Ping, der
+    auch die Anmeldung prüft, aber kein Modell rechnen lässt und nichts kostet.
+
+    Gibt (status, ms, model_ids, error) zurück. Wie überall hier: nie die
+    Zugangsdaten, und bei einem Fehler nur seine Art. Bei einer HTTP-Ablehnung
+    ist `error` der Anfang ihres Rumpfs (höchstens 300 Zeichen): Die Plattform
+    sagt dort, ob ein Tunnel fehlt oder ein Angebot (oaap.net.connector).
+    """
+    import time
+    url = upstream_url(supplier["url"], "/v1/models")
+    headers = {"Accept": "application/json"}
+    if supplier.get("credential"):
+        headers["Authorization"] = "Bearer " + supplier["credential"]
+    started = time.monotonic()
+    try:
+        resp = urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                      timeout=timeout)
+        body = resp.read(2 * 1024 * 1024)
+        status = resp.status
+        resp.close()
+    except urllib.error.HTTPError as exc:
+        try:
+            said = exc.read(300).decode("utf-8", "replace")
+        except Exception:
+            said = ""
+        return exc.code, int((time.monotonic() - started) * 1000), [], said
+    except Exception as exc:
+        reason = getattr(exc, "reason", None)
+        kind = type(reason).__name__ if reason is not None else type(exc).__name__
+        text = str(reason if reason is not None else exc)
+        return 0, int((time.monotonic() - started) * 1000), [], f"{kind}: {text}"[:200]
+    ms = int((time.monotonic() - started) * 1000)
+    doc = _safe_json(body)
+    ids = []
+    if isinstance(doc, dict) and isinstance(doc.get("data"), list):
+        ids = [str(m.get("id")) for m in doc["data"] if isinstance(m, dict) and m.get("id")]
+    elif isinstance(doc, dict) and isinstance(doc.get("models"), list):     # Ollama /api/tags
+        ids = [str(m.get("name")) for m in doc["models"] if isinstance(m, dict) and m.get("name")]
+    return status, ms, ids, ""
+
+
 def call_json(supplier, path, payload, timeout=READ_TIMEOUT):
     """Nicht-Strom-Fall: Antwort plus Token-Zahlen aus `usage`."""
     up = call(supplier, path, payload, timeout=timeout, stream=False)

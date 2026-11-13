@@ -56,6 +56,22 @@ class FakeHandler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_GET(self):
+        Fake.calls.append({"path": self.path, "body": None,
+                           "auth": self.headers.get("Authorization", "")})
+        if self.path != "/v1/models":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = json.dumps({"object": "list", "data": [
+            {"id": "klein"}, {"id": "fern-modell"}, {"id": "eu-modell"}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
@@ -702,6 +718,135 @@ finally:
     os.environ.update(old_env)
 check("die Karte Bezugsquellen zeigt den Abschnitt, wenn die App bearbeitbar ist",
       ("Aus Destinationen der Plattform" in card) == (app.MODE == "app"), app.MODE)
+
+print("\n-- 0.6 Reiter: Dashboard, Letzte Anfragen, Auswertung, Schlüssel, Modelle, Bezugsquellen")
+REITER = ["Dashboard", "Letzte Anfragen", "Auswertung", "Schlüssel", "Modelle", "Bezugsquellen"]
+for pfad in ("/", "/anfragen", "/auswertung", "/schluessel", "/modelle", "/quellen"):
+    status, body, _ = call(pfad, admin=True)
+    seite = body.decode("utf-8")
+    nav = seite.split('<nav class="tabs"')[1].split("</nav>")[0] if '<nav class="tabs"' in seite else ""
+    check(f"{pfad} antwortet mit allen Reitern in der Reihenfolge",
+          status == 200 and [seite_ for seite_ in REITER if seite_ in nav] == REITER
+          and all(nav.index(REITER[i]) < nav.index(REITER[i + 1]) for i in range(5)), status)
+    check(f"{pfad}: genau ein Reiter ist markiert", nav.count('class="on"') == 1)
+    status, _, _ = call(pfad)
+    check(f"{pfad} bleibt der Serververwaltung vorbehalten", status == 403, status)
+status, _, _ = call("/gibtsnicht", admin=True)
+check("eine unbekannte Seite ist 404, kein Dashboard", status == 404, status)
+
+print("\n-- 0.6 Dashboard: Kacheln aus denselben Messzeilen")
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz  # noqa: E402
+import dash  # noqa: E402
+jetzt = _dt.now(_tz.utc)
+erwartet = app.DB.execute("SELECT COUNT(*) AS n FROM usage WHERE time >= ?",
+                          (dash.stamp(jetzt - _td(hours=24)),)).fetchone()["n"]
+status, body, _ = call("/", admin=True)
+seite = body.decode("utf-8")
+kachel = seite.split("Anfragen · 24 h</span>")[1].split("<b>")[1].split("</b>")[0]
+check("die Kachel „Anfragen · 24 h“ = Zeilen der letzten 24 Stunden",
+      kachel == f"{erwartet:,}".replace(",", "."), (kachel, erwartet))
+check("das Dashboard zeichnet den Stundenverlauf und vier Ranglisten",
+      seite.count("<rect") >= 1 and "Top 10 Modellnamen" in seite and "Top 10 Schlüssel" in seite
+      and "Top 10 Bezugsquellen" in seite and "Ausgänge" in seite)
+check("es aktualisiert sich selbst", 'http-equiv="refresh"' in seite)
+check("das Dashboard nennt die Übernahme aus der Konfiguration weiter",
+      "Aus der Konfiguration übernommen" in seite)
+status, body, _ = call("/?fenster=30d&mass=tokens&model=chat-default", admin=True)
+seite = body.decode("utf-8")
+check("Fenster, Maß und Filter werden übernommen",
+      status == 200 and 'class="pill on" href="./?mass=tokens&amp;model=chat-default&amp;fenster=30d"' in seite
+      and "gefiltert" in seite, seite[:0])
+rows, _ = dash.top(app.DB, "", "model", "calls", {"model": "chat-default"})
+check("die Rangliste mit Filter nennt nur den gefilterten Namen",
+      [n for n, _ in rows] == ["chat-default"], rows)
+status, body, _ = call("/?fenster=99y&mass=preis", admin=True)
+check("Unsinn in der Auswahl fällt auf die Vorgabe zurück, kein Absturz",
+      status == 200 and 'class="pill on" href="./?mass=calls&amp;fenster=4h"' in body.decode("utf-8"))
+check("ms-Rangliste ohne Prozentanteil",
+      "<small>" not in dash.bar_list([("a", 120)], False, str, share=False))
+check("ago: gerade eben / vor Min / noch nie",
+      dash.ago(dash.stamp(jetzt), jetzt) == "gerade eben"
+      and dash.ago(dash.stamp(jetzt - _td(minutes=7)), jetzt) == "vor 7 Min"
+      and dash.ago(None) == "noch nie")
+stunden = dash.hourly(app.DB, 24, jetzt)
+check("24 Stundenfächer, die Summe = Zeilen der letzten 24 h (bis auf die angebrochene erste Stunde)",
+      len(stunden) == 24 and 0 < sum(h["calls"] for h in stunden) <= erwartet)
+
+print("\n-- 0.6 Letzte Anfragen mit Filter")
+status, body, _ = call("/anfragen?ausgang=fehler&anzahl=200", admin=True)
+seite = body.decode("utf-8")
+fehler = app.DB.execute("SELECT COUNT(*) AS n FROM usage WHERE outcome NOT LIKE 'ok%'").fetchone()["n"]
+check("nur nicht beantwortete Zeilen", status == 200
+      and seite.count("<tr><td class=\"muted nowrap\"") == min(fehler, 200)
+      and "beantwortet, mit Token-Zahlen</span>" not in seite, (fehler,))
+status, body, _ = call("/anfragen?model=nur-lokal", admin=True)
+seite = body.decode("utf-8")
+check("Filter nach Modellname", "<code>chat-default</code>" not in seite.split("<table>")[1])
+check("kein Prompt auf der Seite", PROMPT not in seite)
+
+print("\n-- 0.6 Verbindungstest einer Bezugsquelle")
+Fake.calls.clear()
+status, body, _ = call("/supplier-test", "POST", admin=True, form="name=fern")
+seite = body.decode("utf-8")
+check("Test antwortet auf dem Reiter Bezugsquellen", status == 200
+      and 'class="on" aria-current="page">Bezugsquellen' in seite, status)
+check("erreichbar, mit Modellliste", "erreichbar — HTTP 200" in seite and "fern-modell" in seite,
+      seite[seite.find("Verbindungstest"):][:300])
+check("die Quelle wurde mit GET /v1/models und ihren Zugangsdaten gefragt",
+      [c["path"] for c in Fake.calls] == ["/v1/models"] and Fake.calls[0]["auth"] == "Bearer " + GEHEIM,
+      Fake.calls)
+check("die Zugangsdaten stehen nicht auf der Seite", GEHEIM not in seite)
+status, body, _ = call("/supplier-test", "POST", admin=True, form="name=*")
+seite = body.decode("utf-8")
+check("Alle testen fragt jede Quelle", all(f"<b>{n}</b>" in seite for n in ("eusrc", "fern", "lokal")))
+app.SUPPLIERS["tot"] = {"name": "tot", "url": "http://127.0.0.1:9/v1", "light": "green",
+                        "credential": ""}
+status, body, _ = call("/supplier-test", "POST", admin=True, form="name=tot")
+seite = body.decode("utf-8")
+check("eine tote Quelle: nicht erreichbar, mit Art des Fehlers", "nicht erreichbar" in seite,
+      seite[seite.find("Verbindungstest"):][:300])
+del app.SUPPLIERS["tot"]
+cls, text, advice = app.probe_verdict({"name": "intern", "status": 403, "ms": 50, "ids": [],
+                                       "error": "", "via": "intern"})
+check("403 heißt: Weg steht, Anmeldung falsch — mit Verweis auf Destination und Connector",
+      cls == "serious" and "Anmeldung" in text and "Connector" in advice)
+cls, text, advice = app.probe_verdict({"name": "intern", "status": 502, "ms": 50, "ids": [],
+                                       "error": "", "via": "intern"})
+check("502 über eine Destination: Tunnel und Angebot prüfen", cls == "critical" and "Tunnel" in advice)
+cls, _, advice = app.probe_verdict({"name": "x", "status": 404, "ms": 5, "ids": [], "error": "",
+                                    "via": ""})
+check("404: Adresse bis /v1 prüfen", cls == "warning" and "/v1" in advice)
+cls, text, advice = app.probe_verdict({"name": "intern", "status": 404, "ms": 30, "ids": [],
+                                       "error": "The inner node does not offer 'mg' on this "
+                                                "tunnel (oaap connect offers selftest).",
+                                       "via": "intern"})
+check("404 der Plattform „not offered“: Angebot fehlt, nicht die Adresse",
+      cls == "critical" and "bietet das Ziel nicht an" in text and "Angebot" in advice)
+cls, text, _ = app.probe_verdict({"name": "intern", "status": 502, "ms": 30, "ids": [],
+                                  "error": "The tunnel 'oaapi01' is not connected -- the inner",
+                                  "via": "intern"})
+check("502 der Plattform „not connected“: Tunnel nicht verbunden",
+      cls == "critical" and "Tunnel ist nicht verbunden" in text)
+status, body, _ = call("/supplier-test", "POST", admin=False, form="name=fern")
+check("der Test bleibt der Serververwaltung vorbehalten", status == 403, status)
+check("im Reiter steht je Quelle ein Testknopf und „Alle testen“",
+      app.suppliers_card().count('action="supplier-test"') == len(app.SUPPLIERS) + 1)
+
+print("\n-- 0.6 Test eines Modellnamens: eine Mini-Anfrage je Ziel")
+Fake.calls.clear()
+vorher = app.DB.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"]
+status, body, _ = call("/alias-test", "POST", admin=True, form="name=chat-default")
+seite = body.decode("utf-8")
+check("Test antwortet auf dem Reiter Modelle",
+      status == 200 and 'aria-current="page">Modelle' in seite, status)
+check("jedes Ziel antwortet", seite.count("antwortet — HTTP 200") == 2, seite[:0])
+check("je Ziel eine Anfrage mit höchstens einem Token und dem Modell der Quelle",
+      [c["body"]["model"] for c in Fake.calls] == ["fern-modell", "eu-modell"]
+      and all(c["body"]["max_tokens"] == 1 for c in Fake.calls), Fake.calls)
+check("der Test zählt nicht in den Verbrauch",
+      app.DB.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == vorher)
+status, body, _ = call("/alias-test", "POST", admin=True, form="name=gibtsnicht")
+check("ein unbekannter Name: Meldung statt Absturz", status == 200 and "gibt es nicht" in body.decode())
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")
