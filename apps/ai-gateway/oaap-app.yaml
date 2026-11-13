@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.5.4
+  version: 0.5.5
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -101,6 +101,19 @@ config:
   - key: AIGW_TIMEOUT_SECONDS
     label: "Geduld gegenüber der Bezugsquelle in Sekunden (10–3600)"
     default: "600"
+
+destinations:
+  # Seit 0.5.5 (oaap.net.destinations 0.3, `any: true`): Bezugsquellen,
+  # die die PLATTFORM erreicht -- ein Gaming-PC hinter einem VPN-Client
+  # (`through:`), das KI-Gateway eines inneren Knotens hinter dem Connector
+  # (`via:`), ein Anbieter, dessen Schlüssel beim Betreiber bleibt. Beliebig
+  # viele, jede unter ihrem eigenen Namen: Die App liest
+  # OAAP_DESTINATION_<NAME>_URL und bietet sie unter „Bezugsquellen“ an. Die
+  # Anmeldung ergänzt die Plattform; die App sieht den Schlüssel nie.
+  - name: supplier
+    kind: http
+    any: true
+    purpose: "Bezugsquellen über die Plattform (Tunnel, Connector, Anbieter)"
 
 health:
   path: /healthz

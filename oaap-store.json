@@ -211,8 +211,8 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.5.4",
-      "released": "2026-11-11",
+      "version": "0.5.5",
+      "released": "2026-11-13",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/ai-gateway"
@@ -698,7 +698,7 @@
       "id": "vpn-client",
       "name": "VPN-Client",
       "type": "native",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "released": "2026-11-13",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

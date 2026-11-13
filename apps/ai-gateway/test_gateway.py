@@ -673,6 +673,36 @@ check("Widerrufen steht drin", "key.revoke" in actions)
 check("einzelne Anfragen stehen nicht drin",
       not any(a.startswith("request") or a == "call" for a in actions), actions)
 
+print("\n-- 0.5.5 Bezugsquellen aus Destinationen der Plattform (any: true)")
+env = {"OAAP_DESTINATION_GAMINGPC_URL": "http://oaap-gateway-1:8098/destinations/gamingpc/",
+       "OAAP_DESTINATION_INTERN_KI_URL": "http://oaap-gateway-1:8098/destinations/intern-ki",
+       "OAAP_DESTINATION_X_URL": "ftp://nein", "OAAP_INSTANCE_NAMES": "https://x"}
+dests = app.bound_destinations(env)
+check("gebundene Destinationen werden gelesen, Name klein mit Bindestrich, Basis endet auf /",
+      dests == [("gamingpc", "http://oaap-gateway-1:8098/destinations/gamingpc/"),
+                ("intern-ki", "http://oaap-gateway-1:8098/destinations/intern-ki/")], dests)
+check("eine Adresse unter der Destination wird ihr zugeordnet",
+      app.destination_of("http://oaap-gateway-1:8098/destinations/gamingpc/v1", dests) == "gamingpc")
+check("eine fremde Adresse nicht",
+      app.destination_of("http://oaap-gateway-1:8098/destinations/gamingpcx/v1", dests) == "")
+html_ = app.destinations_form([("gpc", "http://oaap-gateway-1:8098/destinations/gamingpc/v1",
+                                "yellow", False, True)], dests)
+check("eine schon genutzte Destination wird nicht noch einmal angeboten, die andere schon",
+      'value="gamingpc"' not in html_ and 'value="intern-ki"' in html_
+      and "destinations/intern-ki/v1" in html_, html_[:300])
+check("vorgeschlagen ist gelb, und es gibt kein Feld für Zugangsdaten",
+      'value="yellow" checked' in html_ and 'name="credential"' not in html_)
+check("ohne Destination kein Abschnitt", app.destinations_form([], []) == "")
+old_env = dict(os.environ)
+os.environ.update(env)
+try:
+    card = app.suppliers_card()
+finally:
+    os.environ.clear()
+    os.environ.update(old_env)
+check("die Karte Bezugsquellen zeigt den Abschnitt, wenn die App bearbeitbar ist",
+      ("Aus Destinationen der Plattform" in card) == (app.MODE == "app"), app.MODE)
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

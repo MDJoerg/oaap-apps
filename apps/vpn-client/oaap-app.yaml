@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.1.4
+  version: 0.1.5
   type: native
   class: service
   description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
@@ -50,7 +50,7 @@ config:
   # den Schlüssel des Ziels trägt die Destination (RFC-0060 D5). Für jede
   # IP-Adresse legt die App genau eine Route in den Tunnel.
   - key: VPN_TARGETS
-    label: "Ziele hinter dem Tunnel (name = http://adresse), eines je Zeile"
+    label: "Ziele hinter dem Tunnel, eines je Zeile — z. B. gamingpc = http://10.8.0.1:11434 (IP-Adresse im VPN, Port des Dienstes)"
     multiline: true
     default: ""
   - key: VPN_KIND

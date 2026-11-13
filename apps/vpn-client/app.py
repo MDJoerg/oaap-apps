@@ -45,7 +45,7 @@ IDENTITY_PREFIX = "x-oaap-"
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host",
        "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded"}
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 
 try:
     TIMEOUT = max(10, min(3600, int(os.environ.get("VPN_TIMEOUT_SECONDS") or 600)))

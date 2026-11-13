@@ -33,6 +33,7 @@ nach stdout, Gesundheitspfad, nur Standardbibliothek.
 import html
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -48,7 +49,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.5.2"
+VERSION = "0.5.5"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -459,8 +460,57 @@ def aliases_card():
 </div>"""
 
 
+DEST_ENV = re.compile(r"^OAAP_DESTINATION_([A-Z0-9_]+)_URL$")
+
+
+def bound_destinations(env=None):
+    """[(name, url)] -- the destinations the platform bound to this instance
+    (oaap.net.destinations; manifest `any: true`, 0.5.5). The platform adds
+    the credential on the way, so a supplier made from one needs none here."""
+    out = []
+    for k, v in sorted((env if env is not None else os.environ).items()):
+        m = DEST_ENV.match(k)
+        if m and v.startswith(("http://", "https://")):
+            out.append((m.group(1).lower().replace("_", "-"), v if v.endswith("/") else v + "/"))
+    return out
+
+
+def destination_of(url, dests):
+    """The name of the bound destination a supplier's address leads through, or ""."""
+    for name, base in dests:
+        if (url.rstrip("/") + "/").startswith(base):
+            return name
+    return ""
+
+
+def destinations_form(rows, dests):
+    """One small form per bound destination not yet used by a supplier."""
+    used = {destination_of(r[1], dests) for r in rows}
+    forms = []
+    for name, base in dests:
+        if name in used:
+            continue
+        forms.append(
+            f'<form class="grid" method="post" action="supplier" style="margin-top:.6rem">'
+            f'<div><label>Name</label><input name="name" type="text" value="{esc(name)}" required></div>'
+            f'<div><label>Adresse (Destination <code>{esc(name)}</code>, bis /v1)</label>'
+            f'<input name="url" type="text" value="{esc(base)}v1" required></div>'
+            f'{light_radios("yellow", "dest-" + name)}'
+            f'<div><button type="submit">Als Bezugsquelle anlegen</button></div></form>')
+    if not dests:
+        return ""
+    head = ('<h2 style="margin-top:1.2rem">Aus Destinationen der Plattform</h2>'
+            '<p class="hint">Diese Ziele hat der Betreiber dieser Instanz zugeordnet (Portal → '
+            'Instanz → Netz → Destinationen). Die Plattform meldet sich dort an — hier sind '
+            '<b>keine Zugangsdaten</b> nötig. Die Ampel wählst du: Sie sagt, was mit den Daten '
+            'hinter dem Ziel geschehen kann.</p>')
+    return head + ("".join(forms) or '<p class="muted">Jede zugeordnete Destination ist '
+                   'schon Bezugsquelle.</p>')
+
+
 def suppliers_card():
     editable = MODE == "app"
+    dests = bound_destinations()
     rows = []
     if editable:
         entries = [(r["name"], r["url"], r["light"], bool(r["credential"]),
@@ -469,7 +519,10 @@ def suppliers_card():
         entries = [(n, s["url"], s["light"], bool(s["credential"]), True)
                    for n, s in sorted(SUPPLIERS.items())]
     for name, url, light, has_cred, usable in entries:
-        cred = ("hinterlegt" if has_cred else '<span class="muted">keine (z. B. lokal)</span>')
+        via = destination_of(url, dests)
+        cred = ("hinterlegt" if has_cred else
+                f'<span class="muted">meldet die Plattform an (Destination {esc(via)})</span>' if via else
+                '<span class="muted">keine (z. B. lokal)</span>')
         if not usable:
             cred = '<span class="badge err">nicht lesbar</span>'
         action = ""
@@ -512,7 +565,8 @@ def suppliers_card():
   </form>
   <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <b>rot</b> — unbekannte Herkunft
     ist nicht souverän. Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
-    erreichbar (<code>oaap app link add</code>).</p>"""
+    erreichbar (<code>oaap app link add</code>).</p>
+  {destinations_form(entries, dests)}"""
     return f"""<div class="card">
   <h2>Bezugsquellen</h2>
   <p class="hint">Zugangsdaten werden nur verschlüsselt gespeichert, lassen sich setzen
