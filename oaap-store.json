@@ -211,7 +211,7 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "released": "2026-11-13",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

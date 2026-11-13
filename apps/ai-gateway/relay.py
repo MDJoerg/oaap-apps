@@ -59,10 +59,31 @@ def upstream_url(base, path):
     return base + path
 
 
+SAMPLING = ("temperature", "top_p", "top_k")
+
+
+def is_anthropic(url):
+    """Die OpenAI-kompatible Tür von Anthropic (api.anthropic.com/v1)."""
+    return "//api.anthropic.com" in (url or "")
+
+
+def outgoing(supplier, payload):
+    """Was die Quelle bekommt: ohne Sampling-Parameter, wenn sie sie ablehnt.
+
+    Neuere Claude-Modelle antworten auf `temperature` (außer 1) und `top_p`
+    mit 400 — viele Clients (LM Studio, IDE-Plugins, n8n) schicken sie
+    trotzdem mit. Weggelassen wird nur, was die Quelle ablehnt; den Inhalt
+    fasst das nicht an (Spec §6).
+    """
+    if not (supplier.get("drop_sampling") or is_anthropic(supplier.get("url"))):
+        return payload
+    return {k: v for k, v in payload.items() if k not in SAMPLING}
+
+
 def call(supplier, path, payload, timeout=READ_TIMEOUT, stream=False):
     """Eine Anfrage an eine Bezugsquelle. Wirft nicht, sondern berichtet."""
     url = upstream_url(supplier["url"], path)
-    data = json.dumps(payload).encode("utf-8")
+    data = json.dumps(outgoing(supplier, payload)).encode("utf-8")
     headers = {"Content-Type": "application/json", "Accept": "*/*"}
     if supplier.get("credential"):
         headers["Authorization"] = "Bearer " + supplier["credential"]
@@ -102,6 +123,12 @@ def probe(supplier, timeout=15):
     headers = {"Accept": "application/json"}
     if supplier.get("credential"):
         headers["Authorization"] = "Bearer " + supplier["credential"]
+    if is_anthropic(supplier["url"]):
+        # Die Modellliste von Anthropic verlangt die Version (gemessen
+        # 13.11.: ohne sie 400 „anthropic-version: header is required“,
+        # mit ihr 200) und blättert ab 20 Einträgen.
+        headers["anthropic-version"] = "2023-06-01"
+        url += "?limit=1000"
     started = time.monotonic()
     try:
         resp = urllib.request.urlopen(urllib.request.Request(url, headers=headers),

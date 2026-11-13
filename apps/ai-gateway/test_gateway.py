@@ -983,6 +983,69 @@ check("„alle gezeigten anlegen“ ohne Häkchen", "fern-x" in app.ALIASES, bod
 status, body, _ = call("/alias-import", "POST", admin=True, form="quelle=gibtsnicht&pick=0&id_0=x")
 check("unbekannte Quelle: Meldung", "gibt es nicht" in body.decode("utf-8"))
 
+print("\n-- 0.6.1 temperature/top_p nicht weitergeben (Anthropic lehnt sie ab)")
+import relay as _relay  # noqa: E402
+status, body, _ = call("/supplier", "POST", admin=True,
+                       form=f"name=ohnesampling&url={FAKE_URL}&light=green&drop_sampling=1")
+check("Quelle mit der Einstellung angelegt", "angelegt" in body.decode("utf-8")
+      and app.SUPPLIERS["ohnesampling"]["drop_sampling"] is True)
+check("die Liste zeigt es", "ohne temperature/top_p" in app.suppliers_card())
+call("/alias", "POST", admin=True, form="name=ohne-s&targets=ohnesampling%3Aklein")
+key_s, _ = store.issue(app.DB, "sampling-test", "test", aliases=["ohne-s", "nur-lokal"])
+Fake.calls.clear()
+status, _, _ = call("/v1/chat/completions", "POST", key=key_s, body={
+    "model": "ohne-s", "temperature": 0.7, "top_p": 0.9, "top_k": 5, "max_tokens": 9,
+    "messages": [{"role": "user", "content": "x"}]})
+gesendet = Fake.calls[-1]["body"] if Fake.calls else {}
+check("temperature, top_p, top_k fehlen bei der Quelle, der Rest ist da",
+      status == 200 and not ({"temperature", "top_p", "top_k"} & set(gesendet))
+      and gesendet.get("max_tokens") == 9 and gesendet.get("messages"), gesendet)
+Fake.calls.clear()
+call("/v1/chat/completions", "POST", key=key_s, body={
+    "model": "nur-lokal", "temperature": 0.7, "messages": [{"role": "user", "content": "x"}]})
+check("eine andere Quelle bekommt temperature weiter",
+      Fake.calls and Fake.calls[-1]["body"].get("temperature") == 0.7, Fake.calls[-1:])
+Fake.calls.clear()
+call("/v1/chat/completions", "POST", key=key_s, body={
+    "model": "ohne-s", "stream": True, "temperature": 0.2,
+    "messages": [{"role": "user", "content": "x"}]})
+check("auch im Strom", Fake.calls and "temperature" not in Fake.calls[-1]["body"], Fake.calls[-1:])
+check("Anthropic erkannt: immer ohne, egal was gespeichert ist",
+      _relay.is_anthropic("https://api.anthropic.com/v1")
+      and not _relay.is_anthropic("https://openrouter.ai/api/v1")
+      and "temperature" not in _relay.outgoing({"url": "https://api.anthropic.com/v1"},
+                                               {"temperature": 1, "model": "m"}))
+gesehen = {}
+
+
+class _Antwort:
+    status = 200
+
+    def read(self, *a):
+        return json.dumps({"data": [{"id": "claude-sonnet-5-5"}]}).encode()
+
+    def close(self):
+        pass
+
+
+def _urlopen(req, timeout=None):
+    gesehen["url"], gesehen["h"] = req.full_url, {k.lower(): v for k, v in req.header_items()}
+    return _Antwort()
+
+
+_orig = _relay.urllib.request.urlopen
+_relay.urllib.request.urlopen = _urlopen
+try:
+    st, ms, ids, err = _relay.probe({"url": "https://api.anthropic.com/v1", "credential": "k"})
+finally:
+    _relay.urllib.request.urlopen = _orig
+check("Test bei Anthropic: mit anthropic-version, ohne Blättern, Modelle gelesen",
+      gesehen["h"].get("anthropic-version") == "2023-06-01"
+      and gesehen["url"].endswith("/v1/models?limit=1000")
+      and ids == ["claude-sonnet-5-5"] and gesehen["h"].get("authorization") == "Bearer k", gesehen)
+call("/supplier", "POST", admin=True, form=f"name=ohnesampling&url={FAKE_URL}&light=green")
+check("abschalten geht (kein Häkchen)", app.SUPPLIERS["ohnesampling"]["drop_sampling"] is False)
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

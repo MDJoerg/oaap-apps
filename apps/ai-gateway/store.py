@@ -115,6 +115,9 @@ ADDED_COLUMNS = (
     # Ein abgelaufener Schlüssel antwortet wie ein widerrufener.
     ("keys", "expires", "TEXT NOT NULL DEFAULT ''"),
     ("keys", "cohort", "TEXT NOT NULL DEFAULT ''"),
+    # 0.6.1: temperature/top_p/top_k für diese Quelle nicht weitergeben —
+    # neuere Claude-Modelle lehnen sie mit 400 ab, viele Clients schicken sie.
+    ("suppliers", "drop_sampling", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # Sichtbares Präfix. Manche fertigen Clients und SDKs erwarten einen

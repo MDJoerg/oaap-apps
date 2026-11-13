@@ -71,6 +71,29 @@ steht in Worten da:
 höchstens 1 Token). Sie zählt nicht in den Verbrauch dieses Gateways —
 es gibt keinen Schlüssel, dem sie gehört —, die Quelle zählt sie.
 
+## Anthropic als Bezugsquelle (seit 0.6.1)
+
+Anthropic bietet eine OpenAI-kompatible Tür an — das Gateway braucht dafür
+keine eigene Anthropic-Schnittstelle:
+
+- **Adresse** `https://api.anthropic.com/v1`, **Zugangsdaten** der API-Key
+  von Anthropic (geht als `Authorization: Bearer`), **Modelle** z. B.
+  `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`.
+- **temperature/top_p:** Die neuen Claude-Modelle lehnen sie mit 400 ab
+  („`temperature` is deprecated for this model“), viele Clients schicken
+  sie trotzdem. Für Quellen bei `api.anthropic.com` gibt das Gateway
+  `temperature`, `top_p` und `top_k` **nie** weiter; für jede andere Quelle
+  lässt sich das mit „temperature/top_p nicht weitergeben“ einschalten.
+- **Verbindungstest und „Modelle abrufen“** schicken bei Anthropic die
+  Kopfzeile `anthropic-version` mit (ohne sie antwortet die Modellliste
+  mit 400) und holen alle Modelle auf einmal.
+- Gemessen 13.11. auf oaapx01: Test 200 mit 15 Modellen; Anfrage mit
+  `temperature` und `top_p` 200, Token-Zahlen da; Strom mit Token-Zahlen.
+- Grenzen dieser Tür (Anthropic): kein Prompt-Caching, kein Reasoning in
+  der Antwort, `response_format` nur als strenges JSON-Schema, keine Audio-
+  und Dateianhänge. Anthropic nennt sie selbst einen Test- und
+  Vergleichszugang.
+
 ## Kohorten: Schlüssel für Schulungen (seit 0.6, Spec 0.5 §2.1)
 
 Reiter **Kohorten**. Teilnehmer aus Excel oder einer Liste einfügen —

@@ -53,7 +53,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -597,14 +597,21 @@ def suppliers_card():
     if editable:
         entries = [(r["name"], r["url"], r["light"], bool(r["credential"]),
                     r["name"] in SUPPLIERS) for r in catalog.supplier_rows(DB)]
+        sampling = {r["name"]: bool(r["drop_sampling"]) for r in catalog.supplier_rows(DB)}
     else:
         entries = [(n, s["url"], s["light"], bool(s["credential"]), True)
                    for n, s in sorted(SUPPLIERS.items())]
+        sampling = {}
     for name, url, light, has_cred, usable in entries:
         via = destination_of(url, dests)
         cred = ("hinterlegt" if has_cred else
                 f'<span class="muted">meldet die Plattform an (Destination {esc(via)})</span>' if via else
                 '<span class="muted">keine (z. B. lokal)</span>')
+        forced = relay.is_anthropic(url)
+        drops = forced or sampling.get(name, False)
+        if drops:
+            cred += ('<br><span class="badge off" title="temperature, top_p und top_k werden '
+                     'nicht weitergegeben">ohne temperature/top_p</span>')
         if not usable:
             cred = '<span class="badge err">nicht lesbar</span>'
         test = (f'<form method="post" action="supplier-test">'
@@ -623,6 +630,11 @@ def suppliers_card():
                       f'<input name="credential" type="password" autocomplete="new-password"></div>'
                       f'<div><fieldset><legend>Zugangsdaten</legend><label>'
                       f'<input type="checkbox" name="drop_credential" value="1"> entfernen'
+                      f'</label></fieldset></div>'
+                      f'<div><fieldset><legend>temperature/top_p</legend><label>'
+                      f'<input type="checkbox" name="drop_sampling" value="1"'
+                      f'{" checked" if drops else ""}{" disabled" if forced else ""}> '
+                      f'nicht weitergeben{" (Anthropic: immer)" if forced else ""}'
                       f'</label></fieldset></div>'
                       f'<div><button class="quiet" type="submit">speichern</button></div></form>'
                       f'<form method="post" action="supplier-delete" style="margin:.4rem 0 0">'
@@ -648,9 +660,14 @@ def suppliers_card():
     {light_radios("red", "neu")}
     <div><label for="src-cred">Zugangsdaten (API-Key des Anbieters)</label>
       <input id="src-cred" name="credential" type="password" autocomplete="new-password"></div>
+    <div><fieldset><legend>temperature/top_p</legend><label>
+      <input type="checkbox" name="drop_sampling" value="1"> nicht weitergeben</label></fieldset></div>
     <div><button type="submit">Anlegen</button></div>
   </form>
-  <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <b>rot</b> — unbekannte Herkunft
+  <p class="hint" style="margin-top:.8rem">Anthropic: Adresse <code>https://api.anthropic.com/v1</code>,
+    der API-Key von Anthropic als Zugangsdaten, Modelle wie <code>claude-sonnet-5-5</code>.
+    temperature/top_p gibt das Gateway dort nie weiter (die neuen Modelle lehnen sie ab).
+    Ohne Angabe gilt <b>rot</b> — unbekannte Herkunft
     ist nicht souverän. Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
     erreichbar (<code>oaap app link add</code>).</p>
   {destinations_form(entries, dests)}"""
@@ -2089,7 +2106,8 @@ class Handler(BaseHTTPRequestHandler):
                     DB, user, MASTER, name, form.get("url", ""),
                     form.get("light") or supply.DEFAULT_LIGHT,
                     credential=form.get("credential", ""),
-                    drop_credential=form.get("drop_credential") == "1")
+                    drop_credential=form.get("drop_credential") == "1",
+                    drop_sampling=form.get("drop_sampling") == "1")
                 notice = f"Bezugsquelle „{name}“ {done}."
             elif path == "/supplier-delete":
                 catalog.delete_supplier(DB, user, name)

@@ -17,6 +17,7 @@ wegzuwerfen.
 """
 import re
 
+import relay
 import store
 import supply
 import vault
@@ -73,6 +74,8 @@ def load(db, master):
         if error:
             errors.append(error)
             continue
+        # Für Anthropic immer: dort ist es keine Wahl, sondern eine 400.
+        src["drop_sampling"] = bool(row["drop_sampling"]) or relay.is_anthropic(row["url"])
         suppliers[row["name"]] = src
     aliases = {}
     for row in alias_rows(db):
@@ -132,7 +135,8 @@ def import_config(db, env, master):
 
 # ------------------------------------------------------------ Schreiben
 
-def set_supplier(db, actor, master, name, url, light, credential="", drop_credential=False):
+def set_supplier(db, actor, master, name, url, light, credential="", drop_credential=False,
+                 drop_sampling=False):
     """Legt eine Quelle an oder ändert sie. Wirft ValueError mit einem Satz.
 
     `credential` leer heißt **unverändert** — der gespeicherte Wert wird
@@ -157,16 +161,17 @@ def set_supplier(db, actor, master, name, url, light, credential="", drop_creden
                              "„erzeugen“). Nichts gespeichert.")
         sealed, what = vault.seal(master, credential), "neu gesetzt"
     now = store.now()
+    drop = 1 if drop_sampling else 0
     if row:
-        db.execute("UPDATE suppliers SET url=?, light=?, credential=?, updated=? WHERE name=?",
-                   (url.rstrip("/"), light, sealed, now, name))
+        db.execute("UPDATE suppliers SET url=?, light=?, credential=?, drop_sampling=?, updated=? "
+                   "WHERE name=?", (url.rstrip("/"), light, sealed, drop, now, name))
     else:
-        db.execute("INSERT INTO suppliers (name,url,light,credential,created,updated) "
-                   "VALUES (?,?,?,?,?,?)", (name, url.rstrip("/"), light, sealed, now, now))
+        db.execute("INSERT INTO suppliers (name,url,light,credential,drop_sampling,created,updated) "
+                   "VALUES (?,?,?,?,?,?,?)", (name, url.rstrip("/"), light, sealed, drop, now, now))
     # Nie der Wert, nur was mit ihm geschah.
     store.log(db, actor, "supplier.set", name,
               f"{'geändert' if row else 'neu'}: url={url.rstrip('/')} ampel={light} "
-              f"zugangsdaten={what}")
+              f"zugangsdaten={what}" + (" ohne-sampling" if drop else ""))
     db.commit()
     return "geändert" if row else "angelegt"
 
