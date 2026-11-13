@@ -1,6 +1,6 @@
 """OAAP KI-Gateway 0.6 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
-Umsetzung der Capability `oaap.ai.gateway` 0.3 (RFC-0023, RFC-0064). Das Gateway
+Umsetzung der Capability `oaap.ai.gateway` 0.5 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
 einer oder mehreren Bezugsquellen: lokales Modell, externer Anbieter,
 Kunden-Endpunkt oder ein anderes Gateway. Der Verbraucher fragt nach
@@ -14,8 +14,9 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
   wird hier: **Der API-Schlüssel ist die Identität** — keine Sitzung,
   keine Rollen, kein Kontakt zum Identitätsdienst.
 - `/` ist `admin` — die Betreiber-Sicht in Reitern (0.6): Dashboard,
-  Letzte Anfragen, Auswertung (`/auswertung`), Schlüssel, Modelle,
-  Bezugsquellen mit Verbindungstest und die Schnittstelle für externe Berichte
+  Letzte Anfragen, Auswertung (`/auswertung`), Schlüssel, Kohorten
+  (Schlüssel auf Zeit für Schulungen), Modelle, Bezugsquellen mit
+  Verbindungstest und die Schnittstelle für externe Berichte
   (`/report/v1/…`, RFC-0064 §6) — die eine Maschine mit einem
   Plattform-API-Schlüssel abfragt, nicht mit einem Gateway-Schlüssel. Die Plattform
   liefert die geprüfte Identität als Kopfzeile (App Deployment
@@ -30,6 +31,7 @@ Gebaut als gewöhnliche OAAP-App: ein HTTP-Port, Persistenz nur unter
 dem deklarierten Mount, Konfiguration über deklarierte Variablen, Logs
 nach stdout, Gesundheitspfad, nur Standardbibliothek.
 """
+import base64
 import html
 import json
 import os
@@ -43,6 +45,7 @@ from urllib.parse import parse_qsl, urlencode
 
 import catalog
 import charts
+import cohort
 import dash
 import relay
 import report
@@ -309,6 +312,14 @@ STYLE = """<style>
   .rowactions form{margin:0}
   th.num{text-align:right}.nowrap{white-space:nowrap}
   tr.dim td{opacity:.6}
+  textarea{width:100%;padding:.6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
+       font:.86rem/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}
+  textarea[readonly]{background:#f8fafc}
+  code.key{white-space:nowrap;word-break:normal;font-size:.8rem}
+  .cohort{border:1px solid var(--oaap-border);border-radius:.6rem;padding:1rem;margin-top:.8rem}
+  form.inline{display:inline-flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+  form.inline input[type=date]{width:auto;min-height:36px;padding:.25rem .5rem}
+  form.inline label{display:inline-flex;gap:.3rem;align-items:center;margin:0;font-size:.85rem}
   table tr:hover td{background:#fafbfd}
   @media (max-width:640px){ .userbox .who{display:none} .hbar{grid-template-columns:1fr 1fr}
        .grid2{grid-template-columns:1fr} .kpi b{font-size:1.6rem} }
@@ -663,15 +674,19 @@ def suppliers_card():
 # angeboten? Woher kommt es? — Einrichten steht hinten, Beobachten vorn.
 TABS = (("dashboard", "./", "Dashboard"), ("anfragen", "anfragen", "Letzte Anfragen"),
         ("auswertung", "auswertung", "Auswertung"), ("schluessel", "schluessel", "Schlüssel"),
-        ("modelle", "modelle", "Modelle"), ("quellen", "quellen", "Bezugsquellen"))
+        ("kohorten", "kohorten", "Kohorten"), ("modelle", "modelle", "Modelle"),
+        ("quellen", "quellen", "Bezugsquellen"))
 
 
 def tab_counts():
     try:
-        keys = sum(1 for r in store.keys(DB) if not r["revoked"])
+        rows = store.keys(DB)
+        keys = sum(1 for r in rows if store.usable(r) and not r["cohort"])
+        cohorts_live = len({r["cohort"] for r in rows if r["cohort"] and store.usable(r)})
     except Exception:
-        keys = 0
-    return {"schluessel": keys, "modelle": len(ALIASES), "quellen": len(SUPPLIERS)}
+        keys = cohorts_live = 0
+    return {"schluessel": keys, "kohorten": cohorts_live, "modelle": len(ALIASES),
+            "quellen": len(SUPPLIERS)}
 
 
 def tabs_nav(current):
@@ -767,7 +782,8 @@ def dashboard_page(user, roles, host, params, now=None):
     {dash.sparkline([h['ms'] for h in hours], charts.SERIES[2])}</div>
   <div class="kpi"><span class="kl">Zuletzt</span>
     <b class="small">{esc(dash.ago(ever['last'], now))}</b>
-    <span class="ks">{cur['keys']} Schlüssel aktiv in 24 h · {tab_counts()['schluessel']} gültig</span>
+    <span class="ks">{cur['keys']} Schlüssel aktiv in 24 h · {tab_counts()['schluessel']} gültig
+      {f"· {tab_counts()['kohorten']} Kohorte(n)" if tab_counts()['kohorten'] else ""}</span>
     {_supply_chips()}</div>
 </section>"""
 
@@ -923,7 +939,11 @@ def keys_page(user, roles, host, notice="", secret=None):
     parts = top_cards(notice, secret, host)
     totals = store.totals(DB)
     rows = []
+    in_cohorts = 0
     for row in store.keys(DB):
+        if row["cohort"]:
+            in_cohorts += 1
+            continue
         t = totals.get(row["id"])
         used = (int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0
         budget = (f'{fmt_tokens(used)} / {fmt_tokens(row["budget_tokens"])}'
@@ -935,8 +955,14 @@ def keys_page(user, roles, host, notice="", secret=None):
         if row["revoked"]:
             state = '<span class="badge err">widerrufen</span>'
             action = ""
+        elif store.expired(row):
+            state = (f'<span class="badge off">abgelaufen</span><br><span class="muted">'
+                     f'{esc(dash.until(row["expires"]))}</span>')
+            action = ""
         else:
-            state = '<span class="badge green">gültig</span>'
+            state = '<span class="badge green">gültig</span>' + (
+                f'<br><span class="muted">bis {esc(dash.until(row["expires"]))}</span>'
+                if row["expires"] else "")
             action = (f'<form method="post" action="revoke" style="margin:0">'
                       f'<input type="hidden" name="label" value="{esc(row["label"])}">'
                       f'<button class="quiet" type="submit">widerrufen</button></form>'
@@ -948,7 +974,7 @@ def keys_page(user, roles, host, notice="", secret=None):
                       f'</form></details>')
         last = t["last"] if t else ""
         rows.append(
-            f'<tr{" class=dim" if row["revoked"] else ""}><td><b>{esc(row["label"])}</b><br>'
+            f'<tr{" class=dim" if not store.usable(row) else ""}><td><b>{esc(row["label"])}</b><br>'
             f'<span class="muted">{esc(context_line(row))}</span></td>'
             f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
             f'<td class="num">{budget}</td>'
@@ -967,6 +993,8 @@ def keys_page(user, roles, host, notice="", secret=None):
   <div class="scroll"><table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
     <th class="num">Token</th><th class="num">Aufrufe</th><th class="num">Daten ↑/↓</th><th></th></tr>{"".join(rows) or
     '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table></div>
+  {f'<p class="hint" style="margin:.8rem 0 0">Dazu {in_cohorts} Schlüssel aus Kohorten — '
+   f'die stehen im Reiter <a href="kohorten">Kohorten</a>.</p>' if in_cohorts else ""}
 </div>""")
 
     alias_hint = ", ".join(sorted(ALIASES)) or "—"
@@ -982,6 +1010,8 @@ def keys_page(user, roles, host, notice="", secret=None):
       <input id="budget" name="budget" type="number" min="0" value="0"></div>
     <div><label for="rate">Anfragen je Minute (0 = Standard {DEFAULT_RATE})</label>
       <input id="rate" name="rate" type="number" min="0" value="0"></div>
+    <div><label for="bis">gültig bis einschließlich (leer = unbefristet)</label>
+      <input id="bis" name="bis" type="date"></div>
     <div><fieldset><legend>Höchstens diese Ampelfarbe</legend>
       <label><input type="radio" name="ceiling" value="green"> grün</label>
       <label><input type="radio" name="ceiling" value="yellow" checked> gelb</label>
@@ -1017,11 +1047,15 @@ curl https://{esc(host)}/v1/chat/completions \\
     return page("Schlüssel", "".join(parts), user, roles, tab="schluessel")
 
 
-def models_page(user, roles, notice="", tests=None):
+def models_page(user, roles, notice="", tests=None, params=None):
     parts = top_cards(notice) + config_cards()
     if tests:
         parts.append(tests)
-    parts.append(aliases_card())
+    # Wer gerade Modelle abruft, sieht die Auswahl oben; sonst steht die Liste vorn.
+    if (params or {}).get("quelle"):
+        parts += [import_card(params), aliases_card()]
+    else:
+        parts += [aliases_card(), import_card({})]
     return page("Modelle", "".join(parts), user, roles, tab="modelle")
 
 
@@ -1031,6 +1065,348 @@ def sources_page(user, roles, notice="", tests=None):
         parts.append(tests)
     parts.append(suppliers_card())
     return page("Bezugsquellen", "".join(parts), user, roles, tab="quellen")
+
+
+# ---- Kohorten (0.6): zeitlich begrenzte Schlüssel für Schulungen
+
+def end_of_day(text):
+    """`2026-11-20` → Ende dieses Tages in Ortszeit, als UTC-Zeitstempel; leer bleibt leer."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        day = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"„{text}“ ist kein Datum.")
+    return dash.stamp(day.replace(hour=23, minute=59, second=59, tzinfo=dash.LOCAL))
+
+
+def _today_plus(days):
+    return (datetime.now(timezone.utc).astimezone(dash.LOCAL) + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def issue_cohort(form, multi, user):
+    """Liest die eingefügte Tabelle, stellt je Zeile einen Schlüssel aus, gibt die Tabelle
+    mit der Schlüsselspalte zurück. Die Werte stehen nur in dieser einen Antwort."""
+    name = form.get("kohorte", "").strip().lower()
+    if not cohort.COHORT_NAME.match(name):
+        return {"error": f"Name der Kohorte: {cohort.COHORT_RULE}."}
+    try:
+        expires = end_of_day(form.get("bis", ""))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not expires:
+        return {"error": "Eine Kohorte braucht ein Ende — „gültig bis“ angeben."}
+    if expires <= store.now():
+        return {"error": "„gültig bis“ liegt in der Vergangenheit."}
+    sep, header, rows = cohort.parse(form.get("teilnehmer", ""))
+    if not rows:
+        return {"error": "Keine Teilnehmer — mindestens eine Zeile mit einem Namen einfügen."}
+    first = cohort.normalize_kennung(form.get("erste", "01")) or "01"
+    taken = {r["label"] for r in store.keys(DB)}
+    planned, generated = cohort.plan(rows, name, taken, first=int(first[:2]),
+                                     auto_free=form.get("frei") == "1")
+    aliases = [a for a in multi.get("alias", []) if a in ALIASES]
+    ceiling = form.get("ceiling") if form.get("ceiling") in supply.LIGHT_RANK else supply.DEFAULT_CEILING
+    keys = {}
+    for p in planned:
+        if p["error"]:
+            continue
+        try:
+            keys[p["label"]], _ = store.issue(
+                DB, p["label"], user, aliases=aliases, ceiling=ceiling,
+                budget_tokens=_int(form.get("budget")), rate_per_min=_int(form.get("rate")),
+                owner=p["name"], project=form.get("project", "").strip() or name,
+                cost_center=form.get("cost_center", ""), application=form.get("application", ""),
+                expires=expires, cohort=name)
+        except ValueError as exc:
+            p["error"] = str(exc)
+    text = cohort.output(sep, header, planned, keys, generated)
+    download = cohort.output(";", header, planned, keys, generated)
+    return {"name": name, "planned": planned, "keys": keys, "header": header,
+            "generated": generated, "text": text, "sep": sep or "\t", "expires": expires,
+            "download": download}
+
+
+def cohort_result_card(r):
+    if r.get("error"):
+        return f'<div class="card attention"><p style="margin:0">{esc(r["error"])}</p></div>'
+    ok = len(r["keys"])
+    bad = [p for p in r["planned"] if p["error"]]
+    head = r["header"] or ["Name"]
+    width = max([len(head)] + [len(p["cells"]) for p in r["planned"]])
+    head = list(head) + [f"Spalte {i + 1}" for i in range(len(head), width)]
+    ths = "".join(f"<th>{esc(h)}</th>" for h in head)
+    ths += ("<th>Kennung</th>" if r["generated"] else "") + "<th>Schlüssel</th>"
+    trs = []
+    for p in r["planned"]:
+        cells = list(p["cells"]) + [""] * (width - len(p["cells"]))
+        tds = "".join(f"<td>{esc(c)}</td>" for c in cells)
+        if r["generated"]:
+            tds += f'<td><code>{esc(p["kennung"])}</code></td>'
+        value = r["keys"].get(p["label"])
+        tds += (f'<td><code class="key">{esc(value)}</code></td>' if value else
+                f'<td><span class="badge err">nicht ausgestellt</span> '
+                f'<span class="muted">{esc(p["error"])}</span></td>')
+        trs.append(f'<tr{"" if value else " class=dim"}>{tds}</tr>')
+    blob = base64.b64encode(("﻿" + r["download"]).encode("utf-8")).decode("ascii")
+    sep_word = {"\t": "Tabulator", ";": "Semikolon", ",": "Komma"}[r["sep"]]
+    return f"""<div class="card secretbox">
+  <div class="cardhead"><h2>Kohorte „{esc(r['name'])}“ — {ok} Schlüssel, jetzt sichern</h2>
+    <a class="btn" download="{esc(r['name'])}-schluessel.csv"
+       href="data:text/csv;charset=utf-8;base64,{blob}">Als CSV herunterladen</a></div>
+  <p class="hint">Die Schlüssel werden <b>genau einmal</b> angezeigt — gespeichert ist nur ihre
+    Prüfsumme. Gültig bis <b>{esc(dash.until(r['expires']))}</b> ({esc(dash.LOCAL_NAME)}).
+    {f"<b>{len(bad)} Zeile(n) ohne Schlüssel</b> — Grund in der Tabelle." if bad else ""}</p>
+  <div class="scroll"><table><tr>{ths}</tr>{"".join(trs)}</table></div>
+  <label for="kohorte-text" style="margin-top:1rem">Dieselbe Tabelle zum Kopieren
+    (getrennt mit {sep_word}, wie eingefügt — zurück nach Excel: markieren, kopieren, einfügen)</label>
+  <textarea id="kohorte-text" readonly rows="{min(12, len(r['planned']) + 2)}">{esc(r['text'])}</textarea>
+</div>"""
+
+
+def cohorts_page(user, roles, notice="", result=None, keep=None):
+    keep = keep if (result and result.get("error")) else {}
+    parts = top_cards(notice)
+    if result:
+        parts.append(cohort_result_card(result))
+    existing = store.cohorts(DB)
+    alias_boxes = "".join(
+        f'<label><input type="checkbox" name="alias" value="{esc(a)}"> {esc(a)}</label>'
+        for a in sorted(ALIASES)) or '<span class="muted">noch keine Modellnamen</span>'
+    datalist = "".join(f'<option value="{esc(c["cohort"])}">' for c in existing)
+    parts.append(f"""<div class="card">
+  <h2>Kohorte anlegen oder ergänzen</h2>
+  <p class="hint">Für Schulungen: je Teilnehmer ein Schlüssel, alle mit demselben Ende. Die
+    Teilnehmer aus Excel oder einer Liste einfügen — eine Zeile je Person, Spalten getrennt
+    mit Tab, Semikolon oder Komma. <b>Erste Spalte: Name</b> (mehr braucht es nicht).
+    Steht in der zweiten Spalte eine Nummer (<code>07</code>) oder eine abweichende Kennung
+    (<code>07b</code>), gilt sie; sonst wird ab der ersten Nummer fortlaufend gezählt.
+    Weitere Spalten werden durchgereicht. Zurück kommt dieselbe Tabelle mit einer Spalte für
+    den Schlüssel.</p>
+  <form method="post" action="cohort-issue">
+    <div class="grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.8rem 1rem;align-items:end">
+      <div><label for="k-name">Kohorte</label>
+        <input id="k-name" name="kohorte" type="text" required list="k-known"
+          placeholder="kurs-2026-11" value="{esc(keep.get('kohorte', ''))}">
+        <datalist id="k-known">{datalist}</datalist></div>
+      <div><label for="k-bis">gültig bis einschließlich</label>
+        <input id="k-bis" name="bis" type="date" required value="{esc(keep.get('bis') or _today_plus(4))}"></div>
+      <div><label for="k-erste">erste Nummer</label>
+        <input id="k-erste" name="erste" type="text" value="{esc(keep.get('erste', '01'))}"
+          pattern="[0-9]{{1,2}}" maxlength="2"></div>
+      <div><fieldset><legend>Kennung schon vergeben</legend><label>
+        <input type="checkbox" name="frei" value="1"{" checked" if keep.get("frei") == "1" else ""}>
+        nächste freie nehmen (07 → 07b)</label></fieldset></div>
+    </div>
+    <label for="k-tn" style="margin-top:.9rem">Teilnehmer</label>
+    <textarea id="k-tn" name="teilnehmer" rows="8" required
+      placeholder="Anna Beispiel&#10;Bernd Muster;07&#10;Carla Probe;12;carla@example.org">{esc(keep.get('teilnehmer', ''))}</textarea>
+    <details style="margin-top:.8rem" open><summary class="muted">Für die Auswertung und Grenzen</summary>
+      <div class="grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.8rem 1rem;align-items:end;margin-top:.6rem">
+        <div><label for="k-proj">Projekt (leer = Name der Kohorte)</label>
+          <input id="k-proj" name="project" type="text" maxlength="{store.MAX_TEXT}" value="{esc(keep.get('project', ''))}"></div>
+        <div><label for="k-cc">Kostenstelle</label>
+          <input id="k-cc" name="cost_center" type="text" maxlength="{store.MAX_TEXT}" value="{esc(keep.get('cost_center', ''))}"></div>
+        <div><label for="k-app">Anwendung</label>
+          <input id="k-app" name="application" type="text" maxlength="{store.MAX_TEXT}" value="{esc(keep.get('application', ''))}"></div>
+        <div><label for="k-budget">Budget je Teilnehmer in Token (0 = ohne)</label>
+          <input id="k-budget" name="budget" type="number" min="0" value="{esc(keep.get('budget', '0'))}"></div>
+        <div><label for="k-rate">Anfragen je Minute (0 = Standard {DEFAULT_RATE})</label>
+          <input id="k-rate" name="rate" type="number" min="0" value="{esc(keep.get('rate', '0'))}"></div>
+        <div><fieldset><legend>Höchstens diese Ampelfarbe</legend>
+          <label><input type="radio" name="ceiling" value="green"> grün</label>
+          <label><input type="radio" name="ceiling" value="yellow" checked> gelb</label>
+          <label><input type="radio" name="ceiling" value="red"> rot</label></fieldset></div>
+      </div>
+      <fieldset style="margin-top:.8rem"><legend>Nur diese Modellnamen (keiner angehakt = alle)</legend>
+        {alias_boxes}</fieldset>
+    </details>
+    <p style="margin:1rem 0 0"><button type="submit">Schlüssel erzeugen</button></p>
+  </form>
+  <p class="hint" style="margin-top:.8rem">Der Name jeder Zeile wird zum „Verantwortlichen“ des
+    Schlüssels und steht damit in Auswertung und Prüfspur. Wer das nicht möchte, fügt Kürzel
+    oder nur Nummern ein. Ein widerrufener Schlüssel behält seine Kennung — zum Nachgenerieren
+    eine abweichende angeben (<code>07b</code>) oder „nächste freie nehmen“ wählen.</p>
+</div>""")
+
+    totals = store.totals(DB)
+    blocks = []
+    for c in existing:
+        rows = store.cohort_keys(DB, c["cohort"])
+        calls = sum(int(totals[r["id"]]["calls"]) for r in rows if r["id"] in totals)
+        tokens = sum(int(totals[r["id"]]["in_tokens"]) + int(totals[r["id"]]["out_tokens"])
+                     for r in rows if r["id"] in totals)
+        live = int(c["live"] or 0)
+        ended = bool(c["expires"]) and c["expires"] <= store.now()
+        state = (f'<span class="badge green">{live} von {c["seats"]} gültig</span>' if live else
+                 '<span class="badge off">abgelaufen</span>' if ended else
+                 '<span class="badge err">widerrufen</span>')
+        seats = []
+        for r in rows:
+            t = totals.get(r["id"])
+            kennung = r["label"][len(c["cohort"]) + len(cohort.SEAT) + 2:]
+            st = ('<span class="badge err">widerrufen</span>' if r["revoked"] else
+                  '<span class="badge off">abgelaufen</span>' if store.expired(r) else
+                  '<span class="badge green">gültig</span>')
+            act = ("" if not store.usable(r) else
+                   f'<form method="post" action="revoke" style="margin:0">'
+                   f'<input type="hidden" name="label" value="{esc(r["label"])}">'
+                   f'<input type="hidden" name="back" value="kohorten">'
+                   f'<button class="quiet" type="submit">widerrufen</button></form>')
+            seats.append(f'<tr{"" if store.usable(r) else " class=dim"}><td><code>{esc(kennung)}</code></td>'
+                         f'<td>{esc(r["owner"])}</td><td>{st}</td>'
+                         f'<td class="num">{t["calls"] if t else 0}</td>'
+                         f'<td class="num">{fmt_tokens((int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0)}</td>'
+                         f'<td class="muted">{esc(dash.ago(t["last"])) if t else "noch nie"}</td>'
+                         f'<td>{act}</td></tr>')
+        report_link = f'auswertung?{urlencode({"project": c["project"], "nach": "key", "top": "key"})}'
+        blocks.append(f"""<div class="cohort">
+  <div class="cardhead"><h2 style="margin:0">{esc(c['cohort'])}</h2>{state}</div>
+  <p class="muted" style="margin:.2rem 0 .6rem">bis {esc(dash.until(c['expires'])) if c['expires'] else 'unbefristet'}
+    · Projekt {esc(c['project'] or '—')} · {charts.fmt_num(calls)} Aufrufe · {charts.fmt_num(tokens)} Token
+    · <a href="{esc(report_link)}">Auswertung</a></p>
+  <div class="rowactions">
+    <form method="post" action="cohort-extend" class="inline">
+      <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
+      <input type="date" name="bis" required value="{esc(_today_plus(7))}" aria-label="neues Ende">
+      <button class="quiet" type="submit">verlängern</button></form>
+    {f'''<form method="post" action="cohort-revoke" class="inline">
+      <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
+      <label><input type="checkbox" name="confirm" value="1"> wirklich</label>
+      <button class="quiet" type="submit">alle widerrufen</button></form>''' if live else ""}
+  </div>
+  <details style="margin-top:.6rem"><summary class="muted">{c['seats']} Teilnehmer</summary>
+    <div class="scroll"><table><tr><th>Kennung</th><th>Name</th><th>Zustand</th><th class="num">Aufrufe</th>
+      <th class="num">Token</th><th>zuletzt</th><th></th></tr>{"".join(seats)}</table></div>
+  </details>
+</div>""")
+    parts.append(f"""<div class="card">
+  <h2>Kohorten</h2>
+  <p class="hint">Verlängern gilt für alle nicht widerrufenen Schlüssel der Kohorte — auch
+    abgelaufene gelten danach wieder. Ein abgelaufener Schlüssel bekommt dieselbe Antwort wie
+    ein widerrufener.</p>
+  {"".join(blocks) or '<p class="muted">Noch keine Kohorte.</p>'}
+</div>""")
+    return page("Kohorten", "".join(parts), user, roles, tab="kohorten")
+
+
+# ---- Modellnamen aus einer Bezugsquelle (0.6)
+
+IMPORT_SHOW = 300
+
+
+def suggest_alias_name(model):
+    """`meta-llama/llama-3.3-70b:free` → `llama-3.3-70b-free` — erlaubt sind A-Z a-z 0-9 _ . -"""
+    tail = model.rsplit("/", 1)[-1].lower()
+    name = re.sub(r"[^a-z0-9_.-]+", "-", tail).strip("-.")
+    name = re.sub(r"-{2,}", "-", name)
+    return name[:40].strip("-.") or "modell"
+
+
+def import_card(params):
+    names = sorted(SUPPLIERS)
+    src = params.get("quelle", "")
+    q = params.get("suche", "").strip().lower()
+    pick = f"""<form class="grid" method="get" action="modelle#import">
+    <div><label for="im-src">Bezugsquelle</label><select id="im-src" name="quelle">
+      {options(names, src, {n: n for n in names})}</select></div>
+    <div><label for="im-q">Suche (optional)</label>
+      <input id="im-q" name="suche" type="text" value="{esc(params.get('suche', ''))}" placeholder="llama"></div>
+    <div><button type="submit">Modelle abrufen</button></div>
+  </form>"""
+    body = ""
+    if src and src in SUPPLIERS:
+        r = probe_supplier(src)
+        cls, text, advice = probe_verdict(r)
+        if cls != "good" or not r["ids"]:
+            body = (f'<div class="probe {cls}"><span class="pm">{charts.STATUS[cls][1]}</span><div>'
+                    f'<b>{esc(src)}</b> — {text}{f"<br><span class=muted>{advice}</span>" if advice else ""}'
+                    f'</div></div>')
+        else:
+            have = {}
+            for aname, alias in ALIASES.items():
+                for t in alias["targets"]:
+                    if t["supplier"] == src:
+                        have.setdefault(t["model"], []).append(aname)
+            ids = sorted(set(r["ids"]))
+            shown = [m for m in ids if q in m.lower()] if q else ids
+            rows = []
+            for i, model in enumerate(shown[:IMPORT_SHOW]):
+                used = have.get(model)
+                suggestion = suggest_alias_name(model)
+                taken = suggestion in ALIASES
+                rows.append(
+                    f'<tr{" class=dim" if used else ""}><td><input type="checkbox" name="pick" value="{i}" '
+                    f'id="pk{i}" aria-label="{esc(model)} übernehmen"></td>'
+                    f'<td><label for="pk{i}" style="margin:0;color:inherit;font-size:.92rem">'
+                    f'<code>{esc(model)}</code></label>'
+                    f'<input type="hidden" name="id_{i}" value="{esc(model)}"></td>'
+                    f'<td><input type="text" name="name_{i}" value="{esc(suggestion)}" maxlength="40" '
+                    f'aria-label="Modellname für {esc(model)}"></td>'
+                    f'<td class="muted">{("schon als " + ", ".join(used)) if used else ("Name vergeben" if taken else "")}</td></tr>')
+            more = (f'<p class="hint">Gezeigt sind {IMPORT_SHOW} von {len(shown)} — mit der Suche '
+                    f'eingrenzen.</p>' if len(shown) > IMPORT_SHOW else "")
+            body = f"""<p class="summary"><b>{esc(src)}</b> nennt {len(ids)} Modelle
+    {f"· {len(shown)} passen zu „{esc(q)}“" if q else ""} · abgerufen in {charts.fmt_num(r['ms'])} ms</p>
+  <form method="post" action="alias-import">
+    <input type="hidden" name="quelle" value="{esc(src)}">
+    <div class="scroll"><table><tr><th></th><th>Modell der Quelle</th><th>Modellname im Gateway</th><th></th></tr>
+      {"".join(rows) or '<tr><td colspan="4" class="muted">Kein Modell passt.</td></tr>'}</table></div>
+    {more}
+    <p class="rowactions" style="margin-top:.8rem">
+      <button type="submit">Angehakte anlegen</button>
+      <button class="quiet" type="submit" name="all" value="1">alle gezeigten anlegen ({min(len(shown), IMPORT_SHOW)})</button></p>
+  </form>"""
+    elif src:
+        body = f'<p class="muted">Eine Bezugsquelle „{esc(src)}“ gibt es nicht.</p>'
+    if MODE != "app":
+        return ""
+    return f"""<div class="card" id="import">
+  <h2>Modellnamen aus einer Bezugsquelle anlegen</h2>
+  <p class="hint">Das Gateway fragt die Quelle nach ihren Modellen. Anhaken, Namen bei Bedarf
+    ändern, anlegen — je Modell ein Modellname mit genau diesem Ziel. Ausweichen auf eine zweite
+    Quelle trägst du danach unter „ändern“ ein. Vorhandene Namen werden nie überschrieben.</p>
+  {pick}{body}
+</div>"""
+
+
+def import_aliases(form, multi, user):
+    if MODE != "app":
+        return "Gesperrt, solange die Übernahme aus der Konfiguration wartet (AIGW_MASTER_KEY fehlt)."
+    src = form.get("quelle", "")
+    if src not in SUPPLIERS:
+        return f"Eine Bezugsquelle „{src}“ gibt es nicht."
+    if form.get("all") == "1":
+        picks = sorted({k[3:] for k in form if k.startswith("id_")}, key=lambda x: int(x) if x.isdigit() else 0)
+    else:
+        picks = multi.get("pick", [])
+    if not picks:
+        return "Nichts angehakt — nichts angelegt."
+    made, skipped, failed = [], [], []
+    for i in picks:
+        model = form.get(f"id_{i}", "")
+        name = (form.get(f"name_{i}", "") or suggest_alias_name(model)).strip()
+        if not model:
+            continue
+        if "," in model:
+            failed.append(f"{model} (Komma im Namen der Quelle)")
+            continue
+        if name in ALIASES or name in made:
+            skipped.append(name)
+            continue
+        try:
+            catalog.set_alias(DB, user, name, f"{src}:{model}", False)
+            made.append(name)
+        except ValueError as exc:
+            failed.append(f"{name}: {exc}")
+    reload_supply()
+    out = f"{len(made)} Modellname(n) angelegt" + (f": {', '.join(made[:12])}{' …' if len(made) > 12 else ''}" if made else "") + "."
+    if skipped:
+        out += f" Schon vorhanden, nicht geändert: {', '.join(skipped[:12])}."
+    if failed:
+        out += f" Nicht angelegt: {'; '.join(failed[:6])}."
+    return out
 
 
 # ---- Verbindungstests (0.6)
@@ -1122,6 +1498,9 @@ def probe_card(results, title="Verbindungstest"):
     for r in results:
         cls, text, advice = probe_verdict(r)
         mark = charts.STATUS[cls][1]
+        if cls == "good" and r["ids"]:
+            text += (f' · <a href="modelle?quelle={esc(r["name"])}#import">'
+                     f'Modellnamen daraus anlegen →</a>')
         rows.append(f'<div class="probe {cls}"><span class="pm">{mark}</span><div>'
                     f'<b>{esc(r["name"])}</b> — {text}'
                     f'{f"<br><span class=muted>{advice}</span>" if advice else ""}</div></div>')
@@ -1364,6 +1743,8 @@ class Handler(BaseHTTPRequestHandler):
         body = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # Ausgestellte Schlüssel stehen genau einmal auf einer Seite — nie in einem Cache.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1422,6 +1803,13 @@ class Handler(BaseHTTPRequestHandler):
         row = store.find(DB, value)
         if not row or row["revoked"]:
             note_failure(addr)
+            self.send_json(403, DENIED)
+            return None
+        if store.expired(row):
+            # Dieselbe Antwort wie für einen widerrufenen Schlüssel (Spec §2,
+            # §8) — aber kein Fehlversuch: Wer einen echten, abgelaufenen
+            # Schlüssel schickt, rät nicht. Sonst bremste eine Schulung, die
+            # hinter einer Adresse sitzt, nach Kursende sich selbst aus.
             self.send_json(403, DENIED)
             return None
         return row
@@ -1505,8 +1893,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, requests_page(user, roles, params))
         elif path == "/schluessel":
             self.send_html(200, keys_page(user, roles, host))
+        elif path == "/kohorten":
+            self.send_html(200, cohorts_page(user, roles))
         elif path == "/modelle":
-            self.send_html(200, models_page(user, roles))
+            self.send_html(200, models_page(user, roles, params=params))
         elif path == "/quellen":
             self.send_html(200, sources_page(user, roles))
         elif path == "/":
@@ -1566,7 +1956,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_inference(path)
             return
         if path in ("/issue", "/revoke", "/context", "/supplier", "/supplier-delete",
-                    "/alias", "/alias-delete", "/supplier-test", "/alias-test"):
+                    "/alias", "/alias-delete", "/supplier-test", "/alias-test",
+                    "/cohort-issue", "/cohort-extend", "/cohort-revoke", "/alias-import"):
             self.handle_admin_post(path)
             return
         self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
@@ -1608,6 +1999,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, sources_page(user, roles,
                                              tests=probe_card(probe_all(names), title)))
             return
+        if path.startswith("/cohort-"):
+            self.send_html(200, self.handle_cohort(path, form, multi, user, roles))
+            return
+        if path == "/alias-import":
+            self.send_html(200, models_page(user, roles, notice=import_aliases(form, multi, user)))
+            return
         if path == "/alias-test":
             name = form.get("name", "")
             self.send_html(200, models_page(user, roles,
@@ -1630,6 +2027,7 @@ class Handler(BaseHTTPRequestHandler):
                         ceiling=ceiling, personal_data=personal_data,
                         budget_tokens=_int(form.get("budget")),
                         rate_per_min=_int(form.get("rate")),
+                        expires=end_of_day(form.get("bis", "")),
                         **{name: form.get(name, "") for name in store.CONTEXT_FIELDS})
                     secret = {"label": form.get("label", ""), "value": value}
                 except ValueError as exc:
@@ -1656,8 +2054,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, sources_page(user, roles, notice=notice))
         elif path in ("/alias", "/alias-delete"):
             self.send_html(200, models_page(user, roles, notice=notice))
+        elif path == "/revoke" and form.get("back") == "kohorten":
+            self.send_html(200, cohorts_page(user, roles, notice=notice))
         else:
             self.send_html(200, keys_page(user, roles, host, notice=notice, secret=secret))
+
+    def handle_cohort(self, path, form, multi, user, roles):
+        name = form.get("kohorte", "").strip().lower()
+        if path == "/cohort-extend":
+            try:
+                n = store.extend_cohort(DB, name, end_of_day(form.get("bis", "")), user)
+                return cohorts_page(user, roles, notice=f"Kohorte „{name}“: {n} Schlüssel gelten "
+                                                         f"jetzt bis {dash.until(end_of_day(form.get('bis', '')))}.")
+            except ValueError as exc:
+                return cohorts_page(user, roles, notice=str(exc))
+        if path == "/cohort-revoke":
+            if form.get("confirm") != "1":
+                return cohorts_page(user, roles, notice="Nicht widerrufen: Für eine ganze Kohorte "
+                                                        "bitte „wirklich“ anhaken.")
+            labels = store.revoke_cohort(DB, name, user)
+            return cohorts_page(user, roles, notice=f"Kohorte „{name}“: {len(labels)} Schlüssel "
+                                                    "widerrufen — ab sofort abgelehnt.")
+        return cohorts_page(user, roles, result=issue_cohort(form, multi, user), keep=form)
 
     def change_supply(self, path, form, user):
         """Bezugsquellen und Modellnamen ändern — wirksam ohne Neustart."""

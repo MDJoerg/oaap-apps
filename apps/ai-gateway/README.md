@@ -7,7 +7,7 @@ fragt nach einem **Zweck** (`chat-default`, `code`,
 `embedding-default`) und nie nach einem Hersteller.
 
 Umsetzung der Capability [`oaap.ai.gateway`
-0.3.1](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023, RFC-0064).
+0.5](../../../oaap-spec/spec/oaap.ai.gateway.md) (RFC-0023, RFC-0064).
 
 ## Was diese App tut — und was ausdrücklich nicht
 
@@ -36,15 +36,16 @@ Login erreichbar wird. Das ist richtig so — und der Grund steht oben.
 
 ## Die Betreiber-Sicht (seit 0.6)
 
-Sechs Reiter, Beobachten vorn, Einrichten hinten:
+Sieben Reiter, Beobachten vorn, Einrichten hinten:
 
 | Reiter | Adresse | zeigt |
 | ------ | ------- | ----- |
 | **Dashboard** | `/` | Kennzahlen der letzten 24 h mit Verlaufslinie (Anfragen, Token, Erfolgsquote, Antwortzeit, zuletzt), Säulen je Stunde (beantwortet/nicht beantwortet) und darunter die **aktuelle Auswertung**: Zeitfenster 1 h · 4 h · 24 h · 7 d · 30 d, Rangliste nach Aufrufen, Token oder mittlerer Dauer, Filter nach Modellname, Schlüssel und Quelle; Top 10 Modellnamen, Schlüssel, Bezugsquellen und die Ausgänge. Aktualisiert sich jede Minute. |
 | **Letzte Anfragen** | `/anfragen` | die Messzeilen, neueste zuerst, filterbar nach Schlüssel, Modellname, Quelle und Ausgang (50/100/200) |
 | **Auswertung** | `/auswertung` | Tage und Monate für Rechnungen, dieselbe Abfrage wie `/report/v1/usage` |
-| **Schlüssel** | `/schluessel` | Schlüssel, Ausstellen, „So verbindet sich ein Client“ |
-| **Modelle** | `/modelle` | Modellnamen (Aliasse) mit **Test** je Name |
+| **Schlüssel** | `/schluessel` | einzelne Schlüssel (optional mit Ende), Ausstellen, „So verbindet sich ein Client“ |
+| **Kohorten** | `/kohorten` | Schlüssel für Schulungen: Tabelle einfügen, je Zeile ein Schlüssel mit Ende; verlängern, alle widerrufen |
+| **Modelle** | `/modelle` | Modellnamen (Aliasse) mit **Test** je Name; **Modellnamen aus einer Bezugsquelle** per Mehrfachauswahl anlegen |
 | **Bezugsquellen** | `/quellen` | Quellen mit **Verbindungstest** je Quelle und „Alle testen“, Quellen aus Destinationen der Plattform |
 
 Das Dashboard rechnet in Stunden über dieselbe Tabelle `usage` (Modul
@@ -69,6 +70,52 @@ steht in Worten da:
 **Test eines Modellnamens**: je Ziel eine Mini-Anfrage („ping“,
 höchstens 1 Token). Sie zählt nicht in den Verbrauch dieses Gateways —
 es gibt keinen Schlüssel, dem sie gehört —, die Quelle zählt sie.
+
+## Kohorten: Schlüssel für Schulungen (seit 0.6, Spec 0.5 §2.1)
+
+Reiter **Kohorten**. Teilnehmer aus Excel oder einer Liste einfügen —
+eine Zeile je Person, Spalten mit Tab, Semikolon oder Komma getrennt:
+
+```
+Name            Nr   E-Mail          ← Überschrift wird erkannt (optional)
+Anna Beispiel                        ← ohne Nummer: fortlaufend ab „erste Nummer“
+Bernd Muster    07                   ← Nummer gilt
+Carla Probe     07b  c@example.org   ← abweichende Kennung (Nachgenerieren)
+```
+
+- Name der Kohorte wie bei den Schulungsservern (RFC-0046), Etikett je
+  Schlüssel `<kohorte>-tn-<kennung>`, also `kurs-2026-11-tn-07`.
+- **gültig bis** (einschließlich, Ortszeit) gilt für alle; danach antwortet
+  ein Schlüssel wie ein widerrufener (403), zählt aber nicht als
+  Fehlversuch.
+- Projekt (leer = Name der Kohorte), Kostenstelle, Anwendung, Budget je
+  Teilnehmer, Ampel-Obergrenze, Modellnamen — für die Auswertung und als
+  Grenze.
+- Zurück kommt **dieselbe Tabelle mit Schlüsselspalte** (und Kennung, wo
+  das Gateway sie vergeben oder geändert hat): als Seite, als Textfeld im
+  Format der Eingabe zum Zurückkopieren und als CSV (Semikolon, UTF-8)
+  zum Herunterladen. **Einmal** — die Seite wird nie zwischengespeichert.
+- Ein Etikett wird nie zweimal vergeben, auch nach Widerruf nicht.
+  Nachgenerieren: abweichende Kennung angeben (`07b`) oder „nächste freie
+  nehmen“ (07 → 07b → 07c …). Eine vergebene Kennung ohne diese Wahl wird
+  mit Vorschlag abgelehnt, nicht still übersprungen.
+- Je Kohorte: verlängern (neues Ende für alle nicht widerrufenen, auch
+  abgelaufene leben wieder auf), alle widerrufen (nur mit „wirklich“),
+  einzelne Sitze widerrufen, Link in die Auswertung (Projekt).
+- Der Name einer Zeile wird **Verantwortlicher** des Schlüssels und steht
+  damit in Auswertung und Prüfspur. Wer das nicht will, fügt Kürzel ein.
+
+## Modellnamen aus einer Bezugsquelle (seit 0.6)
+
+Reiter **Modelle → „Modellnamen aus einer Bezugsquelle anlegen“**: Quelle
+wählen, optional suchen, „Modelle abrufen“. Das Gateway fragt
+`GET …/v1/models` und zeigt die Modelle zum Anhaken, je Modell mit einem
+Namensvorschlag (ohne Herstellerpräfix, `:` → `-`:
+`meta-llama/llama-3.3-70b:free` → `llama-3.3-70b-free`), der sich ändern
+lässt. „Angehakte anlegen“ oder „alle gezeigten anlegen“ — je Modell ein
+Modellname mit genau diesem Ziel. Vorhandene Namen werden **nie
+überschrieben**; schon benutzte Modelle sind markiert. Höchstens 300
+Modelle auf einmal, die Suche grenzt ein (OpenRouter nennt Hunderte).
 
 ## Bezugsquellen und Modellnamen (seit 0.4, RFC-0064 Stufe 2)
 
@@ -315,10 +362,11 @@ curl -H "Authorization: Bearer $OAAP_API_KEY"   "https://<gateway>/report/v1/usa
 python3 apps/ai-gateway/test_supply.py     # Konfiguration und Reihenfolge
 python3 apps/ai-gateway/test_catalog.py    # Tresor, Übernahme, Laden
 python3 apps/ai-gateway/test_report.py     # die eine Abfrage: Zeitraum, Kontext-Kopie, CSV
+python3 apps/ai-gateway/test_cohort.py     # Kohorten: Tabelle lesen, Kennungen, Ausgabe
 python3 apps/ai-gateway/test_gateway.py    # die Konformitätsliste der Spec §9
 ```
 
-Alle vier laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
+Alle fünf laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 

@@ -720,14 +720,15 @@ check("die Karte Bezugsquellen zeigt den Abschnitt, wenn die App bearbeitbar ist
       ("Aus Destinationen der Plattform" in card) == (app.MODE == "app"), app.MODE)
 
 print("\n-- 0.6 Reiter: Dashboard, Letzte Anfragen, Auswertung, Schlüssel, Modelle, Bezugsquellen")
-REITER = ["Dashboard", "Letzte Anfragen", "Auswertung", "Schlüssel", "Modelle", "Bezugsquellen"]
-for pfad in ("/", "/anfragen", "/auswertung", "/schluessel", "/modelle", "/quellen"):
+REITER = ["Dashboard", "Letzte Anfragen", "Auswertung", "Schlüssel", "Kohorten", "Modelle",
+          "Bezugsquellen"]
+for pfad in ("/", "/anfragen", "/auswertung", "/schluessel", "/kohorten", "/modelle", "/quellen"):
     status, body, _ = call(pfad, admin=True)
     seite = body.decode("utf-8")
     nav = seite.split('<nav class="tabs"')[1].split("</nav>")[0] if '<nav class="tabs"' in seite else ""
     check(f"{pfad} antwortet mit allen Reitern in der Reihenfolge",
           status == 200 and [seite_ for seite_ in REITER if seite_ in nav] == REITER
-          and all(nav.index(REITER[i]) < nav.index(REITER[i + 1]) for i in range(5)), status)
+          and all(nav.index(REITER[i]) < nav.index(REITER[i + 1]) for i in range(6)), status)
     check(f"{pfad}: genau ein Reiter ist markiert", nav.count('class="on"') == 1)
     status, _, _ = call(pfad)
     check(f"{pfad} bleibt der Serververwaltung vorbehalten", status == 403, status)
@@ -847,6 +848,140 @@ check("der Test zählt nicht in den Verbrauch",
       app.DB.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"] == vorher)
 status, body, _ = call("/alias-test", "POST", admin=True, form="name=gibtsnicht")
 check("ein unbekannter Name: Meldung statt Absturz", status == 200 and "gibt es nicht" in body.decode())
+
+print("\n-- 0.6 Kohorten: Tabelle einfügen, Schlüssel je Zeile, mit Ablauf")
+from urllib.parse import urlencode as _ue  # noqa: E402
+import store as _store  # noqa: E402
+morgen = (_dt.now(_tz.utc) + _td(days=3)).strftime("%Y-%m-%d")
+tabelle = "Name\tE-Mail\nAnna Beispiel\ta@example.org\nBernd Muster\t\nCarla Probe\tc@example.org\n"
+status, body, hdrs = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "kurs-2026-11"), ("bis", morgen), ("erste", "01"), ("teilnehmer", tabelle),
+    ("project", ""), ("cost_center", "KS-1"), ("alias", "nur-lokal"), ("ceiling", "yellow"),
+    ("budget", "5000"), ("rate", "0")]))
+seite = body.decode("utf-8")
+import re as _re  # noqa: E402
+werte = _re.findall(_re.escape(_store.KEY_PREFIX) + r"[A-Za-z0-9_-]+", seite)
+check("drei Schlüssel auf der Antwortseite", status == 200 and len({w for w in werte}) == 3, (status, len(werte)))
+check("die Tabelle kommt mit Kennung und Schlüssel zurück, Tab bleibt Tab",
+      "Name\tE-Mail\t\tKennung\tSchlüssel" not in seite and "Name\tE-Mail\tKennung\tSchlüssel" in seite
+      and "Anna Beispiel\ta@example.org\t01\tsk-oaap-" in seite, seite[seite.find("textarea"):][:300])
+check("und als CSV zum Herunterladen", 'download="kurs-2026-11-schluessel.csv"' in seite
+      and "data:text/csv;charset=utf-8;base64," in seite)
+check("die Antwort wird nie zwischengespeichert", hdrs.get("Cache-Control") == "no-store", hdrs)
+zeilen = {r["label"]: r for r in _store.cohort_keys(app.DB, "kurs-2026-11")}
+check("Etiketten wie bei den Schulungsservern, Name als Verantwortlicher, Projekt = Kohorte",
+      sorted(zeilen) == ["kurs-2026-11-tn-01", "kurs-2026-11-tn-02", "kurs-2026-11-tn-03"]
+      and zeilen["kurs-2026-11-tn-02"]["owner"] == "Bernd Muster"
+      and zeilen["kurs-2026-11-tn-01"]["project"] == "kurs-2026-11"
+      and zeilen["kurs-2026-11-tn-01"]["cost_center"] == "KS-1", zeilen and list(zeilen))
+r1 = zeilen["kurs-2026-11-tn-01"]
+check("Ablauf am Ende des Tages, Modellname und Budget übernommen",
+      r1["expires"] > _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ") and r1["aliases"] == "nur-lokal"
+      and r1["budget_tokens"] == 5000, dict(r1))
+anna = seite.split("Anna Beispiel\ta@example.org\t01\t")[1].split("\n")[0]
+status, body, _ = call("/v1/models", key=anna)
+check("Annas Schlüssel funktioniert", status == 200
+      and [m["id"] for m in json.loads(body)["data"]] == ["nur-lokal"], body[:200])
+check("die Schlüsselliste bleibt übersichtlich: Kohorten-Schlüssel nur im Reiter Kohorten",
+      "kurs-2026-11-tn-01" not in call("/schluessel", admin=True)[1].decode()
+      and "im Reiter <a href=\"kohorten\">Kohorten</a>" in call("/schluessel", admin=True)[1].decode())
+kseite = call("/kohorten", admin=True)[1].decode()
+check("der Reiter Kohorten zeigt die Kohorte mit drei gültigen Sitzen",
+      "kurs-2026-11" in kseite and "3 von 3 gültig" in kseite and "Bernd Muster" in kseite)
+check("kein Schlüsselwert auf dem Reiter danach", _store.KEY_PREFIX not in kseite)
+
+print("\n-- 0.6 Ablauf: wie widerrufen, aber kein Fehlversuch")
+app.DB.execute("UPDATE keys SET expires=? WHERE cohort='kurs-2026-11'", ("2020-01-01T00:00:00Z",))
+app.DB.commit()
+vorher_fehl = len(app._FAILS.get("127.0.0.1", []))
+status, body, _ = call("/v1/models", key=anna)
+check("abgelaufen: dieselbe 403 wie widerrufen", status == 403 and json.loads(body) == app.DENIED, status)
+status, _, _ = call("/v1/chat/completions", "POST", key=anna,
+                    body={"model": "nur-lokal", "messages": [{"role": "user", "content": "x"}]})
+check("auch für Anfragen", status == 403, status)
+check("und zählt nicht als Fehlversuch", len(app._FAILS.get("127.0.0.1", [])) == vorher_fehl)
+check("Reiter zeigt „abgelaufen“", "abgelaufen" in call("/kohorten", admin=True)[1].decode())
+status, body, _ = call("/cohort-extend", "POST", admin=True,
+                       form=_ue([("kohorte", "kurs-2026-11"), ("bis", morgen)]))
+check("verlängern: alle drei gelten wieder", "3 Schlüssel gelten" in body.decode("utf-8"), body[:0])
+status, body, _ = call("/v1/models", key=anna)
+check("Annas Schlüssel geht wieder", status == 200, status)
+status, body, _ = call("/cohort-extend", "POST", admin=True,
+                       form=_ue([("kohorte", "kurs-2026-11"), ("bis", "2020-01-01")]))
+check("verlängern in die Vergangenheit wird abgelehnt", "Zukunft" in body.decode("utf-8"))
+
+print("\n-- 0.6 Nachgenerieren: Kennung bleibt vergeben, abweichende oder nächste freie")
+status, body, _ = call("/revoke", "POST", admin=True,
+                       form="label=kurs-2026-11-tn-02&back=kohorten")
+check("ein Sitz widerrufen, Antwort im Reiter Kohorten",
+      'aria-current="page">Kohorten' in body.decode("utf-8"))
+status, body, _ = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "kurs-2026-11"), ("bis", morgen), ("teilnehmer", "Bernd Muster;02")]))
+seite = body.decode("utf-8")
+check("02 noch einmal: abgelehnt, mit Vorschlag 02b, kein Schlüssel",
+      "02b" in seite and _store.KEY_PREFIX not in seite.split("<textarea")[1], seite[:0])
+status, body, _ = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "kurs-2026-11"), ("bis", morgen), ("teilnehmer", "Bernd Muster;02"), ("frei", "1")]))
+seite = body.decode("utf-8")
+check("mit „nächste freie“: 02b, und die Tabelle nennt die neue Kennung",
+      "Bernd Muster;02;02b;sk-oaap-" in seite, seite[seite.find("<textarea"):][:200])
+status, body, _ = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "kurs-2026-11"), ("bis", morgen), ("teilnehmer", "Dora;02c")]))
+check("abweichende Kennung direkt: 02c", "Dora;02c;sk-oaap-" in body.decode("utf-8"))
+status, body, _ = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "Kurs 1"), ("bis", morgen), ("teilnehmer", "X")]))
+check("falscher Name der Kohorte: Meldung, die Eingabe bleibt stehen",
+      "Name der Kohorte" in body.decode("utf-8") and ">X</textarea>" in body.decode("utf-8"))
+status, body, _ = call("/cohort-issue", "POST", admin=True, form=_ue([
+    ("kohorte", "kurs-x"), ("bis", ""), ("teilnehmer", "X")]))
+check("ohne Ende keine Kohorte", "braucht ein Ende" in body.decode("utf-8"))
+
+print("\n-- 0.6 Kohorte widerrufen: nur mit „wirklich“")
+status, body, _ = call("/cohort-revoke", "POST", admin=True, form="kohorte=kurs-2026-11")
+check("ohne Häkchen nichts", "wirklich" in body.decode("utf-8")
+      and call("/v1/models", key=anna)[0] == 200)
+status, body, _ = call("/cohort-revoke", "POST", admin=True, form="kohorte=kurs-2026-11&confirm=1")
+check("mit Häkchen alle gültigen widerrufen", "4 Schlüssel widerrufen" in body.decode("utf-8"),
+      body.decode("utf-8")[:0])
+check("Annas Schlüssel ist tot", call("/v1/models", key=anna)[0] == 403)
+check("Prüfspur: Kohorte verlängert und widerrufen",
+      {"cohort.extend", "cohort.revoke"} <= {r["action"] for r in _store.audit(app.DB)})
+
+print("\n-- 0.6 einzelner Schlüssel mit Ablauf")
+status, body, _ = call("/issue", "POST", admin=True, form=f"label=gast&bis={morgen}")
+check("ausgestellt, im Reiter Schlüssel mit „bis“",
+      _store.KEY_PREFIX in body.decode() and "gast" in call("/schluessel", admin=True)[1].decode()
+      and _store.keys(app.DB) and [r for r in _store.keys(app.DB) if r["label"] == "gast"][0]["expires"])
+
+print("\n-- 0.6 Modellnamen aus einer Bezugsquelle")
+status, body, _ = call("/modelle?quelle=lokal", admin=True)
+seite = body.decode("utf-8")
+check("die Modelle der Quelle stehen zum Anhaken da",
+      status == 200 and seite.count('name="pick"') == 3 and "klein" in seite, status)
+check("schon benutzte Modelle sind markiert", "schon als nur-lokal" in seite)
+status, body, _ = call("/modelle?quelle=lokal&suche=fern", admin=True)
+check("die Suche grenzt ein", body.decode().count('name="pick"') == 1)
+check("Namensvorschlag ohne Hersteller und ohne Doppelpunkt",
+      app.suggest_alias_name("meta-llama/Llama-3.3-70B:free") == "llama-3.3-70b-free"
+      and app.suggest_alias_name("llama3.1:8b") == "llama3.1-8b")
+status, body, _ = call("/alias-import", "POST", admin=True, form=_ue([
+    ("quelle", "lokal"), ("pick", "0"), ("id_0", "eu-modell"), ("name_0", "eu-modell"),
+    ("id_1", "fern-modell"), ("name_1", "fern-x"), ("pick", "2"), ("id_2", "klein"),
+    ("name_2", "nur-lokal")]))
+seite = body.decode("utf-8")
+check("angehakt: einer angelegt, ein vorhandener Name nicht überschrieben",
+      "1 Modellname(n) angelegt: eu-modell" in seite and "Schon vorhanden" in seite
+      and "nur-lokal" in seite, seite[seite.find("angelegt") - 40:][:200])
+check("der neue Name zeigt auf die Quelle, sofort ohne Neustart",
+      app.ALIASES["eu-modell"]["targets"][0]["model"] == "eu-modell"
+      and app.ALIASES["eu-modell"]["targets"][0]["supplier"] == "lokal"
+      and "fern-x" not in app.ALIASES)
+status, body, _ = call("/alias-import", "POST", admin=True, form=_ue([
+    ("quelle", "lokal"), ("all", "1"), ("id_0", "eu-modell"), ("name_0", "eu-modell"),
+    ("id_1", "fern-modell"), ("name_1", "fern-x")]))
+check("„alle gezeigten anlegen“ ohne Häkchen", "fern-x" in app.ALIASES, body.decode()[:0])
+status, body, _ = call("/alias-import", "POST", admin=True, form="quelle=gibtsnicht&pick=0&id_0=x")
+check("unbekannte Quelle: Meldung", "gibt es nicht" in body.decode("utf-8"))
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")

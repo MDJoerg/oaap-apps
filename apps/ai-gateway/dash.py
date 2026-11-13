@@ -70,6 +70,12 @@ def local(text, with_date=True):
     return dt.strftime("%d.%m. %H:%M:%S" if with_date else "%H:%M")
 
 
+def until(text):
+    """Ablaufzeit lesbar: `17.11.2026 23:59` in Ortszeit."""
+    dt = parse(text)
+    return dt.astimezone(LOCAL).strftime("%d.%m.%Y %H:%M") if dt else (text or "")
+
+
 def ago(text, now=None):
     """„vor 3 Min“ — für die Kachel „letzte Anfrage“."""
     dt = parse(text)

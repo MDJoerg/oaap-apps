@@ -109,7 +109,13 @@ ADDED_COLUMNS = (
     ("usage", "bytes_up", "INTEGER"),
     ("usage", "bytes_down", "INTEGER"),
     # Die Kopie des Kontexts zum Zeitpunkt der Anfrage (gwcore/context.py).
-) + tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMNS)
+) + tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMNS) + (
+    # 0.6 (Spec 0.5 §2): Ablauf eines Schlüssels (UTC-Zeitstempel, leer =
+    # nie) und die Kohorte, aus der er stammt (leer = einzeln ausgestellt).
+    # Ein abgelaufener Schlüssel antwortet wie ein widerrufener.
+    ("keys", "expires", "TEXT NOT NULL DEFAULT ''"),
+    ("keys", "cohort", "TEXT NOT NULL DEFAULT ''"),
+)
 
 # Sichtbares Präfix. Manche fertigen Clients und SDKs erwarten einen
 # Schlüssel in OpenAI-Form; `sk-` vorneweg erspart Anwendern eine
@@ -141,16 +147,67 @@ def migrate(db):
 
 def issue(db, label, actor, aliases=(), ceiling="yellow", personal_data=False,
           budget_tokens=0, rate_per_min=0, owner="", cost_center="", project="",
-          account="default", tenant="default", application="", labels=""):
+          account="default", tenant="default", application="", labels="", expires="",
+          cohort=""):
     """Stellt einen Schlüssel aus und gibt ihn **einmalig** zurück (gwcore/ledger.py)."""
+    if expires and expires <= now():
+        raise ValueError("Das Ablaufdatum liegt in der Vergangenheit — so ein Schlüssel "
+                         "wäre schon beim Ausstellen ungültig.")
     extra = {"aliases": ",".join(aliases), "ceiling": ceiling or "yellow",
              "personal_data": 1 if personal_data else 0,
-             "budget_tokens": int(budget_tokens or 0), "rate_per_min": int(rate_per_min or 0)}
+             "budget_tokens": int(budget_tokens or 0), "rate_per_min": int(rate_per_min or 0),
+             "expires": expires or "", "cohort": cohort or ""}
     ctx = {"owner": owner, "account": account, "project": project,
            "cost_center": cost_center, "application": application, "labels": labels}
     detail = (f"aliases={','.join(aliases) or 'alle'} bis={ceiling or 'yellow'} "
-              f"pbd={'freigegeben' if personal_data else 'nein'}")
+              f"pbd={'freigegeben' if personal_data else 'nein'}"
+              + (f" ablauf={expires}" if expires else "") + (f" kohorte={cohort}" if cohort else ""))
     return ledger.issue(db, label, actor, KEY_PREFIX, extra, ctx, tenant, detail)
+
+
+def expired(row, at=None):
+    """Abgelaufen? Ein Schlüssel ohne Ablauf läuft nie ab."""
+    return bool(row["expires"]) and row["expires"] <= (at or now())
+
+
+def usable(row, at=None):
+    return not row["revoked"] and not expired(row, at)
+
+
+def cohorts(db):
+    """Je Kohorte: Anzahl, davon nutzbar, spätester Ablauf, erste Ausgabe."""
+    at = now()
+    return list(db.execute(
+        "SELECT cohort, COUNT(*) AS seats, "
+        "SUM(CASE WHEN revoked='' AND (expires='' OR expires>?) THEN 1 ELSE 0 END) AS live, "
+        "MAX(expires) AS expires, MIN(created) AS created, MAX(project) AS project "
+        "FROM keys WHERE cohort!='' GROUP BY cohort ORDER BY MIN(created) DESC", (at,)))
+
+
+def cohort_keys(db, name):
+    return list(db.execute("SELECT * FROM keys WHERE cohort=? ORDER BY label", (name,)))
+
+
+def extend_cohort(db, name, expires, actor):
+    """Neuer Ablauf für alle nicht widerrufenen Schlüssel einer Kohorte — auch abgelaufene
+    leben damit wieder auf. Gibt die Anzahl zurück."""
+    if not expires or expires <= now():
+        raise ValueError("Das neue Ende muss in der Zukunft liegen.")
+    cur = db.execute("UPDATE keys SET expires=? WHERE cohort=? AND revoked=''", (expires, name))
+    count = cur.rowcount
+    log(db, actor, "cohort.extend", name, f"ablauf={expires} schluessel={count}")
+    db.commit()
+    return count
+
+
+def revoke_cohort(db, name, actor):
+    """Widerruft alle noch gültigen Schlüssel einer Kohorte; gibt die Etiketten zurück."""
+    labels = [r["label"] for r in cohort_keys(db, name) if not r["revoked"]]
+    for label in labels:
+        revoke(db, label, actor)
+    log(db, actor, "cohort.revoke", name, f"schluessel={len(labels)}")
+    db.commit()
+    return labels
 
 
 def record(db, key, alias, supplier, model, in_tokens, out_tokens, ms, outcome,
