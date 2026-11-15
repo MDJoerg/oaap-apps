@@ -71,6 +71,41 @@ steht in Worten da:
 höchstens 1 Token). Sie zählt nicht in den Verbrauch dieses Gateways —
 es gibt keinen Schlüssel, dem sie gehört —, die Quelle zählt sie.
 
+## Was der Knoten erfährt (seit 0.7.0, RFC-0087 §8.2)
+
+Das Gateway erklärt im Manifest (0.15) die Tür `assets: {path: /oaap/assets}`.
+Der Knoten fragt dort bei jedem Statusdokument nach und gibt der Zentrale
+weiter, was die Preisgabe-Stufe des Mandanten erlaubt:
+
+```json
+{"v": 1, "assets": [
+  {"kind": "source", "name": "gaming", "state": "down", "destination": "gaming"},
+  {"kind": "source", "name": "anthropic", "state": "idle"},
+  {"kind": "model", "name": "chat-gaming", "state": "down", "uses": ["gaming"]}
+]}
+```
+
+- **Bezugsquellen** mit Zustand und, falls ihre Adresse über eine
+  Destination der Plattform führt, deren Name.
+- **Modellnamen** mit den Quellen, die sie nutzen. Ein Modellname ist
+  `ok`, wenn eine seiner Quellen es ist, `down`, wenn alle es sind.
+- Nie: Adressen, Modellkennungen bei der Quelle, Ampel, Schlüssel,
+  Kohorten, Personen.
+
+Woher der Zustand einer Quelle kommt:
+
+- aus **jedem echten Versuch**: jede Weiterleitung, auch die vor einem
+  Ausweichen, und jeder Verbindungstest. Jede HTTP-Antwort unter 500 heißt
+  „erreicht“, keine Antwort oder 5xx „nicht erreicht“;
+- aus einer **Prüfung je Minute** für Quellen hinter einer Destination
+  (Tunnel, VPN): `GET …/models`, rechnet nichts, kostet nichts;
+- ein fremder Anbieter wird dafür **nicht** zusätzlich angefragt;
+- liegt der letzte Versuch mehr als 15 Minuten zurück: `idle`. Nach einem
+  Neustart steht jede Quelle auf `idle`, bis der nächste Versuch kommt.
+
+Damit nennt die Meldung der Zentrale bei „VPN aus“ auch die Modellnamen,
+die nicht mehr antworten.
+
 ## Anthropic als Bezugsquelle (seit 0.6.1)
 
 Anthropic bietet eine OpenAI-kompatible Tür an — das Gateway braucht dafür

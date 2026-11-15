@@ -43,6 +43,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, urlencode
 
+import assets
 import catalog
 import charts
 import cohort
@@ -53,7 +54,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -105,6 +106,9 @@ def reload_supply():
 
 
 reload_supply()
+
+# RFC-0087 §8.2: der letzte Versuch je Bezugsquelle, für die Tür /oaap/assets
+SEEN = assets.Seen()
 
 # Eine zweite, kleine Bremse gegen das Raten von Schlüsseln. Die große
 # steht in der Plattform (RFC-0010) und gilt je Client-Adresse für alle
@@ -1440,7 +1444,31 @@ def probe_supplier(name):
         return {"name": name, "status": None, "ms": 0, "ids": [], "via": via,
                 "error": "nicht nutzbar (Zugangsdaten nicht lesbar oder Eintrag fehlerhaft)"}
     status, ms, ids, error = relay.probe(src, timeout=PROBE_TIMEOUT)
+    SEEN.note(name, assets.reached(status))
     return {"name": name, "status": status, "ms": ms, "ids": ids, "error": error, "via": via}
+
+
+def asset_answer():
+    """Die Antwort der Tür /oaap/assets (Manifest 0.15, RFC-0087 §8.2)."""
+    suppliers, aliases = SUPPLIERS, ALIASES
+    dests = bound_destinations()
+    via = {n: destination_of(src["url"], dests) for n, src in suppliers.items()}
+    SEEN.forget(set(suppliers))
+    return assets.answer(suppliers, aliases, SEEN, {n: d for n, d in via.items() if d})
+
+
+def check_destination_sources():
+    """Je Minute: die Quellen hinter einer Destination der Plattform testen
+    (eigene Wege, kostet nichts). Fremde Anbieter nicht -- siehe assets.py."""
+    while True:
+        time.sleep(assets.CHECK_EVERY)
+        try:
+            dests = bound_destinations()
+            names = sorted(n for n, src in SUPPLIERS.items() if destination_of(src["url"], dests))
+            if names:
+                probe_all(names)
+        except Exception as exc:                        # noqa: BLE001
+            sys.stdout.write(f"Prüfung der Quellen: {type(exc).__name__}\n")
 
 
 def probe_all(names):
@@ -1838,6 +1866,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION})
             return
+        if path == "/oaap/assets":
+            # RFC-0087 §8.2: der Knoten fragt über seinen internen Endpunkt;
+            # von außen liegt der Pfad unter `/` und damit hinter `admin`.
+            self.send_json(200, asset_answer())
+            return
         if path == "/v1/models":
             row = self.authorize()
             if row is None:
@@ -2227,6 +2260,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def relay_once(self, row, alias_name, src, model, path, body, started, up_bytes):
         up, counts = relay.call_json(src, path, body, timeout=TIMEOUT)
+        SEEN.note(src["name"], assets.reached(up.status))
         ms = int((time.monotonic() - started) * 1000)
         if up.status == 0 or up.status >= 500:
             return up.error or f"HTTP {up.status}"
@@ -2255,6 +2289,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def relay_stream(self, row, alias_name, src, model, path, body, started, up_bytes):
         up, asked_usage = relay.open_stream(src, path, body, timeout=TIMEOUT)
+        SEEN.note(src["name"], assets.reached(up.status))
         if up.status == 0 or up.status >= 500:
             up.close()
             return up.error or f"HTTP {up.status}"
@@ -2394,6 +2429,7 @@ def main():
         f"OAAP KI-Gateway {VERSION} auf Port {PORT} — "
         f"{len(SUPPLIERS)} Bezugsquelle(n), {len(ALIASES)} Alias(se)\n")
     sys.stdout.flush()
+    threading.Thread(target=check_destination_sources, daemon=True).start()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 
 

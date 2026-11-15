@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.15"
 
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.6.1
+  version: 0.7.0
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023)"
@@ -114,6 +114,14 @@ destinations:
     kind: http
     any: true
     purpose: "Bezugsquellen über die Plattform (Tunnel, Connector, Anbieter)"
+
+# Seit 0.7.0 (Manifest 0.15, RFC-0087 §8.2): Hier fragt der Knoten, welche
+# Modellnamen und Bezugsquellen es gibt, wer wen nutzt, welche Quelle über
+# welche Destination geht und wie es ihr zuletzt ging -- nur Namen und
+# ok/down/idle, nie Adressen, Modellkennungen, Schlüssel oder Personen.
+# Der Pfad liegt unter `/` und ist von außen damit nur für `admin` offen.
+assets:
+  path: /oaap/assets
 
 health:
   path: /healthz
