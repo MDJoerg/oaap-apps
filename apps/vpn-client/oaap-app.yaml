@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.14"
 
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.1.5
+  version: 0.2.0
   type: native
   class: service
   description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
@@ -59,6 +59,13 @@ config:
   - key: VPN_TIMEOUT_SECONDS
     label: "Geduld gegenüber dem Ziel in Sekunden (10–3600)"
     default: "600"
+
+# Manifest 0.14 (RFC-0087 §8.1, Plattform ab 0.1.288): hier fragt der Knoten,
+# wie Tunnel und Ziele stehen -- für sein Statusdokument und so für die
+# Zentrale ("VPN aus", "Ziel antwortet nicht"). Antwort: Namen und ok/down,
+# nie eine Adresse. Ältere Plattformen ignorieren das Feld.
+link_state:
+  path: /oaap/links
 
 health:
   # 200 nur, solange der Tunnel steht.

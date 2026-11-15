@@ -11,7 +11,8 @@ Geprueft wird, was die App verspricht, an einem echten HTTP-Ziel auf
     Ziels, entfernt X-Forwarded-*, streamt ungepuffert;
   * mit Anmelde-Kopfzeilen (ueber die Route der App) -> 403;
   * Tunnel nicht verbunden -> 502 mit Satz; unbekanntes Ziel -> 404;
-  * /healthz 200 nur verbunden.
+  * /healthz 200 nur verbunden;
+  * die Tuer /oaap/links (0.2.0): Tunnel und je Ziel ok/down, ohne Adresse.
 
 Aufruf: python3 test_vpn_client.py
 """
@@ -256,6 +257,42 @@ st, data, _ = call("GET", "/t/dead/x")
 took = time.monotonic() - t0
 ok("ein Ziel ohne Antwort: 502 nach der kurzen Verbindungsfrist, nicht nach 600 s",
    st == 502 and took < 5, (st, round(took, 1), data))
+
+print("")
+print("Die Tuer link_state (0.2.0, RFC-0087 §8.1)")
+app.TARGETS = vpnconf.parse_targets(f"gaming = http://127.0.0.1:{tport}/base;"
+                                    "dead = http://127.0.0.1:1")
+app.REACH.clear()
+app.say(state="verbunden")
+app.check_targets()
+ok("echtes Ziel: ok; geschlossener Port: down",
+   app.REACH["gaming"]["state"] == "ok" and app.REACH["dead"]["state"] == "down", app.REACH)
+first = app.REACH["dead"]["since"]
+time.sleep(1.1)
+app.check_targets()
+ok("since bleibt, solange der Zustand bleibt", app.REACH["dead"]["since"] == first, app.REACH)
+st, data, h = call("GET", "/oaap/links")
+doc = json.loads(data) if st == 200 else {}
+ok("/oaap/links: v 1, Tunnel ok, je Ziel ok/down",
+   doc.get("v") == 1 and doc["tunnel"]["state"] == "ok"
+   and doc["targets"]["gaming"]["state"] == "ok" and doc["targets"]["dead"]["state"] == "down", doc)
+ok("... und keine Adresse, kein Port, kein Grund darin",
+   "127.0.0.1" not in data.decode() and str(tport) not in data.decode()
+   and "Refused" not in data.decode(), data)
+st, data, _ = call("GET", "/")
+ok("die Seite zeigt je Ziel, ob es antwortet",
+   "antwortet nicht (ConnectionRefusedError)" in data.decode() and "antwortet seit" in data.decode())
+app.say(state="getrennt")
+app.check_targets()
+st, data, _ = call("GET", "/oaap/links")
+doc = json.loads(data)
+ok("Tunnel getrennt: tunnel down und keine alten Ziel-Ergebnisse",
+   doc["tunnel"]["state"] == "down" and doc["targets"] == {}, doc)
+app.say(state="verbunden")
+app.TARGETS = vpnconf.parse_targets(f"gaming = http://127.0.0.1:{tport}/base")
+app.check_targets()
+ok("ein entferntes Ziel verschwindet aus der Antwort", set(app.link_answer()["targets"]) == {"gaming"},
+   app.link_answer())
 
 print("")
 print("FAIL" if fails else "OK", f"-- {fails} Fehler" if fails else "")

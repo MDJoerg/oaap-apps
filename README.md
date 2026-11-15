@@ -88,7 +88,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.1.2   |
 | [Code-Server](apps/code-server/)   | VS Code im Browser (wrapped), ein Container je Mensch — Schulungsarbeitsplatz | 0.1.5   |
 | [Webtop](apps/webtop/)             | Linux-Desktop im Browser (wrapped): Eclipse/ADT, VS Code, Claude Desktop, goose, opencode | 0.1.11   |
-| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.1.5   |
+| [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.2.0   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.5   |
 | [Rollen & Rechte](apps/rollen-rechte/) | Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen (RFC-0045 A7); privilegiert, Installation nur mit `--confirm-administer` | 0.2.2   |
 | [Vorgänge](apps/vorgaenge/)       | Melden, Klären und Übergeben zwischen Mandanten (RFC-0061 Stufe 1+2): nimmt den Feedback-Knopf der Plattform an, Bereiche als Kontexte aus „Rollen & Rechte“; eine Instanz je Mandant, Löschfrist je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier an (RFC-0069); Plattform ab 0.1.201 | 0.5.2   |

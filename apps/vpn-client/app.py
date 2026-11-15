@@ -13,7 +13,12 @@ drei Dinge, sonst nichts:
    (vpnconf.py). Ein Paketfilter laesst aus dem Tunnel nur Antworten auf
    eigene Verbindungen herein und leitet nichts weiter. Steht der Filter
    nicht, startet der Tunnel nicht.
-3. **Bedient benannte Ziele** unter `/t/<name>/...` als schlichter
+3. **Prueft seine Ziele** (0.2.0, RFC-0087 §8.1): alle 30 s ein TCP-
+   Verbindungsaufbau je Ziel, solange der Tunnel steht, und sagt es an
+   seiner Tuer `/oaap/links` (Manifest `link_state`) -- dort fragt der
+   Knoten fuer sein Statusdokument, die Zentrale sieht so "VPN aus" und
+   "Ziel antwortet nicht".
+4. **Bedient benannte Ziele** unter `/t/<name>/...` als schlichter
    Reverse-Proxy: Pfad und Abfrage werden angehaengt, der Host ist der
    des Ziels, Antworten werden ungepuffert durchgereicht (Streaming).
    Keine eigene Anmeldung: den Schluessel ergaenzt das Gateway der
@@ -45,7 +50,7 @@ IDENTITY_PREFIX = "x-oaap-"
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host",
        "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded"}
-VERSION = "0.1.5"
+VERSION = "0.2.0"
 
 try:
     TIMEOUT = max(10, min(3600, int(os.environ.get("VPN_TIMEOUT_SECONDS") or 600)))
@@ -53,6 +58,8 @@ except ValueError:
     TIMEOUT = 600
 
 CONNECT_TIMEOUT = 10
+PROBE_EVERY = 30       # Sekunden zwischen zwei Pruefungen der Ziele
+PROBE_TIMEOUT = 5
 
 LOCK = threading.Lock()
 STATE = {"state": "startet", "since": "", "remote": "", "tunnel_ip": "",
@@ -61,6 +68,7 @@ STATE = {"state": "startet", "since": "", "remote": "", "tunnel_ip": "",
 LOG = collections.deque(maxlen=40)
 TARGETS = {}
 TARGET_ERROR = ""
+REACH = {}             # name -> {"state": ok|down, "since", "checked", "why"}
 
 
 def now():
@@ -233,6 +241,59 @@ def supervise():
         pause = min(120, pause * 2)
 
 
+# ---------------------------------------------------------------- Ziele
+def probe_target(t, timeout=PROBE_TIMEOUT):
+    """('', ok) oder (Grund, False): ein TCP-Verbindungsaufbau zum Ziel,
+    durch den Tunnel (die Route je Ziel-IP legt prepare an). Nichts wird
+    gesendet -- ein Ziel, das die Verbindung annimmt, antwortet."""
+    try:
+        socket.create_connection((t["host"], t["port"]), timeout=timeout).close()
+        return "", True
+    except OSError as e:
+        return type(e).__name__, False
+
+
+def check_targets(probe=probe_target):
+    """Eine Runde: jedes Ziel einmal, solange der Tunnel steht. Ohne Tunnel
+    sagt die App nichts ueber Ziele -- dann ist der Tunnel das Problem, und
+    alte Ergebnisse wuerden luegen."""
+    if not up():
+        with LOCK:
+            REACH.clear()
+        return
+    stamp = now()
+    for name, t in sorted(TARGETS.items()):
+        why, alive = probe(t)
+        st = "ok" if alive else "down"
+        with LOCK:
+            old = REACH.get(name) or {}
+            REACH[name] = {"state": st, "checked": stamp, "why": why,
+                           "since": old["since"] if old.get("state") == st else stamp}
+    with LOCK:
+        for gone in set(REACH) - set(TARGETS):
+            del REACH[gone]
+
+
+def watch_targets():
+    while True:
+        try:
+            check_targets()
+        except Exception as e:  # noqa: BLE001 -- die naechste Runde versucht es wieder
+            LOG.append(f"Pruefung der Ziele: {type(e).__name__}")
+        time.sleep(PROBE_EVERY)
+
+
+def link_answer():
+    """Die Antwort an der Tuer `link_state` (RFC-0087 §8.1): der eigene Tunnel
+    und je Ziel ok/down -- Namen und zwei Woerter, nie eine Adresse."""
+    with LOCK:
+        tunnel = "ok" if STATE["state"] == "verbunden" else "down"
+        targets = {n: {"state": r["state"], "since": r["since"]}
+                   for n, r in sorted(REACH.items()) if n in TARGETS}
+        since = STATE["since"]
+    return {"v": 1, "tunnel": {"state": tunnel, "since": since}, "targets": targets}
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -262,6 +323,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                "since": s["since"]})
             return self._plain(200 if s["state"] == "verbunden" else 503, body,
                                "application/json")
+        if path == "/oaap/links" and self.command in ("GET", "HEAD"):
+            return self._plain(200, json.dumps(link_answer()), "application/json")
         if path.startswith("/t/"):
             return self._proxy()
         if path == "/" and self.command in ("GET", "HEAD"):
@@ -359,9 +422,19 @@ def page():
     with LOCK:
         s = dict(STATE)
     e = html.escape
+    with LOCK:
+        reach = {n: dict(r) for n, r in REACH.items()}
+
+    def seen(n):
+        r = reach.get(n)
+        if not r:
+            return "–"
+        word = "antwortet" if r["state"] == "ok" else f"antwortet nicht ({e(r['why'])})"
+        return f"{word} seit {e(r['since'])}, geprüft {e(r['checked'])}"
     rows = "".join(
         f"<tr><td>{e(n)}</td><td><code>{e(t['url'])}</code></td>"
-        f"<td>{'eigene Route in den Tunnel' if t['ip'] else 'Name -- keine eigene Route, nur wenn der Tunnel ihn ohnehin erreicht'}</td></tr>"
+        f"<td>{'eigene Route in den Tunnel' if t['ip'] else 'Name -- keine eigene Route, nur wenn der Tunnel ihn ohnehin erreicht'}</td>"
+        f"<td>{seen(n)}</td></tr>"
         for n, t in sorted(TARGETS.items()))
     log = e("\n".join(LOG)) or "(noch nichts)"
     return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
@@ -378,14 +451,14 @@ table{{border-collapse:collapse;width:100%}} td,th{{text-align:left;padding:.3re
 <p>{('<strong>Letzter Fehler:</strong> ' + e(s['error'])) if s['error'] else ''}</p>
 <h2>Ziele</h2>
 {('<p><strong>' + e(TARGET_ERROR) + '</strong></p>') if TARGET_ERROR else ''}
-<table><tr><th>Name</th><th>Adresse hinter dem Tunnel</th><th>Weg</th></tr>{rows or '<tr><td colspan=3>keine</td></tr>'}</table>
+<table><tr><th>Name</th><th>Adresse hinter dem Tunnel</th><th>Weg</th><th>Erreichbar</th></tr>{rows or '<tr><td colspan=4>keine</td></tr>'}</table>
 <p>Erreichbar nur über eine Destination der Plattform: <code>--target through:&lt;diese Instanz&gt;/&lt;name&gt;</code>.
 Den Schlüssel des Ziels trägt die Destination, nicht diese App.</p>
 <h2>Was die Gegenseite nicht darf</h2>
 <p>Paketfilter: {e(s['filter'] or '–')} · ip_forward im Container: {e(s['forward'] or '–')}</p>
 <p>Aus der Datei verworfen: {e(', '.join(s['dropped']) or 'nichts')} · geschobene Routen und DNS werden ignoriert.</p>
 <h2>Protokoll (OpenVPN, letzte Zeilen)</h2><pre>{log}</pre>
-<p><small>vpn-client {VERSION} · RFC-0060</small></p></body></html>"""
+<p><small>vpn-client {VERSION} · RFC-0060 · Ziele geprüft alle {PROBE_EVERY} s (RFC-0087)</small></p></body></html>"""
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -395,6 +468,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 def main():
     threading.Thread(target=supervise, daemon=True).start()
+    threading.Thread(target=watch_targets, daemon=True).start()
     sys.stdout.write(f"vpn-client {VERSION} auf Port {PORT}\n")
     Server(("0.0.0.0", PORT), Handler).serve_forever()
 

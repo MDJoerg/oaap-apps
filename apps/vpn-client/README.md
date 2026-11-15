@@ -17,6 +17,14 @@ das Ziel benutzt, merkt keinen Unterschied zu einem direkten Ziel.
   Route in den Tunnel. Ein Paketfilter lässt aus dem Tunnel nur Antworten
   auf eigene Verbindungen herein und verwirft alles Weitergeleitete. Steht
   der Filter nicht, startet der Tunnel nicht.
+- **Prüft seine Ziele** (ab 0.2.0): Solange der Tunnel steht, baut die App
+  alle 30 s je Ziel eine TCP-Verbindung auf (5 s Geduld). Die Seite zeigt,
+  ob es antwortet und seit wann.
+- **Sagt es dem Knoten** (ab 0.2.0, Plattform ab 0.1.288, RFC-0087 §8.1):
+  Unter `/oaap/links` (Manifest `link_state`) fragt der Knoten nach dem
+  eigenen Tunnel und je Ziel `ok` oder `down`. Die Antwort enthält nur
+  Namen, nie eine Adresse. So sieht die Zentrale der Flotte „VPN aus“
+  und „Ziel antwortet nicht“ und meldet beides mit allem, was daran hängt.
 - **Bedient benannte Ziele** unter `/t/<name>/…` als schlichter
   Reverse-Proxy mit Streaming. Keine eigene Anmeldung und **kein
   Schlüssel des Ziels** — den ergänzt das Gateway aus der Destination.
