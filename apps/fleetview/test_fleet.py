@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""FleetView-Regeln (RFC-0021 §3) — ohne Netz, ohne Docker, ohne Knoten.
+"""FleetView-Regeln (RFC-0085 §10) — ohne Netz, ohne Docker, ohne Zwilling.
 
-Geprüft wird, was Entscheidungen trifft: Konfiguration lesen (Fehler
-benennen statt verschlucken), Zustand fortschreiben (nicht erreichbar
-ist ein Zustand), Sichten bauen (veraltet, Versions-Abweichung,
-attention-Sammlung inkl. unbekannter Arten) — und dass der Schlüssel
-nirgends auftaucht: nicht im Zustand, nicht in einer Zeile, nicht in
-einem Fehlertext.
+Geprüft wird, was Entscheidungen trifft: die Antwort des Zwillings lesen
+(die Form von oaap.data.twin §2.6/§2.6a), Knoten und Instanzen
+zusammenführen, Alias vor Knotenname, Lebenszeichen vor Selbstauskunft,
+der zuletzt gelesene Stand bei einem Fehlschlag — und dass der Schlüssel
+nirgends auftaucht. Dazu ein echter Lesezugriff gegen einen kleinen
+HTTP-Server, der wie der Zwilling antwortet.
 
 Run: python3 apps/fleetview/test_fleet.py
 """
@@ -14,7 +14,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet  # noqa: E402
@@ -32,180 +34,210 @@ def check(label, cond, detail=""):
         print(f"  FAIL  {label} {detail}")
 
 
-NOW = datetime(2026, 8, 23, 12, 0, 0, tzinfo=timezone.utc)
-SECRET = "kAqQ7vXo-fleet-key"
+NOW = datetime(2026, 11, 15, 22, 0, 0, tzinfo=timezone.utc)
+SECRET = "oaapk_fleetview_secret"
 
 
-def doc(node="oaapx01", version="0.1.41", instances=None, attention=None,
-        core_state="ok"):
-    return {"schema": "oaap.fleet.status/0.1", "node": node,
-            "platform_version": version, "profiles": [],
-            "time": "2026-08-23T11:59:00Z",
-            "core": [{"name": "identity", "state": core_state}],
-            "instances": instances or [], "attention": attention or []}
+def g(attrs, rels=None):
+    return {"origin": "platform:fleet", "object_id": "x",
+            "attributes": {("fleet" + k[0].upper() + k[1:]): {"value": v, "valid_from": None,
+                                                             "valid_to": None}
+                           for k, v in attrs.items()},
+            "relations": [{"key": "fleet" + k[0].upper() + k[1:], "target": t,
+                           "valid_from": None, "valid_to": None} for k, t in (rels or [])],
+            "activities": []}
 
 
-print("\n-- Konfiguration lesen")
-nodes, errs = fleet.parse_nodes(
-    "oaapx01=https://oaap.joomp.de\n# Kommentar\n"
-    "demo=https://oaap-demo.duckdns.org/;bad line;UPPER=https://x.de;"
-    "demo=https://doppelt.de;leer=")
-check("zwei gültige Knoten", [n["name"] for n in nodes] == ["oaapx01", "demo"])
-check("Adresse ohne Schluss-Schrägstrich",
-      nodes[1]["url"] == "https://oaap-demo.duckdns.org")
-check("drei Fehler benannt (bad line, UPPER, doppelt, leer)", len(errs) == 4, errs)
-keys = fleet.parse_keys(f"oaapx01={SECRET};#weg\nkaputt;demo=zwei")
-check("Schlüssel gelesen", keys == {"oaapx01": SECRET, "demo": "zwei"})
-check("Oberfläche erfährt nur Namen",
-      fleet.key_names(keys) == ["demo", "oaapx01"])
-
-print("\n-- Zustand fortschreiben (poll_all)")
-calls = []
-
-
-def fake_fetch_ok(url, key):
-    calls.append((url, key))
-    return doc(), ""
+def node(name, alias="", state="up", version="0.1.292", via="", profiles="",
+         address="", core_worst="ok", attention=None, oid=None):
+    attention = attention or []
+    return {"id": oid or f"urn:oaap:obj:{name}", "type": "FleetNode", "title": name,
+            "owner": "platform:fleet", "groups": {
+                "oaap.software": g({"platformVersion": version, "os": "Debian 13",
+                                    "profiles": profiles}),
+                "oaap.placement": g({"alias": alias or name, "place": "", "tags": "",
+                                     "address": address, "via": via}),
+                "oaap.services": g({"coreServices": "identity ok", "coreWorst": core_worst}),
+                "oaap.attention": g({"attentionCount": len(attention),
+                                     "attentionKinds": ", ".join(sorted({k for k, _ in attention})),
+                                     "attentionDetail": ", ".join(f"{k}: {d}" for k, d in attention)}),
+                "oaap.dns": g({"publicIp": "", "namesTotal": 2, "namesNotOk": 0,
+                               "namesProblems": ""}),
+                "oaap.liveness": g({"state": state, "since": "2026-11-15T21:02:20Z"}),
+            }}
 
 
-nodes2, _ = fleet.parse_nodes("oaapx01=https://oaap.joomp.de;demo=https://d.example")
-state = fleet.poll_all(nodes2, {"oaapx01": SECRET}, {}, fetch=fake_fetch_ok, now=NOW)
-check("Schlüssel geht nur in die Abfrage",
-      calls == [("https://oaap.joomp.de", SECRET)])
-check("ohne Schlüssel: benannter Zustand statt Abfrage",
-      state["demo"]["error"].startswith("Kein Schlüssel"))
-check("Erfolg trägt Zeitstempel",
-      state["oaapx01"]["fetched"] == "2026-08-23T12:00:00Z"
-      and state["oaapx01"]["error"] == "")
-check("Zustand enthält den Schlüssel nirgends",
-      SECRET not in json.dumps(state))
+def inst(name, node_name, state="ok", app="chat", channel="production"):
+    return {"id": f"urn:oaap:obj:{node_name}/{name}", "type": "FleetInstance", "title": name,
+            "owner": "platform:fleet", "groups": {
+                "oaap.appsoftware": g({"app": app, "appVersion": "0.2.0", "instanceName": name}),
+                "oaap.runtime": g({"channel": channel, "runState": state, "origin": "store",
+                                   "address": "", "autoAddress": f"{name}.x.de",
+                                   "autoState": "ok"},
+                                  [("isPartOf", f"urn:oaap:obj:{node_name}")]),
+            }}
 
 
-def fake_fetch_down(url, key):
-    return None, "Nicht erreichbar (TimeoutError)"
+NODES = [
+    node("oaap-demo", alias="oaapi01", profiles="broker, fleet-hub, store",
+         address="oaap-demo.duckdns.org"),
+    node("oaapx02", via="oaapx01", profiles="gateway-only", address="hsp.btocs.de"),
+    node("raspberrypi", address="raspberrypi"),
+    node("oaap-alt", state="removed", version="0.1.200"),
+    node("oaap-bernd", state="silent", attention=[("dns_drift", "bernd.de")]),
+]
+INSTS = [inst("fleetview", "oaap-demo"), inst("chat", "oaap-demo", state="warn"),
+         inst("chat", "oaapx02"), inst("alt", "oaapx02", state="removed"),
+         inst("kuma", "raspberrypi", state="standby")]
+
+print("\n-- Attribute lesen")
+o = NODES[0]
+check("Alias aus oaap.placement", fleet.attr(o, "oaap.placement", "alias") == "oaapi01")
+check("fehlendes Attribut gibt den Vorgabewert",
+      fleet.attr(o, "oaap.hostcare", "rebootRequired", None) is None)
+merged = {"groups": {"oaap.placement+abcd1234": NODES[0]["groups"]["oaap.placement"]}}
+check("Gruppe nach Zusammenführung (key+id) wird gefunden",
+      fleet.attr(merged, "oaap.placement", "alias") == "oaapi01")
+check("Beziehung isPartOf", fleet.rel_targets(INSTS[0], "oaap.runtime", "isPartOf")
+      == ["urn:oaap:obj:oaap-demo"])
+
+print("\n-- Portaladresse")
+check("Name mit Punkt -> https", fleet.portal_url("hsp.btocs.de") == "https://hsp.btocs.de")
+check("LAN-Name -> http", fleet.portal_url("raspberrypi") == "http://raspberrypi")
+check("IP -> http", fleet.portal_url("10.0.0.5") == "http://10.0.0.5")
+check("leer bleibt leer", fleet.portal_url("") == "")
+
+print("\n-- Zeilen")
+rows = fleet.node_rows(NODES, INSTS)
+by = {r["name"]: r for r in rows}
+check("alle fünf Knoten, auch ohne Liste und Schlüssel", len(rows) == 5)
+check("oaap-demo heißt oaapi01, der feste Name bleibt daneben",
+      by["oaap-demo"]["label"] == "oaapi01" and by["oaap-demo"]["renamed"])
+check("ohne Umbenennung kein Zusatz", not by["oaapx02"]["renamed"])
+check("oaapx02 meldet über oaapx01", by["oaapx02"]["via"] == "oaapx01")
+check("Instanzen dem Knoten zugeordnet",
+      [i["instance"] for i in by["oaap-demo"]["instances"]] == ["chat", "fleetview"])
+check("entfernte Instanz zählt nicht, steht aber benannt",
+      by["oaapx02"]["inst_total"] == 1
+      and [i["instance"] for i in by["oaapx02"]["removed_instances"]] == ["alt"])
+check("schlechteste Instanz bestimmt den lebenden Knoten", by["oaap-demo"]["state"] == "warn")
+check("Standby ist kein Fehler", by["raspberrypi"]["state"] == "ok"
+      and by["raspberrypi"]["inst_standby"] == 1)
+check("stumm schlägt Selbstauskunft", by["oaap-bernd"]["state"] == "silent")
+check("entfernt steht am Ende", rows[-1]["name"] == "oaap-alt"
+      and rows[-1]["state"] == "removed")
+check("sortiert nach angezeigtem Namen",
+      [r["label"] for r in rows[:-1]] == ["oaap-bernd", "oaapi01", "oaapx02", "raspberrypi"])
+check("find_row nach festem Namen und nach Alias",
+      fleet.find_row(rows, "oaap-demo") is fleet.find_row(rows, "oaapi01") is by["oaap-demo"])
+check("node_state: Dienst gestört", fleet.node_state("up", "error", []) == "error")
+check("node_state: unbekannter Instanzzustand -> unbekannt",
+      fleet.node_state("up", "ok", [{"state": "seltsam"}]) == "unknown")
+
+print("\n-- Sichten")
+items = fleet.fleet_attention(rows)
+check("stummer Knoten oben benannt",
+      any(i["node"] == "oaap-bernd" and i["label"] == "Stumm" for i in items))
+check("Hinweis-Art übersetzt", any(i["label"] == "DNS zeigt woanders hin" for i in items))
+check("Host-Pflege-Arten übersetzt (gefunden auf oaap-test, 15.11.)",
+      all(k in fleet.ATTENTION_LABELS for k in
+          ("reboot_required", "reboot_planned", "images_open", "advisories_open")))
+check("entfernter Knoten erzeugt keinen Hinweis",
+      not any(i["node"] == "oaap-alt" for i in items))
+check("Versionsabweichung ohne entfernten Knoten", fleet.version_note(rows) == "")
+dups = fleet.duplicate_instances(rows)
+check("chat auf zwei Knoten benannt (mit Alias)",
+      dups == [{"instance": "chat", "nodes": ["oaapi01", "oaapx02"]}], dups)
+hubs = fleet.pairing_targets(rows)
+check("Koppeln-Knopf zur Zentrale",
+      hubs == [{"name": "oaapi01", "url": "https://oaap-demo.duckdns.org/flotte#zentrale"}], hubs)
+check("Kopplungskarte des Knotens",
+      fleet.pairing_link(by["oaapx02"]) == "https://hsp.btocs.de/flotte#kopplung")
+check("ohne Adresse kein Kopplungslink", fleet.pairing_link(by["oaap-alt"]) == "")
+
+print("\n-- Lesen mit Fehlschlag")
 
 
-state2 = fleet.poll_all(nodes2, {"oaapx01": SECRET}, state,
-                        fetch=fake_fetch_down, now=NOW)
-check("Fehlschlag behält den letzten Stand",
-      state2["oaapx01"]["doc"] == state["oaapx01"]["doc"]
-      and state2["oaapx01"]["fetched"] == "2026-08-23T12:00:00Z"
-      and state2["oaapx01"]["error"].startswith("Nicht erreichbar"))
+def good(url, key, t):
+    return (NODES if t == "FleetNode" else INSTS), False
 
-print("\n-- Sicht bauen (node_rows)")
-rows = fleet.node_rows(nodes2, state2, now=NOW, interval=60)
-r = {x["name"]: x for x in rows}
-check("jeder konfigurierte Knoten hat eine Zeile", len(rows) == 2)
-check("frischer Stand ist nicht veraltet", r["oaapx01"]["stale"] is False)
-check("nie gesehener Knoten ist unreachable + veraltet",
-      r["demo"]["state"] == "unreachable" and r["demo"]["stale"])
-old = dict(state2["oaapx01"], fetched="2026-08-23T11:00:00Z")
-rows_old = fleet.node_rows(nodes2[:1], {"oaapx01": old}, now=NOW, interval=60)
-check("alter Stand wird als veraltet markiert", rows_old[0]["stale"] is True)
 
-sick = doc(instances=[{"instance": "a", "state": "ok"},
-                      {"instance": "b", "state": "error"}])
-rows_sick = fleet.node_rows(nodes2[:1],
-                            {"oaapx01": {"url": "x", "doc": sick, "error": "",
-                                         "fetched": "2026-08-23T12:00:00Z"}},
-                            now=NOW, interval=60)
-check("Gesamtzustand = schlechtester Einzelzustand",
-      rows_sick[0]["state"] == "error"
-      and rows_sick[0]["inst_ok"] == 1 and rows_sick[0]["inst_total"] == 2)
+def bad(url, key, t):
+    raise fleet.TwinError(403, "'fleetview' neither contributes nor consumes 'FleetNode'")
 
-print("\n-- attention und Versionen")
-attn_doc = doc(attention=[{"kind": "confirmation_pending", "instance": "b-test"},
-                          {"kind": "voellig_neu", "detail": "aus der Zukunft"}])
-rows3 = fleet.node_rows(nodes2, {
-    "oaapx01": {"url": "x", "doc": attn_doc, "error": "",
-                "fetched": "2026-08-23T12:00:00Z"},
-    "demo": {"url": "y", "doc": None, "error": "Abgewiesen (403) — Schlüssel prüfen",
-             "fetched": ""}}, now=NOW, interval=60)
-items = fleet.fleet_attention(rows3)
-labels = [(i["node"], i["label"]) for i in items]
-check("Bestätigung offen gesammelt",
-      ("oaapx01", "Bestätigung offen") in labels)
-check("unbekannte Art toleriert und roh gezeigt",
-      ("oaapx01", "voellig_neu") in labels)
-check("nicht erreichbarer Knoten steht in der Liste",
-      ("demo", "Nicht erreichbar") in labels)
-v_rows = [dict(rows3[0], version="0.1.40"), dict(rows3[0], version="0.1.41")]
-check("Versions-Abweichung wird benannt",
-      "0.1.40" in fleet.version_note(v_rows)
-      and "0.1.41" in fleet.version_note(v_rows))
-check("gleiche Versionen: kein Hinweis",
-      fleet.version_note([v_rows[0], v_rows[0]]) == "")
 
-print("\n-- Schema 0.2: Namen, öffentliche IP, Doppel-Instanzen")
-doc02 = doc()
-doc02["names"] = [{"name": "hub.beispiel.de", "kind": "instance",
-                   "instance": "bdt-hub", "state": "ok",
-                   "resolved": "203.0.113.7"}]
-doc02["public_ip"] = "203.0.113.7"
-rows02 = fleet.node_rows(nodes2[:1], {
-    "oaapx01": {"url": "x", "doc": doc02, "error": "",
-                "fetched": "2026-08-23T12:00:00Z"}}, now=NOW, interval=60)
-check("Namen und IP kommen durch",
-      rows02[0]["names"][0]["name"] == "hub.beispiel.de"
-      and rows02[0]["public_ip"] == "203.0.113.7")
-check("0.1-Knoten ohne names bleibt leer statt kaputt",
-      rows3[0]["names"] == [] or isinstance(rows3[0]["names"], list))
+st = fleet.read_fleet("http://gw/twin", SECRET, None, fetch=good, now=NOW)
+check("gelesen mit Zeitstempel", st["read"] == "2026-11-15T22:00:00Z" and not st["error"]
+      and len(st["nodes"]) == 5)
+st2 = fleet.read_fleet("http://gw/twin", SECRET, st, fetch=bad, now=NOW)
+check("Fehlschlag behält den letzten Stand", len(st2["nodes"]) == 5
+      and st2["read"] == st["read"] and "403" in st2["error"])
+st3 = fleet.read_fleet("", "", None, now=NOW)
+check("ohne Zugang: verständlicher Text, kein Absturz",
+      "keinen Zugang zum Zwilling" in st3["error"] and st3["nodes"] == [])
+check("Alter in Sekunden", fleet.age_seconds("2026-11-15T21:59:00Z", NOW) == 60)
+check("Alter unlesbar -> None", fleet.age_seconds("", NOW) is None)
 
-d_a = doc(instances=[{"instance": "bdt-hub-test", "state": "ok"},
-                     {"instance": "nur-hier", "state": "ok"}])
-d_b = doc(instances=[{"instance": "bdt-hub-test", "state": "ok"},
-                     {"instance": "uptime-kuma", "state": "ok"}])
-d_c = doc(instances=[{"instance": "uptime-kuma", "state": "ok"}])
-rows_dup = fleet.node_rows(
-    fleet.parse_nodes("a=https://a.x;b=https://b.x;c=https://c.x")[0],
-    {"a": {"url": "", "doc": d_a, "error": "", "fetched": "2026-08-23T12:00:00Z"},
-     "b": {"url": "", "doc": d_b, "error": "", "fetched": "2026-08-23T12:00:00Z"},
-     "c": {"url": "", "doc": d_c, "error": "", "fetched": "2026-08-23T12:00:00Z"}},
-    now=NOW, interval=60)
-dups = fleet.duplicate_instances(rows_dup)
-check("Doppel-Instanzen über Knoten benannt",
-      {"instance": "bdt-hub-test", "nodes": ["a", "b"]} in dups
-      and {"instance": "uptime-kuma", "nodes": ["b", "c"]} in dups)
-check("Einzelgänger tauchen nicht auf",
-      not any(d["instance"] == "nur-hier" for d in dups))
+d = tempfile.mkdtemp()
+path = os.path.join(d, "fleet-state.json")
+fleet.save_state(path, st)
+check("Zustand übersteht Speichern/Laden", fleet.load_state(path)["read"] == st["read"])
+check("Schlüssel steht nicht im Zustand", SECRET not in open(path, encoding="utf-8").read())
 
-print("\n-- Dokument-Prüfung in fetch_status (ohne Netz simuliert)")
-check("fremdes JSON wird abgelehnt",
-      not str({"schema": "anders/1"}).startswith(fleet.SCHEMA_PREFIX))
+print("\n-- Echter Lesezugriff gegen einen Schein-Zwilling")
+seen = {}
 
-print("\n-- Zustand speichern/laden")
-tmp = os.path.join(tempfile.mkdtemp(), "state.json")
-fleet.save_state(tmp, state2)
-check("Rundreise über die Platte", fleet.load_state(tmp) == state2)
-check("Datei enthält den Schlüssel nicht",
-      SECRET not in open(tmp, encoding="utf-8").read())
-check("kaputte Datei lädt als leer", fleet.load_state(tmp + ".nix") == {})
 
-print("\nStandby (Schema 0.4): schlafende Instanzen sind keine Stoerung")
-doc_sb = {"core": [{"name": "gateway", "state": "ok"}],
-          "instances": [{"instance": "a", "state": "ok"},
-                        {"instance": "b", "state": "standby"}]}
-check("ein Knoten mit schlafender Instanz bleibt gesund", fleet._doc_state(doc_sb) == "ok")
-doc_sb["instances"].append({"instance": "c", "state": "warn"})
-check("und ein echter Befund schlaegt trotzdem durch", fleet._doc_state(doc_sb) == "warn")
-rows_sb = fleet.node_rows([{"name": "n", "url": "http://n"}],
-                          {"n": {"url": "http://n", "doc": doc_sb, "error": "",
-                                 "fetched": "2026-10-16T10:00:00Z"}})
-check("die Zeile zaehlt Standby getrennt", rows_sb[0]["inst_standby"] == 1
-      and rows_sb[0]["inst_ok"] == 1 and rows_sb[0]["inst_total"] == 3)
-check("Standby hat ein Etikett", fleet.STATE_LABELS["standby"] == "Standby")
+class Twin(BaseHTTPRequestHandler):
+    def do_GET(self):
+        seen["path"] = self.path
+        seen["auth"] = self.headers.get("Authorization", "")
+        if self.headers.get("Authorization") != f"Bearer {SECRET}":
+            body, code = b"no", 401
+        elif self.path == "/twin/objects?type=FleetNode":
+            body, code = json.dumps({"objects": NODES, "truncated": False}).encode(), 200
+        elif self.path == "/twin/objects?type=FleetInstance":
+            body, code = json.dumps({"objects": INSTS, "truncated": True}).encode(), 200
+        else:
+            body, code = b"'fleetview' neither contributes nor consumes", 403
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-print("\nKopplung (RFC-0085 §17): FleetView verlinkt nur, gekoppelt wird im Portal")
-rows_p = [{"name": "hub", "url": "https://hub.example/", "profiles": ["fleet-hub", "exposed"]},
-          {"name": "x", "url": "https://x.example", "profiles": ["exposed"]},
-          {"name": "alt", "url": "https://alt.example", "profiles": []}]
-tg = fleet.pairing_targets(rows_p)
-check("nur die Zentrale ist Kopplungsziel", [t["name"] for t in tg] == ["hub"], tg)
-check("Link auf die Zentrale-Karte, ohne doppelten Schrägstrich",
-      tg and tg[0]["url"] == "https://hub.example/flotte#zentrale", tg)
-check("ohne Zentrale kein Ziel", fleet.pairing_targets(rows_p[1:]) == [])
-check("Knoten-Link auf die eigene Kopplungskarte",
-      fleet.pairing_link(rows_p[1]) == "https://x.example/flotte#kopplung")
+    def log_message(self, *a):
+        pass
 
-print(f"\n{ok} passed, {fail} failed")
+
+srv = ThreadingHTTPServer(("127.0.0.1", 0), Twin)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = f"http://127.0.0.1:{srv.server_address[1]}/twin"
+st = fleet.read_fleet(url, SECRET, None)
+check("liest Knoten und Instanzen über /objects?type=", len(st["nodes"]) == 5
+      and len(st["instances"]) == 5 and not st["error"], st.get("error"))
+check("gekürzte Liste wird gemeldet", st["truncated"] is True)
+check("Schlüssel nur im Authorization-Header", seen["auth"] == f"Bearer {SECRET}")
+try:
+    fleet.fetch_type(url, SECRET, "Fremd")
+    check("fremder Typ verweigert", False)
+except fleet.TwinError as e:
+    check("fremder Typ verweigert (403 mit Text des Zwillings)",
+          e.status == 403 and "consumes" in e.detail)
+st = fleet.read_fleet(url, "falsch", None)
+check("falscher Schlüssel: Fehler ohne Schlüssel im Text",
+      st["error"] and "falsch" not in st["error"] and SECRET not in st["error"])
+srv.shutdown()
+
+print("\n-- Manifest")
+here = os.path.dirname(os.path.abspath(__file__))
+man = open(os.path.join(here, "oaap-app.yaml"), encoding="utf-8").read()
+check("bindet FleetNode und FleetInstance als consumes",
+      "consumes:" in man and "type: FleetNode" in man and "type: FleetInstance" in man)
+check("keine Knotenliste, keine Schlüssel mehr",
+      "FLEETVIEW_NODES" not in man and "FLEETVIEW_KEYS" not in man)
+appsrc = open(os.path.join(here, "app.py"), encoding="utf-8").read()
+check("Version in app.py und Manifest gleich",
+      'VERSION = "1.0.0"' in appsrc and "version: 1.0.0" in man)
+
+print(f"\n{ok} bestanden, {fail} fehlgeschlagen")
 sys.exit(1 if fail else 0)

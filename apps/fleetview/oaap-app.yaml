@@ -3,14 +3,27 @@ oaap_manifest: "0.10"
 app:
   id: fleetview
   name: OAAP FleetView
-  version: 0.4.0
+  version: 1.0.0
   type: native
   class: frontend
-  description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten (RFC-0021)"
+  description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten, aus dem Zwilling der Zentrale (RFC-0021, RFC-0085 §10)"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
   rebuild: self
+
+# RFC-0085 §10: FleetView liest, was der Flottendienst der Zentrale in den
+# Zwilling dieses Mandanten schreibt (Nachtrag A2). Die Bindung macht die
+# Installation; sie stellt dabei den Maschinenschlüssel der Instanz aus
+# (OAAP_PLATFORM_KEY, OAAP_TWIN_URL). Die Typen gibt es nur auf einer
+# Zentrale, die `oaap fleet hub twin` gesetzt hat — anderswo verweigert
+# die Installation die Bindung. In einem anderen Mandanten der Zentrale
+# bleibt die Liste leer (jeder Mandant liest nur seinen Zwilling):
+# FleetView gehört in den Mandanten, in den die Flotte schreibt (meist
+# oaap-ops).
+consumes:
+  - type: FleetNode
+  - type: FleetInstance
 
 services:
   web:
@@ -22,39 +35,22 @@ routes:
   # Dienstleister. `server_admin` wird nie an Apps durchgereicht
   # (RFC-0008) und jeder server_admin trägt in der Praxis auch `admin`
   # — deshalb steht hier admin. Die Rolle der Dienstleister, die die
-  # Landschaft lesend betreuen, heißt seit RFC-0039 `support` (vorher
-  # stand hier `partner`, das inzwischen nur noch die externe Firma
-  # meint — dieselbe Kombination wie die Gesundheitsseite).
+  # Landschaft lesend betreuen, heißt seit RFC-0039 `support`.
   - path: /
     roles: [admin, support]
 
 storage:
-  # Nur der letzte bekannte Stand je Knoten (fleet-state.json) — damit
-  # ein nicht erreichbarer Knoten als "veraltet seit ..." erscheint
-  # statt leer. KEINE Schlüssel: die leben ausschließlich in der
-  # geheimen Konfiguration und landen nie auf diesem Mount.
+  # Nur der zuletzt gelesene Stand (fleet-state.json) — damit ein nicht
+  # lesbarer Zwilling den letzten Stand zeigt statt einer leeren Seite.
+  # KEIN Schlüssel: der lebt ausschließlich in der Umgebung der Instanz.
   - name: data
     mount: /data
 
 config:
-  # Welche Knoten beobachtet werden. Eine Angabe je Zeile oder mit ';'
-  # getrennt: name=https://adresse (z. B. oaapx01=https://oaap.joomp.de).
-  - key: FLEETVIEW_NODES
-    label: "Knotenliste (name=https://adresse, ';' oder Zeilenumbruch trennt)"
-    multiline: true
-    default: ""
-  # Je Knoten ein Flotten-Schlüssel (auf dem Knoten ausgestellt mit
-  # 'sudo oaap fleet key issue <label>'): name=schlüssel, ';' trennt.
-  # Geheim — wird nie zurückgezeigt, nie gespeichert außer als env der
-  # Instanz, nie gerendert.
-  - key: FLEETVIEW_KEYS
-    label: "Flotten-Schlüssel (name=schlüssel, ';' trennt)"
-    multiline: true
-    secret: true
-  # Abfragetakt. RFC-0021 Entscheidung 2: Minutenbereich — Alarmierung
-  # bleibt Sache des Monitorings (Uptime Kuma).
+  # Lesetakt. RFC-0021 Entscheidung 2: Minutenbereich — alarmiert wird
+  # von der Zentrale (RFC-0080), nicht von FleetView.
   - key: FLEETVIEW_POLL_SECONDS
-    label: "Abfragetakt in Sekunden (30–3600)"
+    label: "Lesetakt in Sekunden (30–3600)"
     default: "60"
 
 health:
