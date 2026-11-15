@@ -195,5 +195,17 @@ check("die Zeile zaehlt Standby getrennt", rows_sb[0]["inst_standby"] == 1
       and rows_sb[0]["inst_ok"] == 1 and rows_sb[0]["inst_total"] == 3)
 check("Standby hat ein Etikett", fleet.STATE_LABELS["standby"] == "Standby")
 
+print("\nKopplung (RFC-0085 §17): FleetView verlinkt nur, gekoppelt wird im Portal")
+rows_p = [{"name": "hub", "url": "https://hub.example/", "profiles": ["fleet-hub", "exposed"]},
+          {"name": "x", "url": "https://x.example", "profiles": ["exposed"]},
+          {"name": "alt", "url": "https://alt.example", "profiles": []}]
+tg = fleet.pairing_targets(rows_p)
+check("nur die Zentrale ist Kopplungsziel", [t["name"] for t in tg] == ["hub"], tg)
+check("Link auf die Zentrale-Karte, ohne doppelten Schrägstrich",
+      tg and tg[0]["url"] == "https://hub.example/flotte#zentrale", tg)
+check("ohne Zentrale kein Ziel", fleet.pairing_targets(rows_p[1:]) == [])
+check("Knoten-Link auf die eigene Kopplungskarte",
+      fleet.pairing_link(rows_p[1]) == "https://x.example/flotte#kopplung")
+
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

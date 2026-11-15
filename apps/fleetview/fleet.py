@@ -282,3 +282,17 @@ def save_state(path, state):
         json.dump(state, f, ensure_ascii=False, indent=1)
     import os
     os.replace(tmp, path)
+
+
+def pairing_targets(rows):
+    """RFC-0085 §17 (A3): wo man Knoten koppelt. Gekoppelt wird im Portal
+    der Zentrale (Profil `fleet-hub`), nicht hier — FleetView bleibt
+    lesend und verlinkt nur. Eine Zentrale je Eintrag, in Listenreihenfolge."""
+    return [{"name": r["name"], "url": r["url"].rstrip("/") + "/flotte#zentrale"}
+            for r in rows if "fleet-hub" in (r.get("profiles") or [])]
+
+
+def pairing_link(row):
+    """Die Kopplungskarte eines Knotens in seinem eigenen Portal (dort wird
+    die Kopplungsdatei eingespielt)."""
+    return row["url"].rstrip("/") + "/flotte#kopplung"

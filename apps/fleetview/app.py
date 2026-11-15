@@ -236,8 +236,16 @@ def overview(user, roles):
     attn = fleet.fleet_attention(rows)
     note = fleet.version_note(rows)
 
-    body = ['<div class="pagehead"><h1>Flotte</h1>'
-            '<form method="post" action="poll"><button>Jetzt aktualisieren</button></form>'
+    # RFC-0085 §17: gekoppelt wird im Portal der Zentrale; FleetView
+    # verlinkt nur dorthin und bleibt lesend.
+    hubs = fleet.pairing_targets(rows)
+    pair_btns = "".join(
+        f'<a class="btn" href="{esc(h["url"])}" rel="noopener">Knoten koppeln'
+        + (f' ({esc(h["name"])})' if len(hubs) > 1 else "") + "</a> "
+        for h in hubs)
+    body = ['<div class="pagehead"><h1>Flotte</h1><div>' + pair_btns +
+            '<form method="post" action="poll" style="display:inline">'
+            "<button>Jetzt aktualisieren</button></form></div>"
             "</div>"]
     if NODE_ERRORS:
         errs = "".join(f"<li>{esc(e)}</li>" for e in NODE_ERRORS)
@@ -311,7 +319,8 @@ def node_page(name, user, roles):
 
     body = [f'<a class="back" href="../">&larr; Zur Flotte</a>',
             f'<div class="pagehead"><h1>{esc(name)}</h1>'
-            f'<a class="btn" href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a></div>']
+            f'<div><a class="btn" href="{esc(fleet.pairing_link(r))}" rel="noopener">Kopplung</a> '
+            f'<a class="btn" href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a></div></div>']
     body.append(attention_card(attn))
     facts = [
         ("Zustand", badge(r["state"], "veraltet" if r["stale"] and r["fetched"] else "")),
