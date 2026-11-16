@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import door
 
-VERSION = "0.2.0"
+VERSION = "0.2.2"
 PORT = 8000
 
 esc = html.escape

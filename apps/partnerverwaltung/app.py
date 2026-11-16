@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import twin
 
-VERSION = "0.1.2"
+VERSION = "0.1.5"
 PORT = 8000
 
 DATA_DIR = os.environ.get("PARTNERVERWALTUNG_DATA_DIR", "/data")

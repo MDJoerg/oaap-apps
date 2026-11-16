@@ -51,7 +51,7 @@ import yaml
 import checker as ck
 import editor as ed
 
-VERSION = "0.3.0"
+VERSION = "0.3.3"
 PORT = 8000
 FETCH_TIMEOUT = 15
 

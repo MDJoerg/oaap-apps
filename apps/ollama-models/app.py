@@ -42,7 +42,7 @@ from urllib.parse import unquote_plus
 
 import ollama
 
-VERSION = "0.1.0"
+VERSION = "0.1.2"
 PORT = 8000
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://oaap-app-ollama:11434").rstrip("/")

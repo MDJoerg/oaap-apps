@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import twin
 
-VERSION = "0.1.0"
+VERSION = "0.1.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MITARBEITERVERWALTUNG_DATA_DIR", "/data")

@@ -38,6 +38,7 @@ gehoert das Datum zur Zahl daneben.
 Aufruf: python3 check-store.py        # meldet, was auseinanderlaeuft
         python3 check-store.py --fix  # zieht den Katalog nach
 """
+import glob
 import json
 import os
 import re
@@ -170,8 +171,35 @@ for n, line in enumerate(readme_lines):
         readme_changed = True
         fixed.append(f"README {app_id} -> {want}")
 
+# --- vierte Stelle: VERSION = "..." im Code ----------------------------
+# 16.11.2026: ai-gateway 0.7.1 lief produktiv und meldete an /healthz
+# weiter 0.7.0 -- die Konstante im Code war die vierte Abschrift, und elf
+# Apps lagen dort zurueck. Wer /healthz liest (Flotte, Betreiber), soll
+# die Version sehen, die wirklich laeuft.
+CONST = re.compile(r'^VERSION = "([^"]*)"', re.M)
+code_fixes = {}
+for path in sorted(glob.glob(os.path.join(HERE, "apps", "*", "app.py"))):
+    app_dir = os.path.dirname(path)
+    man = os.path.join(app_dir, "oaap-app.yaml")
+    if not os.path.exists(man):
+        continue
+    with open(path, encoding="utf-8", newline="") as f:
+        src = f.read()
+    m = CONST.search(src)
+    if not m:
+        continue
+    with open(man, encoding="utf-8") as f:
+        want = str(((yaml.safe_load(f) or {}).get("app") or {}).get("version"))
+    if m.group(1) == want:
+        continue
+    app_id = os.path.basename(app_dir)
+    problems.append(f"Code {app_id}: VERSION {m.group(1)!r} — Manifest {want!r}")
+    if FIX:
+        code_fixes[path] = src[:m.start(1)] + want + src[m.end(1):]
+        fixed.append(f"Code {app_id} -> {want}")
+
 if not problems:
-    print("Katalog, README und Manifeste stimmen ueberein.")
+    print("Katalog, README, Code und Manifeste stimmen ueberein.")
     sys.exit(0)
 
 print(f"{len(problems)} Abweichung(en) — das Manifest gilt:")
@@ -190,6 +218,9 @@ with open(STORE, "w", encoding="utf-8", newline="\n") as f:
 if readme_changed:
     with open(README, "w", encoding="utf-8", newline="") as f:
         f.write("\n".join(readme_lines))
+for path, src in code_fixes.items():
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(src)
 print(f"\n{len(fixed)} Angabe(n) nachgezogen.")
 if dates_todo:
     print("\nVON HAND NACHZUTRAGEN — das Datum gehoert zur Version:")

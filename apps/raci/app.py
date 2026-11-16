@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import twin
 
-VERSION = "0.1.0"
+VERSION = "0.1.3"
 PORT = 8000
 
 ASSIGNMENT_GROUP = "raci.assignments"
