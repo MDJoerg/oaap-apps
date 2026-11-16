@@ -1,4 +1,4 @@
-"""Paketkatalog 0.3 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
+"""Paketkatalog 0.4 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
 seit 0.2 auch als Spiegel eines Marketplace-Feeds (RFC-0077 §7.2, upstream.py).
 
 Der Betreiber lädt Pakete hoch, gibt Versionen frei und kann jede
@@ -25,7 +25,7 @@ import multipart
 import upstream
 import zipinfo
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:
@@ -96,15 +96,26 @@ def render_index():
                 f'<input type=text name=reason placeholder="{"Grund (nötig)" if rel else "Grund"}" size=14 '
                 f'{"required" if rel else ""}>'
                 f'<button class="danger">Löschen</button></form>']
+            vis = CATALOG.visible_to(app_id)
+            vis_form = (
+                f'<form method=post action="/visible" style="margin:.4rem 0 0">'
+                f'<input type=hidden name=app value="{aid}">'
+                f'<input type=text name=visible_to size=12 value="{esc(", ".join(vis))}" '
+                f'placeholder="alle" title="Mandanten-Kennungen, durch Komma getrennt; leer = alle">'
+                f' <button class=quiet>Sichtbar für</button></form>'
+                f'<span class=muted>{"nur " + esc(", ".join(vis)) if vis else "alle Mandanten"}</span>')
+            origin = r.get("origin") or {}
             rows.append(
                 f"<tr><td>{esc(name) if i == 0 else ''}"
-                f"{'<br><span class=muted><code>' + aid + '</code></span>' if i == 0 else ''}</td>"
+                f"{'<br><span class=muted><code>' + aid + '</code></span>' + vis_form if i == 0 else ''}</td>"
                 f"<td><strong>{ver}</strong> "
                 f'<span class="badge {"on" if rel else ""}">'
                 f'{"freigegeben" if rel else "nicht freigegeben"}</span></td>'
                 f'<td class=muted>{r["size"] / 1048576:.1f} MB<br>'
                 f'<code>{esc(r["sha256"][:12])}</code></td>'
-                f'<td class=muted>{esc(r["uploaded_at"][:10])}<br>{esc(r["uploaded_by"])}</td>'
+                f'<td class=muted>{esc(r["uploaded_at"][:10])}<br>{esc(r["uploaded_by"])}'
+                + ('<br><span class=badge>vom Knoten übernommen</span>' if origin else '')
+                + '</td>'
                 f'<td>{esc(r.get("note", ""))}'
                 + (f'<br><span class=err>im Marketplace zurückgerufen: '
                    f'{esc(r["withdrawn_upstream"])}</span>' if r.get("withdrawn_upstream") else "")
@@ -129,7 +140,12 @@ def render_index():
         '<p><code>sudo oaap store add-catalog &lt;Name dieser Instanz&gt;</code></p>'
         '<p class="muted" style="margin:0">Danach erscheinen die freigegebenen Apps im Store '
         'jedes Mandanten-Administrators; Installieren und Aktualisieren gehen wie bei jeder '
-        'anderen Quelle. Der Knoten prüft jedes Paket vor dem Entpacken noch einmal.</p></div>')
+        'anderen Quelle. Der Knoten prüft jedes Paket vor dem Entpacken noch einmal.</p>'
+        '<p class="muted" style="margin:.5rem 0 0">Ein getestetes Paket kommt ohne Herunter- und '
+        'Hochladen hierher: im Portal auf der Instanz, Reiter Deployment, „In den Katalog '
+        'übernehmen“ (oder <code>sudo oaap app catalog-put &lt;Instanz&gt;</code>). Es landet als '
+        '<strong>nicht freigegeben</strong>; freigeben bleibt hier Deine Entscheidung. Mit „Sichtbar '
+        'für“ erscheint eine App nur im Store der genannten Mandanten.</p></div>')
     return page(body)
 
 
@@ -222,6 +238,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             q = parse_qs(u.query)
             msg = (q.get("m") or [""])[0][:300]
+            CATALOG.ingest_inbox(MAX_BYTES)     # was der Knoten gerade gebracht hat
             body = render_index()
             if msg:
                 body = body.replace("<main>", "<main>" + (
@@ -283,6 +300,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/upstream/unfollow" and MIRROR:
             MIRROR.unfollow(app)
             return self.back(f"{app} wird nicht mehr gefolgt (Vorhandenes bleibt).")
+        if path == "/visible":
+            try:
+                labels = cat.parse_labels(form.get("visible_to", ""))
+                CATALOG.set_visible(app, labels, who)
+            except cat.CatalogError as e:
+                return self.back(str(e), False)
+            return self.back(f"{app}: sichtbar für "
+                             + (", ".join(labels) if labels else "alle Mandanten"))
         try:
             if path == "/release":
                 CATALOG.set_released(app, version, form.get("released") == "1", who)
@@ -322,9 +347,27 @@ def make_server(data_dir=None, port=PORT, env=None, opener=None):
     return ThreadingHTTPServer(("0.0.0.0", port), Handler)
 
 
+INBOX_SECONDS = 5
+
+
+def _inbox_loop():
+    """Der Eingang des Knotens (RFC-0050 §9): kurz getaktet, weil auf der
+    anderen Seite ein Mensch auf "übernommen" oder den Grund der Ablehnung
+    wartet. Leer kostet das ein listdir."""
+    import time
+    while True:
+        try:
+            CATALOG.ingest_inbox(MAX_BYTES)
+        except Exception as e:                       # noqa: BLE001
+            print(f"inbox: {type(e).__name__}: {e}", flush=True)
+        time.sleep(INBOX_SECONDS)
+
+
 def main():
+    import threading
     srv = make_server()
     MIRROR.start()
+    threading.Thread(target=_inbox_loop, daemon=True).start()
     print(f"package-catalog {VERSION} on :{PORT}, data {DATA_DIR}"
           + (f", mirror {MIRROR.channel}/{MIRROR.mode}" if MIRROR.enabled else ""), flush=True)
     try:

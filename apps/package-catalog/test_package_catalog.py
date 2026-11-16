@@ -209,8 +209,106 @@ if os.path.isdir(NODE):
     p = node.stage(C3.dir, doc["apps"][0], stage, 10 ** 9)
     ok("... und prueft die Kopie des Pakets gegen Groesse und Pruefsumme",
        node.sha256_file(p) == doc["apps"][0]["package"]["sha256"])
+    C3.set_visible("website", ["pxx", "bec"], "betreiber")
+    doc = node.read_list(C3.dir)
+    web = next(a for a in doc["apps"] if a["id"] == "website")
+    ok("0.4: visible_to geht in die Liste und der Knoten liest es mit",
+       web.get("visible_to") == ["bec", "pxx"], web)
+    ok("... eine App ohne visible_to bleibt fuer alle (Feld fehlt)",
+       "visible_to" not in next(a for a in doc["apps"] if a["id"] == "vereinsportal"))
 else:
     print("SKIP  Knoten-Leser nicht gefunden (nur im Gesamt-Repository pruefbar)")
+
+print("\n=== 0.4: Sichtbar fuer (visible_to) ===")
+ok("Kennungen werden gelesen, sortiert, doppelte fallen weg",
+   cat.parse_labels("pxx, bec;pxx  ") == ["bec", "pxx"])
+ok("leer heisst alle", cat.parse_labels("  ") == [])
+refuses("eine Kennung, die der Knoten nie vergibt", lambda: cat.parse_labels("Pxx"),
+        "keine Mandanten-Kennung")
+C4 = cat.Catalog(tempfile.mkdtemp(prefix="oaap-catalog-vis-"))
+C4.add(to_file(pkg("bdt-app", "1.0.0")), 10 ** 8, "betreiber")
+C4.set_released("bdt-app", "1.0.0", True, "betreiber")
+C4.set_visible("bdt-app", ["pxx"], "betreiber")
+lst = json.load(open(os.path.join(C4.dir, "store.json")))
+ok("store.json traegt visible_to", lst["apps"][0].get("visible_to") == ["pxx"], lst)
+C4.set_visible("bdt-app", [], "betreiber")
+lst = json.load(open(os.path.join(C4.dir, "store.json")))
+ok("leer gesetzt: das Feld verschwindet wieder (= alle)",
+   "visible_to" not in lst["apps"][0], lst)
+ok("jede Aenderung steht im Protokoll",
+   [e["visible_to"] for e in C4.state["audit"] if e["action"] == "visible"]
+   == [["pxx"], "alle"], C4.state["audit"])
+refuses("visible_to fuer eine App, die es nicht gibt",
+        lambda: C4.set_visible("gibtsnicht", ["pxx"], "b"), "gibt es nicht")
+
+print("\n=== 0.4: der Eingang des Knotens (In den Katalog uebernehmen) ===")
+C5 = cat.Catalog(tempfile.mkdtemp(prefix="oaap-catalog-inbox-"))
+BOX = os.path.join(C5.dir, "inbox")
+os.makedirs(BOX)
+
+
+def drop(data, stem=None, **meta):
+    sha = hashlib.sha256(data).hexdigest()
+    stem = stem or f"bdt-app-1.1.0-{sha[:12]}"
+    with open(os.path.join(BOX, stem + ".zip"), "wb") as f:
+        f.write(data)
+    m = {"sha256": sha, "tenant": "bdt", "instance": "bdt-app-test",
+         "channel": "test", "by": "joerg"}
+    m.update(meta)
+    with open(os.path.join(BOX, stem + ".json"), "w") as f:
+        json.dump(m, f)
+    return stem
+
+
+def result(stem):
+    with open(os.path.join(BOX, stem + ".result.json")) as f:
+        return json.load(f)
+
+
+ok("ein leerer Eingang: nichts zu tun", C5.ingest_inbox(10 ** 8) == 0)
+st = drop(pkg("bdt-app", "1.1.0"))
+ok("ein Eintrag wird bearbeitet", C5.ingest_inbox(10 ** 8) == 1)
+r = C5.get("bdt-app", "1.1.0")
+ok("aufgenommen, aber NICHT freigegeben", r is not None and r["released"] is False, r)
+ok("mit Herkunft (Mandant, Instanz, Kanal) und dem Menschen, der es ausloeste",
+   r["origin"] == {"tenant": "bdt", "instance": "bdt-app-test", "channel": "test"}
+   and r["uploaded_by"] == "joerg" and "bdt/bdt-app-test" in r["note"], r)
+ok("die Antwort steht fuer den Knoten bereit",
+   result(st)["ok"] is True and "nicht freigegeben" in result(st)["message"], result(st))
+ok("Paket und Notiz sind aus dem Eingang verschwunden",
+   sorted(os.listdir(BOX)) == [st + ".result.json"], os.listdir(BOX))
+ok("das Protokoll unterscheidet Uebernahme und Upload",
+   C5.state["audit"][-1]["action"] == "take-over")
+ok("nicht freigegeben heisst: nicht in der Liste",
+   json.load(open(os.path.join(C5.dir, "store.json")))["apps"] == [])
+st2 = drop(pkg("bdt-app", "1.1.0"), stem="bdt-app-1.1.0-aaaaaaaaaaaa")
+C5.ingest_inbox(10 ** 8)
+ok("dieselbe Version noch einmal: abgelehnt, mit Grund fuer den Knoten",
+   result(st2)["ok"] is False and "gibt es schon" in result(st2)["message"], result(st2))
+data = pkg("bdt-app", "1.2.0")
+sha = hashlib.sha256(data).hexdigest()
+st3 = drop(data, sha256="0" * 64, stem=f"bdt-app-1.2.0-{sha[:12]}")
+C5.ingest_inbox(10 ** 8)
+ok("Pruefsumme passt nicht zur Notiz: abgelehnt, nichts aufgenommen",
+   result(st3)["ok"] is False and "Prüfsumme" in result(st3)["message"]
+   and C5.get("bdt-app", "1.2.0") is None, result(st3))
+st4 = drop(zip_bytes({"x.txt": "kein Manifest"}), stem="kaputt-0.0.1-bbbbbbbbbbbb")
+C5.ingest_inbox(10 ** 8)
+ok("ein Paket, das ein Upload ablehnen wuerde, lehnt auch der Eingang ab",
+   result(st4)["ok"] is False and "oaap-app.yaml" in result(st4)["message"], result(st4))
+with open(os.path.join(BOX, "nur-notiz-1.0.0-cccccccccccc.json"), "w") as f:
+    json.dump({"sha256": "1" * 64}, f)
+C5.ingest_inbox(10 ** 8)
+ok("eine Notiz ohne Paket: abgelehnt, die Notiz ist weg",
+   result("nur-notiz-1.0.0-cccccccccccc")["ok"] is False
+   and not os.path.exists(os.path.join(BOX, "nur-notiz-1.0.0-cccccccccccc.json")))
+with open(os.path.join(BOX, "../ausbruch.json"), "w") as f:
+    f.write("{}")
+with open(os.path.join(BOX, "Kein Stamm.json"), "w") as f:
+    f.write("{}")
+ok("eine Datei mit fremdem Namen wird nicht angefasst",
+   C5.ingest_inbox(10 ** 8) == 0 and os.path.exists(os.path.join(BOX, "Kein Stamm.json")))
+ok("kein Rest im tmp-Verzeichnis", os.listdir(C5.tmp_dir()) == [], os.listdir(C5.tmp_dir()))
 
 print("\n=== der Zugang ===")
 SRV = appmod.make_server(tempfile.mkdtemp(prefix="oaap-catalog-http-"), 0)
@@ -291,6 +389,19 @@ ok("eine freigegebene Version ohne Grund loeschen: abgelehnt, sie bleibt",
 s, h, _d = call("POST", "/delete", b"app=meinapp&version=1.0.0&reason=Fehlfreigabe",
                 dict(ADMIN, **{"Content-Type": "application/x-www-form-urlencoded"}))
 ok("mit Grund: weg", appmod.CATALOG.get("meinapp", "1.0.0") is None)
+upload(pkg("sichtbar", "1.0.0"))
+s, h, _d = call("POST", "/visible", b"app=sichtbar&visible_to=pxx%2C+bec",
+                dict(ADMIN, **{"Content-Type": "application/x-www-form-urlencoded"}))
+ok("0.4: Sichtbar fuer setzen ueber die Seite",
+   s == 303 and appmod.CATALOG.visible_to("sichtbar") == ["bec", "pxx"], h)
+s, h, _d = call("POST", "/visible", b"app=sichtbar&visible_to=PXX",
+                dict(ADMIN, **{"Content-Type": "application/x-www-form-urlencoded"}))
+ok("... eine ungueltige Kennung: abgelehnt, alter Stand bleibt",
+   "ok=1" not in h["location"] and appmod.CATALOG.visible_to("sichtbar") == ["bec", "pxx"])
+s, _h, _d = call("POST", "/visible", b"app=sichtbar&visible_to=",
+                 {"X-OAAP-Roles": "user", "X-OAAP-User": "x",
+                  "Content-Type": "application/x-www-form-urlencoded"})
+ok("... ohne admin: 403", s == 403 and appmod.CATALOG.visible_to("sichtbar") == ["bec", "pxx"])
 ok("kein Upload-Rest im tmp-Verzeichnis",
    os.listdir(appmod.CATALOG.tmp_dir()) == [], os.listdir(appmod.CATALOG.tmp_dir()))
 SRV.shutdown()

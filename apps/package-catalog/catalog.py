@@ -16,6 +16,17 @@ nachprüft, kein Befehl.
 Eine Version wird nie überschrieben: dieselbe App-Id mit derselben
 Version ist ein Fehler. Eine freigegebene Version zu löschen verlangt
 einen Grund, der im Protokoll bleibt.
+
+Seit 0.4 (RFC-0050 §9) zwei Ergänzungen:
+
+  inbox/      der Knoten legt hier das GETESTETE Paket einer Instanz ab
+              ("In den Katalog übernehmen"): `<stem>.zip` und, zuletzt
+              geschrieben, `<stem>.json` mit Herkunft und Prüfsumme. Der
+              Katalog nimmt es mit denselben Regeln auf wie einen Upload --
+              als NICHT freigegeben -- und antwortet mit `<stem>.result.json`.
+  visible_to  je App eine Liste von Mandanten-Kennungen; fehlt sie, sieht
+              jeder Mandant die App (RFC-0050 §6 Antwort 1). Der Knoten
+              filtert danach und prüft beim Installieren noch einmal.
 """
 import json
 import os
@@ -27,6 +38,11 @@ from datetime import datetime, timezone
 import zipinfo
 
 VERSION_SPLIT = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$")
+# Dieselbe Regel wie TENANT_LABEL_RE der Plattform: eine Kennung, die der
+# Knoten nie vergibt, darf hier gar nicht erst stehen.
+TENANT_LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+INBOX_STEM = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,120}-[0-9a-f]{12}$")
+MAX_VISIBLE = 64
 
 
 class CatalogError(Exception):
@@ -41,6 +57,21 @@ def version_key(v):
     pre = m.group(4)
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)),
             0 if pre else 1, pre or "")
+
+
+def parse_labels(text):
+    """'pxx, bec' -> ['bec', 'pxx']; leer -> [] (= alle). Ungültiges lehnt ab."""
+    out = set()
+    for part in re.split(r"[\s,;]+", text or ""):
+        if not part:
+            continue
+        if not TENANT_LABEL.match(part):
+            raise CatalogError(f"„{part}“ ist keine Mandanten-Kennung "
+                               "(Kleinbuchstaben, Ziffern, Bindestrich).")
+        out.add(part)
+    if len(out) > MAX_VISIBLE:
+        raise CatalogError(f"Höchstens {MAX_VISIBLE} Mandanten.")
+    return sorted(out)
 
 
 def _now():
@@ -103,8 +134,11 @@ class Catalog:
         return os.path.join(self.dir, *r["file"].split("/")) if r else None
 
     # -- changing ---------------------------------------------------------
-    def add(self, tmp_path, max_bytes, by, note=""):
-        """Take an uploaded file in. The temp file is MOVED into the store."""
+    def add(self, tmp_path, max_bytes, by, note="", origin=None):
+        """Take an uploaded file in. The temp file is MOVED into the store.
+
+        `origin` (seit 0.4): woher ein vom Knoten übernommenes Paket kommt
+        -- Mandant, Instanz, Kanal. Bei einem Upload von Hand fehlt es."""
         info = zipinfo.read(tmp_path, max_bytes)
         app = info["app"]
         with self.lock:
@@ -128,7 +162,10 @@ class Catalog:
                 "description": app["description"], "type": app["type"],
                 "uploaded_by": by, "uploaded_at": _now(),
                 "note": (note or "")[:500], "released": False}
-            self._audit("upload", app["id"], app["version"], by)
+            if origin:
+                a["versions"][app["version"]]["origin"] = origin
+            self._audit("take-over" if origin else "upload",
+                        app["id"], app["version"], by)
             self._save()
             return self.get(app["id"], app["version"])
 
@@ -157,6 +194,95 @@ class Catalog:
                 raise CatalogError("Diese Version gibt es nicht.")
             r["note"] = (note or "")[:500]
             self._save()
+
+    def set_visible(self, app_id, labels, by):
+        """Wer die App im Store sieht: [] = alle Mandanten."""
+        with self.lock:
+            a = self.state["apps"].get(app_id)
+            if not a:
+                raise CatalogError("Diese App gibt es nicht.")
+            labels = sorted(set(labels))
+            if labels == (a.get("visible_to") or []):
+                return
+            if labels:
+                a["visible_to"] = labels
+            else:
+                a.pop("visible_to", None)
+            self._audit("visible", app_id, "", by,
+                        visible_to=labels or "alle")
+            self._save()
+
+    def visible_to(self, app_id):
+        return list((self.state["apps"].get(app_id) or {}).get("visible_to") or [])
+
+    # -- der Eingang des Knotens (RFC-0050 §9) -------------------------------
+    def ingest_inbox(self, max_bytes):
+        """Nimmt auf, was der Knoten in inbox/ gelegt hat. Gibt die Zahl
+        der bearbeiteten Einträge zurück.
+
+        Alles in inbox/ ist eine Behauptung des Knotens, die hier noch
+        einmal geprüft wird: die Prüfsumme der Datei gegen die Notiz, das
+        Paket mit denselben Regeln wie ein Upload. Die Antwort -- auch eine
+        Ablehnung -- steht danach als `<stem>.result.json` im Eingang, damit
+        der Knoten sie dem Menschen sagen kann; Paket und Notiz sind weg.
+        """
+        box = os.path.join(self.dir, "inbox")
+        try:
+            names = os.listdir(box)
+        except OSError:
+            return 0
+        done = 0
+        for fn in sorted(names):
+            if not fn.endswith(".json") or fn.endswith(".result.json"):
+                continue
+            stem = fn[:-5]
+            if not INBOX_STEM.match(stem):
+                continue
+            note_p, zip_p = os.path.join(box, fn), os.path.join(box, stem + ".zip")
+            ok, msg = False, ""
+            try:
+                with open(note_p, encoding="utf-8") as f:
+                    meta = json.load(f)
+                if not isinstance(meta, dict):
+                    raise CatalogError("Die Notiz des Knotens ist unlesbar.")
+                if os.path.islink(zip_p) or not os.path.isfile(zip_p):
+                    raise CatalogError("Das Paket fehlt im Eingang.")
+                tmp = os.path.join(self.tmp_dir(), stem + ".zip")
+                shutil.move(zip_p, tmp)
+                try:
+                    # Die Prüfsumme an der Datei, die gleich aufgenommen
+                    # wird -- nicht an einer, die danach noch wechseln kann.
+                    if zipinfo.sha256_file(tmp) != meta.get("sha256"):
+                        raise CatalogError("Die Prüfsumme des Pakets passt "
+                                           "nicht zur Notiz des Knotens.")
+                    origin = {k: str(meta.get(k) or "")[:80]
+                              for k in ("tenant", "instance", "channel")}
+                    where = (f"{origin['tenant']}/{origin['instance']}"
+                             if origin["tenant"] else origin["instance"])
+                    r = self.add(tmp, max_bytes,
+                                 str(meta.get("by") or "Knoten")[:120],
+                                 note=f"übernommen aus {where} "
+                                      f"({origin['channel'] or '?'})",
+                                 origin=origin)
+                finally:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                ok = True
+                msg = (f"{r['version']} ist im Katalog, noch nicht freigegeben "
+                       f"(Prüfsumme {r['sha256'][:12]}).")
+            except (CatalogError, zipinfo.PackageError) as e:
+                msg = str(e)
+            except (OSError, ValueError) as e:
+                msg = f"Eingang nicht lesbar: {e}"
+            for p in (zip_p, note_p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+            self._atomic(os.path.join(box, stem + ".result.json"),
+                         {"ok": ok, "message": msg, "at": _now()})
+            done += 1
+        return done
 
     def delete(self, app_id, version, reason, by):
         """A version never released can go; a released one needs a reason."""
@@ -204,6 +330,9 @@ class Catalog:
                                  "size": rel["size"]}}
             if rel.get("type"):
                 entry["type"] = rel["type"]
+            vis = self.visible_to(app_id)
+            if vis:
+                entry["visible_to"] = vis
             apps.append({k: v for k, v in entry.items() if v != ""})
         self._atomic(os.path.join(self.dir, "store.json"),
                      {"schema": "0.2", "name": "Paketkatalog", "apps": apps})

@@ -1,6 +1,6 @@
 # Paketkatalog
 
-Freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050, Stufen 1 und 2). Der Betreiber lädt Pakete
+Freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050, Stufen 1, 2 und §9). Der Betreiber lädt Pakete
 hoch, gibt Versionen frei und kann jede gespeicherte ZIP wieder herunterladen. Freigegebenes macht
 der Knoten zur **Store-Quelle**: Mandanten-Administratoren installieren und aktualisieren es im
 Store, wahlweise direkt in Produktion oder mit einer Test-Instanz.
@@ -38,6 +38,31 @@ nicht geändert werden). Es gibt kein Netz, keinen Schlüssel und nichts, was vo
 - Der Knoten **prüft jedes Paket selbst**: Größe und SHA-256 einer eigenen Kopie, kein Folgen von
   Verknüpfungen, App-Id und Version gegen das Manifest im Paket. Die Datei `store.json` ist eine
   Behauptung, die er nachprüft — kein Befehl.
+
+## Getestetes Paket übernehmen und „Sichtbar für“ (seit 0.4, RFC-0050 §9)
+
+**Ohne Herunter- und Hochladen:** Läuft eine Instanz aus einem hochgeladenen Paket (etwa
+`bdt-app-test` oder nach „Übernehmen nach Produktiv“ `bdt-app`), legt der Betreiber genau dieses
+Paket in den Katalog — im Portal auf der Instanz, Reiter Deployment, „In den Katalog übernehmen“,
+oder auf dem Knoten:
+
+```sh
+sudo oaap app catalog-put bdt-app --tenant bdt
+```
+
+Der Knoten legt ZIP und Notiz in `/data/inbox/`; der Katalog prüft die Prüfsumme gegen die Notiz
+und das Paket mit denselben Regeln wie einen Upload, nimmt es **nicht freigegeben** auf (mit
+Herkunft: Mandant, Instanz, Kanal) und antwortet in `inbox/<stamm>.result.json`. Der Knoten gibt
+die Antwort an den Menschen weiter. Freigeben bleibt hier ein Klick.
+
+**Sichtbar für:** je App eine Liste von Mandanten-Kennungen (`pxx, bec`). Leer = alle. Die
+Store-Seite zeigt die App nur diesen Mandanten, und der Knoten lehnt jede Installation in einen
+nicht genannten Mandanten ab — auch für den Betreiber. Die Liste steht als `visible_to` in
+`store.json`.
+
+| Pfad in `/data` | Inhalt |
+|---|---|
+| `inbox/` | Eingang des Knotens: `<app>-<version>-<sha12>.zip`, `.json` (Notiz), `.result.json` (Antwort) |
 
 ## Spiegel eines Marketplace (seit 0.2, RFC-0077 §7.2)
 

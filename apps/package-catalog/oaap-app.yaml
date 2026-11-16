@@ -3,10 +3,10 @@ oaap_manifest: "0.10"
 app:
   id: package-catalog
   name: Paketkatalog
-  version: 0.3.0
+  version: 0.4.0
   type: native
   class: frontend
-  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050). Seit 0.2 auch Spiegel eines Marketplace-Feeds (RFC-0077)."
+  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050). Seit 0.2 auch Spiegel eines Marketplace-Feeds (RFC-0077). Seit 0.4 Eingang fuer das getestete Paket einer Instanz und Sichtbarkeit je Mandant (RFC-0050 §9)."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): PyYAML fest auf 6.0.3, Debians Korrekturen per
