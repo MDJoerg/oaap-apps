@@ -446,6 +446,57 @@ check("ein widerrufener Schlüssel bekommt keinen neuen Kontext",
 status, _, _ = call("/context", "POST", admin=False, form="label=kurs-app&project=heimlich")
 check("Kontext ändern bleibt der Serververwaltung vorbehalten", status == 403, status)
 
+print("\n-- 0.7.1 Ausstellen: eine Ablehnung löscht nichts, bisherige Werte als Vorschlag")
+status, body, _ = call("/issue", "POST", admin=True,
+                       form="label=kurs-app&owner=Jana&project=Neu-Projekt&cost_center=KS-1"
+                            "&aliases=chat-default&budget=500&rate=7&bis=2099-12-31"
+                            "&ceiling=green&personal_data=1")
+text = body.decode("utf-8")
+check("doppeltes Etikett wird abgelehnt, mit ehrlichem Grund",
+      "schon vergeben" in text and "für immer" in text and "Erst widerrufen" not in text)
+check("das Formular kommt mit allen Eingaben zurück",
+      all(s in text for s in ('value="kurs-app"', 'value="Jana"', 'value="Neu-Projekt"',
+                              'value="chat-default"', 'value="500"', 'value="7"',
+                              'value="2099-12-31"')), "")
+check("auch Ampel und Freigabe bleiben gesetzt",
+      'value="green" checked' in text and 'value="1" checked' in text)
+status, body, _ = call("/schluessel", admin=True)
+text = body.decode("utf-8")
+check("die Seite schlägt benutzte Projekte vor",
+      '<datalist id="ctx-project">' in text and '<option value="ADT-Kurs">' in text)
+check("die Felder sind mit den Vorschlägen verbunden", 'list="ctx-project"' in text)
+check("Etiketten bekommen keine Vorschläge (Freitext name=wert)", 'list="ctx-labels"' not in text)
+check("ohne Ablehnung ist das Formular leer", 'name="label" type="text" required placeholder="laptop@joerg"\n        value=""' in text)
+
+print("\n-- 0.7.1 abgelaufen oder widerrufen: neu ausstellen mit denselben Angaben")
+store.issue(app.DB, "laptop@jana", "test", aliases=["chat-default"], ceiling="green",
+            budget_tokens=900, rate_per_min=5, owner="Jana", project="ADT-Kurs",
+            cost_center="KS-4711", expires="2099-01-01T00:00:00Z")
+app.DB.execute("UPDATE keys SET created='2026-01-01T00:00:00Z', expires='2026-01-31T00:00:00Z' "
+               "WHERE label='laptop@jana'")
+app.DB.commit()
+status, body, _ = call("/schluessel", admin=True)
+text = body.decode("utf-8")
+check("abgelaufener Schlüssel bietet „neu ausstellen“ an",
+      "schluessel?neu_wie=laptop%40jana#ausstellen" in text)
+check("auch der widerrufene", "neu_wie=gleich-weg" in text)
+status, body, _ = call("/schluessel?neu_wie=laptop%40jana", admin=True)
+text = body.decode("utf-8")
+check("Etikett: das nächste freie", 'value="laptop@jana-2"' in text)
+check("Kontext, Aliasse und Grenzen übernommen",
+      all(s in text for s in ('value="Jana"', 'value="ADT-Kurs"', 'value="KS-4711"',
+                              'value="chat-default"', 'value="900"', 'value="5"')), "")
+check("Ampel übernommen", 'value="green" checked' in text)
+check("dieselbe Laufzeit ab heute (30 Tage)", f'value="{app._today_plus(30)}"' in text)
+check("die Seite sagt, woher die Werte kommen", "Übernommen von" in text)
+store.issue(app.DB, "laptop@jana-2", "test")
+check("nächstes freies zählt weiter", app.next_label(store.keys(app.DB), "laptop@jana") == "laptop@jana-3")
+check("aus -2 wird -3", app.next_label(store.keys(app.DB), "laptop@jana-2") == "laptop@jana-3")
+status, body, _ = call("/schluessel?neu_wie=gibtsnicht", admin=True)
+check("unbekannte Vorlage: klare Meldung", "gibt es nicht" in body.decode("utf-8"))
+status, _, _ = call("/schluessel?neu_wie=laptop%40jana", admin=False)
+check("neu ausstellen bleibt der Serververwaltung vorbehalten", status == 403, status)
+
 print("\n-- RFC-0064 auch Ablehnungen tragen Bytes")
 key_eng, _ = store.issue(app.DB, "eng", "test", budget_tokens=1)
 call("/v1/chat/completions", "POST", key=key_eng, body=anfrage)            # verbraucht 16

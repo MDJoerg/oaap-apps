@@ -211,7 +211,7 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "released": "2026-11-15",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -264,7 +264,7 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.9.1",
+      "version": "0.9.2",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

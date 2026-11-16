@@ -139,7 +139,10 @@ def issue(db, label, actor, prefix, extra, ctx_fields, tenant="default", detail=
     if not label:
         raise ValueError("Ein Schlüssel braucht ein Etikett — es ist das, was einen Widerruf sinnvoll macht.")
     if db.execute("SELECT 1 FROM keys WHERE label=?", (label,)).fetchone():
-        raise ValueError(f"Das Etikett {label!r} ist schon vergeben. Erst widerrufen, dann neu ausstellen.")
+        raise ValueError(f"Das Etikett {label!r} ist schon vergeben. Ein Etikett bleibt seinem "
+                         "Schlüssel für immer, auch widerrufen oder abgelaufen, damit die "
+                         "Prüfspur eindeutig bleibt — bitte ein anderes wählen "
+                         f"(etwa {label + '-2'!r}).")
     ctx = context.clean({name: ctx_fields.get(name, "") for name in context.CONTEXT_FIELDS})
     value = prefix + secrets.token_urlsafe(32)
     key_id = secrets.token_hex(6)

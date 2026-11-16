@@ -405,19 +405,78 @@ CONTEXT_LABELS = {"owner": "Verantwortlich", "account": "Account", "project": "P
                   "labels": "Freie Etiketten"}
 
 
-def context_inputs(row=None, prefix=""):
-    """Eingabefelder für den Kontext — leer beim Ausstellen, gefüllt beim Ändern."""
+def context_inputs(row=None, prefix="", keep=None):
+    """Eingabefelder für den Kontext — leer beim Ausstellen, gefüllt beim Ändern.
+
+    `keep` sind Formularwerte, die nach einer Ablehnung oder beim Neu-Ausstellen
+    wieder eingesetzt werden. Jedes Feld außer den Etiketten schlägt die schon
+    benutzten Werte vor (`context_datalists`) — gegen „Projekt X“ neben „projekt x“.
+    """
     out = []
     for name in store.CONTEXT_FIELDS:
         value = ""
         if row is not None:
             value = store.labels_text(row[name]) if name == "labels" else row[name]
+        elif keep:
+            value = keep.get(name, "")
         hint = " (name=wert, Komma-getrennt, höchstens 5)" if name == "labels" else ""
+        suggest = "" if name == "labels" else f' list="ctx-{name}" autocomplete="off"'
         out.append(f'<div><label for="{prefix}{name}">{CONTEXT_LABELS[name]}{hint}</label>'
-                   f'<input id="{prefix}{name}" name="{name}" type="text" '
+                   f'<input id="{prefix}{name}" name="{name}" type="text"{suggest} '
                    f'maxlength="{400 if name == "labels" else store.MAX_TEXT}" '
                    f'value="{esc(value or "")}"></div>')
     return "".join(out)
+
+
+def context_datalists(rows):
+    """Je Kontextfeld die schon benutzten Werte als <datalist> — einmal je Seite.
+
+    Häufige Werte zuerst; Schreibweisen, die sich nur in Groß/Klein oder
+    Leerzeichen unterscheiden, erscheinen trotzdem beide, damit man den
+    Wildwuchs sieht, statt ihn zu verstecken.
+    """
+    out = []
+    for name in store.CONTEXT_FIELDS:
+        if name == "labels":
+            continue
+        counts = {}
+        for row in rows:
+            value = (row[name] or "").strip()
+            if value and not (name == "account" and value == "default"):
+                counts[value] = counts.get(value, 0) + 1
+        ranked = sorted(counts, key=lambda v: (-counts[v], v.lower()))
+        out.append(f'<datalist id="ctx-{name}">'
+                   + "".join(f'<option value="{esc(v)}">' for v in ranked) + "</datalist>")
+    return "".join(out)
+
+
+def next_label(rows, label):
+    """Das nächste freie Etikett nach `label`: `laptop@joerg` → `laptop@joerg-2`,
+    `laptop@joerg-2` → `laptop@joerg-3`. Ein Etikett bleibt seinem Schlüssel für
+    immer (auch widerrufen oder abgelaufen), damit die Prüfspur eindeutig bleibt."""
+    taken = {row["label"] for row in rows}
+    stem, n = label, 2
+    m = re.fullmatch(r"(.+)-(\d{1,4})", label)
+    if m:
+        stem, n = m.group(1), int(m.group(2)) + 1
+    while f"{stem}-{n}" in taken:
+        n += 1
+    return f"{stem}-{n}"
+
+
+def renew_values(row, rows):
+    """Formularwerte für „neu ausstellen“: alles vom alten Schlüssel, ein freies
+    Etikett und — wenn er befristet war — dieselbe Laufzeit ab heute."""
+    keep = {name: (store.labels_text(row[name]) if name == "labels" else row[name] or "")
+            for name in store.CONTEXT_FIELDS}
+    keep.update(label=next_label(rows, row["label"]), aliases=row["aliases"] or "",
+                budget=str(row["budget_tokens"] or 0), rate=str(row["rate_per_min"] or 0),
+                ceiling=row["ceiling"] or supply.DEFAULT_CEILING,
+                personal_data="1" if row["personal_data"] else "")
+    start, end = dash.parse(row["created"]), dash.parse(row["expires"])
+    if start and end and end > start:
+        keep["bis"] = _today_plus(max(1, round((end - start).total_seconds() / 86400)))
+    return keep
 
 
 def light_radios(current, prefix):
@@ -956,12 +1015,21 @@ def requests_page(user, roles, params):
     return page("Letzte Anfragen", body, user, roles, tab="anfragen")
 
 
-def keys_page(user, roles, host, notice="", secret=None):
+def renew_link(row):
+    return (f'<a class="quiet" href="schluessel?{urlencode({"neu_wie": row["label"]})}#ausstellen">'
+            f'neu ausstellen</a><br><span class="muted">mit denselben Angaben</span>')
+
+
+def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from=""):
+    """`keep` füllt das Ausstell-Formular wieder (nach einer Ablehnung oder aus
+    `renew_values`); `renew_from` nennt den Schlüssel, aus dem es stammt."""
+    keep = keep or {}
     parts = top_cards(notice, secret, host)
     totals = store.totals(DB)
+    all_keys = store.keys(DB)
     rows = []
     in_cohorts = 0
-    for row in store.keys(DB):
+    for row in all_keys:
         if row["cohort"]:
             in_cohorts += 1
             continue
@@ -975,11 +1043,11 @@ def keys_page(user, roles, host, notice="", secret=None):
             light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
         if row["revoked"]:
             state = '<span class="badge err">widerrufen</span>'
-            action = ""
+            action = renew_link(row)
         elif store.expired(row):
             state = (f'<span class="badge off">abgelaufen</span><br><span class="muted">'
                      f'{esc(dash.until(row["expires"]))}</span>')
-            action = ""
+            action = renew_link(row)
         else:
             state = '<span class="badge green">gültig</span>' + (
                 f'<br><span class="muted">bis {esc(dash.until(row["expires"]))}</span>'
@@ -1019,30 +1087,43 @@ def keys_page(user, roles, host, notice="", secret=None):
 </div>""")
 
     alias_hint = ", ".join(sorted(ALIASES)) or "—"
-    parts.append(f"""<div class="card">
+    ceiling = keep.get("ceiling") if keep.get("ceiling") in supply.LIGHT_RANK else supply.DEFAULT_CEILING
+    radios = "".join(
+        f'<label><input type="radio" name="ceiling" value="{c}"'
+        f'{" checked" if c == ceiling else ""}> {word}</label>'
+        for c, word in (("green", "grün"), ("yellow", "gelb"), ("red", "rot")))
+    origin = (f'<p class="hint">Übernommen von „<b>{esc(renew_from)}</b>“: Kontext, Aliasse, '
+              f'Grenzen, Ampel und Freigabe. Etikett und Ablauf sind Vorschläge — bitte prüfen. '
+              f'Der alte Schlüssel bleibt, wie er ist.</p>' if renew_from else "")
+    parts.append(f"""<div class="card" id="ausstellen">
   <h2>Schlüssel ausstellen</h2>
+  {origin}
+  {context_datalists(all_keys)}
   <form class="grid" method="post" action="issue">
     <div><label for="label">Etikett (eindeutig, benennt den Verbraucher)</label>
-      <input id="label" name="label" type="text" required placeholder="laptop@joerg"></div>
-    {context_inputs()}
+      <input id="label" name="label" type="text" required placeholder="laptop@joerg"
+        value="{esc(keep.get('label', ''))}"></div>
+    {context_inputs(keep=keep)}
     <div><label for="aliases">Aliasse (leer = alle: {esc(alias_hint)})</label>
-      <input id="aliases" name="aliases" type="text" placeholder="chat-default,code"></div>
+      <input id="aliases" name="aliases" type="text" placeholder="chat-default,code"
+        value="{esc(keep.get('aliases', ''))}"></div>
     <div><label for="budget">Budget in Token (0 = ohne)</label>
-      <input id="budget" name="budget" type="number" min="0" value="0"></div>
+      <input id="budget" name="budget" type="number" min="0" value="{esc(keep.get('budget') or '0')}"></div>
     <div><label for="rate">Anfragen je Minute (0 = Standard {DEFAULT_RATE})</label>
-      <input id="rate" name="rate" type="number" min="0" value="0"></div>
+      <input id="rate" name="rate" type="number" min="0" value="{esc(keep.get('rate') or '0')}"></div>
     <div><label for="bis">gültig bis einschließlich (leer = unbefristet)</label>
-      <input id="bis" name="bis" type="date"></div>
+      <input id="bis" name="bis" type="date" value="{esc(keep.get('bis', ''))}"></div>
     <div><fieldset><legend>Höchstens diese Ampelfarbe</legend>
-      <label><input type="radio" name="ceiling" value="green"> grün</label>
-      <label><input type="radio" name="ceiling" value="yellow" checked> gelb</label>
-      <label><input type="radio" name="ceiling" value="red"> rot</label>
+      {radios}
     </fieldset></div>
     <div><fieldset><legend>Personenbezogene Daten</legend>
-      <label><input type="checkbox" name="personal_data" value="1"> freigegeben</label>
+      <label><input type="checkbox" name="personal_data" value="1"{" checked" if keep.get("personal_data") == "1" else ""}> freigegeben</label>
     </fieldset></div>
     <div><button type="submit">Ausstellen</button></div>
   </form>
+  <p class="hint" style="margin-top:.8rem">Die Kontextfelder schlagen vor, was schon
+    benutzt wird — einmal angetippt, steht der Wert genau so da wie bei den anderen
+    Schlüsseln, und die Auswertung zählt sie zusammen.</p>
   <p class="hint" style="margin-top:.8rem">Ohne Angabe gilt <b>gelb</b> —
     souverän ist das, was passiert, wenn niemand etwas einstellt; <b>rot</b> ist
     eine bewusste Zusatzerlaubnis. Die Freigabe für personenbezogene Daten
@@ -1942,7 +2023,18 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/anfragen":
             self.send_html(200, requests_page(user, roles, params))
         elif path == "/schluessel":
-            self.send_html(200, keys_page(user, roles, host))
+            source = params.get("neu_wie", "")
+            if source:
+                all_keys = store.keys(DB)
+                row = next((r for r in all_keys if r["label"] == source), None)
+                if row is None:
+                    self.send_html(200, keys_page(user, roles, host,
+                                                  notice=f"Einen Schlüssel „{source}“ gibt es nicht."))
+                else:
+                    self.send_html(200, keys_page(user, roles, host, renew_from=source,
+                                                  keep=renew_values(row, all_keys)))
+            else:
+                self.send_html(200, keys_page(user, roles, host))
         elif path == "/kohorten":
             self.send_html(200, cohorts_page(user, roles))
         elif path == "/modelle":
@@ -2106,6 +2198,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, models_page(user, roles, notice=notice))
         elif path == "/revoke" and form.get("back") == "kohorten":
             self.send_html(200, cohorts_page(user, roles, notice=notice))
+        elif path == "/issue" and not secret:
+            # abgelehnt: das Formular kommt mit allem zurück, was eingetippt war
+            self.send_html(200, keys_page(user, roles, host, notice=notice, keep=form))
         else:
             self.send_html(200, keys_page(user, roles, host, notice=notice, secret=secret))
 
