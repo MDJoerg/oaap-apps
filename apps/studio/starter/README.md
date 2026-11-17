@@ -10,7 +10,8 @@ Deployment fehlt: Statt aus einer Beschreibung zu erraten, wie ein
 OAAP-Paket aussieht, nimmt man ein Paket, das nachweislich durch die
 Prüfung geht, und ersetzt den Inhalt.
 
-Das Studio gibt dieses Verzeichnis als `oaap-starter.zip` heraus
+Das Studio gibt dieses Verzeichnis als `oaap-starter-<version>.zip` heraus
+(Version = `app.version` im Manifest, Ordner darin gleich benannt)
 (Startseite → „Briefing und Starter-Paket“), zusammen mit dem
 **Plattform-Briefing**, in dem alle Regeln stehen.
 

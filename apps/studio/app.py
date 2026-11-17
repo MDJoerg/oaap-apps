@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -2075,19 +2075,48 @@ def _sec_unclear():
     ])
 
 
+def starter_name():
+    """`oaap-starter-<version>` — Dateiname der ZIP und Ordner darin.
+
+    Seit 0.5.1. Vorher hieß jeder Download `oaap-starter.zip` mit einem
+    Ordner `starter/`, und zwei Stände ließen sich nicht auseinander-
+    halten (Jörg, 17.11.). Die Version kommt aus dem Manifest des
+    Starters selbst, nicht aus der des Studios: Name, Ordner und Inhalt
+    sagen damit dasselbe, und ein Studio-Patch ohne Starter-Änderung
+    erzeugt keinen scheinbar neuen Starter.
+    """
+    with open(os.path.join(STARTER_DIR, "oaap-app.yaml"), encoding="utf-8") as fh:
+        m = pkg.parse_manifest(fh.read())
+    version = str(((m or {}).get("app") or {}).get("version") or "").strip()
+    if not re.fullmatch(r"[0-9A-Za-z.+-]+", version):
+        raise OSError("Starter-Manifest ohne lesbare app.version")
+    return f"oaap-starter-{version}"
+
+
+def _starter_label():
+    """Für den Text im Briefing — das Briefing gibt es auch ohne Starter."""
+    try:
+        return starter_name()
+    except OSError:
+        return "oaap-starter"
+
+
 def starter_zip():
     """Das Starter-Paket als ZIP — im Speicher, aus den echten Dateien.
 
     Feste Zeitstempel und sortierte Reihenfolge: Zwei Abrufe ergeben
     Byte für Byte dieselbe Datei, damit eine Prüfsumme etwas bedeutet.
+    Alles liegt in genau einem Ordner `oaap-starter-<version>/` — den
+    erlaubt die Paketprüfung des Knotens ausdrücklich.
     """
+    folder = starter_name()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for name in STARTER_FILES:
             path = os.path.join(STARTER_DIR, name)
             with open(path, "rb") as fh:
                 data = fh.read()
-            info = zipfile.ZipInfo(f"starter/{name}", date_time=(2026, 1, 1, 0, 0, 0))
+            info = zipfile.ZipInfo(f"{folder}/{name}", date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             zf.writestr(info, data)
@@ -2116,7 +2145,7 @@ def platform_briefing():
         "Dein Auftrag lautet sinngemäß: **„Mach diese Anwendung",
         "OAAP-fähig — als Paket, das durch die Prüfung geht.“**",
         "",
-        "Zu diesem Blatt gehört das **Starter-Paket** (`oaap-starter.zip`)",
+        f"Zu diesem Blatt gehört das **Starter-Paket** (`{_starter_label()}.zip`)",
         "aus derselben Quelle: das kleinste vollständige Paket, mit",
         "kommentiertem Manifest, Dockerfile und einer App, die genau die",
         "Regeln unten vorführt. Sieh es Dir zuerst an — es ist schneller",
@@ -2448,6 +2477,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/starter.zip":
                 try:
                     data = starter_zip()
+                    zip_name = starter_name() + ".zip"
                 except OSError as exc:
                     self.log_message("starter-paket nicht lesbar: %s", exc)
                     return self.send_html(
@@ -2457,7 +2487,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_bytes(
                     data, content_type="application/zip",
                     extra_headers=[("Content-Disposition",
-                                    'attachment; filename="oaap-starter.zip"')])
+                                    f'attachment; filename="{zip_name}"')])
             if path == "/vorhaben/neu":
                 empty = {f: "" for f in FIELDS}
                 empty.update(app_type="native", status="idee")

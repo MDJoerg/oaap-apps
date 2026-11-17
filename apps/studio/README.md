@@ -142,7 +142,7 @@ Startseite) gibt es deshalb zwei Dateien ohne jedes Vorhaben:
   Verbindliche: Gateway und Identität, Manifest, Oberfläche, **Benutzer
   und fachliche Rechte**, was ein Paket erfüllen muss, wie es in drei
   Phasen ankommt, Postkasten-Regeln. Ohne fachlichen Auftrag.
-- **Starter-Paket** (`oaap-starter.zip`) — das kleinste vollständige
+- **Starter-Paket** (`oaap-starter-<version>.zip`, Ordner `oaap-starter-<version>/` darin) — das kleinste vollständige
   Paket: kommentiertes Manifest, Dockerfile, eine App, die Identität aus
   den Kopfzeilen liest, unter `/data` zählt und `/healthz` beantwortet.
   Quelle ist das Verzeichnis [`starter/`](starter/).
