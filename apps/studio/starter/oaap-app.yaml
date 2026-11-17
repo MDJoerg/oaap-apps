@@ -104,8 +104,9 @@ launchpad:
 # App ganz normal, nur ohne diese beiden Variablen — prüfe das, statt
 # abzustürzen.
 # WICHTIG: Der Zwilling ist heute append-only und kennt kein Löschen.
-# Keine personenbezogenen oder Gesundheitsdaten im Klartext hinein —
-# nur Schlüssel, Titel, Relationen und unkritische Fakten. Die
+# Keine personenbezogenen Daten im Klartext hinein — nur Schlüssel,
+# Titel, Relationen, Zustände (auch der Gesundheitszustand der App)
+# und andere Fakten ohne Personenbezug. Die
 # eigentlichen Daten bleiben in Deiner App.
 #
 # data_model:

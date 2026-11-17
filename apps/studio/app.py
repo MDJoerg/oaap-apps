@@ -1876,7 +1876,7 @@ def _sec_capabilities():
     sie selbst nach. Die Zwillingsgrenzen stehen hier mit Absicht so
     deutlich: Ein append-only-Speicher ohne Löschweg ist für
     personenbezogene Daten die falsche Ablage, und das muss gesagt sein,
-    BEVOR jemand seine Gesundheitsdaten hineinschreibt.
+    BEVOR jemand Daten über Personen hineinschreibt.
     """
     return ("Was die Plattform Dir bietet", [
         "Jeder Abschnitt ist **optional**, steht auskommentiert im",
@@ -1926,9 +1926,11 @@ def _sec_capabilities():
         "",
         "- **Der Zwilling vergisst nichts.** Jede Änderung wird angehängt,",
         "  nichts gelöscht; einen Löschweg gibt es noch nicht. Deshalb:",
-        "  **keine personenbezogenen Daten und keine Gesundheitsdaten im",
-        "  Klartext** in den Zwilling. Hinein gehören Schlüssel (gern",
-        "  pseudonym), Titel, Relationen, Zustände und unkritische Fakten;",
+        "  **keine personenbezogenen Daten im Klartext** in den Zwilling",
+        "  (erst recht keine besonders schützenswerten wie medizinische).",
+        "  Hinein gehören Schlüssel (gern pseudonym), Titel, Relationen,",
+        "  **Zustände** — auch der Gesundheitszustand Deiner App und ihrer",
+        "  Teile — und andere Fakten ohne Personenbezug;",
         "  die eigentlichen Daten bleiben in Deiner App unter `/data`, wo",
         "  sie gelöscht werden können.",
         "- **Lesen gilt je Objekttyp.** Jede App, die einen Typ liest, sieht",

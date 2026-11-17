@@ -592,7 +592,7 @@ ok("0.5.0: beide Blätter nennen die Fähigkeiten, wortgleich",
        "`authorization`", "`destinations`", "`cases: {submit: true}`",
        "`mcp: {path: /mcp}`")))
 ok("0.5.0: der Zwilling nennt seine Grenzen (kein Löschen, kein Klartext)",
-   all(x in b for x in ("Der Zwilling vergisst nichts", "keine Gesundheitsdaten",
+   all(x in b for x in ("Der Zwilling vergisst nichts", "keine personenbezogenen Daten im Klartext",
                         "Lesen gilt je Objekttyp", "Profil `store`")))
 ok("0.5.0: Pflege des Abbilds (apt-get upgrade, care.rebuild)",
    "apt-get -y upgrade" in b and "rebuild: self" in b)

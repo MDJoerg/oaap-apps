@@ -61,7 +61,7 @@ Kommentare in den Dateien und ausführlich im App Deployment Contract.
 ## Ein Wort zu personenbezogenen Daten
 
 Der Digitale Zwilling ist heute **append-only** — er hält jede Änderung
-fest und kennt kein Löschen. Personenbezogene oder Gesundheitsdaten
-gehören deshalb **nicht im Klartext** hinein, sondern bleiben in der App
+fest und kennt kein Löschen. Personenbezogene Daten (erst recht
+medizinische) gehören deshalb **nicht im Klartext** hinein, sondern bleiben in der App
 (unter `/data`, wo sie mit der Instanz gelöscht werden können). In den
 Zwilling gehören Schlüssel, Titel, Relationen und unkritische Fakten.
