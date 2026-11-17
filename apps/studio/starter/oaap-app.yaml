@@ -1,22 +1,31 @@
-oaap_manifest: "0.2"
+oaap_manifest: "0.15"
 
 # ---------------------------------------------------------------------
-# Starter-Paket: das kleinste Manifest, das durch die Prüfung geht.
-# Jede Zeile hier ist entweder Pflicht oder erklärt, warum sie da ist.
+# Starter-Paket: das kleinste Manifest, das durch die Prüfung geht —
+# und darunter, auskommentiert, alles, was eine App heute zusätzlich
+# von der Plattform bekommen KANN.
+#
 # Zum Anpassen: app.id, app.name, app.version und app.description
-# ändern — der Rest passt für die allermeisten Apps unverändert.
+# ändern — der Rest des aktiven Teils passt für die allermeisten Apps
+# unverändert. Die auskommentierten Abschnitte nimmst Du nur, wenn Du
+# sie brauchst. Jeder ist optional, und keiner gewährt etwas von
+# selbst: Die App ERKLÄRT, ein Mensch im Mandanten GEWÄHRT.
+#
+# Maßgeblich ist der App Deployment Contract (steht im Briefing) und
+# das JSON-Schema oaap-app.schema.json aus oaap-spec.
 # ---------------------------------------------------------------------
 
 app:
   # Kleinbuchstaben, Ziffern, Bindestriche, 3–40 Zeichen. Die Kennung
   # ist unveränderlich: Ein Deployment mit anderer Kennung wird hart
-  # abgelehnt, weil es eine andere App wäre.
+  # abgelehnt, weil es eine andere App wäre. Der Name der INSTANZ ist
+  # davon unabhängig — den wählt, wer sie anlegt, und er ist änderbar.
   id: starter
   name: OAAP Starter
   # Muss bei JEDEM Deployment steigen (1.2.3). Unveränderte Version =
   # harte Ablehnung. Einzige Ausnahme: das erneute Anmelden desselben
   # Pakets, nachdem ein Mensch den erweiterten Rahmen bestätigt hat.
-  version: 0.1.0
+  version: 0.2.0
   # native = Quellcode, die Plattform baut das Image auf dem Zielknoten
   # (also auf amd64 UND arm64 — keine architekturgebundenen Basisimages).
   type: native
@@ -48,7 +57,11 @@ storage:
 config:
   # Konfiguration kommt ausschließlich über deklarierte
   # Umgebungsvariablen. Geheimnisse bekommen `secret: true` — dann
-  # zeigt das Portal den Wert nie wieder zurück.
+  # zeigt das Portal den Wert nie wieder zurück. Ein Wert, den DIESE App
+  # selbst festlegt (eigener Schlüssel), darf `generate: token` tragen:
+  # Dann bietet das Portal an, ihn zu erzeugen. Nie für fremde Zugangs-
+  # daten. Nicht deklarierte Schlüssel lassen sich weder im Portal noch
+  # per Kommandozeile setzen — mit Absicht.
   - key: STARTER_GREETING
     label: "Begrüßung auf der Startseite"
     default: "Willkommen"
@@ -58,3 +71,133 @@ health:
   # Seiteneffekte, schnell.
   path: /healthz
   startup_grace_seconds: 20
+
+care:
+  # Dein Versprechen: Derselbe Quellcode auf einer frisch gezogenen
+  # Basis gebaut ändert nichts außer der Basis (Abhängigkeiten fest
+  # gepinnt, Dockerfile spielt Debians Korrekturen ein). Dann darf der
+  # Knoten bei Sicherheitsmeldungen selbst neu bauen. Kannst Du das
+  # nicht versprechen, schreib `release` — dann heilt erst Deine
+  # nächste Version.
+  rebuild: self
+
+launchpad:
+  # Überschrift, unter der die Kachel im Portal erscheint. Nur Anzeige —
+  # wer die Kachel sieht, entscheiden die Rollen oben.
+  group: Werkzeuge
+
+# =====================================================================
+# OPTIONAL — Fähigkeiten der Plattform. Einkommentieren, was Du nutzt.
+# Jeder Abschnitt nennt, welche Variable die App dafür bekommt. Diese
+# OAAP_*-Variablen gehören der Plattform: Du deklarierst sie NICHT
+# unter `config`, und niemand kann sie überschreiben.
+# =====================================================================
+
+# --- Digitaler Zwilling: gemeinsame Daten des Mandanten -------------
+# Mehrere Apps beschreiben dieselben Objekte, jede in ihrer eigenen
+# Gruppe; Relationen verbinden die Objekte. Wer ein Objekt anlegt, ist
+# `owner` und besitzt dessen Kerngruppe; andere Apps schreiben als
+# `contributor` in ihre eigene Gruppe daran, `consumes` liest.
+# Die App bekommt OAAP_TWIN_URL (endet schon auf /twin — hänge nur
+# /objects usw. an) und OAAP_PLATFORM_KEY (als Bearer senden).
+# Voraussetzung: Der Knoten trägt das Profil `store`. Ohne läuft die
+# App ganz normal, nur ohne diese beiden Variablen — prüfe das, statt
+# abzustürzen.
+# WICHTIG: Der Zwilling ist heute append-only und kennt kein Löschen.
+# Keine personenbezogenen oder Gesundheitsdaten im Klartext hinein —
+# nur Schlüssel, Titel, Relationen und unkritische Fakten. Die
+# eigentlichen Daten bleiben in Deiner App.
+#
+# data_model:
+#   object_types:
+#     - key: Auftrag
+#       title: Auftrag
+#       title_plural: Aufträge
+#       identifying: []
+#   attribute_types:
+#     - key: Status
+#       title: Status
+#       value_type: text
+#   group_types:
+#     - key: starter.core
+#       "on": Auftrag
+#       attributes: [Status]
+#       relations: [forCustomer]
+#       activities: []
+#     - key: starter.notes        # eigene Gruppe an einem fremden Typ
+#       "on": Firma
+#       attributes: [Status]
+#   relation_types:
+#     - key: forCustomer
+#       title: "is order for"
+#       title_inverse: "has order"
+#       from: Auftrag
+#       to: Firma
+#
+# contributes:
+#   - type: Auftrag
+#     role: owner
+#   - type: Firma               # Objekt einer anderen App ergänzen
+#     role: contributor
+#     group: starter.notes
+#
+# consumes:
+#   - type: Firma
+#     as: Kunde
+#     fields: [reference]
+
+# --- Fachliche Berechtigungen (RFC-0045) -----------------------------
+# Feiner als die Plattformrollen: Die App erklärt Objekte und Tätig-
+# keiten, der Mandant vergibt sie (Portal „Rollen & Rechte“), die App
+# fragt nach: GET {OAAP_AUTHZ_URL}/effective?user=<X-OAAP-User-Id>
+# mit Bearer OAAP_AUTHZ_KEY. Antwort höchstens 30 s zwischenspeichern;
+# bei Fehler ablehnen (fail closed).
+#
+# authorization:
+#   objects:
+#     - key: order
+#       title: Auftrag
+#       activities: [read, edit, close]
+#   role_templates:
+#     - key: order_clerk
+#       title: Sachbearbeitung
+#       grants:
+#         - object: order
+#           activities: [read, edit]
+
+# --- Destinationen: benannte Ziele draußen (RFC-0033) -----------------
+# Statt Adresse und Zugangsdaten selbst zu konfigurieren: Der Betreiber
+# bindet eine Destination des Mandanten an die Instanz, die App bekommt
+# OAAP_DESTINATION_<NAME>_URL. Ist der Mandant „geschlossen“
+# (RFC-0068), ist das der EINZIGE Weg nach draußen.
+#
+# destinations:
+#   - name: crm
+#     kind: http
+#     purpose: "Abgleich der Kundenstammdaten"
+
+# --- Vorgänge aus dem Backend öffnen (RFC-0061) ----------------------
+# Die App bekommt OAAP_CASES_URL und OAAP_CASES_KEY und kann im
+# Vorgänge-Postkorb ihres Mandanten Fälle anlegen (Fehler, Freigaben,
+# Rückfragen an Menschen).
+#
+# cases:
+#   submit: true
+
+# --- MCP: die App als Werkzeugquelle für KI (RFC-0073) ----------------
+# Die App bedient MCP (Streamable HTTP) unter diesem Pfad, der unter
+# einer ihrer Routen liegen muss. Das MCP-Gateway des Mandanten bietet
+# die Werkzeuge KI-Assistenten an — im Namen der Person, die fragt: Die
+# App sieht dieselben X-OAAP-*-Kopfzeilen und prüft dieselben Rechte
+# wie auf ihren Seiten.
+#
+# mcp:
+#   path: /mcp
+
+# --- Assets melden (RFC-0087 §8.2) -----------------------------------
+# Unter diesem Pfad fragt der Knoten, woraus die App besteht (heute nur
+# die Arten `model` und `source`, gedacht für Gateways). Nur Namen und
+# ok/down/idle — nie Adressen, Schlüssel oder Personen.
+#
+# assets:
+#   path: /oaap/assets

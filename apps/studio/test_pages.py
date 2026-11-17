@@ -578,8 +578,28 @@ ok("...und die Fakten zu public-Routen (Kopfzeilen fehlen, Bremse, "
    all(x in b for x in ("fehlen `X-OAAP-User`", "300 Anfragen",
                         "speichert den **Pfad**", "Fragment")))
 ok("...und Netz, Bau-Grenzen und offene WebSockets",
-   all(x in b for x in ("nach außen offen", "256 MB", "20 Minuten",
+   all(x in b for x in ("Nach außen ist es offen", "256 MB", "20 Minuten",
                         "Ausrollen anderer Apps")))
+# 0.5.0: das Briefing auf dem Stand der Plattform (Manifest 0.15).
+ok("0.5.0: geschlossene Mandanten sind erwähnt (RFC-0068)",
+   "geschlossen" in b and "RFC-0068" in b)
+ok("0.5.0: Daten hängen an X-OAAP-User-Id, nicht am Namen (RFC-0040)",
+   "**`X-OAAP-User-Id` ist der stabile Schlüssel**" in b
+   and "`X-OAAP-User` ist der stabile" not in b)
+ok("0.5.0: beide Blätter nennen die Fähigkeiten, wortgleich",
+   all(x in b and x in vb for x in (
+       "Was die Plattform Dir bietet", "`data_model`, `contributes`, `consumes`",
+       "`authorization`", "`destinations`", "`cases: {submit: true}`",
+       "`mcp: {path: /mcp}`")))
+ok("0.5.0: der Zwilling nennt seine Grenzen (kein Löschen, kein Klartext)",
+   all(x in b for x in ("Der Zwilling vergisst nichts", "keine Gesundheitsdaten",
+                        "Lesen gilt je Objekttyp", "Profil `store`")))
+ok("0.5.0: Pflege des Abbilds (apt-get upgrade, care.rebuild)",
+   "apt-get -y upgrade" in b and "rebuild: self" in b)
+ok("0.5.0: Instanzname ist nicht die App-Kennung",
+   "nicht der **Instanzname**" in b)
+ok("0.5.0: das Briefing nennt keinen Host und keine Domain",
+   not any(x in b for x in ("joomp", "duckdns", "oaapx0", "oaap-demo", "btocs")))
 
 req = urllib.request.Request(BASE + "/starter.zip", method="GET")
 for k, v in USER.items():
@@ -595,6 +615,13 @@ ok("mit Manifest, Dockerfile und App darin",
    <= set(zf.namelist()))
 ok("sein Manifest ist das echte, nicht eine Beschreibung davon",
    b"id: starter" in zf.read("starter/oaap-app.yaml"))
+ok("0.5.0: das Starter-Manifest ist Format 0.15 mit care",
+   b'oaap_manifest: "0.15"' in zf.read("starter/oaap-app.yaml")
+   and b"rebuild: self" in zf.read("starter/oaap-app.yaml"))
+ok("0.5.0: das Starter-Dockerfile spielt Debians Korrekturen ein",
+   b"apt-get -y upgrade" in zf.read("starter/Dockerfile"))
+ok("0.5.0: die Starter-App hängt Daten an X-OAAP-User-Id",
+   b'"X-OAAP-User-Id"' in zf.read("starter/app.py"))
 
 st, b, _ = call("GET", f"/vorhaben/{PID}/briefing", USER)
 ok("der Onboarding-Eintrag im Kopf funktioniert auch auf tiefen Seiten",

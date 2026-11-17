@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.4.5"
+VERSION = "0.5.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1061,6 +1061,7 @@ def manifest_html(s):
   <dt>Speicher</dt><dd>{esc(storage)}</dd>
   <dt>Konfiguration</dt><dd>{esc(config)}</dd>
   <dt>Endpunkte</dt><dd>{esc(eps)}</dd>
+  <dt>Plattform</dt><dd>{esc(", ".join(s.get("capabilities") or []) or "—")}</dd>
   <dt>Gesundheit</dt><dd><code>{esc(s.get('health', {}).get('path'))}</code></dd>
 </dl>
 <table style="margin-top:1rem"><tr><th>Route</th><th>Rollen</th></tr>{routes}</table>"""
@@ -1756,9 +1757,12 @@ def _sec_platform(app_type=None):
         "",
         "**Lies ihn und arbeite danach.** Das Wichtigste in Kürze:",
         "",
-        "- **Kein eigener Login.** Die geprüfte Identität kommt als Header",
-        "  `X-OAAP-User` und `X-OAAP-Roles`; sie sind nicht fälschbar.",
-        "  Niemals ein Anmeldeformular bauen.",
+        "- **Kein eigener Login.** Die geprüfte Identität kommt als Header,",
+        "  nicht fälschbar: `X-OAAP-User-Id` (die Person, eine UUID, die sich",
+        "  nie ändert — **daran hängst Du Deine Daten**), `X-OAAP-User` (der",
+        "  Anmeldename — anzeigen, nicht darauf bauen, er ist änderbar),",
+        "  `X-OAAP-Roles`, `X-OAAP-Display-Name` und `X-OAAP-Email` (nur",
+        "  gesetzt, wenn verifiziert). Niemals ein Anmeldeformular bauen.",
         "- **Ein HTTP-Port**, kein TLS in der App (das macht das Gateway).",
         "- **Persistenz nur in deklarierten Mounts** (`storage` im Manifest).",
         "- **Konfiguration nur über deklarierte Umgebungsvariablen**,",
@@ -1770,9 +1774,13 @@ def _sec_platform(app_type=None):
         "- **Mandanten:** Jede Instanz gehört genau einem Mandanten; die App",
         "  sieht davon nichts und filtert nicht selbst — die Grenze setzt",
         "  das Gateway durch. Ein eigenes Mandantenmodell der App bleibt.",
-        "- **Netz:** nach innen abgeschottet (andere Apps unerreichbar),",
-        "  nach außen offen. Jedes externe Ziel als deklarierte Variable,",
-        "  und bei Ausfall weiterarbeiten statt abstürzen.",
+        "- **Netz:** nach innen abgeschottet (andere Apps unerreichbar).",
+        "  Nach außen ist es offen — **außer** der Mandant ist *geschlossen*",
+        "  (RFC-0068): Dann kommt die App nur über eine **Destination**",
+        "  hinaus, die ein Mensch bindet (Abschnitt „Was die Plattform Dir",
+        "  bietet“). Plane jedes externe Ziel deshalb als Destination oder",
+        "  deklarierte Variable, und arbeite bei Ausfall weiter, statt",
+        "  abzustürzen.",
         "- **Offene WebSockets** überstehen das Ausrollen anderer Apps,",
         "  nicht das eigene und nicht das nächtliche Backup: Clients",
         "  verbinden selbst neu (mit etwas Zufall im Wartetakt) und senden",
@@ -1794,6 +1802,14 @@ def _sec_platform(app_type=None):
         "Build-Geheimnisse. Grenzen: Paket höchstens 256 MB (ohne",
         "`node_modules`, Build-Ausgaben, virtuelle Umgebungen), ein",
         "Deployment samt Start höchstens 20 Minuten.",
+        "",
+        "**Pflege des Abbilds:** Das Dockerfile spielt beim Bau Debians",
+        "Korrekturen ein (`apt-get update && apt-get -y upgrade`, siehe",
+        "Starter-Paket), alle Abhängigkeiten sind **fest gepinnt**, und das",
+        "Manifest trägt `oaap_manifest: \"0.15\"` sowie `care: {rebuild: self}`.",
+        "Dann darf der Knoten bei Sicherheitsmeldungen selbst neu bauen,",
+        "ohne auf Deine nächste Version zu warten. Kannst Du das nicht",
+        "zusagen, schreib `rebuild: release`.",
     ]
     return ("Die Plattform, auf der die App läuft", lines)
 
@@ -1847,6 +1863,83 @@ def _sec_access():
         "- `public` erweitert den Rahmen: Ein Mensch bestätigt das Manifest",
         "  einmal. In einer Generalprobe (Testcode auf Produktivdaten) gibt",
         "  es keine `public`-Route.",
+    ])
+
+
+def _sec_capabilities():
+    """Was eine App von der Plattform bekommen KANN (Manifest 0.3–0.15).
+
+    Seit 0.5.0. Bis 0.4.5 stand hier nichts davon: Das Briefing kannte
+    den Stand vom September, die Plattform hatte inzwischen Zwilling,
+    fachliche Berechtigungen, Destinationen, Vorgänge, MCP und Assets.
+    Eine App-KI baut nach, was im Briefing steht — was fehlt, erfindet
+    sie selbst nach. Die Zwillingsgrenzen stehen hier mit Absicht so
+    deutlich: Ein append-only-Speicher ohne Löschweg ist für
+    personenbezogene Daten die falsche Ablage, und das muss gesagt sein,
+    BEVOR jemand seine Gesundheitsdaten hineinschreibt.
+    """
+    return ("Was die Plattform Dir bietet", [
+        "Jeder Abschnitt ist **optional**, steht auskommentiert im",
+        "Starter-Paket und folgt derselben Regel: **Die App erklärt im",
+        "Manifest, ein Mensch im Mandanten gewährt, die App prüft.** Eine",
+        "Erklärung allein gewährt nichts. Die Plattform reicht dafür",
+        "`OAAP_*`-Variablen in den Container; die deklarierst Du **nicht**",
+        "unter `config`, und niemand kann sie überschreiben. Fehlt eine,",
+        "läuft die App ohne diese Fähigkeit weiter, statt abzustürzen.",
+        "",
+        "| Bedarf | Manifest | Die App bekommt |",
+        "|---|---|---|",
+        "| Gemeinsame Daten mit anderen Apps des Mandanten | `data_model`, `contributes`, `consumes` | `OAAP_TWIN_URL`, `OAAP_PLATFORM_KEY` |",
+        "| Feine fachliche Rechte, vom Mandanten gepflegt | `authorization` | `OAAP_AUTHZ_URL`, `OAAP_AUTHZ_KEY` |",
+        "| Ein Ziel draußen (anderes System, KI-Dienst) | `destinations` | `OAAP_DESTINATION_<NAME>_URL` |",
+        "| Menschen etwas zur Bearbeitung vorlegen | `cases: {submit: true}` | `OAAP_CASES_URL`, `OAAP_CASES_KEY` |",
+        "| Werkzeuge für KI-Assistenten anbieten | `mcp: {path: /mcp}` | Aufrufe im Namen der fragenden Person |",
+        "| Kachel im Portal gruppieren | `launchpad: {group: …}` | — |",
+        "",
+        "Einzelheiten zu jedem Abschnitt stehen im Contract und in der",
+        "Spezifikation `oaap.apps.runtime`. Die Startseite des",
+        "Starter-Pakets zeigt, welche dieser Türen eine Instanz",
+        "tatsächlich bekommen hat — das ist der schnellste Test.",
+        "",
+        "### Der Digitale Zwilling",
+        "",
+        "Der Zwilling ist das gemeinsame Gedächtnis eines Mandanten.",
+        "Mehrere Apps beschreiben **dieselben Objekte**, und die Daten",
+        "wachsen über **Relationen** zusammen:",
+        "",
+        "- Wer ein Objekt anlegt, ist `owner` und besitzt dessen",
+        "  **Kerngruppe**. Andere Apps schreiben als `contributor` in ihre",
+        "  **eigene Gruppe** am selben Objekt — niemand überschreibt die",
+        "  Gruppe eines anderen. `consumes` liest.",
+        "- Jedes Objekt trägt Deinen fachlichen Schlüssel (`source_key`),",
+        "  damit es dieselbe Sache bleibt, auch wenn eine zweite App sie",
+        "  kennt. Doppelte Objekte kann ein Mensch zusammenführen; alte",
+        "  Kennungen antworten danach weiter.",
+        "- `OAAP_TWIN_URL` endet schon auf `/twin` — hänge nur",
+        "  `/objects`, `/objects/{id}` usw. an, nie ein zweites `/twin`.",
+        "  Den Schlüssel `OAAP_PLATFORM_KEY` sendest Du als Bearer.",
+        "- Der Zwilling lebt **je Mandant auf seinem Knoten** und nur dort,",
+        "  wo der Knoten das Profil `store` trägt. Sonst installiert die",
+        "  App normal, bekommt die beiden Variablen aber nicht.",
+        "",
+        "**Grenzen, die Du heute kennen musst:**",
+        "",
+        "- **Der Zwilling vergisst nichts.** Jede Änderung wird angehängt,",
+        "  nichts gelöscht; einen Löschweg gibt es noch nicht. Deshalb:",
+        "  **keine personenbezogenen Daten und keine Gesundheitsdaten im",
+        "  Klartext** in den Zwilling. Hinein gehören Schlüssel (gern",
+        "  pseudonym), Titel, Relationen, Zustände und unkritische Fakten;",
+        "  die eigentlichen Daten bleiben in Deiner App unter `/data`, wo",
+        "  sie gelöscht werden können.",
+        "- **Lesen gilt je Objekttyp.** Jede App, die einen Typ liest, sieht",
+        "  alle Gruppen dieses Typs. Einzelne Gruppen nur für bestimmte",
+        "  Leser gibt es noch nicht.",
+        "- **Eine Generalprobe** (Testcode auf einer Kopie der",
+        "  Produktivdaten) bekommt keinen Zwilling.",
+        "",
+        "Wenn Deine App Daten liefern will, die an diesen Grenzen hängen",
+        "bleiben, schreib einen Brief — die Grenzen sind bekannt und",
+        "werden bearbeitet.",
     ])
 
 
@@ -1916,19 +2009,26 @@ def _sec_users():
         "  eingestellt hat. Für die Sicherheit braucht man ihn auch nicht —",
         "  wer auf der Plattform deaktiviert wird, kommt am Gateway nicht",
         "  mehr vorbei und erreicht die App nie wieder.",
-        "- **`X-OAAP-User` ist der stabile Schlüssel** zum Verknüpfen.",
-        "  Anzeigenamen sind änderbar; echte Personen als Stammdaten ohne",
-        "  Login anlegen und beim ersten Kontakt verknüpfen.",
+        "- **`X-OAAP-User-Id` ist der stabile Schlüssel** zum Verknüpfen —",
+        "  nicht `X-OAAP-User`: Anmelde- und Anzeigenamen sind änderbar, und",
+        "  ein frei gewordener Name kann später jemand anderem gehören.",
+        "  Echte Personen als Stammdaten ohne Login anlegen und beim ersten",
+        "  Kontakt verknüpfen.",
+        "- **Fachliche Rechte kann die Plattform vergeben** (RFC-0045):",
+        "  Deine App erklärt im Manifest-Abschnitt `authorization` Objekte",
+        "  und Tätigkeiten (etwa „Auftrag: lesen, bearbeiten“), der Mandant",
+        "  vergibt sie im Portal unter „Rollen & Rechte“, Deine App fragt",
+        "  nach. Das ist der empfohlene Weg, wenn mehrere Menschen im",
+        "  Mandanten Rechte pflegen sollen; ein eigenes Rollenmodell bleibt",
+        "  erlaubt.",
         "",
         "**Was es heute nicht gibt — ehrlich gesagt:** Eine",
-        "**Selbstregistrierung** von Anwendern (auch mit Google-,",
-        "Microsoft-, Apple- oder GitHub-Konto) ist **keine**",
-        "Plattformfunktion; Benutzer legt die Administration an. Ebenso",
-        "wenig gibt es heute eine zentrale Vergabe **fachlicher** Rollen:",
-        "Die App verwaltet sie selbst, nach dem Muster oben. Beides ist",
-        "vorgemerkt. Braucht die App es jetzt, ist das keine",
-        "Bastelaufgabe — schreib einen Brief in den Postkasten, bevor Du",
-        "eine eigene Anmeldung baust.",
+        "**Selbstregistrierung** von Anwendern ist keine Funktion, die",
+        "Deine App auslösen kann; Benutzer legt die Administration an",
+        "(oder ein angeschlossener Identitätsanbieter des Mandanten).",
+        "Braucht die App so etwas, ist das keine Bastelaufgabe — schreib",
+        "einen Brief in den Postkasten, bevor Du eine eigene Anmeldung",
+        "baust.",
     ])
 
 
@@ -2026,6 +2126,7 @@ def platform_briefing():
         _sec_ui(),
         _sec_users(),
         _sec_access(),
+        _sec_capabilities(),
         ("Was Du abgibst: das Paket", [
             "Ein OAAP-Paket ist eine **ZIP** mit dem Manifest",
             "`oaap-app.yaml` im Wurzelverzeichnis (ein einzelner",
@@ -2039,6 +2140,11 @@ def platform_briefing():
             "  jedem Deployment hoch),",
             "- ein **ungültiges Manifest** hat,",
             "- **absolute Pfade**, `..` oder **Symlinks** enthält.",
+            "",
+            "Die App-Kennung (`app.id`) ist nicht der **Instanzname**: Den",
+            "wählt, wer die Instanz anlegt, und er lässt sich später",
+            "umbenennen. Baue deshalb nie einen Instanznamen oder eine",
+            "Adresse in den Code ein.",
             "",
             "Eine **Bestätigung durch einen Menschen** kostet, was den Rahmen",
             "erweitert: neue öffentliche Routen, neue Speicher, neue Ports am",
@@ -2193,6 +2299,7 @@ def briefing(p):
         _sec_ui(),
         _sec_users(),
         _sec_access(),
+        _sec_capabilities(),
         ("Test-Deployment (Deploy-Hook)", deploy),
         _sec_collab(repo_line),
         _sec_unclear(),

@@ -2,7 +2,8 @@
 
 Das kleinste vollständige OAAP-Paket: ein Manifest, ein Dockerfile, eine
 Datei Anwendungscode. Es tut absichtlich fast nichts — es zeigt den
-**Rahmen**, in den eine eigene App hineingehört.
+**Rahmen**, in den eine eigene App hineingehört, und darunter, was die
+Plattform einer App heute **zusätzlich** anbietet.
 
 Gedacht für den Fall, dass ein Projekt schon läuft und nur noch das
 Deployment fehlt: Statt aus einer Beschreibung zu erraten, wie ein
@@ -10,16 +11,16 @@ OAAP-Paket aussieht, nimmt man ein Paket, das nachweislich durch die
 Prüfung geht, und ersetzt den Inhalt.
 
 Das Studio gibt dieses Verzeichnis als `oaap-starter.zip` heraus
-(Startseite → „Neues Projekt onboarden"), zusammen mit dem
+(Startseite → „Briefing und Starter-Paket“), zusammen mit dem
 **Plattform-Briefing**, in dem alle Regeln stehen.
 
 ## Was drin ist
 
-| Datei           | Wofür                                                        |
-| --------------- | ------------------------------------------------------------ |
-| `oaap-app.yaml` | das Manifest — jede Zeile kommentiert                        |
-| `Dockerfile`    | Multi-Arch-Bau, fester numerischer Benutzer                  |
-| `app.py`        | die App: Identität aus den Kopfzeilen, `/data`, `/healthz`   |
+| Datei | Wofür |
+| --- | --- |
+| `oaap-app.yaml` | das Manifest (0.15) — jede Zeile kommentiert, die optionalen Fähigkeiten auskommentiert darunter |
+| `Dockerfile` | Multi-Arch-Bau, Debians Korrekturen beim Bau, fester numerischer Benutzer |
+| `app.py` | die App: Identität aus den Kopfzeilen (Anker `X-OAAP-User-Id`), `/data`, `/healthz`, Anzeige der Plattformtüren |
 
 ## Ausprobieren
 
@@ -29,13 +30,18 @@ mkdir -p /tmp/starter-data
 docker build -t oaap-starter .
 docker run --rm -p 8000:8000 -v /tmp/starter-data:/data oaap-starter
 # Die Startseite lehnt ohne Gateway-Kopfzeilen ab — so ist es gedacht:
-curl -H "X-OAAP-User: kim" -H "X-OAAP-Roles: user" http://localhost:8000/
+curl -H "X-OAAP-User-Id: 0b7c…" -H "X-OAAP-User: kim" \
+     -H "X-OAAP-Roles: user" http://localhost:8000/
 ```
 
 Auf die Plattform kommt es wie jedes andere Paket: im Studio unter
-„Paket prüfen" hochladen, dann ausrollen. Gibt es die Instanz noch
-nicht, stellt ein `server_admin` im Portal eine **Anlege-Erlaubnis** aus
-und man trägt sie statt des Deploy-Tokens ein.
+„Paket prüfen“ hochladen, dann ausrollen — oder im Portal unter
+„Test-Instanz anlegen“ → „Aus einem hochgeladenen Paket (ZIP)“. Den
+**Namen der Instanz** wählt, wer sie anlegt (er muss nicht der
+App-Kennung entsprechen und lässt sich später umbenennen). Gibt es die
+Instanz noch nicht und soll das Studio sie anlegen, stellt ein
+`server_admin` im Portal eine **Anlege-Erlaubnis** für genau diesen
+Namen aus, die man statt des Deploy-Tokens einträgt.
 
 ## Was man ändern muss
 
@@ -43,9 +49,19 @@ und man trägt sie statt des Deploy-Tokens ein.
    danach unveränderlich.
 2. `app.version` bei **jedem** Deployment hochzählen.
 3. Den Inhalt von `app.py` durch die eigene Anwendung ersetzen.
+4. Von den optionalen Abschnitten genau die einkommentieren, die die App
+   nutzt. Die Startseite zeigt danach, ob die Tür angekommen ist.
 
 Was man **nicht** ändern sollte, ohne den Grund zu kennen: den einen
 HTTP-Port, den Verzicht auf einen eigenen Login, den Speicher unter
-`/data`, den Gesundheitspfad und den nicht-privilegierten Benutzer im
-Dockerfile. Die Begründungen stehen als Kommentare in den Dateien und
-ausführlich im App Deployment Contract.
+`/data`, den Gesundheitspfad, die `apt-get upgrade`-Zeile und den
+nicht-privilegierten Benutzer im Dockerfile. Die Begründungen stehen als
+Kommentare in den Dateien und ausführlich im App Deployment Contract.
+
+## Ein Wort zu personenbezogenen Daten
+
+Der Digitale Zwilling ist heute **append-only** — er hält jede Änderung
+fest und kennt kein Löschen. Personenbezogene oder Gesundheitsdaten
+gehören deshalb **nicht im Klartext** hinein, sondern bleiben in der App
+(unter `/data`, wo sie mit der Instanz gelöscht werden können). In den
+Zwilling gehören Schlüssel, Titel, Relationen und unkritische Fakten.

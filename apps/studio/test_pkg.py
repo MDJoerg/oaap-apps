@@ -29,7 +29,7 @@ def ok(label, cond, detail=""):
         print(f"      {detail}")
 
 
-MANIFEST = """oaap_manifest: "0.2"
+MANIFEST = """oaap_manifest: "0.15"
 
 app:
   id: bdt-app
@@ -58,6 +58,9 @@ config:
 
 health:
   path: /healthz
+
+care:
+  rebuild: self
 """
 
 
@@ -177,7 +180,7 @@ def has_error(text, needle):
 
 
 ok("Pflichtfeld fehlt",
-   has_error(MANIFEST.replace('oaap_manifest: "0.2"', ""), "oaap_manifest"))
+   has_error(MANIFEST.replace('oaap_manifest: "0.15"', ""), "oaap_manifest"))
 ok("App-Kennung mit Großbuchstaben",
    has_error(MANIFEST.replace("id: bdt-app", "id: BDT-App"), "app.id"))
 ok("Version ohne Patch-Stelle",
@@ -203,7 +206,7 @@ ok("fester Port außerhalb 8200–8299 (RFC-0017 §5.1)",
                         "    fixed: true\n", "8200"))
 ok("class in einem 0.1-Manifest ist ein Befund",
    any(lv == pkg.BEFUND and "app.class" in t
-       for lv, t in levels(MANIFEST.replace('"0.2"', '"0.1"'))))
+       for lv, t in levels(MANIFEST.replace('"0.15"', '"0.1"'))))
 ok("unbekanntes Feld ist nur ein Hinweis",
    any(lv == pkg.HINWEIS and "Unbekannte Felder" in t
        for lv, t in levels(MANIFEST + "\nfarbe: blau\n")))
@@ -284,7 +287,7 @@ ok("und ohne jeden Befund", sum(r_starter["counts"].values()) == 0,
    str([f["text"] for f in r_starter["findings"]]))
 ok("sein Manifest nennt Kennung, Version, Typ und Klasse",
    r_starter["summary"]["id"] == "starter"
-   and r_starter["summary"]["version"] == "0.1.0"
+   and r_starter["summary"]["version"] == "0.2.0"
    and r_starter["summary"]["type"] == "native"
    and r_starter["summary"]["class"] == "frontend")
 ok("es deklariert einen Speicher und einen Gesundheitspfad",
@@ -294,6 +297,41 @@ ok("und keine oeffentliche Route — sonst waere die Vorlage ein schlechtes Vorb
 ok("zwei Abrufe ergeben dieselben Bytes (Pruefsumme bedeutet etwas)",
    studio.starter_zip() == studio.starter_zip())
 os.remove(starter_zip_path)
+
+# --- 0.5.0: Manifest bis 0.15 -------------------------------------------
+print("\n=== Manifest 0.15 ===")
+base = {"oaap_manifest": "0.15",
+        "app": {"id": "probe", "name": "P", "version": "1.0.0", "type": "native"},
+        "services": {"web": {"build": ".", "port": 8000}},
+        "routes": [{"path": "/", "roles": ["user"]}],
+        "health": {"path": "/healthz"}, "care": {"rebuild": "self"}}
+def texts(m):
+    return [f["text"] for f in pkg.validate(m)]
+ok("0.15 mit allen neuen Abschnitten: kein 'unbekannt', kein Fehler",
+   not [t for t in texts(dict(base, launchpad={"group": "X"},
+        authorization={"objects": []}, destinations=[], cases={"submit": True},
+        mcp={"path": "/mcp"}, assets={"path": "/oaap/assets"}))
+        if "Unbekannt" in t or "neuer als" in t]
+   and not [f for f in pkg.validate(base) if f["level"] == pkg.FEHLER])
+ok("openapi wird wie vom Knoten abgelehnt",
+   any(f["level"] == pkg.FEHLER and "openapi" in f["text"]
+       for f in pkg.validate(dict(base, openapi={"path": "/x"}))))
+ok("contributor ohne eigene Gruppe ist ein Fehler",
+   any(f["level"] == pkg.FEHLER and "contributor" in f["text"]
+       for f in pkg.validate(dict(base, contributes=[{"type": "Firma", "role": "contributor"}]))))
+ok("owner ohne Gruppe ist in Ordnung, der Zwilling wird angesagt",
+   not [f for f in pkg.validate(dict(base, contributes=[{"type": "Auftrag", "role": "owner"}]))
+        if f["level"] == pkg.FEHLER]
+   and any("Zwilling" in t for t in texts(dict(base, contributes=[{"type": "A"}]))))
+no_care = {k: v for k, v in base.items() if k != "care"}
+ok("ohne care: ein Hinweis, kein Fehler",
+   any("care" in t for t in texts(no_care))
+   and not [f for f in pkg.validate(no_care) if f["level"] == pkg.FEHLER])
+ok("die Zusammenfassung nennt die Plattformfähigkeiten",
+   pkg.summary(dict(base, contributes=[{"type": "A"}], mcp={"path": "/mcp"}))["capabilities"]
+   == ["schreibt in den Zwilling", "MCP-Werkzeuge"])
+ok("Format 1.0 bleibt ein Fehler (neue MAJOR-Version)",
+   any(f["level"] == pkg.FEHLER for f in pkg.validate(dict(base, oaap_manifest="1.0"))))
 
 for f in (good, nested, absolute, travers, link, plain, nomani, broken):
     try:

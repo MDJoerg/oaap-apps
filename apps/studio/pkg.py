@@ -54,7 +54,11 @@ CONFIG_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 MANIFEST_VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
 
 KNOWN_MANIFEST_MAJOR = 0
-KNOWN_MANIFEST_MINOR = 2
+# Seit Studio 0.5.0 auf dem Stand des Schemas (oaap-spec
+# schema/oaap-app.schema.json). Bis 0.4.5 stand hier 0.2 — jedes Paket
+# mit Zwilling, Berechtigungen, MCP usw. bekam einen Hinweis „unbekannt“,
+# den ein Knoten so nie gegeben hätte. Steigt das Schema, hier nachziehen.
+KNOWN_MANIFEST_MINOR = 15
 APP_TYPES = ("native", "image", "wrapped")
 APP_CLASSES = ("frontend", "service")
 # `support` seit RFC-0039 -- der Dienstleister, der einen Knoten
@@ -62,7 +66,30 @@ APP_CLASSES = ("frontend", "service")
 ROLES = ("support", "admin", "keyuser", "user", "guest", "partner",
          "public")
 TOP_LEVEL = ("oaap_manifest", "must_understand", "app", "services", "routes",
-             "storage", "config", "health", "placement", "endpoints")
+             "storage", "config", "health", "placement", "endpoints",
+             # 0.3 Zwilling, 0.4 Launchpad, 0.5 Destinationen, 0.6
+             # Berechtigungen, 0.9 Vorgänge, 0.10 Pflege, 0.11–0.13 MCP,
+             # 0.14/0.15 Türen für den Knoten.
+             "data_model", "contributes", "consumes", "launchpad",
+             "destinations", "authorization", "cases", "care", "mcp",
+             "mcp_sources", "mcp_client", "ui_sandbox", "link_state",
+             "assets")
+
+# Was ein Paket von der Plattform anfordert, in Worten für den Menschen,
+# der es prüft — in der Reihenfolge des Briefings.
+CAPABILITIES = (
+    ("contributes", "schreibt in den Zwilling"),
+    ("consumes", "liest aus dem Zwilling"),
+    ("authorization", "fachliche Berechtigungen"),
+    ("destinations", "Destinationen"),
+    ("cases", "öffnet Vorgänge"),
+    ("mcp", "MCP-Werkzeuge"),
+    ("mcp_sources", "liest MCP-Quellen des Mandanten"),
+    ("mcp_client", "handelt an MCP-Gateways"),
+    ("ui_sandbox", "Ansichten für MCP Apps"),
+    ("link_state", "meldet Tunnelzustand"),
+    ("assets", "meldet Assets"),
+)
 
 
 class PackageError(Exception):
@@ -476,6 +503,48 @@ def validate(m):
     elif eps is not None:
         out.append(finding(FEHLER, "`endpoints` ist keine Liste."))
 
+    if "openapi" in m:
+        out.append(finding(FEHLER, "`openapi` ist reserviert und wird vom "
+                                   "Knoten abgelehnt.",
+                           "REST/OData als MCP-Werkzeuge braucht ein eigenes "
+                           "RFC (Idee I-39). Für Werkzeuge: `mcp: {path: …}`."))
+
+    # Zwilling: dieselben Formregeln wie appctl.validate_data_model_sections.
+    # Ob ein Typ wirklich auflöst, entscheidet erst der Knoten mit `store`.
+    for i, c in enumerate(m.get("contributes") or [] if isinstance(m.get("contributes"), list) else []):
+        c = c if isinstance(c, dict) else {}
+        if not str(c.get("type", "")).strip():
+            out.append(finding(FEHLER, f"`contributes[{i}]`: `type` fehlt."))
+        role = c.get("role", "owner")
+        if role not in ("owner", "contributor"):
+            out.append(finding(FEHLER, f"`contributes[{i}]`: `role` muss "
+                                       "owner oder contributor sein."))
+        if role == "contributor" and not str(c.get("group", "")).strip():
+            out.append(finding(FEHLER, f"`contributes[{i}]`: ein contributor "
+                                       "braucht eine eigene `group`.",
+                               "Niemand schreibt in die Gruppe eines anderen — "
+                               "die eigene Gruppe ist der Platz dafür."))
+    for i, c in enumerate(m.get("consumes") or [] if isinstance(m.get("consumes"), list) else []):
+        if not str((c if isinstance(c, dict) else {}).get("type", "")).strip():
+            out.append(finding(FEHLER, f"`consumes[{i}]`: `type` fehlt."))
+    for key in ("contributes", "consumes"):
+        if m.get(key) is not None and not isinstance(m.get(key), list):
+            out.append(finding(FEHLER, f"`{key}` ist keine Liste."))
+    if m.get("contributes") or m.get("consumes"):
+        out.append(finding(HINWEIS, "Das Paket nutzt den Digitalen Zwilling.",
+                           "Er braucht auf dem Zielknoten das Profil `store`; "
+                           "ohne läuft die App, bekommt aber keinen Zugang. Der "
+                           "Zwilling ist append-only — keine personenbezogenen "
+                           "Daten im Klartext hinein."))
+
+    app_type = m["app"].get("type") if isinstance(m.get("app"), dict) else None
+    if "care" not in m and app_type == "native":
+        out.append(finding(HINWEIS, "Kein `care`-Abschnitt.",
+                           "Mit `care: {rebuild: self}` (Manifest ≥ 0.10) und "
+                           "`apt-get upgrade` im Dockerfile darf der Knoten "
+                           "bei Sicherheitsmeldungen selbst neu bauen. Ohne "
+                           "heilt erst die nächste Version."))
+
     return out
 
 
@@ -532,6 +601,7 @@ def summary(m):
             for e in eps if isinstance(e, dict)],
         "health": {"path": str(health.get("path", "")),
                    "grace": health.get("startup_grace_seconds")},
+        "capabilities": [label for key, label in CAPABILITIES if m.get(key)],
     }
 
 
