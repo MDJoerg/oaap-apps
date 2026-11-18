@@ -253,3 +253,30 @@ def recent(db, key_id=None, limit=50):
         return list(db.execute(
             "SELECT * FROM usage WHERE key_id=? ORDER BY id DESC LIMIT ?", (key_id, limit)))
     return list(db.execute("SELECT * FROM usage ORDER BY id DESC LIMIT ?", (limit,)))
+
+def set_aliases(db, label, actor, aliases):
+    """Ändert die Modellnamen eines gültigen Schlüssels (0.8.0, L26).
+
+    Bis 0.7 ließen sie sich nur mit einem neuen Schlüssel ändern -- und
+    ein neuer Schlüssel heißt, das Geheimnis beim Verbraucher zu tauschen.
+    Ampel und Freigabe für personenbezogene Daten bleiben, was beim
+    Ausstellen entschieden wurde (§2): sie begrenzen, wohin ein Modellname
+    führen darf, und gelten damit auch für jeden hinzugefügten.
+    Gibt (alt, neu) zurück; gleich, wenn sich nichts änderte.
+    """
+    row = db.execute("SELECT * FROM keys WHERE label=?", (label,)).fetchone()
+    if not row:
+        raise ValueError(f"Einen Schlüssel „{label}“ gibt es nicht.")
+    if row["revoked"]:
+        raise ValueError(f"„{label}“ ist widerrufen; dafür ändert niemand mehr Modellnamen.")
+    if row["cohort"]:
+        raise ValueError(f"„{label}“ gehört zur Kohorte „{row['cohort']}“; "
+                         "deren Schlüssel haben alle dieselben Modellnamen.")
+    new = ",".join(sorted(dict.fromkeys(a for a in aliases if a)))
+    old = row["aliases"] or ""
+    if ",".join(sorted(a for a in old.split(",") if a)) == new:
+        return old, old
+    db.execute("UPDATE keys SET aliases=? WHERE label=?", (new, label))
+    log(db, actor, "key.aliases", label, f"{old or 'alle'} → {new or 'alle'}")
+    db.commit()
+    return old, new

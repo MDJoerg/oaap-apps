@@ -154,10 +154,24 @@ Den zweiten Fall zeigt `sudo oaap status` („Assertion key: MISSING“), und
 Schlüssel; vorher fehlte er auf Knoten ohne Principal Propagation
 (Fund auf oaapx01, 18.11.2026).
 
+## Modellname als Auswahl, Werkzeugaufrufe ausblendbar (0.6.0)
+
+- Das Formular **Assistent** wählt den Modellnamen aus der Liste, die der
+  Schlüssel der Destination `ki` erreicht (`GET api/models`, mit Ampel).
+  Ein frei getippter Name scheiterte bis 0.5 erst beim ersten Gespräch
+  (bec, 2026-11-18, L27). Ein Name, den der Schlüssel nicht (mehr)
+  erreicht, bleibt sichtbar und wird benannt -- mit dem Hinweis, ihn im
+  KI-Gateway beim Schlüssel freizugeben (dort seit 0.8.0 ohne neuen
+  Schlüssel).
+- **Einstellungen → Werkzeugaufrufe: zeigen / ausblenden** (I-62 W4), für
+  Aufzeichnungen, Schulungen und Einsteiger. Freigaben vor dem Schreiben
+  und Ansichten der Werkzeuge (MCP Apps) bleiben sichtbar. Gilt für diesen
+  Browser.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 99 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 104 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

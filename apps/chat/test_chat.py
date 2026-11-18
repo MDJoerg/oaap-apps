@@ -562,6 +562,26 @@ check("0.3.1: der Grund des Gateways (Ampel) steht im Bericht, der Schritt nennt
 check("vermutete Instanz aus der automatischen Adresse", app.own_instance_guess() == "vuebung-chat",
       app.own_instance_guess())
 
+# ------------------------------------------------ 0.6.0: Modellnamen als Auswahl (L27), W4
+st, r = req("GET", "/api/models")
+check("0.6.0: /api/models nennt die Modellnamen, die der Schlüssel der Destination ki erreicht",
+      st == 200 and [m["id"] for m in r["models"]] == ["standard", "klein"] and r["error"] == "", r)
+st, r = req("GET", "/api/models", person="", assertion=False)
+check("0.6.0: /api/models nur für eine angemeldete Person", st == 401, (st, r))
+_ki, app.KI_URL = app.KI_URL, ""
+try:
+    st, r = req("GET", "/api/models")
+finally:
+    app.KI_URL = _ki
+check("0.6.0: ohne Destination ki keine Liste, aber ein Satz", st == 200 and r["models"] == []
+      and "Destination ki" in r["error"], r)
+st, _ct, html = raw_get("/")
+html = html.decode("utf-8")
+check("0.6.0: das Formular wählt das Modell aus einer Liste, kein freies Feld",
+      '<select name="model" required>' in html and 'input name="model"' not in html, st)
+check("0.6.0 W4: Werkzeugaufrufe lassen sich in den Einstellungen ausblenden",
+      'data-k="calls"' in html and "body[data-calls=hide] .call" in html, st)
+
 # ------------------------------------------------ 0.4.0: Ansichten (MCP Apps, RFC-0075)
 req("POST", "/api/assistants", asst("mitansicht", "private", view="vg", views=True))
 req("POST", "/api/assistants", asst("ohneansicht", "private", view="vg"))

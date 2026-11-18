@@ -457,6 +457,23 @@ Seit 0.5.2 läuft jede Anweisung unter einer Sperre
 0 Abbrüche, 3200 von 3200. `test_report.py` prüft das und wird mit der
 alten Verbindung rot.
 
+## Modellnamen eines Schlüssels ändern (0.8.0)
+
+Bis 0.7 ließen sich die Modellnamen eines Schlüssels nur über einen neuen
+Schlüssel ändern -- und ein neuer Schlüssel heißt, das Geheimnis beim
+Verbraucher zu tauschen (beim Chat: an der Destination). Gefunden in bec am
+2026-11-18: ein neu angelegter Name `chat-default` war dem Schlüssel des
+Chats nicht erlaubt, der Chat bekam 400 (L26).
+
+Seit 0.8.0 hat jede gültige Schlüsselzeile **„Modellnamen ändern“**: ein
+Ankreuzfeld je Modellname, nichts angekreuzt = alle. Die Änderung gilt ab
+der nächsten Anfrage, das Geheimnis bleibt, die Prüfspur nennt alt und neu
+(`key.aliases`). **Ampel und Freigabe für personenbezogene Daten bleiben**,
+wie beim Ausstellen entschieden: sie begrenzen, wohin ein Name führen darf,
+und gelten für jeden hinzugefügten. Schlüssel einer Kohorte ändern sich nur
+gemeinsam (nicht hier). Auf der Kommandozeile:
+`app.py key aliases <etikett> a,b` (leer = alle).
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

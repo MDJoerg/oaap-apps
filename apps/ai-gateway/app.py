@@ -54,7 +54,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -1020,6 +1020,42 @@ def renew_link(row):
             f'neu ausstellen</a><br><span class="muted">mit denselben Angaben</span>')
 
 
+def aliases_form(row):
+    """Modellnamen eines Schlüssels ändern (0.8.0) -- ein Ankreuzfeld je
+    Modellname; keins angekreuzt heißt wie beim Ausstellen: alle."""
+    have = {a for a in (row["aliases"] or "").split(",") if a}
+    boxes = "".join(
+        f'<label style="display:block"><input type="checkbox" name="alias" value="{esc(n)}"'
+        f'{" checked" if n in have else ""}> <code>{esc(n)}</code></label>'
+        for n in sorted(set(ALIASES) | have))
+    gone = sorted(have - set(ALIASES))
+    return (f'<details><summary class="muted">Modellnamen ändern</summary>'
+            f'<form method="post" action="key-aliases" style="margin-top:.6rem">'
+            f'<input type="hidden" name="label" value="{esc(row["label"])}">'
+            f'<p class="hint">Gilt ab der nächsten Anfrage, das Geheimnis bleibt. Ampel und '
+            f'Freigabe bleiben, wie beim Ausstellen entschieden. Nichts angekreuzt = alle.</p>'
+            f'{boxes}'
+            + (f'<p class="hint">Gibt es nicht mehr: {esc(", ".join(gone))} -- Haken entfernen.</p>'
+               if gone else "")
+            + '<div><button class="quiet" type="submit">speichern</button></div></form></details>')
+
+
+def change_key_aliases(label, names, user):
+    names = [n.strip() for n in names if n.strip()]
+    unknown = [n for n in names if n not in ALIASES]
+    if unknown:
+        return ("Diese Modellnamen gibt es nicht: " + ", ".join(unknown) +
+                f". Modellnamen von „{label}“ nicht geändert.")
+    try:
+        old, new = store.set_aliases(DB, label, user, names)
+    except ValueError as exc:
+        return str(exc)
+    if old == new:
+        return f"Modellnamen von „{label}“ unverändert."
+    return (f"Modellnamen von „{label}“ geändert: {old or 'alle'} → {new or 'alle'} "
+            "-- gilt ab der nächsten Anfrage, das Geheimnis bleibt.")
+
+
 def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from=""):
     """`keep` füllt das Ausstell-Formular wieder (nach einer Ablehnung oder aus
     `renew_values`); `renew_from` nennt den Schlüssel, aus dem es stammt."""
@@ -1060,7 +1096,8 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
                       f'<input type="hidden" name="label" value="{esc(row["label"])}">'
                       f'{context_inputs(row, prefix=row["id"] + "-")}'
                       f'<div><button class="quiet" type="submit">speichern</button></div>'
-                      f'</form></details>')
+                      f'</form></details>'
+                      f'{aliases_form(row)}')
         last = t["last"] if t else ""
         rows.append(
             f'<tr{" class=dim" if not store.usable(row) else ""}><td><b>{esc(row["label"])}</b><br>'
@@ -2097,7 +2134,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/v1/chat/completions", "/v1/embeddings"):
             self.handle_inference(path)
             return
-        if path in ("/issue", "/revoke", "/context", "/supplier", "/supplier-delete",
+        if path in ("/issue", "/revoke", "/context", "/key-aliases", "/supplier", "/supplier-delete",
                     "/alias", "/alias-delete", "/supplier-test", "/alias-test",
                     "/cohort-issue", "/cohort-extend", "/cohort-revoke", "/alias-import"):
             self.handle_admin_post(path)
@@ -2176,6 +2213,8 @@ class Handler(BaseHTTPRequestHandler):
                     notice = str(exc)
         elif path in ("/supplier", "/supplier-delete", "/alias", "/alias-delete"):
             notice = self.change_supply(path, form, user)
+        elif path == "/key-aliases":
+            notice = change_key_aliases(form.get("label", ""), multi.get("alias", []), user)
         elif path == "/context":
             label = form.get("label", "")
             try:
@@ -2457,7 +2496,7 @@ def cli(argv):
     if len(argv) < 2 or argv[0] != "key":
         print("Aufruf: app.py key issue <etikett> [--aliases a,b] "
               "[--ceiling green|yellow|red] [--personal-data ja] [--budget N] "
-              f"[--rate N] {context_opts} | key list | key revoke <etikett> "
+              f"[--rate N] {context_opts} | key list | key revoke <etikett> | key aliases <etikett> [a,b] "
               f"| key context <etikett> {context_opts}")
         return 2
     action = argv[1]
@@ -2485,6 +2524,9 @@ def cli(argv):
         return 0
     if action == "revoke" and len(argv) > 2:
         print("widerrufen" if store.revoke(DB, argv[2], "cli") else "unbekannt oder schon widerrufen")
+        return 0
+    if action == "aliases" and len(argv) > 2:
+        print(change_key_aliases(argv[2], (argv[3] if len(argv) > 3 else "").split(","), "cli"))
         return 0
     if action == "context" and len(argv) > 2:
         try:

@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -566,6 +566,30 @@ def setup_report(person, assertion, a):
         add("model", False, "Das KI-Gateway antwortet", f"Nicht erreicht ({type(exc).__name__}).",
             "Läuft das KI-Gateway, und stimmt das Ziel der Destination?")
     return items
+def ki_models():
+    """Die Modellnamen, die der Schlüssel der Destination ki erreicht (0.6.0, L27).
+
+    Das Formular „Assistent“ bietet nur diese an: ein frei getippter Name
+    scheiterte erst beim ersten Gespräch (bec, 18.11.: „chat-default“ war
+    angelegt, aber dem Schlüssel nicht erlaubt). Gibt (Liste, Fehlersatz).
+    """
+    if not KI_URL:
+        return [], "Dieser Instanz ist keine Destination ki zugeordnet."
+    req = urllib.request.Request(KI_URL.rstrip("/") + "/models", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read(1_000_000)).get("data") or []
+    except urllib.error.HTTPError as exc:
+        return [], (f"Das KI-Gateway lehnt ab (HTTP {exc.code}): der Schlüssel der Destination ki "
+                    "ist ungültig oder widerrufen." if exc.code in (401, 403)
+                    else f"Das KI-Gateway antwortet {exc.code}.")
+    except (OSError, ValueError) as exc:
+        return [], f"Das KI-Gateway ist nicht erreichbar ({type(exc).__name__})."
+    out = [{"id": m["id"], "light": m.get("oaap_light", ""), "meaning": m.get("oaap_light_meaning", "")}
+           for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)]
+    return out, ""
+
+
 PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
 
 
@@ -660,6 +684,9 @@ class Handler(BaseHTTPRequestHandler):
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
                 "sandbox_origins": SANDBOX_ORIGINS,
                 "conversations": list_convs(person)})
+        if path == "/api/models":
+            models, err = ki_models()
+            return self.json(200, {"models": models, "error": err})
         if path == "/api/setup":
             aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
             a, _ = STORE.get(aid)

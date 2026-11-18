@@ -211,8 +211,8 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.7.2",
-      "released": "2026-11-16",
+      "version": "0.8.0",
+      "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/ai-gateway"
@@ -318,7 +318,7 @@
       "id": "chat",
       "name": "Chat",
       "type": "native",
-      "version": "0.5.2",
+      "version": "0.6.0",
       "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

@@ -96,6 +96,8 @@ padding:.5rem .8rem;border:1px solid var(--line);border-radius:.7rem;background:
 @keyframes blink{0%,80%,100%{opacity:.25;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
 @media (prefers-reduced-motion:reduce){.dots i{animation:none;opacity:.6}aside{transition:none!important}}
 .cmd{font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem}
+/* W4 (0.6.0): Werkzeugaufrufe ausblendbar -- Ansichten (MCP Apps) und Freigaben bleiben */
+body[data-calls=hide] .call,body[data-calls=hide] details.result{display:none}
 .call,.result{align-self:flex-start;font-size:.85rem;color:var(--muted);background:var(--tool);
 border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .result summary{cursor:pointer}
@@ -238,6 +240,9 @@ dialog input,dialog textarea,dialog select{width:100%}
     <button type="button" data-v="normal">normal</button><button type="button" data-v="large">groß</button></div>
   <label>Gespräche gruppieren</label><div class="seg" data-k="group">
     <button type="button" data-v="assistant">nach Assistent</button><button type="button" data-v="time">nach Zeit</button><button type="button" data-v="none">nicht</button></div>
+  <label>Werkzeugaufrufe</label><div class="seg" data-k="calls">
+    <button type="button" data-v="show">zeigen</button><button type="button" data-v="hide">ausblenden</button></div>
+  <p class="muted" style="font-size:.8rem">Ausgeblendet bleiben Freigaben und Ansichten der Werkzeuge sichtbar &mdash; etwa für Aufzeichnungen und Schulungen.</p>
 </dialog>
 
 <dialog id="dlg">
@@ -248,7 +253,8 @@ dialog input,dialog textarea,dialog select{width:100%}
     <label>Begrüßung</label><input name="greeting" maxlength="500">
     <label>Anweisung an das Modell (Systemprompt)</label><textarea name="system" rows="5" required maxlength="8000"></textarea>
     <div class="row">
-      <div style="flex:1"><label>Modellname des KI-Gateways</label><input name="model" value="standard" required></div>
+      <div style="flex:1"><label>Modellname des KI-Gateways</label><select name="model" required></select>
+        <div id="mhint" style="font-size:.8rem;margin-top:.2rem;opacity:.75"></div></div>
       <div style="flex:1"><label>Sicht des MCP-Gateways</label><input name="view" required></div>
       <div style="flex:1"><label>Gateway (leer = das einzige)</label><input name="gateway"></div>
     </div>
@@ -275,7 +281,7 @@ function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.class
 const narrow = () => matchMedia("(max-width:800px)").matches;
 
 // ---- Einstellungen: nur in diesem Browser (localStorage); ohne Speicher gelten die Vorgaben.
-const SET = {theme: "system", bg: "none", density: "normal", size: "normal", group: "assistant"};
+const SET = {theme: "system", bg: "none", density: "normal", size: "normal", group: "assistant", calls: "show"};
 function load(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
 function keep(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 Object.assign(SET, load("chat.settings", {}));
@@ -285,7 +291,7 @@ const isDark = () => SET.theme === "dark" || (SET.theme === "system" && matchMed
 function applySet(){
   const r = document.documentElement;
   if (SET.theme === "system") r.removeAttribute("data-theme"); else r.dataset.theme = SET.theme;
-  const b = document.body; b.dataset.bg = SET.bg; b.dataset.density = SET.density; b.dataset.size = SET.size;
+  const b = document.body; b.dataset.bg = SET.bg; b.dataset.density = SET.density; b.dataset.size = SET.size; b.dataset.calls = SET.calls;
   for (const seg of document.querySelectorAll("#setdlg .seg"))
     for (const x of seg.querySelectorAll("button")) x.classList.toggle("on", SET[seg.dataset.k] === x.dataset.v);
 }
@@ -776,12 +782,37 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if
 
 // ---- Assistenten: eigene Seite mit Suche, Filter und „Neuer Assistent“
 const F = $("af");
+// Modellnamen: nur die, die der Schlüssel der Destination ki erreicht (0.6.0, L27).
+// Ein Name, der dort nicht (mehr) freigegeben ist, bleibt sichtbar, aber benannt.
+const LIGHT_WORD = {green: "grün", yellow: "gelb", red: "rot"};
+async function loadModels(current){
+  const sel = F.elements.model, hint = $("mhint");
+  sel.textContent = ""; hint.textContent = "Modelle werden gelesen …";
+  let d = {models: [], error: ""};
+  try { const r = await fetch("api/models"); d = await r.json(); }
+  catch (e) { d.error = "Die Modellliste ist nicht erreichbar."; }
+  const ids = d.models.map(m => m.id);
+  for (const m of d.models) {
+    const o = el("option", "", m.id + (m.light ? " · " + (LIGHT_WORD[m.light] || m.light) : ""));
+    o.value = m.id; if (m.meaning) o.title = m.meaning; sel.appendChild(o);
+  }
+  if (current && !ids.includes(current)) {
+    const o = el("option", "", current + " · beim KI-Gateway nicht freigegeben"); o.value = current;
+    sel.insertBefore(o, sel.firstChild);
+  }
+  if (current) sel.value = current;
+  hint.textContent = d.error ? d.error
+    : current && !ids.includes(current)
+      ? "„" + current + "“ erreicht der Schlüssel des Chats nicht. Einen anderen Namen wählen oder im KI-Gateway beim Schlüssel freigeben."
+      : ids.length ? "" : "Der Schlüssel des Chats erreicht kein Modell. Im KI-Gateway beim Schlüssel Modellnamen freigeben.";
+}
 function fill(a){
   F.reset(); $("aerr").textContent = "";
   F.elements.id.readOnly = !!a;
   $("dtitle").textContent = a ? "Assistent ändern" : "Neuer Assistent";
+  loadModels(a ? a.model : "");
   if (!a) return;
-  for (const k of ["id", "title", "greeting", "system", "model", "view", "gateway"]) F.elements[k].value = a[k] || "";
+  for (const k of ["id", "title", "greeting", "system", "view", "gateway"]) F.elements[k].value = a[k] || "";
   F.elements.scope.value = a.visibility.scope;
   F.elements.team.value = (a.visibility.context || {}).team || "";
   F.elements.commands.checked = !!a.commands;

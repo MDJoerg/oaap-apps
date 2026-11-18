@@ -212,6 +212,36 @@ check("nur die erlaubten Aliasse", names == ["chat-default", "nur-lokal"], names
 check("kein Modellname der Quelle", "fern-modell" not in body.decode())
 check("kein Quellenname", "eusrc" not in body.decode() and "fern" not in body.decode())
 
+print("\n-- 0.8.0 (L26): Modellnamen eines Schlüssels ändern, das Geheimnis bleibt")
+status, body, _ = call("/schluessel", admin=True)
+check("die Schlüsselzeile bietet „Modellnamen ändern“ an",
+      "Modellnamen ändern" in body.decode("utf-8") and 'action="key-aliases"' in body.decode("utf-8"))
+status, body, _ = call("/key-aliases", "POST", admin=True, form="label=laptop&alias=nur-lokal")
+check("die Seite bestätigt die Änderung", "geändert" in body.decode("utf-8"), body[-300:])
+status, body, _ = call("/v1/models", key=KEY)
+check("ab der nächsten Anfrage: nur noch nur-lokal, mit demselben Geheimnis",
+      status == 200 and [m["id"] for m in json.loads(body)["data"]] == ["nur-lokal"], body[:200])
+status, body, _ = call("/v1/chat/completions", "POST", key=KEY,
+                       body={"model": "chat-default", "messages": [{"role": "user", "content": "x"}]})
+check("chat-default ist jetzt abgelehnt, mit den erlaubten Namen",
+      status == 400 and "nur-lokal" in body.decode("utf-8"), (status, body[:200]))
+eintrag = [r for r in store.audit(app.DB) if r["action"] == "key.aliases"]
+check("die Prüfspur nennt alt und neu",
+      eintrag and eintrag[0]["subject"] == "laptop" and "chat-default,nur-lokal" in eintrag[0]["detail"]
+      and eintrag[0]["detail"].endswith("→ nur-lokal"), [dict(r) for r in eintrag])
+status, body, _ = call("/key-aliases", "POST", admin=True, form="label=laptop&alias=gibts-nicht")
+check("ein unbekannter Name wird abgelehnt, nichts geändert",
+      "gibt es nicht" in body.decode("utf-8")
+      and [r for r in store.keys(app.DB) if r["label"] == "laptop"][0]["aliases"] == "nur-lokal")
+status, _, _ = call("/key-aliases", "POST", admin=False, form="label=laptop&alias=chat-default")
+check("Modellnamen ändern bleibt der Serververwaltung vorbehalten", status == 403, status)
+status, body, _ = call("/key-aliases", "POST", admin=True, form="label=gleich-weg&alias=nur-lokal")
+check("ein widerrufener Schlüssel bekommt keine neuen Modellnamen", "widerrufen" in body.decode("utf-8"))
+call("/key-aliases", "POST", admin=True, form="label=laptop&alias=chat-default&alias=nur-lokal")
+status, body, _ = call("/v1/models", key=KEY)
+check("zurück auf beide",
+      sorted(m["id"] for m in json.loads(body)["data"]) == ["chat-default", "nur-lokal"], body[:200])
+
 print("\n-- §9.6a die Ampel ist die schlechteste erreichbare Farbe")
 by_id = {m["id"]: m for m in doc["data"]}
 check("nur-lokal ist grün", by_id["nur-lokal"]["oaap_light"] == "green", by_id["nur-lokal"])
