@@ -58,8 +58,8 @@
       "id": "studio",
       "name": "OAAP Studio",
       "type": "native",
-      "version": "0.5.1",
-      "released": "2026-11-17",
+      "version": "0.5.2",
+      "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -652,8 +652,8 @@
       "id": "marketplace",
       "name": "Marketplace",
       "type": "native",
-      "version": "0.3.0",
-      "released": "2026-11-12",
+      "version": "0.3.1",
+      "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/marketplace"

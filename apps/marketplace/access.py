@@ -26,8 +26,13 @@ def principal(headers, public):
     if not user:
         return ANON
     split = lambda v: frozenset(x.strip() for x in (v or "").split(",") if x.strip())  # noqa: E731
+    # Gruppen: KEINE Quelle. Die Plattform setzt kein X-OAAP-Groups
+    # (oaap.core.identity 2.6) -- was unter diesem Namen ankam, hatte der
+    # Client geschickt (gemessen 17.11.2026). Eine Gruppen-Berechtigung
+    # bleibt gespeichert, trifft aber niemanden, bis es eine echte Quelle
+    # gibt. Das Gateway entfernt die Kopfzeile inzwischen auch (0.1.296).
     return {"anon": False, "user": user,
-            "groups": split(headers.get("X-OAAP-Groups")),
+            "groups": frozenset(),
             "roles": split(headers.get("X-OAAP-Roles"))}
 
 

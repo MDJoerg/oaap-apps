@@ -3,7 +3,7 @@ oaap_manifest: "0.10"
 app:
   id: marketplace
   name: Marketplace
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufen 1 und 2): Schaufenster mit Landschaften, Kategorien, Suche und Detailseite (ObjectPage, Teilen mit QR-Code). Asset-Typen OAAP-App, Aufbau-Vorlage und Datei, Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Review zählt ein Release erst nach der Freigabe durch einen zweiten Prinzipal (z. B. eine Prüf-KI). Paketkataloge der Knoten ziehen OAAP-Apps im Spiegelmodus über einen Feed."

@@ -640,7 +640,7 @@ def render_manage(ctx, msg=""):
                if reqs else '<p class="muted small">Keine.</p>')
             + f'<h3>Berechtigungen</h3><table>{e_rows}</table>'
             f'<form method=post action="/my/manage/grant"><input type=hidden name=asset value="{esc(a["id"])}"><p>'
-            '<select name=kind><option>user</option><option>group</option></select> '
+            '<select name=kind><option>user</option><option value=group>group (wirkt noch nicht)</option></select> '
             '<input type=text name=name placeholder="Benutzer/Gruppe" size=16 required> '
             '<input type=text name=channels placeholder="Kanäle (leer = deine)" size=16> '
             '<button>Berechtigen</button></p></form></div>')
@@ -710,7 +710,7 @@ def render_admin(ctx, msg="", review_on=False, escalate_h=24):
         for r in M.recipients())
     esc_n = len(M.reviews("escalated", escalate_after_h=escalate_h))
     open_n = len(M.reviews("open", escalate_after_h=escalate_h))
-    kind_sel = '<select name=kind><option>user</option><option>group</option></select>'
+    kind_sel = '<select name=kind><option>user</option><option value=group>group (wirkt noch nicht)</option></select>'
     note = f'<div class=card><p style="margin:0">{esc(msg)}</p></div>' if msg else ""
     rv = (f'<div class=card><h2>Prüfungen</h2><p>Review ist <strong>{"an" if review_on else "aus"}</strong> '
           f'(MARKET_REVIEW). <a href="/admin/reviews">{esc_n} eskaliert, {open_n} offen</a> beim Prüfer.</p></div>')
@@ -742,7 +742,7 @@ def render_admin(ctx, msg="", review_on=False, escalate_h=24):
 
 def render_reviews(ctx, msg="", review_on=False, escalate_h=24):
     M = ctx.M
-    kind_sel = '<select name=kind><option>user</option><option>group</option></select>'
+    kind_sel = '<select name=kind><option>user</option><option value=group>group (wirkt noch nicht)</option></select>'
 
     def case_row(r, decide):
         pre = r["precheck_map"]

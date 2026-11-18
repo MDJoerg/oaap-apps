@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1763,6 +1763,9 @@ def _sec_platform(app_type=None):
         "  Anmeldename — anzeigen, nicht darauf bauen, er ist änderbar),",
         "  `X-OAAP-Roles`, `X-OAAP-Display-Name` und `X-OAAP-Email` (nur",
         "  gesetzt, wenn verifiziert). Niemals ein Anmeldeformular bauen.",
+        "  **Keine anderen `X-OAAP-*`-Header als Identität lesen** — es gibt",
+        "  kein `X-OAAP-Groups` und kein `X-OAAP-Tenant`; was unter solchen",
+        "  Namen ankäme, hätte der Client geschickt.",
         "- **Ein HTTP-Port**, kein TLS in der App (das macht das Gateway).",
         "- **Persistenz nur in deklarierten Mounts** (`storage` im Manifest).",
         "- **Konfiguration nur über deklarierte Umgebungsvariablen**,",
@@ -1832,8 +1835,10 @@ def _sec_access():
         "Maschinen-Zugang mit Rolle an und stellt einen Schlüssel aus, auf",
         "**eine Instanz** begrenzt und mit Ablaufdatum. Das Programm ruft",
         "die **normale, geschützte Route** mit",
-        "`Authorization: Bearer oaapk_…` — die App bekommt `X-OAAP-User`",
-        "und `X-OAAP-Roles` wie bei einem Menschen. Keine `public`-Route,",
+        "`Authorization: Bearer oaapk_…` — die App bekommt `X-OAAP-User`,",
+        "`X-OAAP-User-Id`, `X-OAAP-Roles` und `X-OAAP-Display-Name` (den",
+        "Titel des Zugangs), **kein** `X-OAAP-Email`, und den",
+        "`Authorization`-Header selbst. Keine `public`-Route,",
         "kein eigenes Schlüsselverfahren. Zwei Stolpersteine:",
         "",
         "- Den `Authorization`-Header auf geschützten Routen **nicht** für",
