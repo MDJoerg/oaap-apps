@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.9.3"
+VERSION = "0.10.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -118,6 +118,11 @@ SOURCES_URL = (os.environ.get("OAAP_MCP_SOURCES_URL") or "").strip()
 SOURCES_KEY = (os.environ.get("OAAP_MCP_SOURCES_KEY") or "").strip()
 SOURCES_EVERY = 300
 SOURCES_STATE = {"at": "", "error": "", "report": {}}
+# RFC-0073 §16 (0.10.0): je Quelle die Erkundungs-Tür der Plattform, wie die
+# Liste sie nennt. Dort liest das Gateway den Katalog ohne Menschen, nur die
+# Listen; jeder Aufruf geht weiter als Person durch die Tür von Verfahren I.
+# Nur im Speicher: die Liste wird beim Start und alle 5 Minuten neu gelesen.
+SOURCE_DISCOVER = {}
 
 
 def fetch_sources():
@@ -138,6 +143,29 @@ def fetch_sources():
     return doc["sources"]
 
 
+def remember_discover(sources):
+    """Merkt sich die Erkundungs-Türen der Liste (nur http://, gültige Namen)."""
+    found = {}
+    for src in sources:
+        name, url = str(src.get("name") or ""), str(src.get("discover") or "")
+        if books.NAME.match(name) and url.startswith("http://"):
+            found[name] = url
+    SOURCE_DISCOVER.clear()
+    SOURCE_DISCOVER.update(found)
+
+
+def discover_door(name):
+    """Die Erkundungs-Tür einer Quelle, oder ''. Kennt dieser Prozess sie nicht
+    (die Kommandozeile ist ein eigener Prozess, gemessen 18.11.), liest er die
+    Liste einmal nach -- ohne abzugleichen."""
+    if name not in SOURCE_DISCOVER and SOURCES_URL and SOURCES_KEY:
+        try:
+            remember_discover(fetch_sources())
+        except ValueError:
+            pass
+    return SOURCE_DISCOVER.get(name, "")
+
+
 def sync_sources():
     """Liste holen und abgleichen. Gibt (ok, Satz) zurück; merkt sich das Ergebnis für die Seite."""
     SOURCES_STATE["at"] = books.now()
@@ -147,6 +175,7 @@ def sync_sources():
         SOURCES_STATE["error"] = str(exc)
         return False, str(exc)
     rep = books.sync_sources(DB, sources, guard.clean(dict(guard.DEFAULTS)))
+    remember_discover(sources)
     SOURCES_STATE["error"] = ""
     SOURCES_STATE["report"] = rep
     for name in rep["added"] + rep["moved"] + rep["back"]:
@@ -375,17 +404,31 @@ def read_catalog(name, person=None):
     Bei Verfahren X braucht es einen Menschen: `person` mit dem Token des
     Betreibers (Kommandozeile `--token-stdin`). Ohne ihn bleibt der Katalog,
     wie er zuletzt gelesen wurde.
+
+    Bei Verfahren I (Quelle der Plattform) liest das Gateway ohne Menschen
+    über die Erkundungs-Tür (RFC-0073 §16): nur die Listen, als eigener
+    Maschinen-Benutzer. Mit Menschen wie bisher durch die Tür von Verfahren I.
     """
     srow = books.server_row(DB, name)
     if not srow:
         return False, f"Einen Server „{name}“ gibt es nicht."
-    if srow["auth_kind"] in books.PERSON_KINDS and not person:
-        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren "
-                       f"{'I' if srow['auth_kind'] == 'platform' else 'X'} braucht ein Token eines "
+    discover = (discover_door(name) if srow["auth_kind"] == "platform"
+                and not person and SOURCES_KEY else "")
+    if srow["auth_kind"] == "exchange" and not person:
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
                        f"Menschen — app.py server read {name} --token-stdin ja.")
+    if srow["auth_kind"] == "platform" and not person and not discover:
+        # Eine Plattform vor 0.1.300 nennt keine Erkundungs-Tür (L8a, 18.11.).
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht einen Menschen, "
+                       f"und die Plattform nennt für diese Quelle keine Erkundungs-Tür (ab Referenz "
+                       f"0.1.300). Als Person des Mandanten auf „Katalog lesen“ klicken, oder "
+                       f"app.py server read {name} --token-stdin ja.")
     lim = limits_of(srow)
     try:
-        server, url = server_access(srow, person)
+        if discover:
+            server, url = {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True}, discover
+        else:
+            server, url = server_access(srow, person)
         offers, session = upstream.list_catalog(server, url, timeout=min(60, lim["timeout_s"]))
     except upstream.UpstreamError as exc:
         books.note_server(DB, name, error=str(exc))
@@ -395,6 +438,9 @@ def read_catalog(name, person=None):
     counts = ", ".join(f"{len(offers.get(k, []))} {KIND_PLURAL[k]}" for k in compose.KINDS
                        if offers.get(k) or k == "tool")
     text = f"Katalog von „{name}“ gelesen: {counts}, Protokoll {session.version}."
+    if discover:
+        # D15: die App zeigt dem Gateway SEINE Liste, nicht die einer Person.
+        text += " Als Gateway gelesen (Erkundungs-Tür, RFC-0073 §16)."
     if changed:
         text += " Gesperrt, weil geändert oder verschwunden: " + ", ".join(changed) + "."
     return True, text

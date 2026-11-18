@@ -190,6 +190,15 @@ docker exec <container> python3 /srv/app.py source sync
 echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <quelle> --token-stdin ja
 ```
 
+**Katalog ohne Menschen (0.10.0, RFC-0073 §16):** Eine Plattform ab 0.1.300
+nennt je Quelle eine **Erkundungs-Tür** (`discover`). Dort liest das Gateway
+den Katalog ohne angemeldeten Menschen — gleich nachdem eine Quelle
+auftaucht, alle `MCPGW_CATALOG_MINUTES` und auf Knopfdruck. Die Plattform
+lässt dort nur den Verbindungsaufbau, die vier Listen und das Lesen der
+Ansichten (`ui://`) durch, die Werkzeuge nennen — nie einen Aufruf. Die App sieht das Gateway als Maschinen-Benutzer `instance:<gateway>`
+und zeigt ihm dessen Liste; nach dem Lesen steht „Als Gateway gelesen“.
+Aufrufe laufen weiter nur als Person (Verfahren I oder A).
+
 ## Verfahren A: ein Chat der Plattform trägt den Menschen (0.7)
 
 Eine Chat-App desselben Mandanten (Manifest 0.12, `mcp_client: {use: true}`)

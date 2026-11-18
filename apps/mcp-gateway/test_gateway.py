@@ -142,6 +142,7 @@ class Paper(BaseHTTPRequestHandler):
         S["auth"].append(self.headers.get("Authorization"))
         S.setdefault("act", []).append(self.headers.get("X-OAAP-Act-Token"))
         S.setdefault("asrt", []).append(self.headers.get("X-OAAP-Act-Assertion"))
+        S.setdefault("paths", []).append((self.path, body.get("method") if isinstance(body, dict) else None))
         if S.get("refuse_sub"):
             # Wie die Tür der Plattform: diese Person scheitert an der Route (403 und ein Satz).
             try:
@@ -1307,7 +1308,58 @@ page = admin("/server-save", name="hand-i", address=DREI, auth="platform", light
 check("Verfahren I für einen Server von Hand: abgewiesen", "Quellen der Plattform" in page
       and books.server_row(app.DB, "hand-i") is None)
 ok_, text_ = app.read_catalog("kp")
-check("Katalog ohne Menschen: nicht gelesen, Satz nennt Verfahren I", not ok_ and "Verfahren I" in text_, text_)
+check("Katalog ohne Menschen und ohne Erkundungs-Tür: nicht gelesen, Satz nennt Verfahren I",
+      not ok_ and "Verfahren I" in text_, text_)
+check("… und nennt den Knopf, nicht nur die Kommandozeile (L8a)",
+      "„Katalog lesen“" in text_ and "Erkundungs-Tür" in text_, text_)
+
+print("\n-- Erkundungs-Tür: Katalog ohne Menschen (RFC-0073 §16, 0.10.0)")
+ERKUNDUNG = TUER.replace("/platform/mcp/to/", "/platform/mcp/discover/")
+_fetch = app.fetch_sources
+app.fetch_sources = lambda: [
+    {"name": "kp", "app": "kontext-probe", "version": "0.1.4", "address": DREI, "door": TUER,
+     "discover": ERKUNDUNG},
+    {"name": "boese", "app": "x", "version": "1", "address": DREI, "door": TUER,
+     "discover": "https://anderswo.example/x"}]
+app.sync_sources()
+_list = app.fetch_sources
+app.fetch_sources = _fetch
+check("der Abgleich merkt sich die Erkundungs-Tür je Quelle aus der Liste",
+      app.SOURCE_DISCOVER.get("kp") == ERKUNDUNG, app.SOURCE_DISCOVER)
+check("… eine Adresse, die nicht http:// ist, wird nicht übernommen",
+      "boese" not in app.SOURCE_DISCOVER, app.SOURCE_DISCOVER)
+books.delete_server(app.DB, "tester", "boese")
+app.SOURCE_DISCOVER.clear()
+_url, app.SOURCES_URL, app.fetch_sources = app.SOURCES_URL, "http://plattform.invalid/x", _list
+ok_, text_ = app.read_catalog("kp")
+check("ein eigener Prozess ohne gemerkte Tür (die Kommandozeile) liest die Liste nach und dann den Katalog",
+      ok_ and "Als Gateway gelesen" in text_ and app.SOURCE_DISCOVER.get("kp") == ERKUNDUNG, text_)
+app.SOURCES_URL, app.fetch_sources = _url, _fetch
+n0 = len(IS_.setdefault("paths", []))
+ok_, text_ = app.read_catalog("kp")
+check("mit Erkundungs-Tür: Katalog ohne Menschen gelesen", ok_ and "gelesen" in text_, text_)
+check("… der Satz sagt, dass als Gateway gelesen wurde", "Als Gateway gelesen" in text_, text_)
+new = IS_["paths"][n0:]
+check("… nur an der Erkundungs-Tür, nie an der Tür von Verfahren I",
+      new and all(p == "/platform/mcp/discover/kp" for p, _ in new), new)
+check("… nur Katalog-Methoden",
+      {mth for _, mth in new} <= {"initialize", "notifications/initialized", "tools/list",
+                                  "resources/list", "resources/templates/list", "prompts/list"}, new)
+check("… mit dem Quellen-Schlüssel, ohne Act-Token und ohne Zusicherung",
+      all(a == "Bearer " + SOURCES_KEY for a in IS_["auth"][-len(new):])
+      and not any(IS_["act"][-len(new):]) and not any(IS_["asrt"][-len(new):]),
+      (IS_["auth"][-len(new):], IS_["act"][-len(new):], IS_["asrt"][-len(new):]))
+try:
+    app.server_access(books.server_row(app.DB, "kp"), None)
+    check("die Erkundungs-Tür öffnet KEINEN Aufruf: ohne Menschen weiter kein Zugang", False, "geliefert")
+except app.NoPerson:
+    check("die Erkundungs-Tür öffnet KEINEN Aufruf: ohne Menschen weiter kein Zugang", True)
+n0 = len(IS_["paths"])
+ok_, text_ = app.read_catalog("kp", {"iss": ISS, "sub": "betreiber", "token": person_token("betreiber")})
+check("mit Menschen: wie bisher durch die Tür von Verfahren I, nicht durch die Erkundungs-Tür",
+      ok_ and all(p == "/platform/mcp/to/kp" for p, _ in IS_["paths"][n0:])
+      and "Als Gateway" not in text_, (IS_["paths"][n0:], text_))
+app.SOURCE_DISCOVER.clear()
 ok_, text_ = app.read_catalog("kp", {"iss": ISS, "sub": "betreiber", "token": person_token("betreiber")})
 check("Katalog mit Token des Betreibers durch die Tür gelesen", ok_, text_)
 page = admin("/server-read", name="kp")
