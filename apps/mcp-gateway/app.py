@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.15.1"
+VERSION = "0.15.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -786,7 +786,10 @@ LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
 TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
         ("sichten", "./?tab=sichten", "Sichten"), ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
         ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
-        ("auswertung", "auswertung", "Auswertung"))
+        ("auswertung", "auswertung", "Auswertung"),
+        # 0.15.2: die eigene Seite auch für die Verwaltung erreichbar -- die
+        # Kachel führt eine Admin-Person auf die Verwaltung, nicht auf /me.
+        ("me", "me", "Meine Aufrufe"))
 
 
 def page(title, body, user, roles, active="start"):
@@ -1155,7 +1158,7 @@ def me_doc(uid, query):
             "note": ME_REALM_NOTE}
 
 
-def me_page(user, uid, query):
+def me_page(user, uid, query, admin=False):
     doc = me_doc(uid, query)
     flt = doc["filter"]
     views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS)})
@@ -1210,7 +1213,7 @@ Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
 <header class="oaap">
   <a class="brand" href="me">{LOGO_SVG}
     <span><b>MEINE WERKZEUGE</b><small>Deine Aufrufe über das MCP-Gateway</small></span></a>
-  <div class="userbox">{esc(user)}</div>
+  <div class="userbox">{esc(user)}{'<br><small><a href="./">zur Verwaltung</a></small>' if admin else ""}</div>
 </header>
 <main>
 {body}</main>
@@ -2546,7 +2549,7 @@ class Handler(BaseHTTPRequestHandler):
                                      'eigenen Aufrufe und braucht die Anmeldung über die Plattform.'
                                      '</p></div>', "", ""))
             return
-        self.send_html(200, me_page(self.identity()[0], uid, query))
+        self.send_html(200, me_page(self.identity()[0], uid, query, self.is_admin()))
 
     def handle_report(self, path):
         if not self.is_admin():

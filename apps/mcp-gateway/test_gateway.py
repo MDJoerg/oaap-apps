@@ -2258,6 +2258,13 @@ check("/me als Seite: eigene Aufrufe, Satz der Ablehnung, Hinweis auf den Anmeld
       st == 200 and "Meine Aufrufe" in html_ and "hat abgelehnt (HTTP 403)" in html_
       and "koeder-sicht" not in html_ and "nur-schluessel" not in html_
       and "vom Gateway abgewiesen" not in html_, html_[:300])
+st, page_ = admin_get("/")
+check("0.15.2: die Verwaltung hat einen Reiter zu „Meine Aufrufe“", 'href="me"' in page_
+      and "Meine Aufrufe" in page_)
+st, html_ = me_get("/me", "u-ohne", roles="admin")
+check("… und /me als Admin führt zurück zur Verwaltung", st == 200 and "zur Verwaltung" in html_)
+st, html_ = me_get("/me", "u-ohne")
+check("… als Person ohne Admin-Rolle kein Link zur Verwaltung", st == 200 and "zur Verwaltung" not in html_)
 st, _ = me_get("/me")
 check("/me ohne Kennung der Person: 403", st == 403, st)
 st, _ = me_get("/me/v1/calls")
