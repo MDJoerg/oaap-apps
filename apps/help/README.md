@@ -74,6 +74,21 @@ den Abschnitt. Dazu kommt im Ergebnis der Hinweis, mit `[Titel](link)` zu
 verweisen. Die Beschreibungen der Werkzeuge bleiben unverändert, sonst
 sperrte das MCP-Gateway sie bis zur Bestätigung.
 
+## Ein Treffer je Dokument (0.6.0, L20)
+
+Die Suche nennt jedes Dokument nur einmal, mit seinem besten Abschnitt.
+Weitere passende Abschnitte desselben Dokuments stehen darunter („Auch:“,
+in `help_search` als `more`, höchstens drei). Vorher füllte ein langes
+Dokument die Liste.
+
+## Wenn die Plattform-Doku fehlt (0.6.0, L9)
+
+Ist die Destination `docs-origin` nicht gebunden (oder gebunden, aber nie
+erfolgreich geholt), sagen es die Startseite, eine leere Trefferseite und
+`help_search`/`help_products` im Feld `notice` -- der Verwaltung (admin,
+tenant_admin) mit dem Weg, allen anderen nur, wen sie fragen. Mit
+`HELP_OAAP_DOCS=off` ist das gewollt und es kommt kein Hinweis.
+
 ## Quellen
 
 - **`oaap-docs`** (Priorität 50): ein `tar.gz` des Doku-Repositorys, geholt

@@ -24,6 +24,8 @@ ARCHIVE_SOURCE = "oaap-docs"
 # gelingt, und auf einem Knoten ohne Destination (M10).
 SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed", "oaap-docs.tar.gz")
 LOCAL_SOURCE = "local"
+# L20: so viele weitere passende Abschnitte nennt ein Treffer höchstens.
+MORE_SECTIONS = 3
 APPS_SOURCE = apps_source.SOURCE
 PRIORITY = {ARCHIVE_SOURCE: 50, APPS_SOURCE: apps_source.PRIORITY, LOCAL_SOURCE: 90}
 TRUST = {ARCHIVE_SOURCE: "platform", APPS_SOURCE: apps_source.TRUST, LOCAL_SOURCE: "local"}
@@ -252,15 +254,27 @@ class Library:
     def search(self, query, *, roles, limit=8, source=None, tags=None, version=None,
                product=None, kind=None):
         limit = max(1, min(int(limit or 8), ix.MAX_LIMIT))
-        hits = []
-        for h in self.index.search(query, limit=limit, source=source, tags=tags,
+        hits, by_doc = [], {}
+        # L20 (0.6.0): ein Treffer je Dokument -- sein bester Abschnitt vorn,
+        # die weiteren als `more`. Vorher füllte ein langes Dokument mit
+        # vielen passenden Abschnitten die Liste (6 von 8) und verdrängte
+        # andere Dokumente. Darum hier aus dem vollen Vorrat schöpfen.
+        for h in self.index.search(query, limit=ix.MAX_LIMIT, source=source, tags=tags,
                                    product=product or None, kind=kind or None):
             d = h["doc"]
             if not ix.visible(d, roles):
                 continue
+            key = (d["source"], d["id"])
+            if key in by_doc:
+                more = by_doc[key].setdefault("more", [])
+                if len(more) < MORE_SECTIONS:
+                    more.append({"section": h["section"], "anchor": h["anchor"],
+                                 "link": self.link(d, h["anchor"])})
+                continue
             m = self._meta(d, version)
             m.update(section=h["section"], anchor=h["anchor"], snippet=h["snippet"],
                      url=self.url(d, h["anchor"]), link=self.link(d, h["anchor"]))
+            by_doc[key] = m
             hits.append(m)
         # Lücke (§15.4): kein Abschnitt trägt alle Wörter -- ohne Personenbezug gezählt.
         if query and not self.index.strict(query):
@@ -308,6 +322,39 @@ class Library:
                     {"id": d["id"], "title": d["title"], "tags": d["tags"],
                      "product": d["product"], "kind": d["kind"]})
         return tree
+
+    def platform_notice(self, *, admin=False):
+        """L9 (0.6.0): sagen, wenn die OAAP-Plattform-Doku fehlt oder nur der
+        mitgelieferte Stand antwortet -- vorher stand es nur auf /admin, und
+        eine leere Hilfe sah aus wie eine ohne passende Texte. None, wenn
+        alles da ist oder die Plattform-Doku bewusst aus ist. `admin`: der
+        Satz nennt den Weg (Destination im Portal), sonst nur, wen fragen."""
+        if not self.oaap_docs:
+            return None
+        st = self.state()
+        bound = bool(src.destination_url(self.env))
+        last = st.get(ARCHIVE_SOURCE) or {}
+        if st.get("answering") == "fetch" or st.get("last_good"):
+            return None
+        how = (" Im Portal unter Destinationen eine Destination docs-origin (Adresse der "
+               "oaap-docs, z. B. https://codeload.github.com/MDJoerg/oaap-docs) anlegen und "
+               "dieser Instanz zuordnen, danach auf /admin „Jetzt holen“."
+               if admin else " Die Verwaltung des Mandanten kann das einrichten.")
+        if bound and last and not last.get("ok"):
+            first = "Die OAAP-Plattform-Doku konnte noch nicht geholt werden"
+            if admin:
+                first += f" ({last.get('error') or 'Fehler'})"
+            how = (" Die Adresse der Destination docs-origin prüfen, danach auf /admin "
+                   "„Jetzt holen“." if admin else " Die Verwaltung des Mandanten ist zu fragen.")
+        elif bound:
+            return None                       # gebunden, der erste Abruf läuft noch
+        else:
+            first = "Die OAAP-Plattform-Doku ist nicht angebunden (Destination docs-origin fehlt)"
+        if st.get("answering") == "seed":
+            first += "; es antwortet nur der mitgelieferte Stand aus dem Paket"
+        else:
+            first += "; die Hilfe kennt nur die Doku der Apps und eigene Notizen"
+        return first + "." + how
 
     def products(self, *, roles):
         """Die Hilfsprodukte, die diese Person sieht, mit Zahl der Dokumente

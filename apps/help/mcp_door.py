@@ -195,6 +195,9 @@ def answer(lib, roles, version, msg):
             result = {"count": len(hits), "hits": hits}
             if not hits:
                 result["hint"] = "Keine Treffer: andere oder weniger Wörter versuchen, oder help_topics."
+            if any(h.get("more") for h in hits):
+                result["grouping"] = ("Ein Treffer je Dokument; `more` nennt weitere passende "
+                                      "Abschnitte desselben Dokuments (mit help_read und section lesen).")
         elif name == "help_read":
             result = lib.read(str(args.get("id") or ""), section=args.get("section") or None,
                               roles=roles)
@@ -217,6 +220,12 @@ def answer(lib, roles, version, msg):
                 return ok({"content": [{"type": "text", "text": str(e)}], "isError": True})
         else:
             return err(-32602, "Unknown tool")
+        if name in ("help_search", "help_products") and isinstance(result, dict):
+            # L9 (0.6.0): die KI soll sagen können, warum die Plattform-Doku fehlt,
+            # statt „dazu gibt es nichts“ zu antworten.
+            note = lib.platform_notice(admin=bool({"admin", "tenant_admin"} & set(roles or ())))
+            if note:
+                result["notice"] = note
         if name in ("help_search", "help_read") and isinstance(result, dict):
             # W5 (0.5.0): klickbar verweisen. Im ERGEBNIS, nicht in der Beschreibung des
             # Werkzeugs -- eine geänderte Beschreibung sperrt es im MCP-Gateway (L25).

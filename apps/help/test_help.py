@@ -298,7 +298,11 @@ try:
        and 'href="/public/produkt/oaap"' in b
        and "default-src 'none'" in hd.get("Content-Security-Policy", ""))
     s, b, _ = http("GET", "/public/?q=backup")
-    ok("Suchseite", s == 200 and "/public/doc/oaap-docs/szenarien/backup-cli#" in b)
+    ok("Suchseite", s == 200 and "/public/doc/oaap-docs/szenarien/backup-cli" in b)
+    ok("L20 (0.6.0): ein Dokument erscheint in der Trefferliste nur einmal",
+       b.count('<h3><a href="/public/doc/oaap-docs/szenarien/backup-cli') == 1, b.count("backup-cli"))
+    ok("L20: weitere Abschnitte stehen als „Auch:“ mit Ankern darunter",
+       "Auch: <a href=\"/public/doc/oaap-docs/szenarien/backup-cli#" in b, b[-1500:])
     s, b, _ = http("GET", "/public/doc/oaap-docs/szenarien/backup-cli")
     ok("Leseseite mit Prüfstand und Original", s == 200 and "geprüft gegen 0.1.247" in b
        and "Original öffnen" in b and "<pre><code" in b)
@@ -477,8 +481,42 @@ try:
     lib2.rebuild_local()
     ok("M10: Notizen neu bauen behält den seed", lib2.search("Saatgutspeicher", roles=U)
        and lib2.state()["answering"] == "seed")
+    # --- L9 (0.6.0): sagen, dass die Plattform-Doku fehlt ----------------------
+    import mcp_door  # noqa: E402
+    na, nu = lib2.platform_notice(admin=True), lib2.platform_notice()
+    ok("L9: ohne Destination sagt die Hilfe es -- der Verwaltung mit dem Weg",
+       na and "nicht angebunden" in na and "docs-origin" in na and "mitgelieferte Stand" in na
+       and "Destinationen" in na and "Jetzt holen" in na, na)
+    ok("L9: ... den anderen nur, wen sie fragen, ohne Adresse und Weg",
+       nu and "Verwaltung des Mandanten" in nu and "codeload" not in nu and "/admin" not in nu, nu)
+    r = mcp_door.answer(lib2, {"user"}, "t", {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": "help_search", "arguments": {"query": "quatschwortxyz"}}})
+    res = json.loads(r["result"]["content"][0]["text"])
+    ok("L9: help_search trägt den Hinweis (notice), damit die KI es sagen kann",
+       res.get("count") == 0 and "nicht angebunden" in res.get("notice", ""), res)
+    r = mcp_door.answer(lib2, {"tenant_admin"}, "t", {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {"name": "help_products", "arguments": {}}})
+    res = json.loads(r["result"]["content"][0]["text"])
+    ok("L9: help_products auch, für tenant_admin mit dem Weg", "Destinationen" in res.get("notice", ""), res)
+    r = mcp_door.answer(lib2, None, "t", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                        "params": {"name": "help_products", "arguments": {}}})
+    res = json.loads(r["result"]["content"][0]["text"])
+    ok("L9: öffentlich (/public) nur der kurze Satz", "Destinationen" not in res.get("notice", "x"), res)
+    lib2.env["OAAP_DESTINATION_DOCS_ORIGIN_URL"] = "http://127.0.0.1:1"
+    lib2.refresh()
+    na = lib2.platform_notice(admin=True)
+    ok("L9: gebunden, aber nie geholt: der Fehler und „Adresse prüfen“",
+       na and "konnte noch nicht geholt werden" in na and "Adresse" in na, na)
+    lib3 = Library(os.path.join(seeddir, "data3"), {"HELP_SEED_FILE": os.path.join(seeddir, "fehlt.tar.gz")})
+    lib3.refresh()
+    n3 = lib3.platform_notice()
+    ok("L9: ohne seed: „nur die Doku der Apps und eigene Notizen“", n3 and "nur die Doku der Apps" in n3, n3)
+    lib4 = Library(os.path.join(seeddir, "data4"), {"HELP_OAAP_DOCS": "off"})
+    lib4.refresh()
+    ok("L9: HELP_OAAP_DOCS=off ist gewollt -- kein Hinweis", lib4.platform_notice(admin=True) is None)
     lib2.env["OAAP_DESTINATION_DOCS_ORIGIN_URL"] = env["OAAP_DESTINATION_DOCS_ORIGIN_URL"]
     st = lib2.refresh()
+    ok("L9: nach dem ersten gelungenen Abruf kein Hinweis mehr", lib2.platform_notice(admin=True) is None)
     ok("M10: erster gelungener Abruf löst den seed ab", st["oaap-docs"]["ok"] and st["answering"] == "fetch"
        and not lib2.search("Saatgutspeicher", roles=U) and lib2.search("Wolkenkuckucksheim", roles=U))
     shutil.rmtree(seeddir, ignore_errors=True)
@@ -508,6 +546,20 @@ try:
     ok("W5: help_read trägt link und den Hinweis zum Verlinken",
        not err_ and r2.get("link", "").startswith("https://hilfe.bec.example/doc/") and r2.get("cite"), r2.get("link"))
     lib.env = env
+
+    # --- L20 (0.6.0): ein Treffer je Dokument ------------------------------------
+    err_, r = tool("help_search", {"query": "backup", "limit": 20})
+    ids = [(h["source"], h["id"]) for h in r["hits"]]
+    ok("L20: jedes Dokument nur einmal in den Treffern", len(ids) == len(set(ids)), ids)
+    more = [h for h in r["hits"] if h.get("more")]
+    ok("L20: weitere passende Abschnitte desselben Dokuments unter more, höchstens drei",
+       more and all(len(h["more"]) <= 3 and all("anchor" in m and "section" in m for m in h["more"])
+                    for h in more) and "Ein Treffer je Dokument" in r.get("grouping", ""),
+       [(h["id"], h.get("more")) for h in r["hits"]])
+    ok("L20: ein Abschnitt in more ist nicht der Treffer selbst",
+       all(m["anchor"] != h["anchor"] for h in more for m in h["more"]))
+    err_, r = tool("help_search", {"query": "backup"})
+    ok("L9: mit geholter Plattform-Doku kein notice", "notice" not in r, r.get("notice"))
 
     # --- Kopf-Leser ----------------------------------------------------------
     fm, body = ix.front_matter('---\ntitle: "A # B"\ntags: [x, y] # Kommentar\nunbekannt: 1\n---\n# T\n')

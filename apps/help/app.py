@@ -36,7 +36,7 @@ import apps_source
 from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
@@ -165,6 +165,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def view_roles(self):
         return ix.UNFILTERED if self.public else self.roles()
+
+    def is_admin(self):
+        """Wer den Weg zur Abhilfe lesen soll (L9) -- nie auf /public/."""
+        return not self.public and bool({"admin", "tenant_admin"} & self.roles())
 
     def href(self, source, doc_id, anchor=""):
         return doc_href(source, doc_id, anchor, self.base)
@@ -345,6 +349,7 @@ class Handler(BaseHTTPRequestHandler):
                 "requests": {"enabled": self.lib.requests.enabled,
                              "maintainer_key": bool((self.lib.env.get("HELP_MAINT_KEY_SHA256") or "").strip())},
                 "oaap_docs": self.lib.oaap_docs,
+                "notice": self.lib.platform_notice(admin=True),
                 "sources": {k: st.get(k) for k in (ARCHIVE_SOURCE, APPS_SOURCE, LOCAL_SOURCE)
                             if st.get(k)},
                 "last_good": st.get("last_good")}
@@ -386,7 +391,12 @@ class Handler(BaseHTTPRequestHandler):
                 + (" <span class=\"badge warn\">Vorschau (Test)</span>" if h.get("channel") == "test" else "")
                 + (f" · Version {esc(h['app_version'])}" if h.get("app_version") else "")
                 + (f" · {stamp(h)}" if stamp(h) else "") + "</div>"
-                + f"<p class=snip>{render.inline(h['snippet'])}</p></div>")
+                + f"<p class=snip>{render.inline(h['snippet'])}</p>"
+                # L20 (0.6.0): weitere passende Abschnitte desselben Dokuments, als Links
+                + ("<p class=meta>Auch: " + " · ".join(
+                    f"<a href=\"{esc(self.href(h['source'], h['id'], m['anchor']))}\">{esc(m['section'] or h['title'])}</a>"
+                    for m in h["more"]) + "</p>" if h.get("more") else "")
+                + "</div>")
 
     def home(self, q, product="", kind=""):
         titles = self.product_titles()
@@ -405,8 +415,10 @@ class Handler(BaseHTTPRequestHandler):
             hits = (self.lib.search(q, limit=20, roles=roles, product=product or None,
                                     kind=kind or None) if (product or kind) else pool)
             body = self.chips(q, product, kind, counts_p, counts_k, titles)
+            note = self.lib.platform_notice(admin=self.is_admin())
             if not hits:
-                body += f"<h1>Keine Treffer</h1><p>Für „{esc(q)}“ gibt es nichts. Andere oder weniger Wörter versuchen.</p>"
+                body += (f"<h1>Keine Treffer</h1><p>Für „{esc(q)}“ gibt es nichts. Andere oder weniger Wörter versuchen.</p>"
+                         + (f"<div class=box><p class=warn>{esc(note)}</p></div>" if note else ""))
             else:
                 body += (f"<p class=meta>{len(hits)} Treffer für „{esc(q)}“</p>"
                          + "".join(self.hit_row(h, titles) for h in hits))
@@ -417,6 +429,9 @@ class Handler(BaseHTTPRequestHandler):
         parts = [f"<h1>{esc(site_title())}</h1><p>Anleitungen, Funktionsbeschreibungen und FAQ "
                  "zu den Apps dieses Mandanten. Oben suchen oder ein Thema wählen. "
                  "Eine KI erreicht dasselbe über MCP unter <code>/mcp</code>.</p>"]
+        note = self.lib.platform_notice(admin=self.is_admin())
+        if note:
+            parts.append(f"<div class=box><p class=warn>{esc(note)}</p></div>")
         if products and layout != "nüchtern":
             tiles = []
             for pr in products:
@@ -575,6 +590,9 @@ def fetch_loop(lib, hours):
         e = st.get(ARCHIVE_SOURCE, {})
         print(f"Abruf {ARCHIVE_SOURCE}: {'ok, ' + str(e.get('files')) + ' Dateien' if e.get('ok') else e.get('error')}",
               flush=True)
+        note = lib.platform_notice(admin=True)
+        if note:
+            print(f"Hinweis: {note}", flush=True)
         time.sleep(max(0.1, hours) * 3600)
 
 
