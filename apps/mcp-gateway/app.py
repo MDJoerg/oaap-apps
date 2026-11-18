@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -166,6 +166,58 @@ def discover_door(name):
     return SOURCE_DISCOVER.get(name, "")
 
 
+HELP_ACTOR = "plattform (RFC-0094 D6)"
+
+
+def help_auto_done(name):
+    """Ist die einmalige Freigabe für diesen Hilfe-Server schon gelaufen?"""
+    return DB.execute("SELECT 1 FROM audit WHERE action='help.auto' AND subject=? LIMIT 1",
+                      (name,)).fetchone() is not None
+
+
+def auto_approve_help(name):
+    """Gibt die LESENDEN Tools und die Prompts einer Hilfe-Instanz des eigenen
+    Mandanten in jede Sicht mit dem Zugang „Plattform“ (Chat, Verfahren A) frei.
+
+    Genau einmal je Hilfe-Server (Protokolleintrag `help.auto`, RFC-0094 D6): Was
+    der Betreiber danach entfernt, bleibt entfernt; eine später angelegte Sicht
+    bekommt nichts von selbst. Ein Tool ohne `readOnlyHint: true` wird nie
+    automatisch freigegeben, Resources auch nicht (jedes Dokument wäre eine).
+    Gibt die freigegebenen Einträge zurück."""
+    ok, why = read_catalog(name)
+    if not ok:
+        books.log(DB, HELP_ACTOR, "item.auto", name, f"nicht freigegeben: {why}")
+        DB.commit()
+        return []
+    views = [v["name"] for v in books.views(DB) if "platform" in books.view_ways(v)]
+    done = []
+    for row in books.catalog(DB, name):
+        if not row["present"] or row["kind"] not in ("tool", "prompt"):
+            continue
+        if row["kind"] == "tool":
+            try:
+                doc = json.loads(row["doc"] or "{}")
+            except ValueError:
+                continue
+            if (doc.get("annotations") or {}).get("readOnlyHint") is not True:
+                continue
+        for view in views:
+            if any(i["server"] == name and i["source"] == row["name"]
+                   for i in books.items(DB, view, row["kind"])):
+                continue
+            try:
+                exposed = books.approve(DB, HELP_ACTOR, view, row["kind"], name, row["name"],
+                                        effect="read")
+                done.append(f"{view}/{exposed}")
+            except ValueError as exc:
+                books.log(DB, HELP_ACTOR, "item.auto", f"{view}/{row['name']}", str(exc))
+    books.log(DB, HELP_ACTOR, "help.auto", name,
+              (f"Hilfe freigegeben: {', '.join(done)}" if done else
+               "Hilfe erkannt, keine Sicht mit Zugang „Plattform“ -- nichts freigegeben"))
+    DB.commit()
+    return done
+
+
 def sync_sources():
     """Liste holen und abgleichen. Gibt (ok, Satz) zurück; merkt sich das Ergebnis für die Seite."""
     SOURCES_STATE["at"] = books.now()
@@ -176,6 +228,14 @@ def sync_sources():
         return False, str(exc)
     rep = books.sync_sources(DB, sources, guard.clean(dict(guard.DEFAULTS)))
     remember_discover(sources)
+    # RFC-0094 D6: a help of the own tenant is searchable by the chat
+    # without an approval step -- once per help server, also for one an
+    # older gateway already entered (measured 18.11. on oaap-test).
+    for src in sources:
+        name = str(src.get("name") or "")
+        srow = books.server_row(DB, name) if src.get("app") == "help" else None
+        if srow and srow["source"] == name and not srow["gone"] and not help_auto_done(name):
+            auto_approve_help(name)
     SOURCES_STATE["error"] = ""
     SOURCES_STATE["report"] = rep
     for name in rep["added"] + rep["moved"] + rep["back"]:

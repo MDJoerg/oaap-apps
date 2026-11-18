@@ -164,6 +164,51 @@ for body, code, why in ((b'{"v": 2, "sources": []}', 200, "fremde Version"),
 ANSWER.update(body=json.dumps({"v": 1, "sources": [KP]}).encode(), code=200)
 okk, text = app.sync_sources()
 ok("sync_sources meldet einen Satz ohne den Schluessel", okk and "geheim" not in text, text)
+
+# RFC-0094 D6: eine Hilfe des eigenen Mandanten ist im Chat ohne Freigabeschritt.
+print("--- RFC-0094 D6: Hilfe automatisch freigegeben")
+HELP = {"name": "bdt-help", "app": "help", "version": "0.4.0", "channel": "production",
+        "path": "/mcp", "address": "http://oaap-gateway-1:8140/mcp",
+        "door": "http://oaap-gateway-1:8128/platform/mcp/to/bdt-help"}
+CAT = {"tool": [
+    {"name": "help_search", "description": "suchen", "inputSchema": {"type": "object"},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "help_products", "description": "Produkte", "inputSchema": {"type": "object"},
+     "annotations": {"readOnlyHint": True}},
+    {"name": "help_request_guide", "description": "Anfrage", "inputSchema": {"type": "object"},
+     "annotations": {"readOnlyHint": False}}],
+    "prompt": [{"name": "guide", "description": "fuehren"}],
+    "resource": [{"uri": "help://apps/bdt/faq", "name": "FAQ"}]}
+READS = []
+
+
+def fake_read(name, person=None):
+    READS.append(name)
+    books.store_catalog(app.DB, name, json.loads(json.dumps(CAT)))
+    return True, "gelesen"
+
+
+app.read_catalog = fake_read
+books.save_view(app.DB, "t", "chat", "read", ways="platform")
+books.save_view(app.DB, "t", "werkzeuge", "write", ways="key")
+ANSWER.update(body=json.dumps({"v": 1, "sources": [KP, HELP]}).encode(), code=200)
+okk, text = app.sync_sources()
+chat = {(i["kind"], i["source"]) for i in books.items(app.DB, "chat")}
+ok("KOEDER (oaap-test 18.11.): auch eine schon eingetragene Hilfe -- Katalog gelesen, lesende Tools und Prompts in der Chat-Sicht",
+   READS == ["bdt-help"] and chat == {("tool", "help_search"), ("tool", "help_products"),
+                                      ("prompt", "guide")}, (READS, chat))
+ok("KOEDER: ein Tool ohne readOnlyHint und Resources nie automatisch",
+   ("tool", "help_request_guide") not in chat and not any(k == "resource" for k, _s in chat))
+ok("KOEDER: eine Sicht ohne Zugang Plattform bekommt nichts",
+   not books.items(app.DB, "werkzeuge"))
+ok("andere Quellen (kp) werden nicht automatisch freigegeben",
+   not any(i["server"] == "kp" for i in books.items(app.DB, "chat")))
+name = next(i["name"] for i in books.items(app.DB, "chat", "tool") if i["source"] == "help_search")
+books.remove_item(app.DB, "betreiber", "chat", "tool", name)
+app.sync_sources()
+ok("einmal: was der Betreiber entfernt, bleibt beim naechsten Abgleich entfernt",
+   READS == ["bdt-help"] and not any(i["source"] == "help_search"
+                                     for i in books.items(app.DB, "chat", "tool")))
 srv.shutdown()
 
 print("")

@@ -251,7 +251,8 @@ try:
        and r["result"]["protocolVersion"] == "2025-06-18")
     s, r = mcp("tools/list")
     names = [x["name"] for x in r["result"]["tools"]]
-    ok("drei Werkzeuge, alle lesend", names == ["help_search", "help_read", "help_topics"]
+    ok("vier Werkzeuge, alle lesend (help_products seit 0.4.0)",
+       names == ["help_search", "help_read", "help_topics", "help_products"]
        and all(x["annotations"]["readOnlyHint"] for x in r["result"]["tools"]))
     ok("Werkzeugtexte: Doku zum Zitieren, nicht ausführen",
        all("nicht selbst aus" in x["description"] for x in r["result"]["tools"][:2]))
@@ -293,7 +294,8 @@ try:
 
     # --- Seite ------------------------------------------------------------------
     s, b, hd = http("GET", "/public/")
-    ok("Startseite listet Themen", s == 200 and "Backup auf der CLI einrichten" in b
+    ok("Startseite zeigt die Hilfsprodukte als Kacheln (RFC-0094)", s == 200 and "OAAP-Plattform" in b
+       and 'href="/public/produkt/oaap"' in b
        and "default-src 'none'" in hd.get("Content-Security-Policy", ""))
     s, b, _ = http("GET", "/public/?q=backup")
     ok("Suchseite", s == 200 and "/public/doc/oaap-docs/szenarien/backup-cli#" in b)
@@ -450,7 +452,7 @@ try:
     ok("/public/admin gibt es nicht", s == 404)
     s, b, _ = http("GET", "/public/")
     ok("öffentliche Seite: kein Link zur Verwaltung, Links mit /public", 'href="/admin"' not in b
-       and 'href="/public/doc/' in b)
+       and 'href="/public/produkt/' in b)
 
     # --- M10: der seed antwortet ohne Destination ----------------------------
     seeddir = tempfile.mkdtemp(prefix="help-seed-")

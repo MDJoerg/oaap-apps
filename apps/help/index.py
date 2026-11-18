@@ -20,7 +20,20 @@ from contextlib import closing
 # ein fehlendes Feld macht den Leserkreis nie größer.
 OPERATOR_ROLES = ["server_admin", "tenant_admin", "support"]
 FIELDS = ("id", "title", "audience", "applies_from", "applies_until",
-          "checked_against", "checked_on", "lang", "tags")
+          "checked_against", "checked_on", "lang", "tags", "kind", "readers")
+# RFC-0094 §4.1: the fixed document types, with the words the page shows.
+KIND_WORDS = {
+    "overview": "Überblick", "concept": "Konzept", "function": "Funktionsbeschreibung",
+    "tutorial": "Schritt für Schritt", "howto": "Anleitung", "faq": "FAQ",
+    "reference": "Referenz", "cli": "CLI-Syntax", "api": "Schnittstelle",
+    "troubleshooting": "Fehlerbehebung", "admin-guide": "Betrieb",
+    "release-notes": "Neuerungen", "glossary": "Glossar",
+    "presentation": "Präsentation", "unspecified": "Sonstiges"}
+KINDS = tuple(KIND_WORDS)
+# RFC-0094 §4.2: who a document is written for -- a filter, never a lock.
+READERS = ("end-user", "power-user", "admin", "developer", "consultant", "operator")
+# Documentation of a TEST instance (RFC-0094 D4): a preview for these roles only.
+PREVIEW_ROLES = {"admin", "keyuser", "tenant_admin", "server_admin"}
 HEADING = re.compile(r"^(#{1,3})\s+(.+?)\s*#*\s*$")
 FENCE = re.compile(r"^\s*(```|~~~)")
 WORD = re.compile(r"\w+", re.UNICODE)
@@ -115,7 +128,9 @@ def visible(doc, roles):
     dann zählt die Schnittmenge mit `audience` -- Relevanz, keine
     Geheimhaltung (D5). Ohne Rollen bleibt nur, was `public` ist."""
     if roles is UNFILTERED:
-        return True
+        return doc.get("channel") != "test"
+    if doc.get("channel") == "test" and not (set(roles) & PREVIEW_ROLES):
+        return False
     aud = doc["audience"]
     return "public" in aud or bool(set(aud) & set(roles))
 
@@ -187,15 +202,22 @@ CREATE TABLE doc (source TEXT, id TEXT, path TEXT, title TEXT, audience TEXT,
                   applies_from TEXT, applies_until TEXT, checked_against TEXT,
                   checked_on TEXT, lang TEXT, tags TEXT, body TEXT,
                   priority INTEGER, trust TEXT, shadowed_by TEXT,
+                  product TEXT, kind TEXT, readers TEXT, app_version TEXT,
+                  channel TEXT,
                   PRIMARY KEY (source, id));
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
-def build(path, documents):
+def build(path, documents, products=None):
     """Baut einen Index aus [{source, priority, trust, path, text}] in
     `path` (über eine Nachbardatei, dann os.replace). Gibt die Zahl der
-    Dokumente zurück."""
+    Dokumente zurück.
+
+    RFC-0094: ein Dokument darf Voreinstellungen seiner Quelle tragen
+    (`product`, `kind`, `readers`, `audience`, `lang`, `app_version`,
+    `channel`); der Kopf des Dokuments gewinnt. `products` (die
+    Hilfsprodukte mit Titel, Farbe, Einstieg) landen in `meta`."""
     tmp = path + ".new"
     if os.path.exists(tmp):
         os.remove(tmp)
@@ -211,6 +233,8 @@ def build(path, documents):
         con.execute("CREATE TABLE section (source TEXT, id TEXT, anchor TEXT, "
                     "heading TEXT, text TEXT)")
     con.execute("INSERT INTO meta VALUES ('fts5', ?)", ("1" if fts else "0",))
+    con.execute("INSERT INTO meta VALUES ('products', ?)",
+                (json.dumps(products or [], ensure_ascii=False),))
     rows = {}
     for d in documents:
         fm, body = front_matter(d["text"])
@@ -220,16 +244,21 @@ def build(path, documents):
             continue             # die erste gewinnt, wie check-docs sie meldet
         aud = fm.get("audience") if isinstance(fm.get("audience"), list) else None
         tags = fm.get("tags") if isinstance(fm.get("tags"), list) else []
+        kind = fm.get("kind") if fm.get("kind") in KINDS else (d.get("kind") or "unspecified")
+        readers = fm.get("readers") if isinstance(fm.get("readers"), list) else d.get("readers") or []
         rows[key] = {
             "source": d["source"], "id": doc_id, "path": d["path"],
             "title": title_of(fm, body, d["path"]),
-            "audience": aud or OPERATOR_ROLES,
+            "audience": aud or d.get("audience") or OPERATOR_ROLES,
             "applies_from": fm.get("applies_from", ""),
             "applies_until": fm.get("applies_until", ""),
             "checked_against": fm.get("checked_against", ""),
             "checked_on": fm.get("checked_on", ""),
-            "lang": fm.get("lang", ""), "tags": tags, "body": body,
-            "priority": d["priority"], "trust": d["trust"]}
+            "lang": fm.get("lang") or d.get("lang", ""), "tags": tags, "body": body,
+            "priority": d["priority"], "trust": d["trust"],
+            "product": d.get("product", ""), "kind": kind,
+            "readers": [r for r in readers if r in READERS],
+            "app_version": d.get("app_version", ""), "channel": d.get("channel", "")}
     # Überdecken (§3): dieselbe id in mehreren Quellen -- die höchste
     # Priorität antwortet, die anderen bleiben unter Quelle:id lesbar.
     best = {}
@@ -238,11 +267,13 @@ def build(path, documents):
             best[doc_id] = src
     for (src, doc_id), r in rows.items():
         shadow = "" if best[doc_id] == src else best[doc_id]
-        con.execute("INSERT INTO doc VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+        con.execute("INSERT INTO doc VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
             src, doc_id, r["path"], r["title"], json.dumps(r["audience"]),
             r["applies_from"], r["applies_until"], r["checked_against"],
             r["checked_on"], r["lang"], json.dumps(r["tags"], ensure_ascii=False),
-            r["body"], r["priority"], r["trust"], shadow))
+            r["body"], r["priority"], r["trust"], shadow,
+            r["product"], r["kind"], json.dumps(r["readers"]), r["app_version"],
+            r["channel"]))
         for anchor, heading, text in sections(r["body"]):
             con.execute("INSERT INTO section (source, id, anchor, heading, text) "
                         "VALUES (?,?,?,?,?)",
@@ -259,6 +290,9 @@ def _doc(row):
     d = dict(row)
     d["audience"] = json.loads(d["audience"])
     d["tags"] = json.loads(d["tags"])
+    d["readers"] = json.loads(d.get("readers") or "[]")
+    for k in ("product", "kind", "app_version", "channel"):
+        d[k] = d.get(k) or ""
     return d
 
 
@@ -279,6 +313,18 @@ class Index:
             return 0
         with closing(con):
             return con.execute("SELECT count(*) FROM doc WHERE shadowed_by=''").fetchone()[0]
+
+    def products(self):
+        """Die Hilfsprodukte, wie der letzte Bau sie festhielt (RFC-0094)."""
+        con = self._con()
+        if not con:
+            return []
+        with closing(con):
+            row = con.execute("SELECT value FROM meta WHERE key='products'").fetchone()
+            try:
+                return json.loads(row[0]) if row else []
+            except ValueError:
+                return []
 
     def fts5(self):
         con = self._con()
@@ -330,7 +376,7 @@ class Index:
             like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             return [_doc(r) for r in con.execute(q + " ORDER BY source, id", (like,))]
 
-    def search(self, query, limit=8, source=None, tags=None):
+    def search(self, query, limit=8, source=None, tags=None, product=None, kind=None):
         """Abschnitte, bestes zuerst; nur antwortende Fassungen (keine
         überdeckten). Erst alle Wörter (UND), ohne Treffer jedes (ODER)."""
         words = [w for w in WORD.findall(query or "") if len(w) > 1]
@@ -358,6 +404,10 @@ class Index:
                 if source and d["source"] != source:
                     continue
                 if tags and not set(tags) & set(d["tags"]):
+                    continue
+                if product and d["product"] != product:
+                    continue
+                if kind and d["kind"] != kind:
                     continue
                 key = (d["source"], d["id"], r["anchor"])
                 if key in seen:

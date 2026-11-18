@@ -1,4 +1,6 @@
-"""help -- statisches Hilfewissen für jede KI (RFC-0078 Stufen 1 und 2).
+"""help -- die Dokumentation eines Mandanten für Menschen und jede KI
+(RFC-0078 Stufen 1 und 2, RFC-0094 Stufe 1: die Doku der installierten Apps
+als Hilfsprodukte, mit Kacheln und Filtern).
 
 Drei Türen auf denselben Kern (library.py):
   /mcp              MCP (Streamable HTTP, JSON): help_search, help_read,
@@ -17,6 +19,7 @@ die Destination `docs-origin` (RFC-0068). Nur Standardbibliothek.
 import html
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -29,10 +32,11 @@ import mcp_door
 import render
 import sources as src
 import index as ix
-from library import ARCHIVE_SOURCE, LOCAL_SOURCE, Library
+import apps_source
+from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
@@ -64,18 +68,30 @@ blockquote{margin:0;padding:4px 14px;border-left:3px solid var(--line);color:var
 .box{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:12px 16px;margin:0 0 20px}
 .toc{columns:2;font-size:.9em}@media(max-width:640px){.toc{columns:1}}
 ul.plain{list-style:none;padding:0}ul.plain li{padding:3px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin:16px 0 24px}
+.tile{display:block;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px 16px;color:var(--fg);text-decoration:none;border-top:4px solid var(--tc,var(--acc))}
+.tile:hover{border-color:var(--tc,var(--acc))}.tile b{display:block;font-size:1.05em;margin-bottom:4px}
+.tile .meta{display:block}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 14px}
+.chip{display:inline-block;padding:2px 10px;border:1px solid var(--line);border-radius:14px;font-size:.86em;color:var(--fg);text-decoration:none}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
 """
+LAYOUTS = ("kacheln", "nüchtern")
 
 
 def esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
+def site_title():
+    return (os.environ.get("HELP_TITLE") or "Hilfe").strip()[:60] or "Hilfe"
+
+
 def page(title, body, q="", base=""):
+    t = site_title()
     return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{esc(title)} · OAAP-Hilfe</title><style>{STYLE}</style></head><body>
-<header><div class="wrap"><a class="brand" href="{base}/">OAAP-Hilfe</a>
+<title>{esc(title)} · {esc(t)}</title><style>{STYLE}</style></head><body>
+<header><div class="wrap"><a class="brand" href="{base}/">{esc(t)}</a>
 <form action="{base}/" method="get" role="search"><input type="search" name="q" value="{esc(q)}" placeholder="Wie richte ich …?" aria-label="Suchen"><button>Suchen</button></form>
 </div></header><main><div class="wrap">{body}</div></main></body></html>"""
 
@@ -192,14 +208,18 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/v1/search":
             tags = [t for t in one("tags").split(",") if t] or None
             hits = self.lib.search(one("q"), limit=one("limit", "8"), source=one("source") or None,
-                                   tags=tags, version=one("version") or None, roles=self.view_roles())
+                                   tags=tags, version=one("version") or None, roles=self.view_roles(),
+                                   product=one("product") or None, kind=one("kind") or None)
             return self.json(200, {"count": len(hits), "hits": hits})
+        if p == "/api/v1/products":
+            return self.json(200, {"products": self.lib.products(roles=self.view_roles())})
         if p.startswith("/api/v1/docs/"):
             doc = self.lib.read(unquote(p[len("/api/v1/docs/"):]), section=one("section") or None,
                                 roles=self.view_roles(), version=one("version") or None)
             return self.json(200, doc) if doc else self.json(404, {"error": "not found"})
         if p == "/api/v1/topics":
-            return self.json(200, self.lib.topics(prefix=one("prefix"), roles=self.view_roles()))
+            return self.json(200, self.lib.topics(prefix=one("prefix"), roles=self.view_roles(),
+                                                  product=one("product") or None))
         if p == "/api/v1/status":
             return self.json(200, self.status())
         if p == "/admin" or p == "/admin/":
@@ -213,8 +233,10 @@ class Handler(BaseHTTPRequestHandler):
             if not doc_id:
                 return self.send(404, self.page("Nicht gefunden", "<p>Dieses Dokument gibt es hier nicht.</p>"))
             return self.send(303, "", headers={"Location": self.href(source, doc_id)})
+        if p.startswith("/produkt/"):
+            return self.product_page(unquote(p[len("/produkt/"):]).strip("/"))
         if p == "/":
-            return self.home(one("q"))
+            return self.home(one("q"), one("product"), one("kind"))
         return self.send(404, self.page("Nicht gefunden", "<p>Diese Seite gibt es nicht.</p>"))
 
     def do_POST(self):
@@ -322,53 +344,138 @@ class Handler(BaseHTTPRequestHandler):
                 "answering": st.get("answering", ""),
                 "requests": {"enabled": self.lib.requests.enabled,
                              "maintainer_key": bool((self.lib.env.get("HELP_MAINT_KEY_SHA256") or "").strip())},
-                "sources": {k: st.get(k) for k in (ARCHIVE_SOURCE, LOCAL_SOURCE) if st.get(k)},
+                "oaap_docs": self.lib.oaap_docs,
+                "sources": {k: st.get(k) for k in (ARCHIVE_SOURCE, APPS_SOURCE, LOCAL_SOURCE)
+                            if st.get(k)},
                 "last_good": st.get("last_good")}
 
-    def home(self, q):
+    def product_titles(self):
+        return {p["product"]: p for p in self.lib.products(roles=self.view_roles())}
+
+    def chips(self, q, product, kind, counts_p, counts_k, titles):
+        """Filter als Links (RFC-0094 §5): Produkt und Typ, mit Zahlen,
+        nur Werte, die es in den Treffern gibt."""
+        def link(**kw):
+            args = {"q": q, "product": product, "kind": kind}
+            args.update(kw)
+            return self.base + "/?" + "&".join(f"{k}={quote(v)}" for k, v in args.items() if v)
+        out = []
+        if counts_p:
+            out.append("<div class=chips><span class=meta>Produkt:</span>"
+                       + (f"<a class=chip href=\"{esc(link(product=''))}\">alle</a>" if product else "")
+                       + "".join(f"<a class=\"chip{' on' if v == product else ''}\" href=\"{esc(link(product=v))}\">"
+                                 f"{esc((titles.get(v) or {}).get('title') or v)} ({n})</a>"
+                                 for v, n in sorted(counts_p.items(), key=lambda x: -x[1]))
+                       + "</div>")
+        if counts_k:
+            out.append("<div class=chips><span class=meta>Typ:</span>"
+                       + (f"<a class=chip href=\"{esc(link(kind=''))}\">alle</a>" if kind else "")
+                       + "".join(f"<a class=\"chip{' on' if v == kind else ''}\" href=\"{esc(link(kind=v))}\">"
+                                 f"{esc(ix.KIND_WORDS.get(v, v))} ({n})</a>"
+                                 for v, n in sorted(counts_k.items(), key=lambda x: -x[1]))
+                       + "</div>")
+        return "".join(out)
+
+    def hit_row(self, h, titles):
+        pt = (titles.get(h.get("product")) or {}).get("title") or h.get("product") or h["source"]
+        kind = ix.KIND_WORDS.get(h.get("kind") or "", "")
+        return (f"<div class=hit><h3><a href=\"{esc(self.href(h['source'], h['id'], h['anchor']))}\">{esc(h['title'])}"
+                + (f" — {esc(h['section'])}" if h["section"] and h["section"] != h["title"] else "")
+                + f"</a></h3><div class=meta><span class=badge>{esc(pt)}</span>"
+                + (f" <span class=badge>{esc(kind)}</span>" if kind and h.get("kind") != "unspecified" else "")
+                + (" <span class=\"badge warn\">Vorschau (Test)</span>" if h.get("channel") == "test" else "")
+                + (f" · Version {esc(h['app_version'])}" if h.get("app_version") else "")
+                + (f" · {stamp(h)}" if stamp(h) else "") + "</div>"
+                + f"<p class=snip>{render.inline(h['snippet'])}</p></div>")
+
+    def home(self, q, product="", kind=""):
+        titles = self.product_titles()
         if q.strip():
-            hits = self.lib.search(q, limit=20, roles=self.view_roles())
+            roles = self.view_roles()
+            # Erst ungefiltert für die Zahlen der Filter, dann gefiltert für die Liste.
+            pool = self.lib.search(q, limit=20, roles=roles)
+            counts_p, counts_k = {}, {}
+            for h in pool:
+                if not kind or h.get("kind") == kind:
+                    counts_p[h.get("product") or ""] = counts_p.get(h.get("product") or "", 0) + 1
+                if not product or h.get("product") == product:
+                    counts_k[h.get("kind") or ""] = counts_k.get(h.get("kind") or "", 0) + 1
+            counts_p.pop("", None)
+            counts_k.pop("", None)
+            hits = (self.lib.search(q, limit=20, roles=roles, product=product or None,
+                                    kind=kind or None) if (product or kind) else pool)
+            body = self.chips(q, product, kind, counts_p, counts_k, titles)
             if not hits:
-                body = f"<h1>Keine Treffer</h1><p>Für „{esc(q)}“ gibt es nichts. Andere oder weniger Wörter versuchen.</p>"
+                body += f"<h1>Keine Treffer</h1><p>Für „{esc(q)}“ gibt es nichts. Andere oder weniger Wörter versuchen.</p>"
             else:
-                rows = []
-                for h in hits:
-                    rows.append(
-                        f"<div class=hit><h3><a href=\"{esc(self.href(h['source'], h['id'], h['anchor']))}\">{esc(h['title'])}"
-                        + (f" — {esc(h['section'])}" if h["section"] and h["section"] != h["title"] else "")
-                        + f"</a></h3><div class=meta><span class=badge>{esc(h['source'])}</span> {esc(h['id'])}"
-                        + (f" · {stamp(h)}" if stamp(h) else "") + "</div>"
-                        + f"<p class=snip>{render.inline(h['snippet'])}</p></div>")
-                body = f"<p class=meta>{len(hits)} Treffer für „{esc(q)}“</p>" + "".join(rows)
+                body += (f"<p class=meta>{len(hits)} Treffer für „{esc(q)}“</p>"
+                         + "".join(self.hit_row(h, titles) for h in hits))
             return self.send(200, self.page(q, body, q))
-        tree = self.lib.topics(roles=self.view_roles())
         st = self.status()
-        parts = ["<h1>OAAP-Hilfe</h1><p>Anleitungen, CLI-Referenz und Betriebswissen der Plattform. "
+        layout = (self.lib.env.get("HELP_LAYOUT") or "kacheln").strip().lower()
+        products = list(titles.values())
+        parts = [f"<h1>{esc(site_title())}</h1><p>Anleitungen, Funktionsbeschreibungen und FAQ "
+                 "zu den Apps dieses Mandanten. Oben suchen oder ein Thema wählen. "
                  "Eine KI erreicht dasselbe über MCP unter <code>/mcp</code>.</p>"]
-        if not st["documents"]:
+        if products and layout != "nüchtern":
+            tiles = []
+            for pr in products:
+                color = pr.get("color") or ""
+                style = f" style=\"--tc:{esc(color)}\"" if re.fullmatch(r"#[0-9a-fA-F]{6}", color) else ""
+                kinds = ", ".join(f"{ix.KIND_WORDS.get(k, k)} {n}" for k, n in list(pr["kinds"].items())[:3]
+                                  if k != "unspecified")
+                tiles.append(
+                    f"<a class=tile{style} href=\"{esc(self.base + '/produkt/' + quote(pr['product']))}\">"
+                    f"<b>{esc(pr['title'])}</b>"
+                    f"<span class=meta>{pr['documents']} Dokumente"
+                    + (f" · Version {esc(pr['version'])}" if pr.get("version") else "")
+                    + (" · Vorschau (Test)" if pr.get("channel") == "test" else "") + "</span>"
+                    + (f"<span class=meta>{esc(kinds)}</span>" if kinds else "") + "</a>")
+            parts.append("<div class=tiles>" + "".join(tiles) + "</div>")
+        elif products:
+            parts.append("<ul class=plain>" + "".join(
+                f"<li><a href=\"{esc(self.base + '/produkt/' + quote(pr['product']))}\">{esc(pr['title'])}</a>"
+                f" <span class=meta>{pr['documents']} Dokumente</span></li>" for pr in products) + "</ul>")
+        if not products and not st["documents"]:
             parts.append("<div class=box><p class=warn>Noch keine Dokumente geladen.</p>"
                          + (f"<p class=meta>{esc((st['sources'].get(ARCHIVE_SOURCE) or {}).get('error'))}</p>" if st["sources"].get(ARCHIVE_SOURCE) else "")
                          + "</div>")
-        for source, docs in tree.items():
-            groups = {}
-            for d in docs:
-                top = d["id"].split("/")[0] if "/" in d["id"] else "Allgemein"
-                groups.setdefault(top, []).append(d)
-            parts.append(f"<h2>{esc(source)}</h2>")
-            for top in sorted(groups):
-                items = groups[top]
-                # Die erzeugte CLI-Referenz (Tag `cli`) hat ~80 Seiten: eine Zeile, die zum Index führt.
-                gen = [d for d in items if "cli" in d.get("tags", [])]
-                if len(gen) > 12:
-                    items = [d for d in items if d not in gen and d["id"] != "cli/generated"]
-                    items.append({"id": "cli/generated", "title": f"Erzeugte CLI-Referenz ({len(gen)} Seiten)"})
-                li = "".join(f"<li><a href=\"{esc(self.href(source, d['id']))}\">{esc(d['title'])}</a></li>" for d in items)
-                parts.append(f"<h3>{esc(top)}</h3><ul class=plain>{li}</ul>")
         good = st.get("last_good") or {}
         parts.append(f"<p class=meta>{st['documents']} Dokumente"
-                     + (f" · Stand vom {esc(good.get('at'))}" if good.get("at") else "")
+                     + (f" · Plattform-Doku vom {esc(good.get('at'))}" if good.get("at") and st.get("oaap_docs") else "")
                      + ("" if self.public else " · <a href=\"/admin\">Verwaltung</a>") + "</p>")
         return self.send(200, self.page("Übersicht", "".join(parts)))
+
+    def product_page(self, pid):
+        titles = self.product_titles()
+        pr = titles.get(pid)
+        if not pr:
+            return self.send(404, self.page("Nicht gefunden", "<p>Dieses Thema gibt es hier nicht.</p>"))
+        tree = self.lib.topics(roles=self.view_roles(), product=pid)
+        docs = [d for items in tree.values() for d in items]
+        by_kind = {}
+        for d in docs:
+            by_kind.setdefault(d.get("kind") or "unspecified", []).append(d)
+        src_of = {d["id"]: s for s, items in tree.items() for d in items}
+        parts = [f"<h1>{esc(pr['title'])}</h1><p class=meta>{pr['documents']} Dokumente"
+                 + (f" · Version {esc(pr['version'])}" if pr.get("version") else "")
+                 + (f" · aus {esc(pr['app'])}" if pr.get("app") and pr.get("app") != "OAAP" else "")
+                 + (" · <span class=warn>Vorschau aus einer Test-Instanz</span>" if pr.get("channel") == "test" else "")
+                 + "</p>"]
+        if pr.get("entry") and pr["entry"] in src_of:
+            parts.append(f"<p><a href=\"{esc(self.href(src_of[pr['entry']], pr['entry']))}\">Einstieg lesen</a></p>")
+        parts.append(f"<form action=\"{self.base}/\" method=get><input type=hidden name=product value=\"{esc(pid)}\">"
+                     f"<p><input type=search name=q placeholder=\"In {esc(pr['title'])} suchen …\"></p></form>")
+        for kind in [k for k in ix.KINDS if k in by_kind]:
+            items = sorted(by_kind[kind], key=lambda d: d["title"].lower())
+            gen = [d for d in items if "cli" in d.get("tags", [])]
+            if len(gen) > 12:
+                items = [d for d in items if d not in gen and d["id"] != "cli/generated"]
+                items.append({"id": "cli/generated", "title": f"Erzeugte CLI-Referenz ({len(gen)} Seiten)"})
+            li = "".join(f"<li><a href=\"{esc(self.href(src_of.get(d['id'], ARCHIVE_SOURCE), d['id']))}\">{esc(d['title'])}</a></li>"
+                         for d in items)
+            parts.append(f"<h2>{esc(ix.KIND_WORDS.get(kind, kind))}</h2><ul class=plain>{li}</ul>")
+        return self.send(200, self.page(pr["title"], "".join(parts)))
 
     def doc_page(self, ref):
         source, _, doc_id = ref.partition("/")
@@ -378,7 +485,13 @@ class Handler(BaseHTTPRequestHandler):
         def link_for(rel_path):
             return self.base + "/p/" + quote(source) + "/" + quote(rel_path)
 
-        info = [f"<span class=badge>{esc(doc['source'])}</span> <code>{esc(doc['id'])}</code>"]
+        titles = self.product_titles()
+        pt = (titles.get(doc.get("product")) or {}).get("title") or doc.get("product") or doc["source"]
+        info = [f"<a class=badge href=\"{esc(self.base + '/produkt/' + quote(doc.get('product') or ''))}\">{esc(pt)}</a>"
+                + (f" <span class=badge>{esc(ix.KIND_WORDS.get(doc.get('kind'), ''))}</span>"
+                   if doc.get("kind") and doc["kind"] != "unspecified" else "")
+                + (f" Version {esc(doc['app_version'])}" if doc.get("app_version") else "")
+                + (" <span class=\"badge warn\">Vorschau (Test)</span>" if doc.get("channel") == "test" else "")]
         if stamp(doc):
             info.append(stamp(doc))
         if doc["url"]:
@@ -410,6 +523,15 @@ class Handler(BaseHTTPRequestHandler):
             f"<td>{esc(a.get('at'))} {'ok' if a.get('ok') else ('<span class=err>' + esc(a.get('error')) + '</span>' if a else '–')}"
             + (f"<br><span class=meta>antwortet: Stand {esc(good.get('at'))}, {good.get('files')} Dateien, {esc((good.get('sha256') or '')[:12])}</span>" if good else "")
             + "</td></tr>"]
+        ap = st["sources"].get(APPS_SOURCE) or {}
+        rows.append(f"<tr><td>{APPS_SOURCE}</td><td>Doku der installierten Apps des Mandanten "
+                    f"(<code>{esc(self.lib.docs_root)}</code>, vom Knoten eingehängt)</td>"
+                    f"<td>{ap.get('products', 0)} Produkte, {ap.get('files', 0)} Dateien"
+                    + (f"<br><span class=meta>{esc(ap.get('error'))}</span>" if ap.get("error") else "")
+                    + "</td></tr>")
+        if not self.lib.oaap_docs:
+            rows[0] = (f"<tr><td>{ARCHIVE_SOURCE}</td><td colspan=2>ausgeschaltet "
+                       "(<code>HELP_OAAP_DOCS=off</code>) -- die Destination docs-origin wird nicht gebraucht</td></tr>")
         local = src.read_local(self.lib.data_dir)
         rows.append(f"<tr><td>{LOCAL_SOURCE}</td><td>eigene Notizen, Priorität über der Plattform-Doku</td><td>{len(local)} Dateien</td></tr>")
         files = "".join(
@@ -428,6 +550,21 @@ class Handler(BaseHTTPRequestHandler):
 <form method=post action="/admin/local"><p><input type=text name=name placeholder="dateiname.md (a-z, 0-9, / _ . -)" required></p>
 <p><textarea name=text rows=12 placeholder="---&#10;id: szenarien/server-aufsetzen&#10;---&#10;# …"></textarea></p><button>Speichern</button></form>"""
         return self.send(200, self.page("Verwaltung", body))
+
+
+def watch_loop(lib, seconds=30):
+    """Ändert der Knoten die App-Doku (Installation, Update, Entfernen),
+    baut die Hilfe neu -- ohne die Plattform-Doku neu zu holen."""
+    while True:
+        time.sleep(seconds)
+        try:
+            if lib.apps_changed():
+                lib.rebuild()
+                st = lib.state().get(APPS_SOURCE) or {}
+                print(f"App-Doku neu gelesen: {st.get('products', 0)} Produkte, "
+                      f"{st.get('files', 0)} Dateien", flush=True)
+        except Exception as e:                  # noqa: BLE001
+            print(f"App-Doku nicht gelesen: {e}", flush=True)
 
 
 def fetch_loop(lib, hours):
@@ -452,6 +589,7 @@ def main():
     except ValueError:
         hours = 6.0
     threading.Thread(target=fetch_loop, args=(LIB, hours), daemon=True).start()
+    threading.Thread(target=watch_loop, args=(LIB,), daemon=True).start()
     print(f"help {VERSION} on :{PORT} (FTS5: {LIB.index.fts5()})", flush=True)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 

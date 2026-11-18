@@ -13,6 +13,7 @@ import json
 import os
 import threading
 
+import apps_source
 import guide_requests
 import index as ix
 import sources as src
@@ -22,8 +23,24 @@ ARCHIVE_SOURCE = "oaap-docs"
 # gelingt, und auf einem Knoten ohne Destination (M10).
 SEED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed", "oaap-docs.tar.gz")
 LOCAL_SOURCE = "local"
-PRIORITY = {ARCHIVE_SOURCE: 50, LOCAL_SOURCE: 90}
-TRUST = {ARCHIVE_SOURCE: "platform", LOCAL_SOURCE: "local"}
+APPS_SOURCE = apps_source.SOURCE
+PRIORITY = {ARCHIVE_SOURCE: 50, APPS_SOURCE: apps_source.PRIORITY, LOCAL_SOURCE: 90}
+TRUST = {ARCHIVE_SOURCE: "platform", APPS_SOURCE: apps_source.TRUST, LOCAL_SOURCE: "local"}
+# RFC-0094 §5: die Plattform-Doku ist ein Hilfsprodukt unter anderen. Typ
+# nach Ordner, solange ein Dokument selbst keinen nennt.
+OAAP_PRODUCTS = {
+    "oaap": {"title": "OAAP-Plattform", "color": "#2b5f8a"},
+    "oaap-cli": {"title": "OAAP-Kommandozeile", "color": "#4a4a46"},
+    "notizen": {"title": "Eigene Notizen", "color": "#8a5a00"},
+}
+OAAP_KINDS = (("cli/", "cli"), ("szenarien/", "tutorial"), ("faq/", "faq"),
+              ("betrieb/", "admin-guide"))
+
+
+def oaap_product_kind(path):
+    product = "oaap-cli" if path.startswith("cli/") else "oaap"
+    kind = next((k for pre, k in OAAP_KINDS if path.startswith(pre)), "")
+    return product, kind
 
 
 def now():
@@ -49,6 +66,16 @@ class Library:
     @property
     def web_template(self):
         return (self.env.get("HELP_WEB_TEMPLATE") or "").strip()
+
+    @property
+    def oaap_docs(self):
+        """HELP_OAAP_DOCS (RFC-0094 §5): off = die Plattform-Doku samt seed
+        bleibt draußen, die Destination docs-origin darf ungebunden sein."""
+        return (self.env.get("HELP_OAAP_DOCS") or "on").strip().lower() != "off"
+
+    @property
+    def docs_root(self):
+        return apps_source.root_of(self.env)
 
     @property
     def max_bytes(self):
@@ -89,18 +116,48 @@ class Library:
         return self.env.get("HELP_SEED_FILE") or SEED
 
     def _documents(self, archive_docs):
-        docs = [{"source": ARCHIVE_SOURCE, "priority": PRIORITY[ARCHIVE_SOURCE],
-                 "trust": TRUST[ARCHIVE_SOURCE], "path": p, "text": t}
-                for p, t in archive_docs]
+        """(Dokumente, Hilfsprodukte) aus Plattform-Doku, App-Doku und Notizen."""
+        docs, products = [], []
+        if self.oaap_docs:
+            for path, text in archive_docs:
+                product, kind = oaap_product_kind(path)
+                docs.append({"source": ARCHIVE_SOURCE, "priority": PRIORITY[ARCHIVE_SOURCE],
+                             "trust": TRUST[ARCHIVE_SOURCE], "path": path, "text": text,
+                             "product": product, "kind": kind, "lang": "de"})
+        local = src.read_local(self.data_dir)
         docs += [{"source": LOCAL_SOURCE, "priority": PRIORITY[LOCAL_SOURCE],
-                  "trust": TRUST[LOCAL_SOURCE], "path": p, "text": t}
-                 for p, t in src.read_local(self.data_dir)]
+                  "trust": TRUST[LOCAL_SOURCE], "path": p, "text": t, "product": "notizen"}
+                 for p, t in local]
+        app_docs, app_products, app_state = apps_source.read(self.docs_root)
+        docs += app_docs
+        self._apps_state = app_state
+        present = {d["product"] for d in docs}
+        for pid, meta in OAAP_PRODUCTS.items():
+            if pid in present:
+                products.append(dict(meta, product=pid, source=(LOCAL_SOURCE if pid == "notizen"
+                                                                else ARCHIVE_SOURCE),
+                                     entry="", version="", channel="", app="OAAP"))
+        products += app_products
+        return docs, products
+
+    def _build(self, archive_docs):
+        docs, products = self._documents(archive_docs)
+        ix.build(self.index.path, docs, products)
+        self._apps_stamp = apps_source.stamp(self.docs_root)
         return docs
 
     def refresh(self):
         """Holt das Archiv und baut den Index neu. Scheitert der Abruf oder
         wird das Archiv abgelehnt, bleibt der alte Index -- und der Fehler
         steht im Zustand (§3.1, M4). Gibt den neuen Zustand zurück."""
+        if not self.oaap_docs:
+            # Ohne Plattform-Doku kein Abruf: nur App-Doku und Notizen.
+            self.rebuild()
+            st = self.state()
+            st[ARCHIVE_SOURCE] = {"at": now(), "ok": True, "error": "",
+                                  "skipped": "HELP_OAAP_DOCS=off", "files": 0}
+            self._write_state(st)
+            return st
         with self.lock:
             st = self.state()
             entry = {"at": now(), "ok": False, "error": "", "sha256": "", "files": 0}
@@ -108,7 +165,7 @@ class Library:
                 data = src.fetch(src.destination_url(self.env), self.archive_path,
                                  max_bytes=self.max_bytes)
                 docs = src.read_archive(data)
-                ix.build(self.index.path, self._documents(docs))
+                self._build(docs)
                 tmp = self.archive_file + ".new"
                 with open(tmp, "wb") as f:
                     f.write(data)
@@ -122,28 +179,37 @@ class Library:
                 if not os.path.exists(self.archive_file) and not st.get("answering") == "seed":
                     docs, origin = self._archive_docs()
                     if origin == "seed":
-                        ix.build(self.index.path, self._documents(docs))
+                        self._build(docs)
                         st["answering"] = "seed"
             if entry["ok"]:
                 st["answering"] = "fetch"
             st[ARCHIVE_SOURCE] = entry
+            st[APPS_SOURCE] = getattr(self, "_apps_state", None) or apps_source.read(self.docs_root)[2]
             st["documents"] = self.index.count()
             self._write_state(st)
             return st
 
-    def rebuild_local(self):
-        """Nach einer Änderung an `local`: neu bauen aus dem zuletzt
-        angenommenen Archiv, ohne neuen Abruf."""
+    def rebuild(self):
+        """Neu bauen aus dem zuletzt angenommenen Archiv (oder seed), der
+        App-Doku und den Notizen -- ohne neuen Abruf. Nach einer Änderung an
+        `local` und wenn der Knoten die App-Doku geändert hat."""
         with self.lock:
-            archive, origin = self._archive_docs()
-            ix.build(self.index.path, self._documents(archive))
+            archive, origin = self._archive_docs() if self.oaap_docs else ([], "")
+            self._build(archive)
             st = self.state()
             if origin:
                 st["answering"] = origin
             st[LOCAL_SOURCE] = {"at": now(), "ok": True,
                                 "files": len(src.read_local(self.data_dir))}
+            st[APPS_SOURCE] = getattr(self, "_apps_state", {})
             st["documents"] = self.index.count()
             self._write_state(st)
+
+    rebuild_local = rebuild
+
+    def apps_changed(self):
+        """Hat der Knoten die App-Doku geändert, seit zuletzt gebaut wurde?"""
+        return apps_source.stamp(self.docs_root) != getattr(self, "_apps_stamp", None)
 
     # --- Antworten ---------------------------------------------------------
     def url(self, doc, anchor=""):
@@ -154,6 +220,9 @@ class Library:
 
     def _meta(self, doc, version=None):
         out = {"id": doc["id"], "title": doc["title"], "source": doc["source"],
+               "product": doc.get("product", ""), "kind": doc.get("kind", ""),
+               "readers": doc.get("readers", []), "app_version": doc.get("app_version", ""),
+               "channel": doc.get("channel", ""),
                "trust": doc["trust"], "url": self.url(doc),
                "checked_against": doc["checked_against"], "checked_on": doc["checked_on"],
                "applies_from": doc["applies_from"], "applies_until": doc["applies_until"],
@@ -163,10 +232,12 @@ class Library:
             out["applies_to_version"] = a
         return out
 
-    def search(self, query, *, roles, limit=8, source=None, tags=None, version=None):
+    def search(self, query, *, roles, limit=8, source=None, tags=None, version=None,
+               product=None, kind=None):
         limit = max(1, min(int(limit or 8), ix.MAX_LIMIT))
         hits = []
-        for h in self.index.search(query, limit=limit, source=source, tags=tags):
+        for h in self.index.search(query, limit=limit, source=source, tags=tags,
+                                   product=product or None, kind=kind or None):
             d = h["doc"]
             if not ix.visible(d, roles):
                 continue
@@ -209,12 +280,33 @@ class Library:
         out["other_versions"] = [f"{s}:{d['id']}" for s in d["shadows"]]
         return out
 
-    def topics(self, prefix="", *, roles):
+    def topics(self, prefix="", *, roles, product=None):
         tree = {}
         for d in self.index.docs(prefix=prefix or ""):
+            if product and d["product"] != product:
+                continue
             if ix.visible(d, roles):
-                tree.setdefault(d["source"], []).append({"id": d["id"], "title": d["title"], "tags": d["tags"]})
+                tree.setdefault(d["source"], []).append(
+                    {"id": d["id"], "title": d["title"], "tags": d["tags"],
+                     "product": d["product"], "kind": d["kind"]})
         return tree
+
+    def products(self, *, roles):
+        """Die Hilfsprodukte, die diese Person sieht, mit Zahl der Dokumente
+        je Typ (RFC-0094 §5). Ein Produkt ohne sichtbares Dokument fehlt."""
+        counts = {}
+        for d in self.index.docs():
+            if ix.visible(d, roles):
+                c = counts.setdefault(d["product"], {})
+                c[d["kind"]] = c.get(d["kind"], 0) + 1
+        out = []
+        for p in self.index.products():
+            c = counts.get(p.get("product"))
+            if not c:
+                continue
+            out.append(dict(p, documents=sum(c.values()),
+                            kinds={k: c[k] for k in ix.KINDS if k in c}))
+        return out
 
     def resources(self, *, roles):
         return [{"uri": f"help://{d['source']}/{d['id']}", "name": d["title"],
