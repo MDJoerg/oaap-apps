@@ -258,6 +258,48 @@ docker exec <container> python3 /srv/app.py profile create kp-chat \
   kommt nur `_meta.ui` (`resourceUri`, `visibility`), keine anderen
   `_meta`-Angaben des Herstellers.
 
+## Verfahren P: die Person aus dem Chat bis ins Zielsystem (0.12)
+
+Ein MCP-Server **in SAP** (ein ICF-Dienst) soll als die Person arbeiten, die im
+Chat fragt: `SY-UNAME` ist diese Person, es gelten ihre Berechtigungen. Das
+Gateway hält dafür nichts. Die Plattform hat eine Destination mit
+`principal_propagation` (RFC-0066). Sie nennt den SAP-Benutzer aus dem Attribut
+`sap_user` der Person, stellt für genau ihn ein kurzlebiges Zertifikat der
+Mandanten-CA aus und meldet ihn damit am gepinnten Ziel an. Das Gateway reicht
+nur die Zusicherung weiter, die die Plattform ihm für die Person gegeben hat.
+
+```bash
+# einmal, als server_admin auf dem Knoten (P1): Destination und Bindung mit --propagate
+oaap destination add sap-a4h --tenant bec --kind http --target https://<sap>:<port> \
+  --auth principal_propagation --accept-sha256 <fingerabdruck>
+oaap destination bind <gateway> sap-a4h --tenant bec --propagate
+# im Gateway: Server mit Pfad hinter der Destination, Sicht nur für die Plattform
+docker exec <container> python3 /srv/app.py server set sap \
+  --address destination:sap-a4h/zmcp2/bc/access-support --auth propagate --light yellow
+docker exec <container> python3 /srv/app.py view set sap --ways platform
+```
+
+- **Adresse** nur `destination:<name>[/pfad]`, **keine Zugangsdaten** (beides
+  wird sonst abgewiesen). Der Pfad hängt am Ziel der Destination; `..`,
+  Abfrage und Fragment gehen nicht.
+- **Nur mit Person:** aus einem Chat (Verfahren A) oder auf der Betreiberseite.
+  Ein Schlüssel wird abgewiesen, nie technisch ersetzt. Eine Anmeldung beim
+  Anmeldedienst nimmt die Destination noch nicht an (RFC-0066 Form B), das sagt
+  ein Satz. Darum gehört ein P-Server in eine Sicht mit Zugang `platform`, nicht
+  in eine mit Schlüsseln.
+- **Katalog lesen** (P3): auf der Betreiberseite als die angemeldete Person.
+  Sie braucht dafür einen eigenen SAP-Benutzer. Einen technischen
+  Katalog-Benutzer gibt es nicht; ohne Person bleibt der Katalog, wie er
+  zuletzt gelesen wurde.
+- **Sitzungen je Person** (P4): Eine zweite Person bekommt nie die Sitzung der
+  ersten, und kein Cookie des Zielsystems wird zurückgeschickt.
+- **Ablehnungen** der Destination oder von SAP (kein `sap_user`, keine
+  Zuordnung des Zertifikats) gehen mit ihrem Satz an die Person: „Die
+  Destination oder das Zielsystem lehnt ab (HTTP 403): …“. Gemessen als
+  `refused`/`destination`; der Sicherungsautomat zählt das nicht.
+- Gemessen wird Verfahren `P` mit Person, Chat und Assistent.
+- **Ampel** (P5): ein Demosystem mit Demodaten `yellow`, Kundensysteme `red`.
+
 ## Der festgehaltene Text
 
 Eine Tool-Beschreibung geht unmittelbar in das Modell des Clients. Ein

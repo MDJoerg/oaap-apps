@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -399,6 +399,34 @@ def platform_act(person):
     return token
 
 
+USER_ASSERTION = "X-OAAP-User-Assertion"
+
+
+def propagate_access(person):
+    """Verfahren P (0.12, RFC-0066 Form A): die Person über eine Destination bis ins Zielsystem.
+
+    Das Gateway gibt der Destination die Zusicherung, die die Plattform
+    DIESEM Gateway für die Person gab (Chat über die via-Tür, Verfahren A,
+    oder die Betreiberseite). Die Destination prüft sie gegen die Instanz,
+    von der der Aufruf kommt, nennt den Benutzer im Zielsystem (`sap_user`)
+    und stellt für genau ihn ein kurzlebiges Zertifikat aus. Das Gateway
+    hält dafür nichts: keinen Schlüssel, kein Zertifikat, keinen Cookie.
+
+    Ohne Zusicherung kein Aufruf — nie ein technischer Rückfall (D8). Ein
+    Token des Anmeldediensts (Form B) nimmt die Destination noch nicht an.
+    """
+    if person and person.get("assertion"):
+        return {"auth_kind": "none", "credential": "", "door": "destination",
+                "headers": {USER_ASSERTION: person["assertion"]}}
+    if person and person.get("token"):
+        raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
+                       "(Verfahren P). Das geht heute mit einer Person aus einem Chat der "
+                       "Plattform; eine Anmeldung beim Anmeldedienst nimmt die Destination noch "
+                       "nicht an (RFC-0066 Form B).")
+    raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
+                   "(Verfahren P) und braucht eine Person; mit einem Schlüssel geht es nicht.")
+
+
 def server_access(srow, person=None):
     """Adresse und Zugang für upstream.py. Wirft UpstreamError mit einem Satz.
 
@@ -426,6 +454,8 @@ def server_access(srow, person=None):
                     "headers": {ACT_ASSERTION: person["assertion"]}}, url
         return {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True,
                 "headers": {ACT_HEADER: platform_act(person)}}, url
+    if srow["auth_kind"] == "propagate":
+        return propagate_access(person), url
     if srow["auth_kind"] != "exchange":
         return {"auth_kind": srow["auth_kind"], "credential": credential}, url
     if person and person.get("procedure") == "A":
@@ -477,6 +507,11 @@ def read_catalog(name, person=None):
     if srow["auth_kind"] == "exchange" and not person:
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
                        f"Menschen — app.py server read {name} --token-stdin ja.")
+    if srow["auth_kind"] == "propagate" and not (person and person.get("assertion")):
+        # P3: kein technischer Katalog-Benutzer -- es liest eine Person als sie selbst.
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Als "
+                       f"Person mit eigenem Benutzer im Zielsystem auf der Seite des Gateways auf "
+                       f"„Katalog jetzt lesen“ klicken.")
     if srow["auth_kind"] == "platform" and not person and not discover:
         # Eine Plattform vor 0.1.300 nennt keine Erkundungs-Tür (L8a, 18.11.).
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht einen Menschen, "
@@ -1129,7 +1164,7 @@ def server_form(s=None):
 {" readonly" if s else ""} required></div>
 <div><label>Adresse (URL oder destination:&lt;name&gt;)</label>
 <input type="text" name="address" value="{esc(s["address"] if s else "")}" required></div>
-<div><label>Zugang (Verfahren T, oder X = Token-Tausch)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange"), plain)}</select></div>
+<div><label>Zugang (Verfahren T; X = Token-Tausch; P = propagate, die Person über eine Destination bis ins Zielsystem)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange", "propagate"), plain)}</select></div>
 <div><label>Kopfzeile (bei Zugang header)</label><input type="text" name="header" value="{esc(header)}"></div>
 <div><label>Verfahren X: Token-Endpunkt (URL oder destination:&lt;name&gt;)</label>
 <input type="text" name="token_url" value="{esc(ex.get("token_url", ""))}"></div>
@@ -1882,7 +1917,9 @@ class Handler(BaseHTTPRequestHandler):
         msg_id = out["id"]
         wants_sse = "text/event-stream" in (self.headers.get("Accept") or "")
         reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
-        if self.person and self.person.get("procedure") == "A":
+        if srow["auth_kind"] == "propagate":
+            state["procedure"] = "P"
+        elif self.person and self.person.get("procedure") == "A":
             state["procedure"] = "A"
         elif srow["auth_kind"] == "exchange":
             state["procedure"] = "X"
@@ -1894,7 +1931,8 @@ class Handler(BaseHTTPRequestHandler):
             # Kein Rückfall auf einen technischen Zugang (D8) — und kein Fehler auf dem
             # Weg zum Server: Der Sicherungsautomat zählt das nicht.
             done("refused" if not self.person or self.person.get("procedure") == "A"
-                 else "upstream_error", "exchange")
+                 or srow["auth_kind"] == "propagate" else "upstream_error",
+                 "destination" if srow["auth_kind"] == "propagate" else "exchange")
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
             return False
         except upstream.UpstreamError as exc:
@@ -1978,7 +2016,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Satz geht weiter, der Sicherungsautomat zählt es nicht (RFC-0073 §4.1).
                 with sess.lock:
                     sess.upstream.pop(srow["name"], None)
-                done("refused", "platform")
+                done("refused", "destination" if server.get("door") == "destination"
+                     else "platform")
                 answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
                 return False
             except upstream.TooLarge as exc:
@@ -2254,9 +2293,13 @@ def save_server(form, user):
     name = form.get("name", "").strip()
     address = form.get("address", "").strip()
     if address.startswith("destination:"):
-        if not books.NAME.match(address[len("destination:"):]):
+        need, _, path = address[len("destination:"):].partition("/")
+        if not books.NAME.match(need):
             raise ValueError("Nach destination: folgt der Name der Bindung (Kleinbuchstaben, "
-                             "Ziffern, Bindestriche).")
+                             "Ziffern, Bindestriche), danach wahlweise /pfad.")
+        if path and (not upstream.DESTINATION_PATH.match(path) or ".." in path.split("/")):
+            raise ValueError("Der Pfad hinter der Destination darf kein „..“, keine Abfrage und "
+                             "kein Fragment enthalten.")
     else:
         try:
             upstream.check_host(upstream.resolve(address))
@@ -2294,7 +2337,7 @@ def save_server(form, user):
 
 def cli(argv):
     """Für kopflose Knoten: `docker exec <container> python3 /srv/app.py …`."""
-    usage = ("Aufruf: app.py server set <name> --address A [--auth none|bearer|basic|header:N] "
+    usage = ("Aufruf: app.py server set <name> --address A|destination:D[/pfad] [--auth none|bearer|basic|header:N|propagate] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
              "        app.py view set <name> [--max-effect read|write|execute] "
              "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] | view list\n"

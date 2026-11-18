@@ -1797,6 +1797,191 @@ check("0.8.0: ein Tool nur für die Ansicht (visibility app) steht mit dieser An
       (lst.get("nurapp") or {}).get("_meta", {}).get("ui", {}).get("visibility") == ["app"], lst)
 uisrv.shutdown()
 
+print("\n-- 0.12.0: Verfahren P -- die Person über eine Destination bis ins Zielsystem (RFC-0066)")
+# Eine Papier-Destination mit Principal Propagation, wie connect sie zeigt: Sie nimmt
+# die Zusicherung der Person, lehnt ohne sie oder ohne Benutzer im Zielsystem mit 403
+# und einem Satz ab, und dahinter steht ein zustandsloser MCP-Server wie der Access
+# Explorer in a4h (keine Mcp-Session-Id). Sie setzt einen Cookie, den das Gateway
+# NIE zurückschicken darf (P4).
+ASRT_ANNA = "eyJ2IjoxfQ.eyJzdWIiOiJ1LWFubmEifQ.ZusicherungAnnaNurFuerDenTest01234"
+ASRT_BERT = "eyJ2IjoxfQ.eyJzdWIiOiJ1LWJlcnQifQ.ZusicherungBertNurFuerDenTest01234"
+ASRT_OHNE = "eyJ2IjoxfQ.eyJzdWIiOiJ1LW9obmUifQ.ZusicherungOhneSapUserNurFuerTest0"
+ASRT_BETR = "eyJ2IjoxfQ.eyJzdWIiOiJ1LWJldHIifQ.ZusicherungBetreiberNurFuerTest012"
+SAP_USERS = {ASRT_ANNA: "ANNA", ASRT_BERT: "BERT", ASRT_BETR: "BETREIBER"}
+D = {"seen": []}
+
+
+class Dest(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def reply(self, status, body, ctype="application/json"):
+        raw = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Set-Cookie", "SAP_SESSIONID_A4H_001=GEHEIM-SITZUNG; Path=/")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        asrt = self.headers.get("X-OAAP-User-Assertion") or ""
+        D["seen"].append({"path": self.path, "asrt": asrt, "method": body.get("method"),
+                          "auth": self.headers.get("Authorization"),
+                          "cookie": self.headers.get("Cookie"),
+                          "sid": self.headers.get("Mcp-Session-Id")})
+        if not asrt:
+            self.reply(403, b"no assertion of the person came with the call", "text/plain")
+            return
+        user = SAP_USERS.get(asrt)
+        if not user:
+            self.reply(403, b"the person has no sap_user", "text/plain")
+            return
+        m, mid = body.get("method"), body.get("id")
+        if mid is None:
+            self.reply(202, b"")
+            return
+        if m == "initialize":
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {
+                "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "Access Explorer", "version": "0.35.0"}}})
+        elif m == "tools/list":
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {"tools": [
+                tool("who_am_i", "Sagt den SAP-Benutzer.", {}, (), {"readOnlyHint": True})]}})
+        elif m in ("resources/list", "resources/templates/list", "prompts/list"):
+            field = {"resources/list": "resources", "resources/templates/list": "resourceTemplates",
+                     "prompts/list": "prompts"}[m]
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {field: []}})
+        elif m == "tools/call":
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": "SY-UNAME=" + user}]}})
+        else:
+            self.reply(200, {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "?"}})
+
+
+dest = ThreadingHTTPServer(("0.0.0.0", 0), Dest)
+threading.Thread(target=dest.serve_forever, daemon=True).start()
+os.environ["OAAP_DESTINATION_SAP_PROBE_URL"] = f"http://{IP}:{dest.server_address[1]}/destinations/sap-probe/"
+
+check("P: destination:<name>/pfad hängt den Pfad an das Ziel der Destination",
+      app.upstream.resolve("destination:sap-probe/zmcp2/bc/x").endswith(
+          "/destinations/sap-probe/zmcp2/bc/x"), app.upstream.resolve("destination:sap-probe/zmcp2/bc/x"))
+try:
+    app.upstream.resolve("destination:sap-probe/../geheim")
+    went = True
+except app.upstream.UpstreamError:
+    went = False
+check("P: ein Pfad mit „..“ führt nicht aus der Destination heraus", not went)
+
+admin("/server-save", name="sap-url", address=PAPER, auth="propagate", light="yellow")
+check("P: Verfahren P mit einer URL statt einer Destination: abgewiesen",
+      books.server_row(app.DB, "sap-url") is None)
+admin("/server-save", name="sap-cred", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="yellow", credential="geheim")
+check("P: Verfahren P mit eigenen Zugangsdaten: abgewiesen", books.server_row(app.DB, "sap-cred") is None)
+admin("/server-save", name="sap-weg", address="destination:sap-probe/../x", auth="propagate", light="yellow")
+check("P: Destination mit „..“ im Pfad: beim Speichern abgewiesen", books.server_row(app.DB, "sap-weg") is None)
+admin("/server-save", name="sap", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="yellow")
+srow = books.server_row(app.DB, "sap")
+check("P: Server mit destination:…/pfad und Zugang propagate gespeichert",
+      srow is not None and srow["auth_kind"] == "propagate" and not srow["credential"], srow and dict(srow))
+check("P: das Formular bietet propagate an", "propagate" in app.server_form(srow))
+
+D["seen"].clear()
+okr, text = app.read_catalog("sap")
+check("P3: ohne Person kein Katalog (kein technischer Katalog-Benutzer), mit Satz, kein Aufruf",
+      not okr and "liest als Person" in text and not D["seen"], (text, D["seen"]))
+page = admin("/server-read", _headers={"X-OAAP-User-Id": "u-betr", "X-OAAP-User-Assertion": ASRT_BETR},
+             name="sap")
+check("P3: auf der Betreiberseite liest die Betreiberin den Katalog als sie selbst",
+      [c["name"] for c in books.catalog(app.DB, "sap", "tool")] == ["who_am_i"]
+      and D["seen"] and all(s["asrt"] == ASRT_BETR for s in D["seen"]), D["seen"])
+check("... an genau den Pfad hinter der Destination, ohne Authorization",
+      all(s["path"] == "/destinations/sap-probe/zmcp2/bc/x" and not s["auth"] for s in D["seen"]),
+      D["seen"])
+
+admin("/view-save", name="p-key", max_effect="read", ways="key")
+add("p-key", "who_am_i", server="sap")
+check("P: ein P-Server in einer Sicht mit Schlüsseln: abgewiesen",
+      books.item_row(app.DB, "p-key", "tool", "who_am_i") is None)
+admin("/view-save", name="p-sicht", max_effect="read", ways="platform")
+add("p-sicht", "who_am_i", server="sap")
+check("P: in einer Plattform-Sicht erlaubt", books.item_row(app.DB, "p-sicht", "tool", "who_am_i") is not None)
+admin("/server-save", name="sap", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="yellow")
+admin("/view-save", name="p-sicht", max_effect="read", ways="key,platform")
+check("P: die Sicht nachträglich auf Schlüssel stellen: abgewiesen",
+      books.view_row(app.DB, "p-sicht")["ways"] == "platform", books.view_row(app.DB, "p-sicht")["ways"])
+admin("/issue", label="p-chat", kind="profile", groups="@pchat", views="p-sicht", ceiling="yellow")
+
+
+def call_p(sid, asrt, uid, mid=5):
+    st, _, msgs = rpc_a("p-sicht", {"jsonrpc": "2.0", "id": mid, "method": "tools/call",
+                                    "params": {"name": "who_am_i", "arguments": {}}}, sid,
+                        client="pchat", uid=uid, asrt=asrt, assistant="sap")
+    m = msgs[-1] if msgs else {}
+    text = (((m.get("result") or {}).get("content") or [{}])[0].get("text")
+            or (m.get("error") or {}).get("message", ""))
+    return st, text
+
+
+D["seen"].clear()
+st, sid_anna = session_a("p-sicht", client="pchat", uid="u-anna", asrt=ASRT_ANNA)
+st, text = call_p(sid_anna, ASRT_ANNA, "u-anna")
+check("P: Anna aus dem Chat kommt im Zielsystem als ANNA an", text == "SY-UNAME=ANNA", (st, text))
+check("... die Destination sah Annas Zusicherung, keinen Authorization-Kopf, keinen Cookie",
+      D["seen"] and all(s["asrt"] == ASRT_ANNA and not s["auth"] and not s["cookie"] for s in D["seen"]),
+      D["seen"])
+st, sid_bert = session_a("p-sicht", client="pchat", uid="u-bert", asrt=ASRT_BERT)
+D["seen"].clear()
+st, text = call_p(sid_bert, ASRT_BERT, "u-bert")
+check("P4: Bert in seiner Sitzung kommt als BERT an", text == "SY-UNAME=BERT", (st, text))
+D["seen"].clear()
+st, text = call_p(sid_anna, ASRT_BERT, "u-bert")
+check("P4 Köder: Bert mit Annas Sitzung bekommt sie nicht -- und am Zielsystem kommt nichts an",
+      "SY-UNAME" not in text and not D["seen"], (st, text, D["seen"]))
+D["seen"].clear()
+st, text = call_p(sid_anna, ASRT_ANNA, "u-anna", mid=6)
+check("P4: Cookie des Zielsystems wird nie zurückgeschickt (auch im zweiten Aufruf nicht)",
+      text == "SY-UNAME=ANNA" and D["seen"] and not any(s["cookie"] for s in D["seen"]), D["seen"])
+
+st, sid_ohne = session_a("p-sicht", client="pchat", uid="u-ohne", asrt=ASRT_OHNE)
+for i in range(6):
+    st, text = call_p(sid_ohne, ASRT_OHNE, "u-ohne", mid=10 + i)
+check("P: ohne Benutzer im Zielsystem: der Satz der Destination geht an die Person",
+      "Die Destination oder das Zielsystem lehnt ab (HTTP 403)" in text and "sap_user" in text, text)
+row = rows_after("SELECT * FROM usage WHERE view='p-sicht' AND user_sub='u-ohne' ORDER BY id", 6)
+check("... gemessen als refused/destination, Verfahren P",
+      row and all((r["outcome"], r["reason"], r["procedure"]) == ("refused", "destination", "P")
+                  for r in row), [tuple((r["outcome"], r["reason"], r["procedure"])) for r in row])
+st, text = call_p(sid_anna, ASRT_ANNA, "u-anna", mid=30)
+check("... und der Sicherungsautomat bleibt zu: Anna kommt danach weiter an",
+      text == "SY-UNAME=ANNA", text)
+row = rows_after("SELECT * FROM usage WHERE view='p-sicht' AND user_sub='u-anna' AND outcome='ok' "
+                 "ORDER BY id", 1)
+check("P: Messzeile Verfahren P mit Person, Issuer platform, Chat und Assistent",
+      row and row[-1]["procedure"] == "P" and row[-1]["user_iss"] == "platform"
+      and row[-1]["client"] == "pchat" and row[-1]["assistant"] == "sap", [dict(r) for r in row][-1:])
+
+try:
+    app.propagate_access({"iss": "https://kc", "sub": "x", "token": "t"})
+    said = ""
+except app.NoPerson as exc:
+    said = str(exc)
+check("P: eine Anmeldung beim Anmeldedienst (Form B) wird mit Satz abgewiesen", "Form B" in said, said)
+try:
+    app.propagate_access(None)
+    said = ""
+except app.NoPerson as exc:
+    said = str(exc)
+check("P: ohne Person (Schlüssel) abgewiesen, nie ein technischer Rückfall", "Schlüssel" in said, said)
+dest.shutdown()
+
+
 gw.shutdown()
 paper.shutdown()
 

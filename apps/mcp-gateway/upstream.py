@@ -23,6 +23,7 @@ import http.client
 import ipaddress
 import json
 import os
+import re
 import socket
 import time
 from urllib.parse import urlsplit
@@ -54,10 +55,18 @@ class Refused(UpstreamError):
     Der Text trägt den Satz der Plattform, bereinigt und gekürzt.
     """
 
-    def __init__(self, status, sentence):
-        super().__init__("refused", f"Die Plattform lehnt ab (HTTP {status})"
+    def __init__(self, status, sentence, who="Die Plattform"):
+        super().__init__("refused", f"{who} lehnt ab (HTTP {status})"
                          + (f": {sentence}" if sentence else "."))
         self.status = status
+
+
+# Verfahren P (0.12): Wer am Ende einer Destination mit Principal Propagation
+# 401/403 sagt, kann die Destination sein (kein `sap_user`, keine Zusicherung)
+# oder das Zielsystem (keine Zuordnung des Zertifikats). Beides betrifft DIESE
+# Person, nicht den Server für alle.
+REFUSER = {"destination": "Die Destination oder das Zielsystem"}
+DESTINATION_PATH = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
 
 
 def _sentence(raw):
@@ -83,16 +92,26 @@ class TooLarge(UpstreamError):
 # ------------------------------------------------------------------ Adresse
 
 def resolve(address, env=None):
-    """`destination:<need>` → URL aus der Umgebung; sonst die URL selbst, geprüft."""
+    """`destination:<need>[/pfad]` → URL aus der Umgebung (+ Pfad); sonst die URL selbst, geprüft.
+
+    Der Pfad (0.12) gehört zum Ziel der Destination: `destination:sap-a4h/zmcp2/bc/x`
+    ist `https://<ziel>/zmcp2/bc/x`. Er darf nicht aus der Destination
+    herausführen (`..`) und trägt weder Abfrage noch Fragment.
+    """
     env = os.environ if env is None else env
     address = (address or "").strip()
     if address.startswith("destination:"):
-        need = address[len("destination:"):].strip()
+        need, _, path = address[len("destination:"):].strip().partition("/")
         var = "OAAP_DESTINATION_" + need.upper().replace("-", "_") + "_URL"
         url = env.get(var, "")
         if not need or not url:
             raise UpstreamError("address", f"Die Destination „{need}“ ist an diese Instanz "
                                            f"nicht gebunden ({var} fehlt).")
+        if path:
+            if not DESTINATION_PATH.match(path) or ".." in path.split("/"):
+                raise UpstreamError("address", "Der Pfad hinter der Destination darf kein „..“, "
+                                               "keine Abfrage und kein Fragment enthalten.")
+            url = url.rstrip("/") + "/" + path.lstrip("/")
         return url
     parts = urlsplit(address)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -241,7 +260,7 @@ def post(server, url, message, session_id=None, version=None, timeout=60,
                     said = _sentence(resp.read(400))
                 except (OSError, http.client.HTTPException):
                     said = ""
-                raise Refused(resp.status, said)
+                raise Refused(resp.status, said, REFUSER.get(server["door"], "Die Plattform"))
             supported = _supported_versions(resp, conn, deadline) if message.get(
                 "method") == "initialize" else None
             if supported:

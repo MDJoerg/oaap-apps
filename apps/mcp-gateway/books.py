@@ -182,10 +182,11 @@ EFFECT_WORDS = {"read": "lesen", "write": "schreiben", "execute": "ausführen"}
 LIGHTS = ("green", "yellow", "red")
 LIGHT_RANK = {e: i for i, e in enumerate(LIGHTS)}
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
-AUTH_KINDS = ("none", "bearer", "basic", "exchange", "platform")
-# Zugänge, die einen angemeldeten Menschen brauchen: X (Tausch zum Server) und
-# I (Tausch zur Plattform, RFC-0073). Nie in einer Sicht, die Schlüssel annimmt.
-PERSON_KINDS = ("exchange", "platform")
+AUTH_KINDS = ("none", "bearer", "basic", "exchange", "platform", "propagate")
+# Zugänge, die einen angemeldeten Menschen brauchen: X (Tausch zum Server),
+# I (Tausch zur Plattform, RFC-0073) und P (die Person über eine Destination bis
+# ins Zielsystem, RFC-0066, 0.12). Nie in einer Sicht, die Schlüssel annimmt.
+PERSON_KINDS = ("exchange", "platform", "propagate")
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
 
@@ -246,7 +247,8 @@ def valid_auth(kind):
                                 "mcp-protocol-version", "accept"):
             raise ValueError(f"Die Kopfzeile {kind[7:]} setzt das Gateway selbst.")
         return kind
-    raise ValueError("Zugang ist none, bearer, basic, header:<Name>, exchange oder platform.")
+    raise ValueError("Zugang ist none, bearer, basic, header:<Name>, exchange, platform oder "
+                     "propagate.")
 
 
 # ------------------------------------------------------------------ Schlüssel
@@ -472,11 +474,16 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if auth_kind == "platform" and not (old_row and old_row["source"]):
         raise ValueError("Verfahren I (platform) gibt es nur für Quellen der Plattform; die Tür "
                          "nennt die Quellenliste (source sync).")
-    if auth_kind == "platform" and any(r["server"] == name for r in db.execute(
+    if auth_kind == "propagate" and not address.startswith("destination:"):
+        raise ValueError("Verfahren P (propagate) geht nur über eine Destination mit Principal "
+                         "Propagation: Adresse destination:<name>[/pfad].")
+    if auth_kind in ("platform", "propagate") and any(r["server"] == name for r in db.execute(
             "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
             "WHERE v.ways LIKE '%key%'")):
-        raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren I "
-                         "braucht einen Menschen — erst die Sicht auf „Anmeldung“ stellen.")
+        raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren "
+                         + ("I" if auth_kind == "platform" else "P")
+                         + " braucht einen Menschen — erst die Sicht auf „Anmeldung“ oder "
+                         "„Plattform“ stellen.")
     if auth_kind == "exchange":
         ex = dict(json.loads(old_row["exchange"] or "{}")) if old_row else {}
         ex.update({k: (v or "").strip() for k, v in (exchange or {}).items() if v is not None})
@@ -504,8 +511,11 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if address.startswith("destination:") and credential and auth_kind != "exchange":
         raise ValueError("Ein Server hinter einer Destination trägt keine eigenen Zugangsdaten: "
                          "Die Plattform setzt die der Destination ein (eine Wahrheit, nicht zwei).")
-    if auth_kind == "platform":
-        credential = ""                         # der Quellen-Schlüssel kommt von der Plattform
+    if auth_kind == "propagate" and credential:
+        raise ValueError("Verfahren P trägt keine Zugangsdaten: Das Zertifikat der Person stellt "
+                         "die Destination aus. Erst „Zugangsdaten entfernen“.")
+    if auth_kind in ("platform", "propagate"):
+        credential = ""                         # Quellen-Schlüssel bzw. Zertifikat kommt von der Plattform
     elif auth_kind != "none" and not credential:
         raise ValueError(f"Zugang {auth_kind} braucht Zugangsdaten.")
     stamp = now()
@@ -650,7 +660,7 @@ def save_view(db, actor, name, max_effect, requests=None, ways=None):
         raise ValueError("Zugänge sind key, signin und platform, durch Komma getrennt, in "
                          "dieser Reihenfolge (z. B. signin,platform).")
     if "key" in ways and old and exchange_servers(db, name):
-        raise ValueError("Die Sicht enthält Server mit Verfahren X (" + ", ".join(exchange_servers(db, name))
+        raise ValueError("Die Sicht enthält Server mit Verfahren X, I oder P (" + ", ".join(exchange_servers(db, name))
                          + "); die brauchen einen angemeldeten Menschen — Schlüssel gehen hier nicht.")
     current = view_requests(old) if old else dict(REQUESTS_NEW)
     if requests:
@@ -695,7 +705,8 @@ def delete_view(db, actor, name):
 def exchange_servers(db, view):
     return [r["name"] for r in db.execute(
         "SELECT DISTINCT s.name FROM items i JOIN servers s ON s.name=i.server "
-        "WHERE i.view=? AND s.auth_kind IN ('exchange','platform') ORDER BY s.name", (view,))]
+        "WHERE i.view=? AND s.auth_kind IN ('exchange','platform','propagate') ORDER BY s.name",
+        (view,))]
 
 
 def view_ways(vrow):
@@ -781,7 +792,7 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
     if server_row(db, server)["auth_kind"] in PERSON_KINDS and "key" in view_ways(view_row(db, view)):
-        raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X oder I und braucht einen angemeldeten "
+        raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht einen angemeldeten "
                          f"Menschen; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
                          "„Anmeldung“ stellen.")
     cat = catalog_row(db, server, kind, source)
