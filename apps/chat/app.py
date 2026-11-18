@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -61,6 +61,10 @@ UI_EXTENSION = "io.modelcontextprotocol/ui"
 UI_MIME = "text/html;profile=mcp-app"
 MODEL_TIMEOUT = int(os.environ.get("CHAT_MODEL_TIMEOUT", "240"))
 ASSERTION = "X-OAAP-User-Assertion"
+NO_ASSERTION = ("Keine Zusicherung der Plattform für diese Anfrage. Entweder kommt sie "
+                "nicht aus einer Anmeldung (ein Schlüssel statt einer Sitzung), oder dem "
+                "Knoten fehlt sein Zusicherungsschlüssel -- das sieht der Betreiber mit "
+                "'oaap status' und behebt es mit 'oaap update'.")
 ACT_ASSERTION = "X-OAAP-Act-Assertion"
 MCP_VERSION = "2025-11-25"
 MAX_BODY = 64_000
@@ -848,8 +852,9 @@ class Handler(BaseHTTPRequestHandler):
         # §5.2: ohne Zusicherung keine Runde -- nie ein Rückfall auf die App selbst.
         assertion = self.headers.get(ASSERTION, "").strip()
         if not assertion:
-            return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage "
-                                            "(keine Person, oder ein Schlüssel statt einer Sitzung)."})
+            # 0.5.2 (L18): the app cannot tell the two causes apart, so it
+            # names both -- and the second one is the operator's to fix.
+            return self.json(401, {"error": NO_ASSERTION})
         a = self.assistant_for(conv, who)
         if isinstance(a, str):
             return self.json(403, {"error": a})

@@ -143,6 +143,17 @@ Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Sc
    trägt, z. B. `{"reasoning": {"effort": "none"}}` für `qwen3:8b` auf
    einer CPU (RFC-0074 §6 Befund 5).
 
+### „Keine Zusicherung der Plattform für diese Anfrage“
+
+Jede Runde braucht die Zusicherung, die identity für die angemeldete
+Person unterschreibt. Fehlt sie, hat das zwei mögliche Ursachen, die die
+App nicht unterscheiden kann: Die Anfrage kam mit einem Schlüssel statt
+aus einer Anmeldung, oder dem Knoten fehlt sein Zusicherungsschlüssel.
+Den zweiten Fall zeigt `sudo oaap status` („Assertion key: MISSING“), und
+`sudo oaap update` behebt ihn. Ab Plattform 0.1.302 hat jeder Knoten den
+Schlüssel; vorher fehlte er auf Knoten ohne Principal Propagation
+(Fund auf oaapx01, 18.11.2026).
+
 ## Prüfen
 
 ```sh
