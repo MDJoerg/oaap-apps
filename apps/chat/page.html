@@ -255,7 +255,9 @@ dialog input,dialog textarea,dialog select{width:100%}
     <div class="row">
       <div style="flex:1"><label>Modellname des KI-Gateways</label><select name="model" required></select>
         <div id="mhint" style="font-size:.8rem;margin-top:.2rem;opacity:.75"></div></div>
-      <div style="flex:1"><label>Sicht des MCP-Gateways</label><input name="view" required></div>
+      <div style="flex:1"><label>Sicht des MCP-Gateways</label><input name="view" required list="viewlist" autocomplete="off">
+        <datalist id="viewlist"></datalist>
+        <div id="vhint" style="font-size:.8rem;margin-top:.2rem;opacity:.75"></div></div>
       <div style="flex:1"><label>Gateway (leer = das einzige)</label><input name="gateway"></div>
     </div>
     <div class="row">
@@ -806,13 +808,44 @@ async function loadModels(current){
       ? "„" + current + "“ erreicht der Schlüssel des Chats nicht. Einen anderen Namen wählen oder im KI-Gateway beim Schlüssel freigeben."
       : ids.length ? "" : "Der Schlüssel des Chats erreicht kein Modell. Im KI-Gateway beim Schlüssel Modellnamen freigeben.";
 }
+// Sichten: Suchhilfe aus dem Gateway (0.6.1) -- nur die, die du aus diesem Chat
+// öffnen kannst; die Verwaltung des Mandanten sieht alle, die übrigen mit Grund.
+let VIEWS = [];
+const LIGHT_W = {green: "grün", yellow: "gelb", red: "rot"};
+function viewHint(){
+  const v = F.elements.view.value.trim(), hint = $("vhint"), hit = VIEWS.find(x => x.name === v);
+  if (!v || !VIEWS.length) return;
+  hint.textContent = hit ? (hit.ok ? "" : "Nicht für diesen Chat: " + hit.reason)
+                         : "Diese Sicht kennt das Gateway für dich nicht.";
+}
+async function loadViews(){
+  const list = $("viewlist"), hint = $("vhint");
+  list.textContent = ""; VIEWS = []; hint.textContent = "Sichten werden gelesen …";
+  let d = {views: [], error: ""};
+  try { const r = await fetch("api/views?gateway=" + encodeURIComponent(F.elements.gateway.value.trim())); d = await r.json(); }
+  catch (e) { d.error = "Die Sichtenliste ist nicht erreichbar."; }
+  VIEWS = d.views || [];
+  for (const v of VIEWS) {
+    const o = el("option"); o.value = v.name;
+    o.label = (v.ok ? "" : "(nicht für diesen Chat) ") + v.tools + " Werkzeuge" +
+      (v.prompts ? ", " + v.prompts + " Prompts" : "") + " · " + (LIGHT_W[v.light] || v.light);
+    list.appendChild(o);
+  }
+  hint.textContent = d.error ? d.error
+    : !VIEWS.length ? "Für dich gibt es in diesem Gateway keine Sicht -- die Verwaltung legt ein Zugangsprofil für diesen Chat an."
+    : (d.all ? "Du siehst als Verwaltung alle Sichten; Nutzer sehen nur die freigegebenen." : "");
+  viewHint();
+}
+F.elements.view.addEventListener("input", viewHint);
+F.elements.gateway.addEventListener("change", loadViews);
 function fill(a){
   F.reset(); $("aerr").textContent = "";
   F.elements.id.readOnly = !!a;
   $("dtitle").textContent = a ? "Assistent ändern" : "Neuer Assistent";
   loadModels(a ? a.model : "");
+  if (a) for (const k of ["id", "title", "greeting", "system", "view", "gateway"]) F.elements[k].value = a[k] || "";
+  loadViews();
   if (!a) return;
-  for (const k of ["id", "title", "greeting", "system", "view", "gateway"]) F.elements[k].value = a[k] || "";
   F.elements.scope.value = a.visibility.scope;
   F.elements.team.value = (a.visibility.context || {}).team || "";
   F.elements.commands.checked = !!a.commands;

@@ -419,7 +419,10 @@ def sync_sources(db, sources, limits):
         if door and not door.startswith("http://"):
             door = ""
         seen.add(name)
-        old = server_row(db, name)
+        # 0.14.0: ein Server einer Quelle kann umbenannt sein -- gefunden wird
+        # er über seine Herkunft (`source` = Instanzname), nicht über den Namen.
+        old = db.execute("SELECT * FROM servers WHERE source=?", (name,)).fetchone() \
+            or server_row(db, name)
         if old is None:
             kind = "platform" if door else "none"
             db.execute("INSERT INTO servers (name,address,auth_kind,credential,light,limits,source,"
@@ -433,25 +436,26 @@ def sync_sources(db, sources, limits):
         if old["source"] != name:
             report["conflict"].append(name)
             continue
+        sname = old["name"]
         if old["gone"]:
-            db.execute("UPDATE servers SET gone='', updated=? WHERE name=?", (stamp, name))
-            log(db, "plattform", "server.source", name, "wieder in der Quellenliste")
-            report["back"].append(name)
+            db.execute("UPDATE servers SET gone='', updated=? WHERE name=?", (stamp, sname))
+            log(db, "plattform", "server.source", sname, "wieder in der Quellenliste")
+            report["back"].append(sname)
         kind = old["auth_kind"]
         if kind == "none" and door and not old["credential"]:
             db.execute("UPDATE servers SET auth_kind='platform', updated=? WHERE name=?",
-                       (stamp, name))
-            log(db, "plattform", "server.source", name, "Zugang: none → platform (Verfahren I)")
+                       (stamp, sname))
+            log(db, "plattform", "server.source", sname, "Zugang: none → platform (Verfahren I)")
             kind = "platform"
         want = door if kind == "platform" else address
         if kind == "platform" and not door:
             want = old["address"]               # Tür fehlt in der Liste: nichts umbiegen
         if old["address"] != want:
-            db.execute("UPDATE servers SET address=?, updated=? WHERE name=?", (want, stamp, name))
-            log(db, "plattform", "server.source", name, f"address: {old['address']} → {want}")
-            report["moved"].append(name)
-    for row in db.execute("SELECT name FROM servers WHERE source<>'' AND gone=''").fetchall():
-        if row["name"] not in seen:
+            db.execute("UPDATE servers SET address=?, updated=? WHERE name=?", (want, stamp, sname))
+            log(db, "plattform", "server.source", sname, f"address: {old['address']} → {want}")
+            report["moved"].append(sname)
+    for row in db.execute("SELECT name,source FROM servers WHERE source<>'' AND gone=''").fetchall():
+        if row["source"] not in seen:
             db.execute("UPDATE servers SET gone=?, updated=? WHERE name=?", (stamp, stamp, row["name"]))
             log(db, "plattform", "server.source", row["name"],
                 "nicht mehr in der Quellenliste; Einträge in den Sichten bleiben stehen")
@@ -539,6 +543,53 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if changes:
         log(db, actor, "server.save", name, "; ".join(changes))
     db.commit()
+
+
+def rename_server(db, actor, old, new):
+    """Benennt einen Server um (0.14.0). Katalog und Einträge in den Sichten
+    ziehen mit; die Namen der Einträge in den Sichten bleiben, wie sie sind
+    (auch ein vorgeschlagenes `<server>_<name>`) -- Clients sehen nichts
+    davon. Ein Server einer Quelle behält seine Herkunft (`source`) und wird
+    beim Abgleich weiter gefunden. Messzeilen behalten den alten Namen.
+    Gibt die betroffenen Sichten zurück."""
+    valid_name(new, "eines Servers")
+    row = server_row(db, old)
+    if not row:
+        raise ValueError(f"Einen Server „{old}“ gibt es nicht.")
+    if new == old:
+        return []
+    if server_row(db, new):
+        raise ValueError(f"Einen Server „{new}“ gibt es schon.")
+    views_hit = [r["view"] for r in db.execute(
+        "SELECT DISTINCT view FROM items WHERE server=? ORDER BY view", (old,))]
+    db.execute("UPDATE servers SET name=?, updated=? WHERE name=?", (new, now(), old))
+    db.execute("UPDATE catalog SET server=? WHERE server=?", (new, old))
+    db.execute("UPDATE items SET server=? WHERE server=?", (new, old))
+    log(db, actor, "server.rename", old, f"→ {new}; Sichten: {', '.join(views_hit) or 'keine'}"
+        + (f"; Quelle {row['source']} bleibt" if row["source"] else ""))
+    db.commit()
+    return views_hit
+
+
+def views_for_person(db, groups, wildcard, why_not, see_all=False):
+    """Die Sichten, die ein Mensch mit diesen Gruppen öffnen kann (0.14.0) --
+    dieselbe Regel wie beim Aufruf (Profil, Zugang, Ampel). Mit `see_all`
+    (Verwaltung des Mandanten) auch die übrigen, jede mit dem Grund."""
+    out = []
+    for v in views(db):
+        profile = match_profile(db, groups, v["name"], wildcard)
+        reason = why_not(profile, v) if profile else "kein Zugangsprofil erlaubt diese Sicht."
+        if reason and not see_all:
+            continue
+        counts = {}
+        for i in items(db, v["name"]):
+            if item_state(db, i) == "active":
+                counts[i["kind"]] = counts.get(i["kind"], 0) + 1
+        out.append({"name": v["name"], "ok": not reason, "reason": reason or "",
+                    "light": view_light(db, v["name"]), "max_effect": v["max_effect"],
+                    "tools": counts.get("tool", 0), "prompts": counts.get("prompt", 0),
+                    "resources": counts.get("resource", 0) + counts.get("template", 0)})
+    return out
 
 
 def delete_server(db, actor, name):

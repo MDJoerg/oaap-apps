@@ -19,6 +19,9 @@ sys.path.insert(0, HERE)
 RESULTS = []
 
 
+SEEN_VIEWS = {"assertion": ""}
+
+
 def check(name, ok, info=None):
     RESULTS.append(bool(ok))
     print(("  PASS  " if ok else "  FAIL  ") + name + ("" if ok or info is None else f"  {info!r}"[:600]))
@@ -95,6 +98,13 @@ class Fake(BaseHTTPRequestHandler):
             return self.reply(200, {"user": uid, "grants": GRANTS.get(uid, []), "fresh_for": 0})
         if self.path == "/v1/models":
             return self.reply(200, {"object": "list", "data": [{"id": "standard"}, {"id": "klein"}]})
+        if self.path == "/via/gw1/_views":
+            SEEN_VIEWS["assertion"] = self.headers.get("X-OAAP-Act-Assertion", "")
+            if self.headers.get("Authorization") != "Bearer " + CK or not SEEN_VIEWS["assertion"].startswith("ZS-"):
+                return self.reply(401, {})
+            return self.reply(200, {"v": 1, "client": "vuebung-chat", "all": False, "views": [
+                {"name": "vg", "ok": True, "reason": "", "light": "green", "max_effect": "read",
+                 "tools": 3, "prompts": 1, "resources": 0}]})
         if self.path == "/gw" and self.headers.get("Authorization") == "Bearer " + CK:
             port = self.server.server_address[1]
             return self.reply(200, {"v": 1, "gateways": [
@@ -581,6 +591,20 @@ check("0.6.0: das Formular wählt das Modell aus einer Liste, kein freies Feld",
       '<select name="model" required>' in html and 'input name="model"' not in html, st)
 check("0.6.0 W4: Werkzeugaufrufe lassen sich in den Einstellungen ausblenden",
       'data-k="calls"' in html and "body[data-calls=hide] .call" in html, st)
+
+# ------------------------------------------------ 0.6.1: Suchhilfe für Sichten
+st, r = req("GET", "/api/views")
+check("0.6.1: /api/views fragt das Gateway über die via-Tür, mit Schlüssel und Zusicherung",
+      st == 200 and r["gateway"] == "gw1" and [v["name"] for v in r["views"]] == ["vg"]
+      and r["error"] == "" and SEEN_VIEWS["assertion"].startswith("ZS-anna"), (st, r))
+st, r = req("GET", "/api/views", assertion=False)
+check("0.6.1: ohne Zusicherung keine Liste, aber ein Satz", st == 200 and r["views"] == []
+      and "Zusicherung" in r["error"], r)
+st, r = req("GET", "/api/views?gateway=gibtsnicht")
+check("0.6.1: unbekanntes Gateway: Satz mit der Liste des Mandanten", st == 200 and r["views"] == []
+      and "gw1" in r["error"], r)
+st, _ct, html = raw_get("/")
+check("0.6.1: das Feld Sicht hat die Suchhilfe", 'list="viewlist"' in html.decode("utf-8"))
 
 # ------------------------------------------------ 0.4.0: Ansichten (MCP Apps, RFC-0075)
 req("POST", "/api/assistants", asst("mitansicht", "private", view="vg", views=True))

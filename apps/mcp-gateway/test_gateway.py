@@ -2065,6 +2065,87 @@ check("Prüfspur: view.rename mit den umgestellten Lesern",
           for r in books.audit(app.DB)))
 
 
+print("\n-- 0.14.0: Server umbenennen, Sichten für die Person aus dem Chat")
+admin("/view-save", name="umb-sicht", max_effect="read")
+add("umb-sicht", "echo", server="papier")
+fp_vorher = books.item_row(app.DB, "umb-sicht", "tool", "echo")["approved_fp"]
+_, page = admin_get("/server?name=papier")
+check("die Serverseite bietet Umbenennen an", 'action="server-rename"' in page)
+page = admin("/server-rename", name="papier", new="papier2")
+it = books.item_row(app.DB, "umb-sicht", "tool", "echo")
+check("umbenannt: Server, Katalog und Einträge ziehen mit, Freigabe unverändert",
+      books.server_row(app.DB, "papier") is None and books.server_row(app.DB, "papier2") is not None
+      and books.catalog(app.DB, "papier") == [] and len(books.catalog(app.DB, "papier2")) > 0
+      and it["server"] == "papier2" and it["approved_fp"] == fp_vorher
+      and books.item_state(app.DB, it) == "active", page[:300])
+check("die Seite nennt die betroffenen Sichten", "umb-sicht" in page)
+check("Prüfspur server.rename", any(r["action"] == "server.rename" and r["subject"] == "papier"
+                                    and "papier2" in r["detail"] for r in books.audit(app.DB)))
+sid, _ = session("baum-b", KB)
+check("ein Aufruf geht danach an den umbenannten Server", "echo" in listed("baum-b", KB, sid))
+page = admin("/server-rename", name="papier2", new="kp")
+check("auf einen vorhandenen Namen: abgewiesen", "gibt es schon" in page
+      and books.server_row(app.DB, "papier2") is not None)
+admin("/server-rename", name="papier2", new="papier")
+
+kp_items = [dict(i)["view"] for i in books.approved_items(app.DB, "kp")]
+admin("/server-rename", name="kp", new="kontext")
+rep_ = books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
+                                    "address": DREI, "door": TUER}], app.guard.clean(dict(app.guard.DEFAULTS)))
+check("Server einer Quelle umbenannt: der Abgleich findet ihn über die Herkunft, kein zweiter Server",
+      books.server_row(app.DB, "kp") is None and books.server_row(app.DB, "kontext")["source"] == "kp"
+      and not rep_["added"] and not rep_["conflict"] and not rep_["gone"], rep_)
+rep_ = books.sync_sources(app.DB, [], app.guard.clean(dict(app.guard.DEFAULTS)))
+check("… verschwindet die Quelle, wird er als fort markiert (über die Herkunft)",
+      rep_["gone"] == ["kontext"] and books.server_row(app.DB, "kontext")["gone"], rep_)
+books.sync_sources(app.DB, [{"name": "kp", "app": "kontext-probe", "version": "0.1.4",
+                             "address": DREI, "door": TUER}], app.guard.clean(dict(app.guard.DEFAULTS)))
+check("… und kommt zurück, mit seinen Einträgen",
+      not books.server_row(app.DB, "kontext")["gone"]
+      and sorted(dict(i)["view"] for i in books.approved_items(app.DB, "kontext")) == sorted(kp_items))
+admin("/server-rename", name="kontext", new="kp")
+
+admin("/view-save", name="v-sicht", max_effect="read", ways="platform")
+admin("/view-save", name="v-zu", max_effect="read", ways="platform")
+admin("/view-save", name="v-key", max_effect="read", ways="key")
+add("v-sicht", "echo", server="papier")
+admin("/issue", label="v-prof", kind="profile", groups="@vchat", views="v-sicht,v-key", ceiling="red")
+
+
+def views_a(client="vchat", roles="user", uid="u-anna", asrt=ASRT):
+    headers = {}
+    for h, v in (("X-OAAP-MCP-Client", client), ("X-OAAP-User-Id", uid),
+                 ("X-OAAP-User-Assertion", asrt), ("X-OAAP-Roles", roles)):
+        if v:
+            headers[h] = v
+    req = urllib.request.Request(f"{GW}/mcp/_views", headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    raw = resp.read()
+    return resp.status, (json.loads(raw) if raw.startswith(b"{") else raw)
+
+
+st, doc = views_a()
+names = {v["name"]: v for v in doc["views"]} if st == 200 else {}
+check("Person aus dem Chat: nur die Sichten, die sie öffnen kann",
+      st == 200 and "v-sicht" in names and "v-zu" not in names and "v-key" not in names and names["v-sicht"]["ok"]
+      and names["v-sicht"]["tools"] == 1 and doc["all"] is False, (st, doc))
+st, doc = views_a(roles="user,tenant_admin")
+names = {v["name"]: v for v in doc["views"]} if st == 200 else {}
+check("Verwaltung des Mandanten: alle Sichten, die übrigen mit Grund",
+      st == 200 and doc["all"] is True and names["v-sicht"]["ok"]
+      and not names["v-zu"]["ok"] and "kein Zugangsprofil" in names["v-zu"]["reason"]
+      and not names["v-key"]["ok"] and "Zugang" in names["v-key"]["reason"], (st, doc))
+st, _ = views_a(client="")
+check("ohne die via-Tür (kein Chat genannt): dieselbe 401 wie jede Ablehnung", st == 401, st)
+st, _ = views_a(asrt="")
+check("ohne Zusicherung: 401", st == 401, st)
+st, doc = views_a(client="anderer-chat")
+check("ein anderer Chat: v-sicht nicht (nur Profile mit @* gelten für jeden Chat)", st == 200 and "v-sicht" not in [v["name"] for v in doc["views"]], doc)
+
+
 gw.shutdown()
 paper.shutdown()
 

@@ -358,6 +358,27 @@ Einträgen des SAP-Servers in bec mühsam (Jörg, 2026-11-18).
   Namen eintragen. Die alte Adresse antwortet danach wie jede unbekannte
   Sicht. Messzeilen behalten den alten Namen: sie sagen, was war.
 
+## Server umbenennen, Sichten für den Chat (0.14)
+
+- **Server umbenennen** (Seite des Servers): Katalog und Einträge in den
+  Sichten ziehen mit, die Freigaben bleiben (derselbe Fingerabdruck). Die
+  Namen der Einträge in den Sichten bleiben, wie sie sind -- auch ein
+  vorgeschlagenes `<server>_<name>`; Clients merken nichts. Ein Server aus
+  der Quellenliste der Plattform behält seine Herkunft (`source` =
+  Instanzname) und wird beim Abgleich darüber gefunden, nicht über den
+  Namen -- kein zweiter Server, „fort“ und „zurück“ wirken weiter.
+  Prüfspur `server.rename`; Messzeilen behalten den alten Namen.
+- **`GET /mcp/_views`** -- nur über die via-Tür der Plattform (Chat, Person
+  und Zusicherung gesetzt), sonst dieselbe 401 wie jede Ablehnung. Antwort:
+  die Sichten, die diese Person aus diesem Chat öffnen kann -- dieselbe
+  Regel wie beim Aufruf (Profil mit `@<chat>` oder `@*`, Zugang
+  „Plattform“, Ampel) --, je mit Zahl der aktiven Werkzeuge, Prompts,
+  Resources, Ampel und höchster Klasse. Wer `tenant_admin`, `server_admin`
+  oder `admin` ist, bekommt **alle** Sichten, die übrigen mit dem Grund
+  („kein Zugangsprofil erlaubt diese Sicht“, „Zugang Plattform fehlt“ …):
+  so sieht die Verwaltung, was sie noch einrichten muss. `_views` kann nie
+  eine Sicht sein (Namen beginnen mit Buchstabe oder Ziffer).
+
 ## Feste Argumente und Grenzen
 
 Beispiel: Ein ABAP-MCP-Server hat `search_objects(package, name)`. In

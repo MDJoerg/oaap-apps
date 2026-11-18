@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -233,9 +233,10 @@ def sync_sources():
     # older gateway already entered (measured 18.11. on oaap-test).
     for src in sources:
         name = str(src.get("name") or "")
-        srow = books.server_row(DB, name) if src.get("app") == "help" else None
-        if srow and srow["source"] == name and not srow["gone"] and not help_auto_done(name):
-            auto_approve_help(name)
+        srow = (DB.execute("SELECT * FROM servers WHERE source=?", (name,)).fetchone()
+                if src.get("app") == "help" else None)
+        if srow and srow["source"] == name and not srow["gone"] and not help_auto_done(srow["name"]):
+            auto_approve_help(srow["name"])
     SOURCES_STATE["error"] = ""
     SOURCES_STATE["report"] = rep
     for name in rep["added"] + rep["moved"] + rep["back"]:
@@ -400,6 +401,7 @@ def platform_act(person):
 
 
 USER_ASSERTION = "X-OAAP-User-Assertion"
+VIEWS_PATH = "/mcp/_views"            # 0.14.0: Suchhilfe des Chats
 
 
 def propagate_access(person):
@@ -502,7 +504,7 @@ def read_catalog(name, person=None):
     srow = books.server_row(DB, name)
     if not srow:
         return False, f"Einen Server „{name}“ gibt es nicht."
-    discover = (discover_door(name) if srow["auth_kind"] == "platform"
+    discover = (discover_door(srow["source"] or name) if srow["auth_kind"] == "platform"
                 and not person and SOURCES_KEY else "")
     if srow["auth_kind"] == "exchange" and not person:
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
@@ -1252,6 +1254,12 @@ in einer Sicht liegt. Ein Tool oder Prompt bekommt dort einen Namen der Sicht �
 Servers, wenn er frei ist, sonst <code>&lt;server&gt;_&lt;name&gt;</code>. Die Wirkungsklasse vergibt der
 Betreiber; die Angaben des Servers sind nur ein Vorschlag.</p>
 {"".join(sections) or '<p class=muted>Noch nicht gelesen.</p>'}</div>
+<div class="card"><h2>Umbenennen</h2><p class="hint">Katalog und Einträge in den Sichten ziehen mit;
+die Namen in den Sichten bleiben (Clients merken nichts). {"Der Server stammt aus der Quelle " + "<code>" + esc(s["source"]) + "</code>" + " und wird beim Abgleich weiter gefunden. " if s["source"] else ""}Messzeilen behalten
+den alten Namen.</p>
+<form class="grid" method="post" action="server-rename"><input type="hidden" name="name" value="{esc(name)}">
+<div><label>Neuer Name</label><input type="text" name="new" required></div>
+<div><button class="quiet">Umbenennen</button></div></form></div>
 <div class="card"><h2>Ändern</h2>{server_form(s)}
 <form method="post" action="server-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
 <button class="quiet">Server löschen</button></form></div>''')
@@ -1765,6 +1773,23 @@ class Handler(BaseHTTPRequestHandler):
             return None, None
         return key, vrow
 
+    def views_for_carried(self):
+        """GET /mcp/_views (0.14.0): die Sichten, die die Person aus diesem Chat
+        öffnen kann -- für die Suchhilfe im Formular „Assistent“. Nur über die
+        via-Tür der Plattform (sie allein setzt Chat, Person und Zusicherung);
+        sonst dieselbe Antwort wie jede Ablehnung. `_views` kann nie eine Sicht
+        sein (ein Name beginnt mit Buchstabe oder Ziffer). Die Verwaltung des
+        Mandanten sieht auch die übrigen Sichten, je mit dem Grund."""
+        carried = self.platform_person()
+        if carried is None:
+            self.deny()
+            return
+        roles = {r.strip() for r in (self.headers.get("X-OAAP-Roles") or "").split(",")}
+        see_all = bool(roles & {"tenant_admin", "server_admin", "admin"})
+        rows = books.views_for_person(DB, carried["groups"], "@*",
+                                      lambda prof, v: why_not(prof, v, "platform"), see_all)
+        self.send_json(200, {"v": 1, "client": carried["client"], "all": see_all, "views": rows})
+
     def platform_person(self):
         """Der Mensch, den die Plattform durch einen Chat herträgt (Verfahren A), oder None.
 
@@ -1811,7 +1836,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/issue", "/revoke", "/key-limits", "/source-sync", "/context", "/server-save",
                     "/server-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
-                    "/view-copy", "/view-items",
+                    "/view-copy", "/view-items", "/server-rename",
                     "/item-confirm", "/item-tailor"):
             self.handle_admin_post(path)
             return
@@ -2284,6 +2309,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith(WELL_KNOWN):
             self.resource_metadata(path[len(WELL_KNOWN):])
             return
+        if path == VIEWS_PATH:
+            self.views_for_carried()
+            return
         if path.startswith("/mcp"):
             # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede
             # Sicht, ob es sie gibt oder nicht: Hier wird nichts verraten.
@@ -2396,6 +2424,13 @@ class Handler(BaseHTTPRequestHandler):
                 notice = "Kontext geändert: " + ", ".join(changed) if changed else "Kontext unverändert."
             elif path == "/server-save":
                 notice, back = save_server(form, user), ("server", form.get("name", ""))
+            elif path == "/server-rename":
+                old, new = form.get("name", ""), form.get("new", "").strip()
+                hit = books.rename_server(DB, user, old, new)
+                GUARDS.pop(old, None)
+                notice = (f"Server „{old}“ heißt jetzt „{new}“; Sichten: {', '.join(hit) or 'keine'}. "
+                          "Die Namen in den Sichten bleiben.")
+                back = ("server", new)
             elif path == "/server-delete":
                 books.delete_server(DB, user, form.get("name", ""))
                 notice = f"Server „{form.get('name', '')}“ gelöscht."
@@ -2465,6 +2500,7 @@ class Handler(BaseHTTPRequestHandler):
 # Nach einer Handlung zeigt die Seite den Reiter, zu dem sie gehört (0.9.0).
 POST_TAB = {"/issue": "zugaenge", "/revoke": "zugaenge", "/key-limits": "zugaenge", "/context": "zugaenge",
             "/source-sync": "server", "/server-delete": "server", "/server-save": "server",
+            "/server-rename": "server",
             "/view-delete": "sichten", "/view-save": "sichten", "/view-items": "sichten",
             "/view-copy": "sichten"}
 

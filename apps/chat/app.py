@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -590,6 +590,32 @@ def ki_models():
     return out, ""
 
 
+def gateway_views(gateway, assertion):
+    """Die Sichten, die die Person aus diesem Chat öffnen kann (0.6.1) -- die
+    Suchhilfe im Formular „Assistent“. Fragt das Gateway über die via-Tür
+    (GET …/_views, MCP-Gateway ab 0.14.0); die Verwaltung des Mandanten
+    bekommt dort auch die übrigen Sichten mit Grund. Gibt (Gateway, Liste, alle?, Fehlersatz)."""
+    try:
+        gw = gateway_for(gateway or "")
+    except Stop as exc:
+        return "", [], False, exc.text
+    if not assertion:
+        return gw["name"], [], False, "Keine Zusicherung der Plattform in dieser Anfrage -- über die Plattform angemeldet öffnen."
+    req = urllib.request.Request(gw["via"] + "/_views", headers={
+        "Accept": "application/json", "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            doc = json.loads(r.read(1_000_000))
+    except urllib.error.HTTPError as exc:
+        return gw["name"], [], False, (f"Das Gateway {gw['name']} kennt die Sichtenliste nicht "
+                                       "(MCP-Gateway vor 0.14.0?)." if exc.code in (401, 404, 405)
+                                       else f"Das Gateway {gw['name']} antwortet {exc.code}.")
+    except (OSError, ValueError) as exc:
+        return gw["name"], [], False, f"Das Gateway {gw['name']} ist nicht erreichbar ({type(exc).__name__})."
+    rows = [v for v in (doc.get("views") or []) if isinstance(v, dict) and isinstance(v.get("name"), str)]
+    return gw["name"], rows, bool(doc.get("all")), ""
+
+
 PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
 
 
@@ -687,6 +713,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/models":
             models, err = ki_models()
             return self.json(200, {"models": models, "error": err})
+        if path == "/api/views":
+            from urllib.parse import parse_qs, urlparse
+            gname = (parse_qs(urlparse(self.path).query).get("gateway") or [""])[0]
+            gw, rows, all_, err = gateway_views(gname, self.headers.get(ASSERTION, "").strip())
+            return self.json(200, {"gateway": gw, "views": rows, "all": all_, "error": err})
         if path == "/api/setup":
             aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
             a, _ = STORE.get(aid)

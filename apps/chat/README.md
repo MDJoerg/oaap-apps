@@ -168,10 +168,19 @@ Schlüssel; vorher fehlte er auf Knoten ohne Principal Propagation
   und Ansichten der Werkzeuge (MCP Apps) bleiben sichtbar. Gilt für diesen
   Browser.
 
+## Suchhilfe für die Sicht (0.6.1)
+
+Das Feld **Sicht** im Formular „Assistent“ schlägt beim Tippen die Sichten
+vor, die du aus diesem Chat öffnen kannst (`GET api/views` → das Gateway
+über die via-Tür, `/_views`, MCP-Gateway ab 0.14.0), mit Zahl der Werkzeuge
+und Ampel. Als Verwaltung des Mandanten siehst du alle Sichten; die übrigen
+sind als „nicht für diesen Chat“ markiert, und unter dem Feld steht der
+Grund. Ein Name, den das Gateway für dich nicht kennt, wird benannt.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 104 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 108 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 
