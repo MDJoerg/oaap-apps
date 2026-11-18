@@ -105,6 +105,18 @@ class Fake(BaseHTTPRequestHandler):
             return self.reply(200, {"v": 1, "client": "vuebung-chat", "all": False, "views": [
                 {"name": "vg", "ok": True, "reason": "", "light": "green", "max_effect": "read",
                  "tools": 3, "prompts": 1, "resources": 0}]})
+        if self.path.startswith("/via/gw1/_readiness?view="):
+            # 0.7.0 (RFC-0095 §5): das Gateway sagt je Sicht, was der Person noch fehlt.
+            if self.headers.get("Authorization") != "Bearer " + CK or                     not self.headers.get("X-OAAP-Act-Assertion", "").startswith("ZS-"):
+                return self.reply(401, {})
+            if self.path.endswith("=vg"):
+                return self.reply(200, {"v": 1, "view": "vg", "me": "https://tools.example/me",
+                                        "ready": False, "missing_tools": 2, "state": "incomplete",
+                                        "servers": [{"server": "jira", "state": "needs_credential",
+                                                     "tools": 2, "entries": 2,
+                                                     "hint": "Jira → Profil → Token", "link": ""}]})
+            return self.reply(200, {"v": 1, "view": "x", "me": "", "ready": False, "missing_tools": 0,
+                                    "state": "not_for_you", "servers": [], "reason": "kein Zugangsprofil"})
         if self.path == "/gw" and self.headers.get("Authorization") == "Bearer " + CK:
             port = self.server.server_address[1]
             return self.reply(200, {"v": 1, "gateways": [
@@ -360,11 +372,11 @@ st, r = req("POST", f"/api/conv/{c2['id']}/step", {})
 check("... erneut versucht mit frischer Zusicherung: läuft", r["state"] == "done" and len(DOOR) == calls + 1, r)
 
 # Sitzung einer anderen Person wird nicht übernommen
-app._MCP[("id-anna", "gw1", "kp-i")] = "S-bert"
+app._MCP[("id-anna", "gw1", "kp-i", False)] = "S-bert"
 req("POST", f"/api/conv/{c2['id']}/send", {"text": "Projekte?"})
 _, r = req("POST", f"/api/conv/{c2['id']}/step", {})
 check("fremde MCP-Sitzung: die Tür kennt sie nicht, der Chat eröffnet eine eigene",
-      r["state"] == "done" and app._MCP[("id-anna", "gw1", "kp-i")] == "S-anna", r)
+      r["state"] == "done" and app._MCP[("id-anna", "gw1", "kp-i", False)] == "S-anna", r)
 
 # Schleife begrenzt
 _, c3 = req("POST", "/api/conv", {"assistant": "projekte"})
@@ -605,6 +617,26 @@ check("0.6.1: unbekanntes Gateway: Satz mit der Liste des Mandanten", st == 200 
       and "gw1" in r["error"], r)
 st, _ct, html = raw_get("/")
 check("0.6.1: das Feld Sicht hat die Suchhilfe", 'list="viewlist"' in html.decode("utf-8"))
+
+# ------------------------------------------------ 0.7.0: Bereitschaft je Assistent (RFC-0095 §5)
+req("POST", "/api/assistants", asst("bereit", "private", view="vg"))
+st, r = req("GET", "/api/readiness")
+mark = (r.get("assistants") or {}).get("bereit", {})
+check("0.7.0: /api/readiness nennt je Assistent die Werkzeuge, die dir noch fehlen, mit Link auf /me",
+      st == 200 and mark.get("missing_tools") == 2 and mark.get("me") == "https://tools.example/me", (st, r))
+check("0.7.0: eine Sicht, die dir nicht offensteht, bekommt keine Markierung (das sagt „Einrichtung prüfen“)",
+      all(v.get("missing_tools") or v.get("ready") for v in r["assistants"].values()), r)
+st, r = req("GET", "/api/setup?assistant=bereit")
+it = [i for i in r.get("items", []) if i["key"] == "personal:jira"]
+check("0.7.0: „Einrichtung prüfen“ nennt den Server, die Zahl, den Hinweis und wo man den Zugang hinterlegt",
+      it and not it[0]["ok"] and "2 Werkzeug(e) von jira" in it[0]["title"]
+      and "Jira → Profil → Token" in it[0]["detail"] and "https://tools.example/me" in it[0]["next"], r)
+st, r = req("GET", "/api/readiness", assertion=False)
+check("0.7.0: ohne Zusicherung keine Markierungen (kein Fehler)", st == 200 and r["assistants"] == {}, r)
+st, _ct, html = raw_get("/")
+check("0.7.0: die Karte zeigt „noch nicht eingerichtet – einrichten“",
+      "noch nicht eingerichtet – " in html.decode("utf-8") and "loadReadiness" in html.decode("utf-8"))
+req("POST", "/api/assistants/bereit/delete", {})
 
 # ------------------------------------------------ 0.4.0: Ansichten (MCP Apps, RFC-0075)
 req("POST", "/api/assistants", asst("mitansicht", "private", view="vg", views=True))

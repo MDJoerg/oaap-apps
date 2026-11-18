@@ -43,7 +43,10 @@ import signin  # noqa: E402
 import test_rsa_keys as rk  # noqa: E402
 TMP = tempfile.mkdtemp(prefix="mcpgw-")
 os.environ.update({"MCPGW_DATA_DIR": TMP, "MCPGW_MASTER_KEY": "test-tresor-schluessel-0123456789",
-                   "MCPGW_CATALOG_MINUTES": "0"})
+                   "MCPGW_CATALOG_MINUTES": "0",
+                   # Plattform ab 0.1.307 (D2) und RFC-0043: was die Plattform der Instanz sagt.
+                   "OAAP_IDENTITY_HEADERS": "X-OAAP-User,X-OAAP-Roles,X-OAAP-User-Id,X-OAAP-User-Idp",
+                   "OAAP_INSTANCE_NAMES": "https://gw.example,https://alias.example"})
 
 ok = fail = 0
 
@@ -1205,7 +1208,8 @@ check("Messzeile: Profil a-team (Gruppe /team), sub und Issuer, Kontext des Prof
 T2 = person_token("person-2", ("/anders",))
 s2, _ = session("angemeldet", T2)
 call("angemeldet", T2, s2, "echo", {"text": "x"})
-row = list(app.DB.execute("SELECT * FROM usage ORDER BY id DESC LIMIT 1"))[0]
+# Die Zeile dieser Person, nicht die jüngste (war unter Last ab und zu rot, wie a-team).
+row = rows_after("SELECT * FROM usage WHERE user_sub='person-2' ORDER BY id DESC", 1)[0]
 check("ohne passende Gruppe: das *-Profil", row["key_id"] == profiles["b-alle"]["id"]
       and row["user_sub"] == "person-2", dict(row))
 
@@ -2454,6 +2458,100 @@ for root, _, files in os.walk(TMP):
             pass
 check("Köderwert: in keiner Datei unter /data, in keiner Seite, keiner Zeile, keinem Protokoll",
       not leak and BAIT not in LOG.getvalue(), leak)
+
+print("\n-- 0.17.0: Bereitschaft je Sicht (RFC-0095 Stufe 3) und Kennung aus dem Realm (D2)")
+
+
+def ready_a(view, uid, client="uchat"):
+    headers = {"X-OAAP-MCP-Client": client, "X-OAAP-User-Id": uid,
+               "X-OAAP-User-Assertion": ASRT, "X-OAAP-Roles": "user"}
+    req = urllib.request.Request(f"{GW}/mcp/_readiness?view={view}", headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    raw = resp.read()
+    return resp.status, (json.loads(raw) if raw.startswith(b"{") else raw)
+
+
+st, doc = ready_a("u-sicht", "u-erik-u")
+s0 = (doc.get("servers") or [{}])[0] if st == 200 else {}
+check("Bereitschaft: ohne Zugang needs_credential, mit Zahl der Werkzeuge, Hinweis und Link auf /me",
+      st == 200 and doc["ready"] is False and doc["missing_tools"] == 1 and s0.get("server") == "jira"
+      and s0.get("state") == "needs_credential" and "Zugriffstoken" in s0.get("hint", "")
+      and doc["me"] == "https://gw.example/me", doc)
+me_post("/me/credential", "u-erik-u", server="jira", value="erik-wert")
+st, doc = ready_a("u-sicht", "u-erik-u")
+check("… nach dem Hinterlegen ready, ohne den Chat neu zu laden",
+      st == 200 and doc["ready"] is True and doc["servers"][0]["state"] == "ready", doc)
+US_["refuse_key"] = "Token erik-wert"
+call_u("u-erik-u", 70)
+rows_after("SELECT * FROM usage WHERE user_sub='u-erik-u' AND reason='credential'", 1)
+US_.pop("refuse_key")
+st, doc = ready_a("u-sicht", "u-erik-u")
+check("… lehnt der Server den Zugang ab: credential_rejected",
+      st == 200 and doc["servers"][0]["state"] == "credential_rejected" and doc["ready"] is False, doc)
+st, html_ = me_get("/me", "u-erik-u")
+check("/me zeigt „vom Server abgelehnt – erneuern“", "vom Server abgelehnt" in html_)
+time.sleep(1.1)
+me_post("/me/credential", "u-erik-u", server="jira", value="erik-neu")
+st, doc = ready_a("u-sicht", "u-erik-u")
+check("… ein neuer Zugang macht sie wieder ready", doc["servers"][0]["state"] == "ready", doc)
+st, doc = ready_a("u-sicht", "u-erik-u", client="anderer-chat")
+check("ein Chat ohne Profil: not_for_you, keine Server",
+      st == 200 and doc["state"] == "not_for_you" and doc["servers"] == [], doc)
+st, doc2 = ready_a("gibt-es-nicht", "u-erik-u")
+check("eine unbekannte Sicht antwortet genauso (verrät nicht, ob es sie gibt)",
+      st == 200 and doc2["state"] == "not_for_you" and doc2["reason"] == doc["reason"], (doc, doc2))
+st, _ = ready_a("u-sicht", "u-erik-u", client="")
+check("/mcp/_readiness ohne via-Tür: dieselbe 401", st == 401, st)
+st, raw = me_get("/me/v1/readiness", "u-erik-u")
+d = json.loads(raw) if st == 200 else {}
+check("/me/v1/readiness: deine Server mit Verfahren U und ihr Zustand",
+      st == 200 and d["servers"] == [{"server": "jira", "state": "ready", "hint": d["servers"][0]["hint"],
+                                      "link": d["servers"][0]["link"]}], d)
+
+# D2: dieselbe Person mit Anmeldung am Anmeldedienst (Claude Code)
+admin("/view-save", name="u-anm", max_effect="read", ways="signin")
+add("u-anm", "whoami", server="jira")
+admin("/issue", label="u-team", kind="profile", groups="/uteam", views="u-anm", ceiling="red")
+TU = person_token("realm-dora", ("/uteam",))
+me_post("/me/credential", "u-dora-u", server="jira", value="dora-wert")
+sdu, _ = session("u-anm", TU)
+n = len(US_["apikey"])
+st, _, msgs, _ = call("u-anm", TU, sdu, "whoami")
+check("D2: Anmeldung am Anmeldedienst ohne Zuordnung: abgelehnt, Hinweis „/me einmal öffnen“, nichts hinaus",
+      "einmal" in err(msgs).get("message", "") and len(US_["apikey"]) == n, msgs)
+
+
+def me_get_idp(uid, idp):
+    req = urllib.request.Request(GW + "/me?problems=0", headers={
+        "X-OAAP-User": "vp-person", "X-OAAP-Roles": "user", "X-OAAP-User-Id": uid,
+        "X-OAAP-User-Idp": idp})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read().decode()
+
+
+app.TRUST_IDP = False
+me_get_idp("u-mallory", f"{ISS} realm-dora")
+check("D2: ohne Zusage der Plattform (OAAP_IDENTITY_HEADERS) wird die Kopfzeile nicht geglaubt",
+      books.person_link_get(app.DB, ISS, "realm-dora") == "")
+app.TRUST_IDP = True
+me_get_idp("u-dora-u", f"https://fremd.example/realms/x realm-dora")
+check("D2: ein fremder Issuer wird nicht zugeordnet", books.person_link_get(app.DB, ISS, "realm-dora") == "")
+page_ = me_get_idp("u-dora-u", f"{ISS} realm-dora")
+check("D2: mit Zusage und passendem Issuer: zugeordnet, /me zeigt den Aufruf aus dem Realm",
+      books.person_link_get(app.DB, ISS, "realm-dora") == "u-dora-u" and "u-anm" in page_
+      and "Anmeldedienst (etwa aus Claude Code)" in page_, page_[-600:])
+st, _, msgs, _ = call("u-anm", TU, sdu, "whoami")
+check("D2: danach findet der Aufruf aus dem Realm Doras Zugang (Verfahren U)",
+      "result" in (msgs[-1] if msgs else {}) and US_["apikey"][-1] == "Token dora-wert", (msgs, US_["apikey"][-2:]))
+check("D2: Prüfspur person.link mit Kennungen, nie Namen",
+      any(r["action"] == "person.link" and r["actor"] == "person:u-dora-u" and r["subject"] == "realm-dora"
+          for r in books.audit(app.DB, 200)))
+st, raw = me_get("/me/v1/calls?problems=0", "u-mallory")
+check("D2 Köder: wer die Kopfzeile ohne Zusage schickte, sieht Doras Aufrufe nicht",
+      st == 200 and all(c["view"] != "u-anm" for c in json.loads(raw)["calls"]))
 
 
 gw.shutdown()

@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import threading
+from urllib.parse import quote
 
 import apps_source
 import guide_requests
@@ -62,6 +63,22 @@ class Library:
     @property
     def archive_path(self):
         return (self.env.get("HELP_ARCHIVE_PATH") or "/tar.gz/refs/heads/main").strip()
+
+    @property
+    def public_base(self):
+        """Die eigene öffentliche Adresse (RFC-0043: OAAP_INSTANCE_NAMES, die erste ist die
+        kanonische) -- für klickbare Links auf die Leseseite (W5, 0.5.0). Leer ohne Namen."""
+        names = [n.strip() for n in (self.env.get("OAAP_INSTANCE_NAMES") or "").split(",")]
+        first = next((n for n in names if n.startswith(("https://", "http://"))), "")
+        return first.rstrip("/")
+
+    def link(self, doc, anchor=""):
+        """Die Leseseite dieses Dokuments in der Hilfe selbst, für eine angemeldete Person."""
+        base = self.public_base
+        if not base:
+            return ""
+        return (f"{base}/doc/{quote(doc['source'])}/{quote(doc['id'])}"
+                + (f"#{quote(anchor)}" if anchor else ""))
 
     @property
     def web_template(self):
@@ -223,7 +240,7 @@ class Library:
                "product": doc.get("product", ""), "kind": doc.get("kind", ""),
                "readers": doc.get("readers", []), "app_version": doc.get("app_version", ""),
                "channel": doc.get("channel", ""),
-               "trust": doc["trust"], "url": self.url(doc),
+               "trust": doc["trust"], "url": self.url(doc), "link": self.link(doc),
                "checked_against": doc["checked_against"], "checked_on": doc["checked_on"],
                "applies_from": doc["applies_from"], "applies_until": doc["applies_until"],
                "audience": doc["audience"], "lang": doc["lang"], "tags": doc["tags"]}
@@ -243,7 +260,7 @@ class Library:
                 continue
             m = self._meta(d, version)
             m.update(section=h["section"], anchor=h["anchor"], snippet=h["snippet"],
-                     url=self.url(d, h["anchor"]))
+                     url=self.url(d, h["anchor"]), link=self.link(d, h["anchor"]))
             hits.append(m)
         # Lücke (§15.4): kein Abschnitt trägt alle Wörter -- ohne Personenbezug gezählt.
         if query and not self.index.strict(query):
@@ -272,6 +289,7 @@ class Library:
             anchor, heading, text = parts[0]
             body = f"## {heading}\n\n{text}"
             out["section"], out["url"] = heading, self.url(d, anchor)
+            out["link"] = self.link(d, anchor)
         out["markdown"] = body
         out["path"] = d["path"]
         out["sections"] = [{"anchor": a, "heading": h} for a, h, _t in ix.sections(d["body"]) if a]

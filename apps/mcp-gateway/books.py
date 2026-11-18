@@ -97,6 +97,13 @@ CREATE TABLE IF NOT EXISTS personal_credentials (
   last_used   TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (iss, sub, server)
 );
+CREATE TABLE IF NOT EXISTS person_links (
+  iss          TEXT NOT NULL,
+  sub          TEXT NOT NULL,
+  platform_sub TEXT NOT NULL,
+  seen         TEXT NOT NULL,
+  PRIMARY KEY (iss, sub)
+);
 CREATE TABLE IF NOT EXISTS views (
   name        TEXT PRIMARY KEY,
   server      TEXT NOT NULL DEFAULT '',
@@ -717,6 +724,26 @@ def personal_of_person(db, iss, sub):
         (iss, sub))}
 
 
+def person_link_set(db, iss, sub, platform_sub):
+    """D2 (0.17): Die Plattform sagt auf /me, welche Kennung im Realm diese Person hat.
+    Gemerkt, damit ein Aufruf mit Anmeldung am Anmeldedienst ihren Zugang (Verfahren U)
+    findet. Nur von der Plattform gesetzt, nie aus einem MCP-Aufruf."""
+    old = db.execute("SELECT platform_sub FROM person_links WHERE iss=? AND sub=?",
+                     (iss, sub)).fetchone()
+    db.execute("INSERT INTO person_links (iss,sub,platform_sub,seen) VALUES (?,?,?,?) "
+               "ON CONFLICT(iss,sub) DO UPDATE SET platform_sub=excluded.platform_sub, "
+               "seen=excluded.seen", (iss, sub, platform_sub, now()))
+    if old is None or old["platform_sub"] != platform_sub:
+        log(db, f"person:{platform_sub}", "person.link", sub, f"Kennung im Realm {iss}")
+    db.commit()
+
+
+def person_link_get(db, iss, sub):
+    row = db.execute("SELECT platform_sub FROM person_links WHERE iss=? AND sub=?",
+                     (iss, sub)).fetchone()
+    return row["platform_sub"] if row else ""
+
+
 def personal_holders(db, server):
     """Für den Betreiber: wer (Kennung) wann gespeichert und zuletzt benutzt hat -- nie der Wert."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=UNUSED_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1253,16 +1280,19 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
 PROBLEMS = ("refused", "limited", "upstream_error", "tool_error")
 
 
-def person_calls(db, iss, sub, days=30, problems=False, view="", day="", limit=500):
+def person_calls(db, iss, sub, days=30, problems=False, view="", day="", limit=500, also=()):
     """Die Messzeilen EINER Person (RFC-0095 Stufe 1): höchstens `days` Tage zurück.
 
     Nur Zeilen mit genau diesem Issuer und dieser Kennung -- Schlüsselaufrufe
     haben keine Person und erscheinen nie. Ohne Kennung: nichts."""
     if not (iss and sub):
         return []
-    sql = ["SELECT * FROM usage WHERE user_iss=? AND user_sub=? AND time >= ?"]
+    who = [(iss, sub)] + [(i, s) for i, s in also if i and s]
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    args = [iss, sub, since]
+    # 0.17 (D2): dieselbe Person auch mit ihrer Kennung aus dem Realm.
+    sql = ["SELECT * FROM usage WHERE (" + " OR ".join("(user_iss=? AND user_sub=?)" for _ in who)
+           + ") AND time >= ?"]
+    args = [x for pair in who for x in pair] + [since]
     if problems:
         sql.append(f"AND outcome IN ({','.join('?' * len(PROBLEMS))})")
         args += PROBLEMS

@@ -65,6 +65,15 @@ claude mcp add --transport http oaap-help-maint https://<adresse>/maint/mcp \
 Die Texte der Anfragen sind **fremder Inhalt**: ein Wunsch, den man prüft,
 nie eine Anweisung.
 
+## Klickbare Links (0.5.0, W5)
+
+`help_search` und `help_read` liefern je Dokument ein Feld `link`: die
+Leseseite in der Hilfe selbst, unter ihrer eigenen öffentlichen Adresse
+(`OAAP_INSTANCE_NAMES`, die erste ist die kanonische), mit Sprungmarke auf
+den Abschnitt. Dazu kommt im Ergebnis der Hinweis, mit `[Titel](link)` zu
+verweisen. Die Beschreibungen der Werkzeuge bleiben unverändert, sonst
+sperrte das MCP-Gateway sie bis zur Bestätigung.
+
 ## Quellen
 
 - **`oaap-docs`** (Priorität 50): ein `tar.gz` des Doku-Repositorys, geholt

@@ -217,6 +217,12 @@ def answer(lib, roles, version, msg):
                 return ok({"content": [{"type": "text", "text": str(e)}], "isError": True})
         else:
             return err(-32602, "Unknown tool")
+        if name in ("help_search", "help_read") and isinstance(result, dict):
+            # W5 (0.5.0): klickbar verweisen. Im ERGEBNIS, nicht in der Beschreibung des
+            # Werkzeugs -- eine geänderte Beschreibung sperrt es im MCP-Gateway (L25).
+            if any((h or {}).get("link") for h in result.get("hits") or []) or result.get("link"):
+                result["cite"] = ("Verweise auf Dokumente mit ihrem Feld link als Markdown-Link "
+                                  "[Titel](link), nicht als Text.")
         return ok({"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
                    "isError": False})
     return err(-32601, "Method not found")

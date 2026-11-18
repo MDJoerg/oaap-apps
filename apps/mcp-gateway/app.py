@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -366,17 +366,77 @@ def seal_personal(iss, sub, value):
     return VAULT_PERSONAL.seal(MASTER, json.dumps({"iss": iss, "sub": sub, "v": value}))
 
 
+def personal_owner(person):
+    """Unter welcher Kennung der Zugang dieser Person liegt: ("platform", uid). Eine Person mit
+    Anmeldung am Anmeldedienst über die Verknüpfung, die die Plattform auf /me nannte (D2)."""
+    if not person or not person.get("sub"):
+        return None
+    if person["iss"] == "platform":
+        return ("platform", person["sub"])
+    linked = books.person_link_get(DB, person["iss"], person["sub"])
+    return ("platform", linked) if linked else None
+
+
+def server_readiness(person, srow):
+    """RFC-0095 §5: ready, needs_credential oder credential_rejected -- für einen Server."""
+    if srow["auth_kind"] != "personal":
+        return "ready"
+    owner = personal_owner(person)
+    row = books.personal_row(DB, owner[0], owner[1], srow["name"]) if owner else None
+    if row is None:
+        return "needs_credential"
+    last = DB.execute("SELECT outcome, reason, time FROM usage WHERE user_iss=? AND user_sub=? "
+                      "AND server=? ORDER BY id DESC LIMIT 1",
+                      (person["iss"], person["sub"], srow["name"])).fetchone()
+    if last and last["outcome"] == "refused" and last["reason"] == "credential" \
+            and last["time"] >= row["stored"]:
+        return "credential_rejected"
+    return "ready"
+
+
+def readiness_doc(person, vrow, reason=""):
+    """Je Server der Sicht: Zustand, Zahl der aktiven Einträge, Hinweis -- für eine Person.
+    `reason`: warum die Sicht dieser Person nicht offensteht (dann not_for_you, ohne Server)."""
+    out = {"v": 1, "view": vrow["name"] if vrow else "", "me": me_url(), "servers": []}
+    if reason or not vrow:
+        out.update(ready=False, reason=reason or "kein Zugangsprofil erlaubt diese Sicht.",
+                   state="not_for_you", missing_tools=0)
+        return out
+    counts = {}
+    for i in books.items(DB, vrow["name"]):
+        if books.item_state(DB, i) == "active":
+            c = counts.setdefault(i["server"], {"tools": 0, "entries": 0})
+            c["entries"] += 1
+            c["tools"] += i["kind"] == "tool"
+    missing = 0
+    for name, c in sorted(counts.items()):
+        srow = books.server_row(DB, name)
+        if not srow:
+            continue
+        state = server_readiness(person, srow)
+        spec = books.personal_spec(srow) if srow["auth_kind"] == "personal" else {}
+        if state != "ready":
+            missing += c["tools"]
+        out["servers"].append({"server": name, "state": state, "tools": c["tools"],
+                               "entries": c["entries"], "hint": spec.get("hint", ""),
+                               "link": spec.get("link", "")})
+    out.update(ready=not missing and all(s["state"] == "ready" for s in out["servers"]),
+               missing_tools=missing, state="ready" if not missing else "incomplete", reason="")
+    return out
+
+
 def personal_access(srow, person):
     """Verfahren U (0.16, RFC-0095 §4.3): der Zugang genau dieser Person, sonst nichts von ihr."""
     name = srow["name"]
+    owner = personal_owner(person)
     if not person or not person.get("sub"):
         raise NoPersonal(f"Der Server {name} braucht den persönlichen Zugang einer Person; mit "
                          "einem Schlüssel geht es nicht.")
-    row = books.personal_row(DB, person["iss"], person["sub"], name)
+    row = books.personal_row(DB, owner[0], owner[1], name) if owner else None
     if row is None:
-        where = ("/me" if person["iss"] == "platform" else
-                 "/me (über die Plattform angemeldet; Aufrufe mit Anmeldung am Anmeldedienst "
-                 "finden ihn erst, wenn die Plattform die Kennung aus dem Realm mitgibt)")
+        where = ("/me" if owner else
+                 "/me -- öffne die Seite einmal über die Plattform, damit das Gateway deine "
+                 "Anmeldung am Anmeldedienst dir zuordnen kann")
         raise NoPersonal(f"Für den Server {name} hast du noch keinen Zugang hinterlegt -- "
                          f"„Meine Werkzeuge“ auf diesem Gateway, {where}.")
     try:
@@ -384,11 +444,11 @@ def personal_access(srow, person):
     except (VaultError, ValueError) as exc:
         raise upstream.UpstreamError("credential", f"Dein Zugang ist nicht lesbar ({exc}); "
                                                    "trag ihn auf /me neu ein.") from None
-    if doc.get("iss") != person["iss"] or doc.get("sub") != person["sub"]:
+    if doc.get("iss") != owner[0] or doc.get("sub") != owner[1]:
         raise upstream.UpstreamError("credential", "Dieser Zugang gehört nicht dir.")
     spec = books.personal_spec(srow)
     send = spec.get("send") or "bearer"
-    books.personal_touch(DB, person["iss"], person["sub"], name)
+    books.personal_touch(DB, owner[0], owner[1], name)
     return {"auth_kind": send, "credential": (spec.get("prefix") or "") + doc["v"],
             "door": "personal"}
 
@@ -445,6 +505,21 @@ def platform_act(person):
 
 USER_ASSERTION = "X-OAAP-User-Assertion"
 VIEWS_PATH = "/mcp/_views"            # 0.14.0: Suchhilfe des Chats
+READINESS_PATH = "/mcp/_readiness"    # 0.17.0: Bereitschaft je Sicht für den Chat (RFC-0095 §5)
+# D2 (0.17): die Kennung der Person im Realm, von der Plattform auf /me gesetzt. Geglaubt
+# NUR, wenn die Plattform sagt, dass sie diese Kopfzeile setzt und auf jeder anderen Route
+# entfernt (OAAP_IDENTITY_HEADERS, ab Plattform 0.1.307) -- eine ältere ließe einen Client
+# sie selbst schicken.
+IDP_HEADER = "X-OAAP-User-Idp"
+TRUST_IDP = IDP_HEADER.lower() in {h.strip().lower() for h in
+                                   (os.environ.get("OAAP_IDENTITY_HEADERS") or "").split(",")}
+# Die eigene öffentliche Adresse (RFC-0043), für den Link auf /me in der Antwort an den Chat.
+PUBLIC_BASE = next((n.strip().rstrip("/") for n in (os.environ.get("OAAP_INSTANCE_NAMES") or "")
+                    .split(",") if n.strip().startswith(("https://", "http://"))), "")
+
+
+def me_url():
+    return PUBLIC_BASE + "/me" if PUBLIC_BASE else ""
 
 
 def propagate_access(person):
@@ -1184,14 +1259,15 @@ def me_call(row):
             "door": door, "ms": row["ms"], "sentence": sentence, "hint": hint}
 
 
-def me_filter(query, uid):
+def me_filter(query, uid, also=()):
     """Filter aus der Anfrage. „Nur Probleme“ ist voreingestellt, wenn es in den
     letzten 7 Tagen welche gab (RFC-0095 §3)."""
     raw = query.get("problems", "")
     if raw in ("0", "1"):
         problems = raw == "1"
     else:
-        problems = bool(books.person_calls(DB, "platform", uid, days=7, problems=True, limit=1))
+        problems = bool(books.person_calls(DB, "platform", uid, days=7, problems=True, limit=1,
+                                           also=also))
     view = query.get("view", "").strip()
     day = query.get("day", "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
@@ -1205,11 +1281,29 @@ ME_REALM_NOTE = ("Aufrufe, bei denen du dich selbst am Anmeldedienst angemeldet 
                  "haben keine Person und stehen nie hier.")
 
 
-def me_doc(uid, query):
-    flt = me_filter(query, uid)
-    rows = books.person_calls(DB, "platform", uid, days=ME_DAYS, **flt)
+def me_doc(uid, query, also=()):
+    flt = me_filter(query, uid, also)
+    rows = books.person_calls(DB, "platform", uid, days=ME_DAYS, also=also, **flt)
     return {"v": 1, "days": ME_DAYS, "filter": flt, "calls": [me_call(r) for r in rows],
-            "note": ME_REALM_NOTE}
+            "note": ME_LINKED_NOTE if also else ME_REALM_NOTE}
+
+
+ME_LINKED_NOTE = ("Dabei sind auch deine Aufrufe mit eigener Anmeldung am Anmeldedienst (etwa aus "
+                  "Claude Code): Die Plattform hat dem Gateway gesagt, dass das deine Kennung dort "
+                  "ist. Aufrufe mit einem API-Schlüssel haben keine Person und stehen nie hier.")
+
+
+def me_readiness(uid):
+    """/me/v1/readiness: deine Server mit Verfahren U und ihr Zustand (RFC-0095 §5)."""
+    person = {"iss": "platform", "sub": uid}
+    rows = []
+    for s in books.servers(DB):
+        if s["auth_kind"] == "personal":
+            spec = books.personal_spec(s)
+            rows.append({"server": s["name"], "state": server_readiness(person, s),
+                         "hint": spec.get("hint", ""), "link": spec.get("link", "")})
+    return {"v": 1, "me": me_url(), "servers": rows,
+            "ready": all(r["state"] == "ready" for r in rows)}
 
 
 def me_credentials_card(uid, notice=""):
@@ -1223,7 +1317,9 @@ def me_credentials_card(uid, notice=""):
     for s in servers:
         spec = books.personal_spec(s)
         have = mine.get(s["name"])
-        state = (badge("green", "hinterlegt") + f' <span class="muted">am {esc(have["stored"][:10])}'
+        rejected = have and server_readiness({"iss": "platform", "sub": uid}, s) == "credential_rejected"
+        state = (badge("red", "vom Server abgelehnt – erneuern") + " " if rejected else "") + (
+                 badge("green", "hinterlegt") + f' <span class="muted">am {esc(have["stored"][:10])}'
                  + (f', zuletzt benutzt {esc(have["last_used"].replace("T", " ")[:16])} UTC'
                     if have["last_used"] else ", noch nicht benutzt") + "</span>"
                  if have else badge("yellow", "noch nicht eingerichtet"))
@@ -1248,10 +1344,11 @@ kann ihn löschen.</p>
 <div class="scroll"><table><tr><th>Server</th><th>Stand</th><th>Eintragen</th></tr>{"".join(rows)}</table></div></div>'''
 
 
-def me_page(user, uid, query, admin=False, notice=""):
-    doc = me_doc(uid, query)
+def me_page(user, uid, query, admin=False, notice="", also=()):
+    doc = me_doc(uid, query, also)
     flt = doc["filter"]
-    views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS)})
+    views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS,
+                                                               also=also)})
 
     def link(**change):
         q = {"problems": "1" if flt["problems"] else "0", "view": flt["view"], "day": flt["day"]}
@@ -1295,7 +1392,7 @@ Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.<
 {"".join(rows) or f'<tr><td colspan=7 class=muted>{empty}</td></tr>'}</table></div>
 <p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
 Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
-<p class="hint">{esc(ME_REALM_NOTE)}</p></div>
+<p class="hint">{esc(doc["note"])}</p></div>
 {me_credentials_card(uid, notice)}'''
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2078,6 +2175,24 @@ class Handler(BaseHTTPRequestHandler):
             return None, None
         return key, vrow
 
+    def readiness_for_carried(self):
+        """GET /mcp/_readiness?view=<sicht> (0.17.0, RFC-0095 §5): Ist diese Sicht für die
+        Person, die der Chat trägt, eingerichtet? Nur über die via-Tür; sonst dieselbe
+        Ablehnung wie überall. Eine Sicht, die die Person nicht öffnen kann, zeigt keine
+        Server -- ob es sie gibt, verrät die Antwort nicht."""
+        carried = self.platform_person()
+        if carried is None:
+            self.deny()
+            return
+        query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+        vrow = books.view_row(DB, query.get("view", "").strip())
+        profile = books.match_profile(DB, carried["groups"], vrow["name"], "@*") if vrow else None
+        reason = (why_not(profile, vrow, "platform") if profile else
+                  "kein Zugangsprofil erlaubt diese Sicht.")
+        doc = readiness_doc(carried, vrow if not reason else None, reason or "")
+        doc["view"] = query.get("view", "")[:100]
+        self.send_json(200, doc)
+
     def views_for_carried(self):
         """GET /mcp/_views (0.14.0): die Sichten, die die Person aus diesem Chat
         öffnen kann -- für die Suchhilfe im Formular „Assistent“. Nur über die
@@ -2639,6 +2754,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == VIEWS_PATH:
             self.views_for_carried()
             return
+        if path == READINESS_PATH:
+            self.readiness_for_carried()
+            return
         if path.startswith("/mcp"):
             # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede
             # Sicht, ob es sie gibt oder nicht: Hier wird nichts verraten.
@@ -2675,22 +2793,37 @@ class Handler(BaseHTTPRequestHandler):
         Kennung; ohne sie nichts."""
         uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
         query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
-        if path == "/me/v1/calls":
+        also = self.realm_subject(uid)
+        if path in ("/me/v1/calls", "/me/v1/readiness"):
             if not uid:
                 self.send_json(403, {"error": "Nur über die Plattform angemeldet: Es fehlt die "
                                               "Kennung der Person."})
                 return
-            self.send_json(200, me_doc(uid, query))
+            self.send_json(200, me_doc(uid, query, also) if path == "/me/v1/calls"
+                           else me_readiness(uid))
             return
         if path != "/me":
-            self.send_json(404, {"error": "Bekannt sind /me und /me/v1/calls."})
+            self.send_json(404, {"error": "Bekannt sind /me, /me/v1/calls und /me/v1/readiness."})
             return
         if not uid:
             self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Diese Seite zeigt deine '
                                      'eigenen Aufrufe und braucht die Anmeldung über die Plattform.'
                                      '</p></div>', "", ""))
             return
-        self.send_html(200, me_page(self.identity()[0], uid, query, self.is_admin()))
+        self.send_html(200, me_page(self.identity()[0], uid, query, self.is_admin(), also=also))
+
+    def realm_subject(self, uid):
+        """D2 (0.17): die Kennung dieser Person im Realm des Gateways, wenn die Plattform sie
+        nennt (X-OAAP-User-Idp: „<Issuer> <sub>“) und wenn sie sie schützt (TRUST_IDP). Merkt
+        sich die Zuordnung für Verfahren U. Gibt [(Issuer, sub)] oder []."""
+        if not (uid and TRUST_IDP and ISSUER):
+            return []
+        iss, _, sub = (self.headers.get(IDP_HEADER) or "").strip().partition(" ")
+        sub = sub.strip()
+        if not sub or iss.rstrip("/") != ISSUER or len(sub) > 200 or " " in sub:
+            return []
+        books.person_link_set(DB, ISSUER, sub, uid)
+        return [(ISSUER, sub)]
 
     def handle_me_post(self, path):
         """Zugang eintragen oder löschen (RFC-0095 §4.2) -- nur für sich selbst."""

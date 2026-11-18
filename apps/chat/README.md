@@ -177,6 +177,20 @@ und Ampel. Als Verwaltung des Mandanten siehst du alle Sichten; die übrigen
 sind als „nicht für diesen Chat“ markiert, und unter dem Feld steht der
 Grund. Ein Name, den das Gateway für dich nicht kennt, wird benannt.
 
+## Werkzeuge, die für dich noch nicht eingerichtet sind (0.7.0)
+
+Jede Assistenten-Karte zeigt „2 Werkzeuge noch nicht eingerichtet – einrichten“,
+wenn ein Server der Sicht deinen eigenen Zugang braucht (Verfahren U) oder
+ihn abgelehnt hat. Der Link führt auf „Meine Werkzeuge“ des Gateways.
+„Einrichtung prüfen“ nennt dieselben Server mit Hinweis und nächstem
+Schritt. Der Chat fragt dafür das Gateway über die via-Tür
+(`/_readiness`, MCP-Gateway ab 0.17.0). Das Gateway kennt keine
+Assistenten, die Zuordnung Assistent → Sicht macht der Chat.
+
+Behoben: Ein Assistent mit Ansichten (MCP Apps) erbte die Sitzung eines
+Assistenten ohne Ansichten auf derselben Sicht und bekam dann keine
+Ansichten. Ob Ansichten angesagt sind, gehört jetzt zur Sitzung.
+
 ## Prüfen
 
 ```sh

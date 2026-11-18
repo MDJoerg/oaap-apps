@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -242,7 +242,9 @@ class McpWay:
         self.views = bool(assistant.get("views"))
         gw = gateway_for(assistant.get("gateway") or "")
         self.url = f'{gw["via"]}/{assistant["view"]}'
-        self.key = (person, gw["name"], assistant["view"])
+        # 0.7.0: ob die Sitzung Ansichten (MCP Apps) angesagt hat, gehört zum Schlüssel --
+        # sonst erbte ein Assistent mit Ansichten die Sitzung eines ohne auf derselben Sicht.
+        self.key = (person, gw["name"], assistant["view"], self.views)
         self.assertion = assertion
         self.aid = assistant["id"]
 
@@ -541,6 +543,21 @@ def setup_report(person, assertion, a):
             else:
                 hint = f"Gibt es die Sicht {a['view']} im Gateway {gw['name']}?"
             add("view", False, f"Sicht {a['view']} als du", exc.text, hint)
+    if gw and assertion:
+        doc = gateway_readiness(a.get("gateway") or "", assertion, a["view"])
+        if doc and doc.get("state") != "not_for_you":
+            for s in doc["servers"]:
+                if s.get("state") == "ready":
+                    continue
+                where = (f"auf „Meine Werkzeuge“ des Gateways ({doc['me']})" if doc.get("me")
+                         else "auf „Meine Werkzeuge“ des Gateways (Kachel im Portal)")
+                what = ("Der Server hat deinen Zugang abgelehnt." if s["state"] == "credential_rejected"
+                        else "Dieser Server braucht deinen eigenen Zugang.")
+                add("personal:" + s["server"], False,
+                    f"{s['tools']} Werkzeug(e) von {s['server']} noch nicht eingerichtet",
+                    what + (" " + s["hint"] if s.get("hint") else ""),
+                    ("Den Zugang erneuern " if s["state"] == "credential_rejected" else "Deinen Zugang hinterlegen ")
+                    + where + ".")
     elif gw:
         add("view", False, f"Sicht {a['view']} als du", "Keine Zusicherung der Plattform in dieser Anfrage.",
             "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
@@ -614,6 +631,29 @@ def gateway_views(gateway, assertion):
         return gw["name"], [], False, f"Das Gateway {gw['name']} ist nicht erreichbar ({type(exc).__name__})."
     rows = [v for v in (doc.get("views") or []) if isinstance(v, dict) and isinstance(v.get("name"), str)]
     return gw["name"], rows, bool(doc.get("all")), ""
+
+
+def gateway_readiness(gateway, assertion, view):
+    """Ist die Sicht dieses Assistenten für die Person eingerichtet? (0.7.0, RFC-0095 §5)
+
+    Fragt das Gateway über die via-Tür (GET …/_readiness, MCP-Gateway ab 0.17.0). Das Gateway
+    kennt keine Assistenten; die Zuordnung Assistent → Sicht macht der Chat (D9). Gibt das
+    Dokument des Gateways oder None, wenn es die Frage nicht kennt (älteres Gateway)."""
+    try:
+        gw = gateway_for(gateway or "")
+    except Stop:
+        return None
+    if not assertion:
+        return None
+    from urllib.parse import quote
+    req = urllib.request.Request(gw["via"] + "/_readiness?view=" + quote(view or ""), headers={
+        "Accept": "application/json", "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            doc = json.loads(r.read(1_000_000))
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) and isinstance(doc.get("servers"), list) else None
 
 
 PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
@@ -718,6 +758,19 @@ class Handler(BaseHTTPRequestHandler):
             gname = (parse_qs(urlparse(self.path).query).get("gateway") or [""])[0]
             gw, rows, all_, err = gateway_views(gname, self.headers.get(ASSERTION, "").strip())
             return self.json(200, {"gateway": gw, "views": rows, "all": all_, "error": err})
+        if path == "/api/readiness":
+            # 0.7.0: je sichtbarem Assistenten, ob seine Werkzeuge für dich eingerichtet sind.
+            assertion = self.headers.get(ASSERTION, "").strip()
+            seen, out = {}, {}
+            for a, _o in STORE.visible(who):
+                k = (a.get("gateway") or "", a.get("view") or "")
+                if k not in seen:
+                    seen[k] = gateway_readiness(k[0], assertion, k[1])
+                doc = seen[k]
+                if doc and doc.get("state") != "not_for_you":
+                    out[a["id"]] = {"missing_tools": doc.get("missing_tools", 0),
+                                    "ready": bool(doc.get("ready")), "me": doc.get("me", "")}
+            return self.json(200, {"assistants": out})
         if path == "/api/setup":
             aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
             a, _ = STORE.get(aid)

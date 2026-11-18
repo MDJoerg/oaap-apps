@@ -426,6 +426,24 @@ erkennen (Jira, GitHub, Confluence, viele SaaS-Server):
    Kennung der Plattform, nie mit Namen), wann gespeichert, zuletzt benutzt,
    nach 180 Tagen ohne Nutzung markiert. Löschen ja, lesen nie.
 
+## Bereitschaft und Kennung im Realm (0.17)
+
+RFC-0095 Stufe 3 und D2.
+
+- **Bereitschaft:** Der Chat fragt über die via-Tür `GET /mcp/_readiness?view=…`
+  und erfährt je Server, ob die Sicht für die Person eingerichtet ist:
+  `ready`, `needs_credential` (eigener Zugang fehlt, mit Hinweis und Link),
+  `credential_rejected` (der Server hat ihn abgelehnt). Dazu kommt die
+  Adresse von `/me` aus `OAAP_INSTANCE_NAMES`. Kann die Person die Sicht
+  nicht öffnen, nennt die Antwort keine Server. `/me` zeigt „vom Server
+  abgelehnt – erneuern“ an der Zugangskarte.
+- **Kennung im Realm (D2):** Ab Plattform 0.1.307 nennt die Plattform auf
+  `/me` die Kennung der Person im Realm (`X-OAAP-User-Idp`) und sagt in
+  `OAAP_IDENTITY_HEADERS` zu, dass sie diese Kopfzeile schützt. Dann zeigt
+  `/me` auch Aufrufe mit eigener Anmeldung (Claude Code), und solche Aufrufe
+  finden den persönlichen Zugang. Ohne die Zusage wird die Kopfzeile
+  ignoriert.
+
 ## Feste Argumente und Grenzen
 
 Beispiel: Ein ABAP-MCP-Server hat `search_objects(package, name)`. In

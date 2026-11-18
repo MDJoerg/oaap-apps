@@ -709,7 +709,7 @@ function showView(v){
   VIEW = v;
   $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst";
   $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
-  if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) renderAssistants(); }
+  if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) { renderAssistants(); loadReadiness(); } }
   else render();
   const want = v === "asst" ? "#assistenten" : "";
   if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
@@ -851,6 +851,12 @@ function fill(a){
   F.elements.commands.checked = !!a.commands;
   F.elements.views.checked = !!a.views;
 }
+let READY = {};
+async function loadReadiness(){
+  try { const r = await api("GET", "api/readiness"); READY = r.assistants || {}; }
+  catch (e) { READY = {}; }
+  renderAssistants();
+}
 function renderAssistants(){
   const box = $("alist"); box.textContent = "";
   const q = $("aq").value.trim().toLowerCase(), f = $("ascope").value;
@@ -870,6 +876,15 @@ function renderAssistants(){
     const acts = el("div", "acts");
     const go = el("button", "primary", "Gespräch beginnen"); go.type = "button";
     go.onclick = () => startDraft(a.id); acts.appendChild(go);
+    // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
+    const r = READY[a.id];
+    if (r && r.missing_tools) {
+      const m = el("p", "err", r.missing_tools + (r.missing_tools === 1 ? " Werkzeug" : " Werkzeuge") + " noch nicht eingerichtet – ");
+      const lk = el("a", "", "einrichten");
+      if (r.me) { lk.href = r.me; lk.target = "_blank"; lk.rel = "noopener"; }
+      else { lk.href = "#"; lk.onclick = e => { e.preventDefault(); checkSetup(a.id); }; }
+      m.appendChild(lk); card.insertBefore(m, card.children[2] || null);
+    }
     if (a.manage) {
       const e = el("button", "", "Ändern"); e.type = "button";
       e.onclick = async () => { fill(await api("GET", "api/assistants/" + a.id)); $("dlg").showModal(); };

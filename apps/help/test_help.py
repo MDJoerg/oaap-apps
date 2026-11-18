@@ -493,6 +493,22 @@ try:
     lib.rebuild_local()
     ok("mit FTS5 zurück", lib.index.fts5())
 
+    # --- W5 (0.5.0): klickbare Links auf die eigene Leseseite --------------------
+    err_, r0 = tool("help_search", {"query": "backup"})
+    ok("W5: ohne OAAP_INSTANCE_NAMES kein link, kein cite",
+       not err_ and all(not h.get("link") for h in r0["hits"]) and "cite" not in r0, r0.get("cite"))
+    lib.env = dict(env, OAAP_INSTANCE_NAMES="https://hilfe.bec.example, https://alias.example")
+    err_, r1 = tool("help_search", {"query": "backup"})
+    h1 = r1["hits"][0] if r1.get("hits") else {}
+    ok("W5: Treffer tragen link auf die Leseseite der Hilfe (kanonischer Name, Abschnitt als Anker)",
+       h1.get("link", "").startswith("https://hilfe.bec.example/doc/")
+       and (not h1.get("anchor") or h1["link"].endswith("#" + h1["anchor"]))
+       and "Markdown-Link" in r1.get("cite", ""), h1)
+    err_, r2 = tool("help_read", {"id": h1.get("id", "")})
+    ok("W5: help_read trägt link und den Hinweis zum Verlinken",
+       not err_ and r2.get("link", "").startswith("https://hilfe.bec.example/doc/") and r2.get("cite"), r2.get("link"))
+    lib.env = env
+
     # --- Kopf-Leser ----------------------------------------------------------
     fm, body = ix.front_matter('---\ntitle: "A # B"\ntags: [x, y] # Kommentar\nunbekannt: 1\n---\n# T\n')
     ok("Kopf: # in Anführungszeichen bleibt, Kommentar fällt, Unbekanntes fällt",
