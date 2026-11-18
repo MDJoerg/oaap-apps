@@ -58,13 +58,16 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.15.2"
+VERSION = "0.16.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
 DB_PATH = os.path.join(DATA_DIR, "gateway.db")
 MASTER = os.environ.get("MCPGW_MASTER_KEY", "")
 VAULT = Vault(b"oaap-mcp-gateway-vault|", "MCPGW_MASTER_KEY")
+# 0.16 (RFC-0095 §4.2): ein eigener Bereich für die Zugänge der Personen -- ein
+# Zugang eines Servers und der einer Person sind nie gegeneinander austauschbar.
+VAULT_PERSONAL = Vault(b"oaap-mcp-gateway-personal|", "MCPGW_MASTER_KEY")
 
 # Einstellungen von der Plattform (Spec §3.8, RFC-0073 Stufe 3): Hat ein
 # Konnektor die Clients dieses Gateways angelegt, reicht die Plattform fünf
@@ -350,6 +353,46 @@ class NoPerson(upstream.UpstreamError):
         super().__init__("exchange", text)
 
 
+class NoPersonal(upstream.UpstreamError):
+    """Verfahren U ohne gespeicherten Zugang dieser Person -- abgelehnt, BEVOR etwas hinausgeht."""
+
+    def __init__(self, text):
+        super().__init__("personal", text)
+
+
+def seal_personal(iss, sub, value):
+    """Versiegelt einen persönlichen Zugang, gebunden an die Person (Issuer, sub):
+    Eine Zeile, die jemand in der Datei einer anderen Person unterschiebt, öffnet sich nicht."""
+    return VAULT_PERSONAL.seal(MASTER, json.dumps({"iss": iss, "sub": sub, "v": value}))
+
+
+def personal_access(srow, person):
+    """Verfahren U (0.16, RFC-0095 §4.3): der Zugang genau dieser Person, sonst nichts von ihr."""
+    name = srow["name"]
+    if not person or not person.get("sub"):
+        raise NoPersonal(f"Der Server {name} braucht den persönlichen Zugang einer Person; mit "
+                         "einem Schlüssel geht es nicht.")
+    row = books.personal_row(DB, person["iss"], person["sub"], name)
+    if row is None:
+        where = ("/me" if person["iss"] == "platform" else
+                 "/me (über die Plattform angemeldet; Aufrufe mit Anmeldung am Anmeldedienst "
+                 "finden ihn erst, wenn die Plattform die Kennung aus dem Realm mitgibt)")
+        raise NoPersonal(f"Für den Server {name} hast du noch keinen Zugang hinterlegt -- "
+                         f"„Meine Werkzeuge“ auf diesem Gateway, {where}.")
+    try:
+        doc = json.loads(VAULT_PERSONAL.open_(MASTER, row["sealed"]))
+    except (VaultError, ValueError) as exc:
+        raise upstream.UpstreamError("credential", f"Dein Zugang ist nicht lesbar ({exc}); "
+                                                   "trag ihn auf /me neu ein.") from None
+    if doc.get("iss") != person["iss"] or doc.get("sub") != person["sub"]:
+        raise upstream.UpstreamError("credential", "Dieser Zugang gehört nicht dir.")
+    spec = books.personal_spec(srow)
+    send = spec.get("send") or "bearer"
+    books.personal_touch(DB, person["iss"], person["sub"], name)
+    return {"auth_kind": send, "credential": (spec.get("prefix") or "") + doc["v"],
+            "door": "personal"}
+
+
 EXCHANGED = {}                       # (Issuer, sub, Server) → (Token, gültig bis); nur im Speicher
 _EXCHANGED_LOCK = threading.Lock()
 
@@ -458,6 +501,8 @@ def server_access(srow, person=None):
                 "headers": {ACT_HEADER: platform_act(person)}}, url
     if srow["auth_kind"] == "propagate":
         return propagate_access(person), url
+    if srow["auth_kind"] == "personal":
+        return personal_access(srow, person), url
     if srow["auth_kind"] != "exchange":
         return {"auth_kind": srow["auth_kind"], "credential": credential}, url
     if person and person.get("procedure") == "A":
@@ -514,6 +559,10 @@ def read_catalog(name, person=None):
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Als "
                        f"Person mit eigenem Benutzer im Zielsystem auf der Seite des Gateways auf "
                        f"„Katalog jetzt lesen“ klicken.")
+    if srow["auth_kind"] == "personal" and not person:
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren U liest mit dem eigenen "
+                       f"Zugang der Betreiberin -- auf der Seite des Gateways auf „Katalog jetzt "
+                       f"lesen“ klicken, nachdem du ihn auf /me hinterlegt hast.")
     if srow["auth_kind"] == "platform" and not person and not discover:
         # Eine Plattform vor 0.1.300 nennt keine Erkundungs-Tür (L8a, 18.11.).
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht einen Menschen, "
@@ -1073,6 +1122,8 @@ REASON_SENTENCES = {
     ("refused", "ui_changed"): ("Die Ansicht hat sich seit der Freigabe geändert.", HINT_GATEWAY),
     ("refused", "exchange"): ("Der Tausch deiner Anmeldung beim Anmeldedienst ist nicht gelungen.",
                               HINT_TENANT),
+    ("refused", "personal"): ("Für diesen Server hast du noch keinen Zugang hinterlegt.",
+                              "Trag ihn unten unter „Meine Zugangsdaten“ ein."),
     ("limited", "budget"): ("Das Budget des Zugangs ist aufgebraucht.", HINT_GATEWAY),
     ("limited", "rate"): ("Zu viele Aufrufe in kurzer Zeit.", "Warte eine Minute."),
     ("limited", "queue"): ("Der Server war ausgelastet.", HINT_LATER),
@@ -1112,6 +1163,9 @@ def call_sentence(row):
     if outcome == "refused" and reason == "destination":
         return ("Das Gateway konnte dich nicht bis zur Destination tragen (keine Zusicherung "
                 "der Plattform in diesem Aufruf).", HINT_TENANT, door)
+    if outcome == "refused" and reason == "credential":
+        return (f"Der Server hat deinen Zugang abgelehnt{code}.",
+                "Erneuere ihn unten unter „Meine Zugangsdaten“.", door)
     if outcome == "upstream_error":
         word = UPSTREAM_WORDS.get(reason, "")
         return (f"Der Server war nicht erreichbar oder fehlerhaft"
@@ -1158,7 +1212,43 @@ def me_doc(uid, query):
             "note": ME_REALM_NOTE}
 
 
-def me_page(user, uid, query, admin=False):
+def me_credentials_card(uid, notice=""):
+    """„Meine Zugangsdaten“ (RFC-0095 §4.2): je Server mit Verfahren U eintragen,
+    ersetzen, löschen. Nur schreiben: Gezeigt wird wann, nie der Wert."""
+    servers = [s for s in books.servers(DB) if s["auth_kind"] == "personal"]
+    if not servers:
+        return ""
+    mine = books.personal_of_person(DB, "platform", uid)
+    rows = []
+    for s in servers:
+        spec = books.personal_spec(s)
+        have = mine.get(s["name"])
+        state = (badge("green", "hinterlegt") + f' <span class="muted">am {esc(have["stored"][:10])}'
+                 + (f', zuletzt benutzt {esc(have["last_used"].replace("T", " ")[:16])} UTC'
+                    if have["last_used"] else ", noch nicht benutzt") + "</span>"
+                 if have else badge("yellow", "noch nicht eingerichtet"))
+        how = esc(spec.get("hint") or "")
+        if spec.get("link"):
+            how += (" " if how else "") + (f'<a href="{esc(spec["link"])}" target="_blank" '
+                                           f'rel="noopener noreferrer">Wo du ihn bekommst</a>')
+        drop = (f'<form method="post" action="me/credential-delete" style="display:inline">'
+                f'<input type="hidden" name="server" value="{esc(s["name"])}">'
+                f'<button class="quiet">Löschen</button></form>' if have else "")
+        rows.append(f'''<tr><td><b>{esc(s["name"])}</b><br><span class="muted">{how or "—"}</span></td>
+<td>{state}</td><td><form method="post" action="me/credential" class="grid" style="gap:.4rem">
+<input type="hidden" name="server" value="{esc(s["name"])}">
+<input type="password" name="value" autocomplete="off" required placeholder="{"ersetzen" if have else "Token oder Schlüssel"}">
+<button>{"Ersetzen" if have else "Speichern"}</button></form> {drop}</td></tr>''')
+    top = f'<p class="attention">{esc(notice)}</p>' if notice else ""
+    return f'''<div class="card"><h2>Meine Zugangsdaten</h2>{top}
+<p class="hint">Diese Server kennen dich nur mit deinem eigenen Zugang, etwa einem persönlichen Token.
+Das Gateway hält ihn verschlüsselt, schickt ihn nur bei deinen Aufrufen an genau diesen Server und
+zeigt ihn nie wieder an, auch der Verwaltung nicht. Die Verwaltung sieht nur, dass es ihn gibt, und
+kann ihn löschen.</p>
+<div class="scroll"><table><tr><th>Server</th><th>Stand</th><th>Eintragen</th></tr>{"".join(rows)}</table></div></div>'''
+
+
+def me_page(user, uid, query, admin=False, notice=""):
     doc = me_doc(uid, query)
     flt = doc["filter"]
     views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS)})
@@ -1205,7 +1295,8 @@ Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.<
 {"".join(rows) or f'<tr><td colspan=7 class=muted>{empty}</td></tr>'}</table></div>
 <p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
 Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
-<p class="hint">{esc(ME_REALM_NOTE)}</p></div>'''
+<p class="hint">{esc(ME_REALM_NOTE)}</p></div>
+{me_credentials_card(uid, notice)}'''
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meine Werkzeuge — OAAP MCP-Gateway</title>
@@ -1337,6 +1428,8 @@ def server_form(s=None):
     plain = kind if kind in books.AUTH_KINDS else "header"
     header = kind[7:] if kind.startswith("header:") else ""
     ex = json.loads(s["exchange"] or "{}") if s else {}
+    pspec = books.personal_spec(s) if s else {}
+    psend = pspec.get("send") or "bearer"
     limit_inputs = "".join(
         f'<div><label>{esc(guard.LABELS[n])}</label><input type="number" name="lim_{n}" '
         f'value="{lim[n]}"></div>' for n in guard.DEFAULTS)
@@ -1347,8 +1440,16 @@ def server_form(s=None):
 {" readonly" if s else ""} required></div>
 <div><label>Adresse (URL oder destination:&lt;name&gt;)</label>
 <input type="text" name="address" value="{esc(s["address"] if s else "")}" required></div>
-<div><label>Zugang (Verfahren T; X = Token-Tausch; P = propagate, die Person über eine Destination bis ins Zielsystem)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange", "propagate"), plain)}</select></div>
-<div><label>Kopfzeile (bei Zugang header)</label><input type="text" name="header" value="{esc(header)}"></div>
+<div><label>Zugang (Verfahren T; X = Token-Tausch; P = propagate, die Person über eine Destination bis ins Zielsystem)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange", "propagate", "personal"), plain)}</select></div>
+<div><label>Verfahren U (personal): so geht der Zugang jeder Person zum Server</label>
+<select name="personal_send">{options(("bearer", "header"), "bearer" if psend == "bearer" else "header", {"bearer": "Authorization: Bearer", "header": "Kopfzeile (Name unten bei „Kopfzeile“)"})}</select></div>
+<div><label>Verfahren U: Präfix vor dem Wert (nur Kopfzeile, z. B. „Token “)</label>
+<input type="text" name="personal_prefix" value="{esc(pspec.get("prefix", ""))}"></div>
+<div><label>Verfahren U: Hinweis für die Person (wo erzeugen, welche Rechte)</label>
+<input type="text" name="personal_hint" value="{esc(pspec.get("hint", ""))}"></div>
+<div><label>Verfahren U: Link dorthin</label>
+<input type="text" name="personal_link" value="{esc(pspec.get("link", ""))}"></div>
+<div><label>Kopfzeile (bei Zugang header oder Verfahren U mit Kopfzeile)</label><input type="text" name="header" value="{esc(header or (psend[7:] if psend.startswith("header:") else ""))}"></div>
 <div><label>Verfahren X: Token-Endpunkt (URL oder destination:&lt;name&gt;)</label>
 <input type="text" name="token_url" value="{esc(ex.get("token_url", ""))}"></div>
 <div><label>Verfahren X: eigener Client (= MCPGW_AUDIENCE)</label>
@@ -1360,6 +1461,29 @@ def server_form(s=None):
 <div><label><input type="checkbox" name="drop_credential" value="1"> Zugangsdaten entfernen</label></div>
 <div><label>Ampel</label><select name="light">{options(books.LIGHTS, s["light"] if s else "red", LIGHT_WORDS)}</select></div>
 {limit_inputs}<div><button>Speichern</button></div></form>'''
+
+
+def personal_card(s):
+    """Für den Betreiber (RFC-0095 D6): wie viele Personen einen Zugang hinterlegt haben,
+    wer (Kennung), wann -- löschen ja, lesen nie. Ungenutzt seit 180 Tagen: markiert (D8)."""
+    if s["auth_kind"] != "personal":
+        return ""
+    holders = books.personal_holders(DB, s["name"])
+    rows = "".join(
+        f'<tr><td><code>{esc(h["sub"])}</code>{"" if h["iss"] == "platform" else " <span class=muted>" + esc(h["iss"]) + "</span>"}</td>'
+        f'<td>{esc(h["stored"][:10])}</td><td>{esc((h["last_used"] or "—")[:10])}'
+        f'{" " + badge("yellow", "seit 180 Tagen ungenutzt") if h["unused"] else ""}</td>'
+        f'<td><form method="post" action="personal-delete"><input type="hidden" name="name" value="{esc(s["name"])}">'
+        f'<input type="hidden" name="iss" value="{esc(h["iss"])}"><input type="hidden" name="sub" value="{esc(h["sub"])}">'
+        f'<button class="quiet">Löschen</button></form></td></tr>' for h in holders)
+    return f'''<div class="card"><h2>Persönliche Zugänge (Verfahren U)</h2>
+<p class="hint">{len(holders)} Person(en) haben einen eigenen Zugang hinterlegt. Die Werte liest niemand, auch
+nicht die Verwaltung; löschen geht (etwa nach einem Leck oder einem Abgang). Personen erscheinen mit ihrer
+Kennung der Plattform, nie mit Namen. Den Katalog liest das Gateway mit deinem eigenen Zugang -- hinterlege
+ihn auf <a href="me">Meine Aufrufe</a>.</p>
+<div class="scroll"><table><tr><th>Person</th><th>Hinterlegt</th><th>Zuletzt benutzt</th><th></th></tr>
+{rows or '<tr><td colspan=4 class=muted>Noch niemand.</td></tr>'}</table></div></div>
+'''
 
 
 def server_page(user, roles, host, name, notice=""):
@@ -1435,7 +1559,7 @@ in einer Sicht liegt. Ein Tool oder Prompt bekommt dort einen Namen der Sicht �
 Servers, wenn er frei ist, sonst <code>&lt;server&gt;_&lt;name&gt;</code>. Die Wirkungsklasse vergibt der
 Betreiber; die Angaben des Servers sind nur ein Vorschlag.</p>
 {"".join(sections) or '<p class=muted>Noch nicht gelesen.</p>'}</div>
-<div class="card"><h2>Umbenennen</h2><p class="hint">Katalog und Einträge in den Sichten ziehen mit;
+{personal_card(s)}<div class="card"><h2>Umbenennen</h2><p class="hint">Katalog und Einträge in den Sichten ziehen mit;
 die Namen in den Sichten bleiben (Clients merken nichts). {"Der Server stammt aus der Quelle " + "<code>" + esc(s["source"]) + "</code>" + " und wird beim Abgleich weiter gefunden. " if s["source"] else ""}Messzeilen behalten
 den alten Namen.</p>
 <form class="grid" method="post" action="server-rename"><input type="hidden" name="name" value="{esc(name)}">
@@ -2014,8 +2138,11 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/mcp/"):
             self.handle_mcp_post()
             return
+        if path in ("/me/credential", "/me/credential-delete"):
+            self.handle_me_post(path)
+            return
         if path in ("/issue", "/revoke", "/key-limits", "/source-sync", "/context", "/server-save",
-                    "/server-delete",
+                    "/server-delete", "/personal-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
                     "/view-copy", "/view-items", "/server-rename",
                     "/item-confirm", "/item-tailor"):
@@ -2307,6 +2434,8 @@ class Handler(BaseHTTPRequestHandler):
         reqs = books.view_requests(books.view_row(DB, vrow["name"]) or vrow)
         if srow["auth_kind"] == "propagate":
             state["procedure"] = "P"
+        elif srow["auth_kind"] == "personal":
+            state["procedure"] = "U"
         elif self.person and self.person.get("procedure") == "A":
             state["procedure"] = "A"
         elif srow["auth_kind"] == "exchange":
@@ -2315,6 +2444,11 @@ class Handler(BaseHTTPRequestHandler):
             state["procedure"] = "I"
         try:
             server, url = server_access(srow, self.person)
+        except NoPersonal as exc:
+            # RFC-0095 §4.3: abgelehnt, bevor etwas hinausgeht; der Automat zählt es nicht.
+            done("refused", "personal", door="gateway")
+            answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
+            return False
         except NoPerson as exc:
             # Kein Rückfall auf einen technischen Zugang (D8) — und kein Fehler auf dem
             # Weg zum Server: Der Sicherungsautomat zählt das nicht.
@@ -2405,6 +2539,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Satz geht weiter, der Sicherungsautomat zählt es nicht (RFC-0073 §4.1).
                 with sess.lock:
                     sess.upstream.pop(srow["name"], None)
+                if server.get("door") == "personal":
+                    # Verfahren U: der Server lehnt DIESEN Zugang ab -- die Person erneuert ihn.
+                    done("refused", "credential", exc.status, "server")
+                    answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Der Server lehnt deinen "
+                                                     f"Zugang ab (HTTP {exc.status}) -- erneuere ihn "
+                                                     "auf /me."))
+                    return False
                 via = "destination" if server.get("door") == "destination" else "platform"
                 done("refused", via, exc.status, via)
                 answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
@@ -2551,6 +2692,39 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_html(200, me_page(self.identity()[0], uid, query, self.is_admin()))
 
+    def handle_me_post(self, path):
+        """Zugang eintragen oder löschen (RFC-0095 §4.2) -- nur für sich selbst."""
+        raw = self.read_body(1 << 16) or b""
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        if not uid:
+            self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Nur über die Plattform '
+                                     'angemeldet.</p></div>', "", ""))
+            return
+        form = {}
+        for pair in raw.decode("utf-8", "replace").split("&"):
+            if pair:
+                name, _, value = pair.partition("=")
+                form[unquote_plus(name)] = unquote_plus(value)
+        server = form.get("server", "")
+        try:
+            if path == "/me/credential":
+                value = form.get("value", "").strip()
+                if not value or len(value) > 4096 or any(ch in value for ch in "\r\n"):
+                    raise ValueError("Der Zugang ist eine Zeile, höchstens 4096 Zeichen.")
+                try:
+                    sealed = seal_personal("platform", uid, value)
+                except VaultError as exc:
+                    raise ValueError(f"Nicht gespeichert: Der Tresor des Gateways ist nicht "
+                                     f"eingerichtet ({exc}).") from None
+                replaced = books.personal_store(DB, "platform", uid, server, sealed)
+                notice = f"Zugang für {server} {'ersetzt' if replaced else 'gespeichert'}."
+            else:
+                gone = books.personal_delete(DB, "platform", uid, server)
+                notice = f"Zugang für {server} gelöscht." if gone else "Da war kein Zugang."
+        except ValueError as exc:
+            notice = str(exc)
+        self.send_html(200, me_page(self.identity()[0], uid, {}, self.is_admin(), notice))
+
     def handle_report(self, path):
         if not self.is_admin():
             self.send_json(403, {"error": "Nur für die Rolle admin — ein Abrechnungssystem fragt "
@@ -2646,6 +2820,11 @@ class Handler(BaseHTTPRequestHandler):
                 notice = (f"Server „{old}“ heißt jetzt „{new}“; Sichten: {', '.join(hit) or 'keine'}. "
                           "Die Namen in den Sichten bleiben.")
                 back = ("server", new)
+            elif path == "/personal-delete":
+                gone = books.personal_delete(DB, form.get("iss", ""), form.get("sub", ""),
+                                             form.get("name", ""), actor=user)
+                notice = "Persönlicher Zugang gelöscht." if gone else "Diesen Zugang gibt es nicht mehr."
+                back = ("server", form.get("name", ""))
             elif path == "/server-delete":
                 books.delete_server(DB, user, form.get("name", ""))
                 notice = f"Server „{form.get('name', '')}“ gelöscht."
@@ -2777,9 +2956,15 @@ def save_server(form, user):
         if exchange.get("client_id") and AUDIENCE and exchange["client_id"] != AUDIENCE:
             raise ValueError("Der eigene Client für den Tausch muss MCPGW_AUDIENCE sein: Keycloak "
                              "tauscht nur für einen Client, an den das Token adressiert ist.")
+    personal = None
+    if auth == "personal":
+        send = form.get("personal_send", "bearer")
+        personal = {"send": "bearer" if send == "bearer" else "header:" + form.get("header", "").strip(),
+                    "prefix": form.get("personal_prefix", ""), "hint": form.get("personal_hint", ""),
+                    "link": form.get("personal_link", "")}
     books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,
                       sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1",
-                      exchange=exchange)
+                      exchange=exchange, personal=personal)
     srow = books.server_row(DB, name)
     if srow:
         guard_of(srow)

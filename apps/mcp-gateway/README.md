@@ -403,6 +403,29 @@ welche gab; dazu Filter nach Sicht und Tag. Dasselbe als JSON unter
   `destination`, `server`). Freien Text gibt es weiterhin nicht. Zeilen von
   vor 0.15 bekommen die Tür, die ihr Ausgang nahelegt.
 
+## Verfahren U: jede Person bringt ihren eigenen Zugang (0.16)
+
+RFC-0095 Stufe 2. Für Server, die Personen nur an einem eigenen Token
+erkennen (Jira, GitHub, Confluence, viele SaaS-Server):
+
+1. **Betreiber:** Server mit Zugang `personal` anlegen. Einstellen, wie der
+   Zugang geschickt wird (`Authorization: Bearer` oder eine Kopfzeile mit
+   Präfix, etwa `X-Api-Key: Token …`), dazu ein Hinweis und ein Link für die
+   Person. Zugangsdaten des Servers gibt es hier nicht, auch keinen
+   Rückfall. Den Katalog liest das Gateway mit deinem eigenen Zugang: erst
+   auf `/me` hinterlegen, dann „Katalog jetzt lesen“.
+2. **Person:** auf `/me` unter „Meine Zugangsdaten“ den Zugang eintragen.
+   Er liegt verschlüsselt im Tresor, in einem eigenen Bereich und an die
+   Person gebunden, und wird nie wieder angezeigt. Ersetzen und löschen
+   geht jederzeit.
+3. **Aufruf:** Das Gateway schickt nur diesen Zugang mit, sonst nichts von
+   der Person. Fehlt er, wird abgelehnt, bevor etwas hinausgeht, mit
+   Verweis auf `/me`. Lehnt der Server ihn ab (401/403), steht auf `/me`
+   „erneuern“; der Sicherungsautomat bleibt zu.
+4. **Betreiber, Serverseite:** wie viele Personen einen Zugang haben (als
+   Kennung der Plattform, nie mit Namen), wann gespeichert, zuletzt benutzt,
+   nach 180 Tagen ohne Nutzung markiert. Löschen ja, lesen nie.
+
 ## Feste Argumente und Grenzen
 
 Beispiel: Ein ABAP-MCP-Server hat `search_objects(package, name)`. In

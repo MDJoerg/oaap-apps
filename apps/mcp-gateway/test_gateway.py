@@ -140,6 +140,11 @@ class Paper(BaseHTTPRequestHandler):
         S = self.server.state
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         S["auth"].append(self.headers.get("Authorization"))
+        S.setdefault("apikey", []).append(self.headers.get("X-Api-Key"))
+        if S.get("refuse_key") and self.headers.get("X-Api-Key") == S["refuse_key"]:
+            # Verfahren U (0.16): der Server lehnt diesen persönlichen Zugang ab.
+            self.reply(401, {"error": "bad token"})
+            return
         S.setdefault("act", []).append(self.headers.get("X-OAAP-Act-Token"))
         S.setdefault("asrt", []).append(self.headers.get("X-OAAP-Act-Assertion"))
         S.setdefault("paths", []).append((self.path, body.get("method") if isinstance(body, dict) else None))
@@ -2275,6 +2280,180 @@ st, _ = me_get("/me/v1/sonstwas", "u-ohne")
 check("unbekannter Pfad unter /me: 404", st == 404, st)
 check("Tür nur aus der festen Liste (ein fremdes Wort wird leer gespeichert)",
       {r[0] for r in app.DB.execute("SELECT DISTINCT door FROM usage")} <= {"", *books.DOORS})
+
+print("\n-- 0.16.0: Verfahren U, persönliche Zugänge (RFC-0095 Stufe 2)")
+US_ = paper_state(tools=[tool("whoami", "Sagt, wer ruft.", {})])
+fuenf = ThreadingHTTPServer(("0.0.0.0", 0), Paper)
+fuenf.state = US_
+threading.Thread(target=fuenf.serve_forever, daemon=True).start()
+FUENF = f"http://{IP}:{fuenf.server_address[1]}/mcp"
+BAIT = "KOEDER-anna-geheim-4711"
+
+
+def me_post(path, uid, **form):
+    req = urllib.request.Request(GW + path, data=urlencode(form).encode(), method="POST",
+                                 headers={"X-OAAP-User": "vp-person", "X-OAAP-Roles": "user",
+                                          "X-OAAP-User-Id": uid})
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    return resp.status, resp.read().decode()
+
+
+def tool_calls(state):
+    return [p for p in state["paths"] if p[1] == "tools/call"] if "paths" in state else []
+
+
+page = admin("/server-save", name="jira", address=FUENF, auth="personal", light="green",
+             personal_send="header", header="X-Api-Key", personal_prefix="Token ",
+             personal_hint="Jira → Profil → Persönliche Zugriffstoken, Recht lesen",
+             personal_link="https://jira.example/secure/ViewProfile.jspa", credential="geteilt-123")
+check("U: ein gemeinsamer Zugang des Servers wird abgewiesen (kein Rückfall)",
+      books.server_row(app.DB, "jira") is None and "eigenen Zugang" in page, page[-400:])
+admin("/server-save", name="jira", address=FUENF, auth="personal", light="green",
+      personal_send="header", header="X-Api-Key", personal_prefix="Token ",
+      personal_hint="Jira → Profil → Persönliche Zugriffstoken, Recht lesen",
+      personal_link="https://jira.example/secure/ViewProfile.jspa")
+srow = books.server_row(app.DB, "jira")
+check("U: Server mit Zugang personal, Kopfzeile, Präfix, Hinweis gespeichert",
+      srow and srow["auth_kind"] == "personal" and not srow["credential"]
+      and books.personal_spec(srow) == {"send": "header:X-Api-Key", "prefix": "Token ",
+                                        "hint": "Jira → Profil → Persönliche Zugriffstoken, Recht lesen",
+                                        "link": "https://jira.example/secure/ViewProfile.jspa"}, srow and dict(srow))
+ok_, why = app.read_catalog("jira", None)
+check("U: ohne Person kein Katalog, mit Satz", not ok_ and "Verfahren U" in why, why)
+OP = {"X-OAAP-User-Id": "u-betr-u", "X-OAAP-User-Assertion": ASRT}
+page = admin("/server-read", OP, name="jira")
+check("U: die Betreiberin ohne eigenen Zugang: Katalog nicht gelesen, Verweis auf /me",
+      "noch keinen Zugang" in page and not books.catalog(app.DB, "jira"), page[-300:])
+me_post("/me/credential", "u-betr-u", server="jira", value="betr-wert")
+page = admin("/server-read", OP, name="jira")
+check("U: mit ihrem Zugang liest sie den Katalog als sie selbst",
+      len(books.catalog(app.DB, "jira")) == 1 and "Token betr-wert" in US_["apikey"], US_.get("apikey"))
+
+admin("/view-save", name="u-key", max_effect="read", ways="key")
+page = add("u-key", "whoami", server="jira")
+check("U: nie in einer Sicht, die Schlüssel annimmt",
+      books.item_row(app.DB, "u-key", "tool", "whoami") is None)
+admin("/view-save", name="u-sicht", max_effect="read", ways="platform")
+add("u-sicht", "whoami", server="jira")
+admin("/issue", label="u-prof", kind="profile", groups="@uchat", views="u-sicht", ceiling="red")
+page = admin("/view-save", name="u-sicht", max_effect="read", ways="key,platform")
+check("U: die Sicht nachträglich auf Schlüssel stellen: abgewiesen",
+      books.view_row(app.DB, "u-sicht")["ways"] == "platform", page[-300:])
+
+
+def call_u(uid, mid=40):
+    st, sid = session_a("u-sicht", client="uchat", uid=uid, asrt=ASRT_ANNA)
+    st, _, msgs = rpc_a("u-sicht", {"jsonrpc": "2.0", "id": mid, "method": "tools/call",
+                                    "params": {"name": "whoami", "arguments": {}}}, sid,
+                        client="uchat", uid=uid, asrt=ASRT_ANNA, assistant="jira")
+    m = msgs[-1] if msgs else {}
+    return st, m
+
+
+before = len(tool_calls(US_))
+st, m = call_u("u-anna-u")
+rows_after("SELECT * FROM usage WHERE user_sub='u-anna-u'", 1)
+row = app.DB.execute("SELECT * FROM usage WHERE user_sub='u-anna-u' ORDER BY id DESC").fetchone()
+check("U: ohne eigenen Zugang abgelehnt, BEVOR etwas hinausgeht, mit Verweis auf /me",
+      "error" in m and "/me" in m["error"]["message"] and len(tool_calls(US_)) == before
+      and row["outcome"] == "refused" and row["reason"] == "personal" and row["door"] == "gateway"
+      and row["procedure"] == "U", (m, dict(row) if row else None))
+st, html_ = me_post("/me/credential", "u-anna-u", server="jira", value=BAIT)
+check("U: die Person trägt ihren Zugang auf /me ein; die Seite zeigt „hinterlegt“, nie den Wert",
+      st == 200 and "Zugang für jira gespeichert" in html_ and "hinterlegt" in html_ and BAIT not in html_,
+      html_[-500:])
+st, m = call_u("u-anna-u", 41)
+check("U: der Server bekommt genau Annas Zugang in der eingestellten Form",
+      "result" in m and US_["apikey"][-1] == "Token " + BAIT, (m, US_["apikey"][-2:]))
+me_post("/me/credential", "u-bert-u", server="jira", value="bert-wert")
+st, m = call_u("u-bert-u", 42)
+check("U Köder: Berts Aufruf trägt Berts Zugang, nie Annas",
+      "result" in m and US_["apikey"][-1] == "Token bert-wert"
+      and all(v != "Token " + BAIT for v in US_["apikey"][-2:]), US_["apikey"][-3:])
+st, m = call_u("u-anna-u", 43)
+check("… und Annas danach wieder ihren", US_["apikey"][-1] == "Token " + BAIT)
+r = books.personal_row(app.DB, "platform", "u-anna-u", "jira")
+check("U: „zuletzt benutzt“ ist gesetzt", r and r["last_used"])
+
+US_["refuse_key"] = "Token bert-wert"
+for i in range(6):
+    st, m = call_u("u-bert-u", 50 + i)
+rows_after("SELECT * FROM usage WHERE user_sub='u-bert-u' AND reason='credential'", 1)
+row = app.DB.execute("SELECT * FROM usage WHERE user_sub='u-bert-u' ORDER BY id DESC").fetchone()
+check("U: 401 des Servers = Ablehnung DIESES Zugangs: refused/credential, Tür server, Status 401",
+      "error" in m and "erneuere" in m["error"]["message"] and row["outcome"] == "refused"
+      and row["reason"] == "credential" and row["door"] == "server" and row["status"] == 401,
+      (m, dict(row)))
+st, m = call_u("u-anna-u", 60)
+check("… öffnet den Sicherungsautomaten nicht: Anna kommt nach sechs Ablehnungen Berts durch",
+      "result" in m, m)
+st, doc = me_json("u-bert-u", "?problems=1")
+c = doc["calls"][0] if st == 200 and doc["calls"] else {}
+check("/me: „Der Server hat deinen Zugang abgelehnt (HTTP 401)“ mit Hinweis zum Erneuern",
+      c.get("sentence") == "Der Server hat deinen Zugang abgelehnt (HTTP 401)."
+      and "Erneuere" in c.get("hint", ""), c)
+US_.pop("refuse_key")
+
+# Unterschieben: Annas versiegelte Zeile in Berts Zeile -- öffnet sich nicht für Bert.
+sealed_anna = books.personal_row(app.DB, "platform", "u-anna-u", "jira")["sealed"]
+sealed_bert = books.personal_row(app.DB, "platform", "u-bert-u", "jira")["sealed"]
+app.DB.execute("UPDATE personal_credentials SET sealed=? WHERE sub='u-bert-u'", (sealed_anna,))
+app.DB.commit()
+n = len(US_["apikey"])
+st, m = call_u("u-bert-u", 61)
+check("U: eine untergeschobene Zeile einer anderen Person öffnet sich nicht, nichts geht hinaus",
+      "error" in m and "gehört nicht dir" in m["error"]["message"] and len(US_["apikey"]) == n, m)
+app.DB.execute("UPDATE personal_credentials SET sealed=? WHERE sub='u-bert-u'", (sealed_bert,))
+app.DB.commit()
+
+st, page = admin_get("/server?name=jira")
+check("Betreiber: Zahl und Kennungen der Personen, nie ein Wert",
+      "3 Person(en)" in page and "u-anna-u" in page and BAIT not in page and "bert-wert" not in page,
+      page[-800:])
+app.DB.execute("UPDATE personal_credentials SET stored='2020-01-01T00:00:00Z', last_used='' "
+               "WHERE sub='u-betr-u'")
+app.DB.commit()
+st, page = admin_get("/server?name=jira")
+check("Betreiber: seit 180 Tagen ungenutzt wird markiert", "seit 180 Tagen ungenutzt" in page)
+
+admin("/server-rename", name="jira", new="jira2")
+check("Umbenennen: die Zugänge ziehen mit",
+      "jira2" in books.personal_of_person(app.DB, "platform", "u-anna-u"))
+admin("/server-rename", name="jira2", new="jira")
+
+page = admin("/personal-delete", name="jira", iss="platform", sub="u-anna-u")
+st, m = call_u("u-anna-u", 62)
+check("Betreiber löscht Annas Zugang: ihr nächster Aufruf wird abgelehnt",
+      "Persönlicher Zugang gelöscht" in page and "error" in m and "/me" in m["error"]["message"], m)
+st, html_ = me_post("/me/credential-delete", "u-bert-u", server="jira")
+check("die Person löscht ihren Zugang selbst",
+      "gelöscht" in html_ and books.personal_row(app.DB, "platform", "u-bert-u", "jira") is None)
+aud = [dict(r) for r in books.audit(app.DB, 400) if r["action"].startswith("personal.")]
+check("Prüfspur personal.store/personal.delete: Person als Kennung, nie Name, nie Wert",
+      any(a["action"] == "personal.store" and a["actor"] == "person:u-anna-u" for a in aud)
+      and any(a["action"] == "personal.delete" and "vom Betreiber; Person u-anna-u" in a["detail"] for a in aud)
+      and any(a["action"] == "personal.delete" and a["actor"] == "person:u-bert-u" for a in aud)
+      and not any(BAIT in json.dumps(a) or "vp-person" in json.dumps(a) for a in aud), aud[:3])
+st, _ = me_post("/me/credential", "", server="jira", value="x")
+check("/me/credential ohne Kennung: 403", st == 403, st)
+st, html_ = me_post("/me/credential", "u-anna-u", server="papier", value="x")
+check("ein Server ohne Verfahren U nimmt keinen persönlichen Zugang",
+      "nimmt keinen persönlichen Zugang" in html_)
+
+app.DB.commit()
+leak = []
+for root, _, files in os.walk(TMP):
+    for f in files:
+        try:
+            if BAIT.encode() in open(os.path.join(root, f), "rb").read():
+                leak.append(f)
+        except OSError:
+            pass
+check("Köderwert: in keiner Datei unter /data, in keiner Seite, keiner Zeile, keinem Protokoll",
+      not leak and BAIT not in LOG.getvalue(), leak)
 
 
 gw.shutdown()

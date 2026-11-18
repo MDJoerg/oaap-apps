@@ -88,6 +88,15 @@ CREATE TABLE IF NOT EXISTS servers (
   created     TEXT NOT NULL,
   updated     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS personal_credentials (
+  iss         TEXT NOT NULL,
+  sub         TEXT NOT NULL,
+  server      TEXT NOT NULL,
+  sealed      TEXT NOT NULL,
+  stored      TEXT NOT NULL,
+  last_used   TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (iss, sub, server)
+);
 CREATE TABLE IF NOT EXISTS views (
   name        TEXT PRIMARY KEY,
   server      TEXT NOT NULL DEFAULT '',
@@ -168,6 +177,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # Zahl und ein Wort aus einer festen Liste: Kein Inhalt passt hinein (§10).
     ("usage", "status", "INTEGER NOT NULL DEFAULT 0"),
     ("usage", "door", "TEXT NOT NULL DEFAULT ''"),
+    # 0.16 (RFC-0095 Stufe 2, Verfahren U): wie der persönliche Zugang einer
+    # Person zum Server geht -- {send, prefix, hint, link}. Kein Wert darin.
+    ("servers", "personal", "TEXT NOT NULL DEFAULT '{}'"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -189,11 +201,13 @@ EFFECT_WORDS = {"read": "lesen", "write": "schreiben", "execute": "ausführen"}
 LIGHTS = ("green", "yellow", "red")
 LIGHT_RANK = {e: i for i, e in enumerate(LIGHTS)}
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
-AUTH_KINDS = ("none", "bearer", "basic", "exchange", "platform", "propagate")
+AUTH_KINDS = ("none", "bearer", "basic", "exchange", "platform", "propagate", "personal")
 # Zugänge, die einen angemeldeten Menschen brauchen: X (Tausch zum Server),
 # I (Tausch zur Plattform, RFC-0073) und P (die Person über eine Destination bis
 # ins Zielsystem, RFC-0066, 0.12). Nie in einer Sicht, die Schlüssel annimmt.
-PERSON_KINDS = ("exchange", "platform", "propagate")
+# 0.16: U (personal) -- jede Person bringt ihren eigenen Zugang mit (RFC-0095).
+PERSON_KINDS = ("exchange", "platform", "propagate", "personal")
+UNUSED_DAYS = 180                    # RFC-0095 D8: danach auf der Betreiberseite markiert
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
 
@@ -256,8 +270,31 @@ def valid_auth(kind):
                                 "mcp-protocol-version", "accept"):
             raise ValueError(f"Die Kopfzeile {kind[7:]} setzt das Gateway selbst.")
         return kind
-    raise ValueError("Zugang ist none, bearer, basic, header:<Name>, exchange, platform oder "
-                     "propagate.")
+    raise ValueError("Zugang ist none, bearer, basic, header:<Name>, exchange, platform, "
+                     "propagate oder personal.")
+
+
+def valid_personal(spec):
+    """Wie der persönliche Zugang geht (Verfahren U): {send, prefix, hint, link}.
+
+    `send` ist `bearer` oder `header:<Name>` -- dieselben Formen wie beim
+    Zugang eines Servers. Wirft ValueError mit einem Satz."""
+    spec = dict(spec or {})
+    send = (spec.get("send") or "bearer").strip()
+    if send != "bearer":
+        send = valid_auth(send if send.startswith("header:") else "header:" + send)
+        if not send.startswith("header:"):
+            raise ValueError("Verfahren U schickt den Zugang als bearer oder in einer Kopfzeile.")
+    prefix = (spec.get("prefix") or "")
+    if len(prefix) > 40 or any(not ch.isprintable() for ch in prefix):
+        raise ValueError("Das Präfix ist höchstens 40 druckbare Zeichen lang.")
+    hint = " ".join((spec.get("hint") or "").split())
+    if len(hint) > 300:
+        raise ValueError("Der Hinweis für die Person ist höchstens 300 Zeichen lang.")
+    link = (spec.get("link") or "").strip()
+    if link and (len(link) > 300 or not re.match(r"^https?://[^\s\"'<>]+$", link)):
+        raise ValueError("Der Link für die Person beginnt mit http:// oder https://.")
+    return {"send": send, "prefix": prefix if send != "bearer" else "", "hint": hint, "link": link}
 
 
 # ------------------------------------------------------------------ Schlüssel
@@ -474,7 +511,7 @@ def sync_sources(db, sources, limits):
 
 
 def save_server(db, actor, name, address, auth_kind, light, limits, sealed_credential=None,
-                drop_credential=False, exchange=None):
+                drop_credential=False, exchange=None, personal=None):
     """Legt an oder ändert. `sealed_credential` ist schon verschlüsselt; None = unverändert.
 
     `exchange` (nur bei Zugang `exchange`): {token_url, client_id, audience}
@@ -490,11 +527,11 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if auth_kind == "propagate" and not address.startswith("destination:"):
         raise ValueError("Verfahren P (propagate) geht nur über eine Destination mit Principal "
                          "Propagation: Adresse destination:<name>[/pfad].")
-    if auth_kind in ("platform", "propagate") and any(r["server"] == name for r in db.execute(
+    if auth_kind in ("platform", "propagate", "personal") and any(r["server"] == name for r in db.execute(
             "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
             "WHERE v.ways LIKE '%key%'")):
         raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren "
-                         + ("I" if auth_kind == "platform" else "P")
+                         + {"platform": "I", "propagate": "P"}.get(auth_kind, "U")
                          + " braucht einen Menschen — erst die Sicht auf „Anmeldung“ oder "
                          "„Plattform“ stellen.")
     if auth_kind == "exchange":
@@ -527,7 +564,13 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if auth_kind == "propagate" and credential:
         raise ValueError("Verfahren P trägt keine Zugangsdaten: Das Zertifikat der Person stellt "
                          "die Destination aus. Erst „Zugangsdaten entfernen“.")
-    if auth_kind in ("platform", "propagate"):
+    if auth_kind == "personal" and credential:
+        # RFC-0095 §4.1: nie ein gemeinsamer Rückfall hinter den Personen.
+        raise ValueError("Verfahren U trägt keine Zugangsdaten des Servers: Jede Person bringt "
+                         "ihren eigenen Zugang. Erst „Zugangsdaten entfernen“.")
+    personal_json = json.dumps(valid_personal(personal), sort_keys=True) \
+        if auth_kind == "personal" else "{}"
+    if auth_kind in ("platform", "propagate", "personal"):
         credential = ""                         # Quellen-Schlüssel bzw. Zertifikat kommt von der Plattform
     elif auth_kind != "none" and not credential:
         raise ValueError(f"Zugang {auth_kind} braucht Zugangsdaten.")
@@ -549,6 +592,9 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
                 changes.append(f"{field}: {old[field]} → {new}")
         if old["credential"] != credential:
             changes.append("Zugangsdaten " + ("entfernt" if not credential else "gesetzt"))
+        if (old["personal"] or "{}") != personal_json:
+            changes.append("persönlicher Zugang: " + personal_json)
+    db.execute("UPDATE servers SET personal=? WHERE name=?", (personal_json, name))
     if changes:
         log(db, actor, "server.save", name, "; ".join(changes))
     db.commit()
@@ -574,6 +620,7 @@ def rename_server(db, actor, old, new):
     db.execute("UPDATE servers SET name=?, updated=? WHERE name=?", (new, now(), old))
     db.execute("UPDATE catalog SET server=? WHERE server=?", (new, old))
     db.execute("UPDATE items SET server=? WHERE server=?", (new, old))
+    db.execute("UPDATE personal_credentials SET server=? WHERE server=?", (new, old))
     log(db, actor, "server.rename", old, f"→ {new}; Sichten: {', '.join(views_hit) or 'keine'}"
         + (f"; Quelle {row['source']} bleibt" if row["source"] else ""))
     db.commit()
@@ -607,8 +654,76 @@ def delete_server(db, actor, name):
         raise ValueError(f"Server „{name}“ steht noch in Sichten: {', '.join(used)}.")
     db.execute("DELETE FROM servers WHERE name=?", (name,))
     db.execute("DELETE FROM catalog WHERE server=?", (name,))
-    log(db, actor, "server.delete", name)
+    gone = db.execute("DELETE FROM personal_credentials WHERE server=?", (name,)).rowcount
+    log(db, actor, "server.delete", name, f"{gone} persönliche Zugänge gelöscht" if gone else "")
     db.commit()
+
+
+# ------------------------------------------------- persönliche Zugänge (Verfahren U)
+# RFC-0095 §4.2: je (Issuer, sub, Server) ein versiegelter Wert. Nur schreiben,
+# ersetzen, löschen -- nie zurückgeben, auch nicht teilweise. Die Prüfspur nennt
+# die Person mit ihrer Kennung, nie mit Namen (§10), und nie den Wert.
+
+def personal_spec(srow):
+    try:
+        spec = json.loads(srow["personal"] or "{}") if "personal" in srow.keys() else {}
+    except ValueError:
+        spec = {}
+    return spec if isinstance(spec, dict) else {}
+
+
+def personal_row(db, iss, sub, server):
+    return db.execute("SELECT * FROM personal_credentials WHERE iss=? AND sub=? AND server=?",
+                      (iss, sub, server)).fetchone()
+
+
+def personal_store(db, iss, sub, server, sealed):
+    row = server_row(db, server)
+    if not row or row["auth_kind"] != "personal":
+        raise ValueError(f"Der Server „{server}“ nimmt keinen persönlichen Zugang.")
+    if not (iss and sub):
+        raise ValueError("Ohne Kennung der Person wird nichts gespeichert.")
+    replaced = personal_row(db, iss, sub, server) is not None
+    db.execute("INSERT INTO personal_credentials (iss,sub,server,sealed,stored,last_used) "
+               "VALUES (?,?,?,?,?,'') ON CONFLICT(iss,sub,server) DO UPDATE SET "
+               "sealed=excluded.sealed, stored=excluded.stored, last_used=''",
+               (iss, sub, server, sealed, now()))
+    log(db, f"person:{sub}", "personal.store", server, ("ersetzt" if replaced else "neu")
+        + ("" if iss == "platform" else f"; Issuer {iss}"))
+    db.commit()
+    return replaced
+
+
+def personal_delete(db, iss, sub, server, actor=None):
+    """Löscht den Zugang einer Person. `actor` None = die Person selbst; sonst der Betreiber."""
+    cur = db.execute("DELETE FROM personal_credentials WHERE iss=? AND sub=? AND server=?",
+                     (iss, sub, server))
+    if cur.rowcount:
+        log(db, actor or f"person:{sub}", "personal.delete", server,
+            "von der Person" if actor is None else f"vom Betreiber; Person {sub}")
+    db.commit()
+    return bool(cur.rowcount)
+
+
+def personal_touch(db, iss, sub, server):
+    db.execute("UPDATE personal_credentials SET last_used=? WHERE iss=? AND sub=? AND server=?",
+               (now(), iss, sub, server))
+    db.commit()
+
+
+def personal_of_person(db, iss, sub):
+    return {r["server"]: r for r in db.execute(
+        "SELECT server, stored, last_used FROM personal_credentials WHERE iss=? AND sub=?",
+        (iss, sub))}
+
+
+def personal_holders(db, server):
+    """Für den Betreiber: wer (Kennung) wann gespeichert und zuletzt benutzt hat -- nie der Wert."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=UNUSED_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return [{"iss": r["iss"], "sub": r["sub"], "stored": r["stored"], "last_used": r["last_used"],
+             "unused": (r["last_used"] or r["stored"]) < cutoff}
+            for r in db.execute("SELECT iss, sub, stored, last_used FROM personal_credentials "
+                                "WHERE server=? ORDER BY stored", (server,))]
 
 
 def note_server(db, name, version=None, error=None, read=False):
@@ -720,7 +835,7 @@ def save_view(db, actor, name, max_effect, requests=None, ways=None):
         raise ValueError("Zugänge sind key, signin und platform, durch Komma getrennt, in "
                          "dieser Reihenfolge (z. B. signin,platform).")
     if "key" in ways and old and exchange_servers(db, name):
-        raise ValueError("Die Sicht enthält Server mit Verfahren X, I oder P (" + ", ".join(exchange_servers(db, name))
+        raise ValueError("Die Sicht enthält Server mit Verfahren X, I, P oder U (" + ", ".join(exchange_servers(db, name))
                          + "); die brauchen einen angemeldeten Menschen — Schlüssel gehen hier nicht.")
     current = view_requests(old) if old else dict(REQUESTS_NEW)
     if requests:
@@ -855,7 +970,7 @@ def set_view_items(db, actor, view, wanted, seen, effects=None):
 def exchange_servers(db, view):
     return [r["name"] for r in db.execute(
         "SELECT DISTINCT s.name FROM items i JOIN servers s ON s.name=i.server "
-        "WHERE i.view=? AND s.auth_kind IN ('exchange','platform','propagate') ORDER BY s.name",
+        "WHERE i.view=? AND s.auth_kind IN ('exchange','platform','propagate','personal') ORDER BY s.name",
         (view,))]
 
 

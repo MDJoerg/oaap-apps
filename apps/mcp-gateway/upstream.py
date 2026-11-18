@@ -66,7 +66,9 @@ class Refused(UpstreamError):
 # 401/403 sagt, kann die Destination sein (kein `sap_user`, keine Zusicherung)
 # oder das Zielsystem (keine Zuordnung des Zertifikats). Beides betrifft DIESE
 # Person, nicht den Server für alle.
-REFUSER = {"destination": "Die Destination oder das Zielsystem"}
+REFUSER = {"destination": "Die Destination oder das Zielsystem",
+           # 0.16 (Verfahren U): der Server lehnt den persönlichen Zugang ab.
+           "personal": "Der Server"}
 DESTINATION_PATH = re.compile(r"^[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
 
 
