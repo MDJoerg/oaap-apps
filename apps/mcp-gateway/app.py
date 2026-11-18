@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.17.0"
+VERSION = "0.18.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -448,9 +448,14 @@ def personal_access(srow, person):
         raise upstream.UpstreamError("credential", "Dieser Zugang gehört nicht dir.")
     spec = books.personal_spec(srow)
     send = spec.get("send") or "bearer"
+    if send == "basic" and ":" not in doc["v"]:
+        # Vor 0.18 als ein Wert eingetragen, der Server ist inzwischen auf basic gestellt.
+        raise upstream.UpstreamError("credential", f"Der Server {name} braucht jetzt Benutzer und "
+                                                   "Token getrennt; trag deinen Zugang auf /me neu ein.")
     books.personal_touch(DB, owner[0], owner[1], name)
-    return {"auth_kind": send, "credential": (spec.get("prefix") or "") + doc["v"],
-            "door": "personal"}
+    # basic: upstream bildet base64(benutzer:token) erst hier, beim Senden (auth_headers).
+    return {"auth_kind": send, "credential": ("" if send == "basic" else spec.get("prefix") or "")
+            + doc["v"], "door": "personal"}
 
 
 EXCHANGED = {}                       # (Issuer, sub, Server) → (Token, gültig bis); nur im Speicher
@@ -1330,9 +1335,11 @@ def me_credentials_card(uid, notice=""):
         drop = (f'<form method="post" action="me/credential-delete" style="display:inline">'
                 f'<input type="hidden" name="server" value="{esc(s["name"])}">'
                 f'<button class="quiet">Löschen</button></form>' if have else "")
+        user_in = ('<input type="text" name="user" autocomplete="username" required '
+                   'placeholder="Benutzer bzw. E-Mail">' if spec.get("send") == "basic" else "")
         rows.append(f'''<tr><td><b>{esc(s["name"])}</b><br><span class="muted">{how or "—"}</span></td>
 <td>{state}</td><td><form method="post" action="me/credential" class="grid" style="gap:.4rem">
-<input type="hidden" name="server" value="{esc(s["name"])}">
+<input type="hidden" name="server" value="{esc(s["name"])}">{user_in}
 <input type="password" name="value" autocomplete="off" required placeholder="{"ersetzen" if have else "Token oder Schlüssel"}">
 <button>{"Ersetzen" if have else "Speichern"}</button></form> {drop}</td></tr>''')
     top = f'<p class="attention">{esc(notice)}</p>' if notice else ""
@@ -1539,7 +1546,7 @@ def server_form(s=None):
 <input type="text" name="address" value="{esc(s["address"] if s else "")}" required></div>
 <div><label>Zugang (Verfahren T; X = Token-Tausch; P = propagate, die Person über eine Destination bis ins Zielsystem)</label><select name="auth">{options(("none", "bearer", "basic", "header", "exchange", "propagate", "personal"), plain)}</select></div>
 <div><label>Verfahren U (personal): so geht der Zugang jeder Person zum Server</label>
-<select name="personal_send">{options(("bearer", "header"), "bearer" if psend == "bearer" else "header", {"bearer": "Authorization: Bearer", "header": "Kopfzeile (Name unten bei „Kopfzeile“)"})}</select></div>
+<select name="personal_send">{options(("bearer", "basic", "header"), psend if psend in ("bearer", "basic") else "header", {"bearer": "Authorization: Bearer", "basic": "Authorization: Basic – Benutzer/E-Mail und Token (z. B. Atlassian Cloud)", "header": "Kopfzeile (Name unten bei „Kopfzeile“)"})}</select></div>
 <div><label>Verfahren U: Präfix vor dem Wert (nur Kopfzeile, z. B. „Token “)</label>
 <input type="text" name="personal_prefix" value="{esc(pspec.get("prefix", ""))}"></div>
 <div><label>Verfahren U: Hinweis für die Person (wo erzeugen, welche Rechte)</label>
@@ -2844,6 +2851,15 @@ class Handler(BaseHTTPRequestHandler):
                 value = form.get("value", "").strip()
                 if not value or len(value) > 4096 or any(ch in value for ch in "\r\n"):
                     raise ValueError("Der Zugang ist eine Zeile, höchstens 4096 Zeichen.")
+                srow = books.server_row(DB, server)
+                if srow and books.personal_spec(srow).get("send") == "basic":
+                    # 0.18: Benutzer und Token getrennt; versiegelt wird „benutzer:token“.
+                    user_ = form.get("user", "").strip()
+                    if not user_ or len(user_) > 256 or ":" in user_ \
+                            or any(not ch.isprintable() for ch in user_):
+                        raise ValueError("Dieser Server braucht Benutzer bzw. E-Mail und Token; "
+                                         "der Benutzer ist eine Zeile ohne Doppelpunkt.")
+                    value = user_ + ":" + value
                 try:
                     sealed = seal_personal("platform", uid, value)
                 except VaultError as exc:
@@ -3092,7 +3108,7 @@ def save_server(form, user):
     personal = None
     if auth == "personal":
         send = form.get("personal_send", "bearer")
-        personal = {"send": "bearer" if send == "bearer" else "header:" + form.get("header", "").strip(),
+        personal = {"send": send if send in ("bearer", "basic") else "header:" + form.get("header", "").strip(),
                     "prefix": form.get("personal_prefix", ""), "hint": form.get("personal_hint", ""),
                     "link": form.get("personal_link", "")}
     books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,

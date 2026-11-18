@@ -144,7 +144,8 @@ class Paper(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         S["auth"].append(self.headers.get("Authorization"))
         S.setdefault("apikey", []).append(self.headers.get("X-Api-Key"))
-        if S.get("refuse_key") and self.headers.get("X-Api-Key") == S["refuse_key"]:
+        if (S.get("refuse_key") and self.headers.get("X-Api-Key") == S["refuse_key"]) or \
+                (S.get("refuse_auth") and self.headers.get("Authorization") == S["refuse_auth"]):
             # Verfahren U (0.16): der Server lehnt diesen persönlichen Zugang ab.
             self.reply(401, {"error": "bad token"})
             return
@@ -2552,6 +2553,97 @@ check("D2: Prüfspur person.link mit Kennungen, nie Namen",
 st, raw = me_get("/me/v1/calls?problems=0", "u-mallory")
 check("D2 Köder: wer die Kopfzeile ohne Zusage schickte, sieht Doras Aufrufe nicht",
       st == 200 and all(c["view"] != "u-anm" for c in json.loads(raw)["calls"]))
+
+
+print("\n-- 0.18.0: Verfahren U mit Benutzer und Token (Basic, etwa Atlassian Cloud)")
+import base64 as _b64
+BS_ = paper_state(tools=[tool("suche", "Sucht.", {})])
+sechs = ThreadingHTTPServer(("0.0.0.0", 0), Paper)
+sechs.state = BS_
+threading.Thread(target=sechs.serve_forever, daemon=True).start()
+SECHS = f"http://{IP}:{sechs.server_address[1]}/mcp"
+
+
+def basic_of(user, tok):
+    return "Basic " + _b64.b64encode(f"{user}:{tok}".encode()).decode()
+
+
+admin("/server-save", name="atl", address=SECHS, auth="personal", light="green",
+      personal_send="basic", personal_prefix="soll-weg ",
+      personal_hint="Atlassian → API-Token mit Berechtigungen, App „Atlassian MCP V2“",
+      personal_link="https://id.atlassian.com/manage-profile/security/api-tokens")
+srow = books.server_row(app.DB, "atl")
+check("Basic: Server gespeichert, send basic, kein Präfix",
+      srow and books.personal_spec(srow)["send"] == "basic" and books.personal_spec(srow)["prefix"] == "",
+      srow and books.personal_spec(srow))
+page = admin_get("/server?name=atl")[1]
+check("Basic: die Betreiberseite zeigt die Wahl Basic ausgewählt", '<option value="basic" selected>' in page)
+st, html_ = me_get("/me", "u-fritz-u")
+check("/me: für einen Basic-Server ein Feld für Benutzer bzw. E-Mail",
+      'name="user"' in html_ and "Benutzer bzw. E-Mail" in html_)
+st, html_ = me_post("/me/credential", "u-fritz-u", server="atl", value="fritz-tok")
+check("Basic: ohne Benutzer nicht gespeichert, mit Satz",
+      "Benutzer bzw. E-Mail und Token" in html_ and books.personal_row(app.DB, "platform", "u-fritz-u", "atl") is None)
+st, html_ = me_post("/me/credential", "u-fritz-u", server="atl", user="a:b", value="fritz-tok")
+check("Basic: ein Benutzer mit Doppelpunkt wird abgewiesen",
+      books.personal_row(app.DB, "platform", "u-fritz-u", "atl") is None, html_[-300:])
+st, html_ = me_post("/me/credential", "u-fritz-u", server="atl", user="fritz@example.org", value="fritz-tok")
+check("Basic: mit Benutzer und Token gespeichert; die Seite zeigt keinen der beiden Werte",
+      "Zugang für atl gespeichert" in html_ and "fritz-tok" not in html_
+      and books.personal_row(app.DB, "platform", "u-fritz-u", "atl") is not None, html_[-300:])
+OPF = {"X-OAAP-User-Id": "u-fritz-u", "X-OAAP-User-Assertion": ASRT}
+admin("/server-read", OPF, name="atl")
+check("Basic: der Katalog wird als die Person gelesen, Authorization: Basic base64(benutzer:token)",
+      len(books.catalog(app.DB, "atl")) == 1 and basic_of("fritz@example.org", "fritz-tok") in BS_["auth"],
+      BS_["auth"][-2:])
+admin("/view-save", name="b-sicht", max_effect="read", ways="platform")
+add("b-sicht", "suche", server="atl")
+admin("/issue", label="b-prof", kind="profile", groups="@uchat", views="b-sicht", ceiling="red")
+st, sid = session_a("b-sicht", client="uchat", uid="u-fritz-u", asrt=ASRT_ANNA)
+n = len(BS_["auth"])
+st, _, msgs = rpc_a("b-sicht", {"jsonrpc": "2.0", "id": 81, "method": "tools/call",
+                                "params": {"name": "suche", "arguments": {}}}, sid,
+                    client="uchat", uid="u-fritz-u", asrt=ASRT_ANNA, assistant="atl")
+check("Basic: ein Aufruf trägt genau Fritz' Basic-Wert hinaus",
+      "result" in (msgs[-1] if msgs else {}) and BS_["auth"][-1] == basic_of("fritz@example.org", "fritz-tok")
+      and len(BS_["auth"]) > n, (msgs, BS_["auth"][-2:]))
+app.DB.commit()
+
+
+def plain_in_data(word):
+    hits = []
+    for d, _, fs in os.walk(TMP):
+        for f in fs:
+            try:
+                if word in open(os.path.join(d, f), "rb").read():
+                    hits.append(f)
+            except OSError:
+                pass
+    return hits
+
+
+check("Basic: der Token steht in keiner Datei unter /data und keinem Protokoll im Klartext",
+      not plain_in_data(b"fritz-tok") and "fritz-tok" not in LOG.getvalue(), plain_in_data(b"fritz-tok"))
+BS_["refuse_auth"] = basic_of("fritz@example.org", "fritz-tok")
+rpc_a("b-sicht", {"jsonrpc": "2.0", "id": 82, "method": "tools/call",
+                  "params": {"name": "suche", "arguments": {}}}, sid,
+      client="uchat", uid="u-fritz-u", asrt=ASRT_ANNA, assistant="atl")
+rows_after("SELECT * FROM usage WHERE user_sub='u-fritz-u' AND reason='credential'", 1)
+BS_.pop("refuse_auth")
+st, doc = ready_a("b-sicht", "u-fritz-u")
+check("Basic: lehnt der Server ab, ist die Sicht credential_rejected",
+      st == 200 and doc["servers"][0]["state"] == "credential_rejected", doc)
+# Ein Wert von vor 0.18 (ohne Doppelpunkt) unter einem Basic-Server: abgelehnt mit Satz, nichts hinaus.
+books.personal_store(app.DB, "platform", "u-gerd-u", "atl", app.seal_personal("platform", "u-gerd-u", "alt-ohne"))
+st, sid2 = session_a("b-sicht", client="uchat", uid="u-gerd-u", asrt=ASRT_ANNA)
+n = len(BS_["auth"])
+st, _, msgs = rpc_a("b-sicht", {"jsonrpc": "2.0", "id": 83, "method": "tools/call",
+                                "params": {"name": "suche", "arguments": {}}}, sid2,
+                    client="uchat", uid="u-gerd-u", asrt=ASRT_ANNA, assistant="atl")
+check("Basic: ein alter Wert ohne Benutzer geht nicht hinaus, Hinweis „neu eintragen“",
+      "neu ein" in json.dumps(msgs, ensure_ascii=False) and all("alt-ohne" not in (a or "") for a in BS_["auth"][n:]),
+      msgs)
+sechs.shutdown()
 
 
 gw.shutdown()

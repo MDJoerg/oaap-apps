@@ -284,11 +284,14 @@ def valid_auth(kind):
 def valid_personal(spec):
     """Wie der persönliche Zugang geht (Verfahren U): {send, prefix, hint, link}.
 
-    `send` ist `bearer` oder `header:<Name>` -- dieselben Formen wie beim
-    Zugang eines Servers. Wirft ValueError mit einem Satz."""
+    `send` ist `bearer`, `basic` oder `header:<Name>` -- dieselben Formen wie beim
+    Zugang eines Servers. `basic` (0.18): die Person nennt Benutzer (etwa ihre E-Mail)
+    und Token getrennt, das Gateway bildet `Authorization: Basic base64(benutzer:token)`
+    erst beim Senden -- so verlangt es etwa der MCP-Server von Atlassian Cloud.
+    Wirft ValueError mit einem Satz."""
     spec = dict(spec or {})
     send = (spec.get("send") or "bearer").strip()
-    if send != "bearer":
+    if send not in ("bearer", "basic"):
         send = valid_auth(send if send.startswith("header:") else "header:" + send)
         if not send.startswith("header:"):
             raise ValueError("Verfahren U schickt den Zugang als bearer oder in einer Kopfzeile.")
@@ -301,7 +304,8 @@ def valid_personal(spec):
     link = (spec.get("link") or "").strip()
     if link and (len(link) > 300 or not re.match(r"^https?://[^\s\"'<>]+$", link)):
         raise ValueError("Der Link für die Person beginnt mit http:// oder https://.")
-    return {"send": send, "prefix": prefix if send != "bearer" else "", "hint": hint, "link": link}
+    return {"send": send, "prefix": prefix if send.startswith("header:") else "", "hint": hint,
+            "link": link}
 
 
 # ------------------------------------------------------------------ Schlüssel
