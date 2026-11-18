@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -1037,6 +1037,177 @@ Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattfo
 <div><label>Budget (Aufrufe, 0 = ohne)</label><input type="number" name="budget" value="0" min="0"></div>
 <div><label>Rate je Minute (0 = {DEFAULT_RATE})</label><input type="number" name="rate" value="0" min="0"></div>
 {context_inputs()}<div><button>Ausstellen</button></div></form></details></div>'''
+
+
+# ------------------------------------------------------------------ /me (RFC-0095)
+# Die zweite Seite des Gateways: für die Person, deren Aufrufe hindurchgehen.
+# Stufe 1 liest nur -- die eigenen Messzeilen der letzten 30 Tage, Fehler in
+# Worten. Die Sätze entstehen aus den CODES der Zeile (Ausgang, Grund, Status,
+# Tür), nie aus gespeichertem Text: Den gibt es nicht (Spec §10).
+
+ME_DAYS = 30
+DEFAULT_DOOR = {"refused": "gateway", "limited": "gateway", "upstream_error": "server",
+                "tool_error": "server"}
+DOOR_WORDS = {"gateway": "das Gateway", "platform": "die Plattform",
+              "destination": "die Destination oder das Zielsystem", "server": "der Server"}
+ME_OUTCOME_WORDS = {"ok": "ok", "refused": "abgelehnt", "limited": "begrenzt",
+                 "upstream_error": "Serverfehler", "tool_error": "Werkzeugfehler"}
+HINT_GATEWAY = "Frag die Verwaltung des MCP-Gateways; nenne Zeit und Sicht."
+HINT_TENANT = "Frag die Verwaltung des Mandanten; nenne Zeit und Sicht."
+HINT_LATER = "Versuch es später noch einmal; hält es an, sag der Verwaltung Zeit und Sicht."
+REASON_SENTENCES = {
+    ("refused", "suspended"): ("Der Eintrag ist gesperrt, bis die Verwaltung einen geänderten "
+                               "Text bestätigt.", HINT_GATEWAY),
+    ("refused", "effect"): ("Der Eintrag liegt über der Wirkungsklasse, die dein Zugang oder die "
+                            "Sicht erlaubt.", HINT_GATEWAY),
+    ("refused", "unknown_tool"): ("Dieses Werkzeug gibt es in der Sicht nicht (mehr).", HINT_GATEWAY),
+    ("refused", "unknown_prompt"): ("Diesen Prompt gibt es in der Sicht nicht (mehr).", HINT_GATEWAY),
+    ("refused", "unknown_resource"): ("Diese Resource gibt es in der Sicht nicht.", HINT_GATEWAY),
+    ("refused", "ambiguous"): ("Die Adresse passt zu mehreren Vorlagen der Sicht.", HINT_GATEWAY),
+    ("refused", "arguments"): ("Die Argumente passten nicht zu dem, was die Sicht erlaubt (feste "
+                               "Argumente, Grenzen).", "Formuliere die Anfrage anders; hält es an, "
+                               + HINT_GATEWAY[0].lower() + HINT_GATEWAY[1:]),
+    ("refused", "ui_changed"): ("Die Ansicht hat sich seit der Freigabe geändert.", HINT_GATEWAY),
+    ("refused", "exchange"): ("Der Tausch deiner Anmeldung beim Anmeldedienst ist nicht gelungen.",
+                              HINT_TENANT),
+    ("limited", "budget"): ("Das Budget des Zugangs ist aufgebraucht.", HINT_GATEWAY),
+    ("limited", "rate"): ("Zu viele Aufrufe in kurzer Zeit.", "Warte eine Minute."),
+    ("limited", "queue"): ("Der Server war ausgelastet.", HINT_LATER),
+    ("limited", "breaker"): ("Der Server pausiert nach wiederholten Fehlern.", HINT_LATER),
+    ("limited", "size"): ("Die Antwort war größer als erlaubt und wurde nicht weitergereicht.",
+                          HINT_GATEWAY),
+    ("tool_error", ""): ("Das Werkzeug hat einen Fehler gemeldet (sein Text wird nicht "
+                         "gespeichert).", "Sieh in der Antwort im Chat nach oder versuch es "
+                                         "mit anderen Angaben."),
+}
+UPSTREAM_WORDS = {"connect": "keine Verbindung", "timeout": "keine Antwort in der Zeit",
+                  "http": "HTTP-Fehler", "version": "fremde Protokollversion",
+                  "protocol": "kein gültiges MCP", "session": "Sitzung verloren",
+                  "jsonrpc": "Fehler im Protokoll", "address": "Adresse nicht nutzbar",
+                  "redirect": "leitet weiter"}
+
+
+def call_sentence(row):
+    """(Satz, Abhilfe, Tür) für eine Messzeile -- nur aus ihren Codes."""
+    outcome, reason = row["outcome"], row["reason"] or ""
+    status = row["status"] if "status" in row.keys() else 0
+    door = (row["door"] if "door" in row.keys() else "") or DEFAULT_DOOR.get(outcome, "")
+    code = f" (HTTP {status})" if status else ""
+    if outcome == "ok":
+        return "", "", ""
+    if outcome == "refused" and reason in ("destination", "platform") and door in (
+            "destination", "platform"):
+        who = DOOR_WORDS[door]
+        return (f"{who[0].upper() + who[1:]} hat abgelehnt{code}.", HINT_TENANT, door)
+    if outcome == "refused" and reason == "destination":
+        return ("Das Gateway konnte dich nicht bis zur Destination tragen (keine Zusicherung "
+                "der Plattform in diesem Aufruf).", HINT_TENANT, door)
+    if outcome == "upstream_error":
+        word = UPSTREAM_WORDS.get(reason, "")
+        return (f"Der Server war nicht erreichbar oder fehlerhaft"
+                f"{' – ' + word if word else ''}{code}.", HINT_LATER, door)
+    hit = REASON_SENTENCES.get((outcome, reason)) or REASON_SENTENCES.get((outcome, ""))
+    if hit:
+        return hit[0], hit[1], door
+    return (f"{ME_OUTCOME_WORDS.get(outcome, outcome)}{code}.", HINT_GATEWAY, door)
+
+
+def me_call(row):
+    sentence, hint, door = call_sentence(row)
+    return {"time": row["time"], "view": row["view"], "kind": row["kind"], "name": row["tool"],
+            "client": row["client"], "assistant": row["assistant"], "procedure": row["procedure"],
+            "outcome": row["outcome"], "reason": row["reason"], "status": row["status"],
+            "door": door, "ms": row["ms"], "sentence": sentence, "hint": hint}
+
+
+def me_filter(query, uid):
+    """Filter aus der Anfrage. „Nur Probleme“ ist voreingestellt, wenn es in den
+    letzten 7 Tagen welche gab (RFC-0095 §3)."""
+    raw = query.get("problems", "")
+    if raw in ("0", "1"):
+        problems = raw == "1"
+    else:
+        problems = bool(books.person_calls(DB, "platform", uid, days=7, problems=True, limit=1))
+    view = query.get("view", "").strip()
+    day = query.get("day", "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        day = ""
+    return {"problems": problems, "view": view[:100], "day": day}
+
+
+ME_REALM_NOTE = ("Aufrufe, bei denen du dich selbst am Anmeldedienst angemeldet hast (etwa aus "
+                 "Claude Code), erscheinen hier, sobald die Plattform dem Gateway deine Kennung "
+                 "aus dem Anmeldedienst mitgibt (RFC-0095 D2). Aufrufe mit einem API-Schlüssel "
+                 "haben keine Person und stehen nie hier.")
+
+
+def me_doc(uid, query):
+    flt = me_filter(query, uid)
+    rows = books.person_calls(DB, "platform", uid, days=ME_DAYS, **flt)
+    return {"v": 1, "days": ME_DAYS, "filter": flt, "calls": [me_call(r) for r in rows],
+            "note": ME_REALM_NOTE}
+
+
+def me_page(user, uid, query):
+    doc = me_doc(uid, query)
+    flt = doc["filter"]
+    views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS)})
+
+    def link(**change):
+        q = {"problems": "1" if flt["problems"] else "0", "view": flt["view"], "day": flt["day"]}
+        q.update(change)
+        return "me?" + "&amp;".join(f"{k}={quote(v)}" for k, v in q.items() if v)
+
+    rows = []
+    for c in doc["calls"]:
+        who = " · ".join(x for x in (c["client"], c["assistant"]) if x) or "—"
+        mark = badge("green" if c["outcome"] == "ok" else "yellow" if c["outcome"] in (
+            "limited", "tool_error") else "red", ME_OUTCOME_WORDS.get(c["outcome"], c["outcome"]))
+        kind = "" if c["kind"] == "tool" else (
+            " <span class=muted>" + esc(compose.KIND_WORDS.get(c["kind"], c["kind"])) + "</span>")
+        rows.append(f'<tr><td>{esc(c["time"].replace("T", " ").rstrip("Z"))}</td>'
+                    f'<td><a href="{link(view=c["view"])}">{esc(c["view"])}</a></td>'
+                    f'<td><code>{esc(c["name"] or "—")}</code>{kind}</td><td>{esc(who)}</td>'
+                    f'<td>{esc(c["procedure"])}</td><td>{mark}</td><td class="num">{c["ms"]} ms</td></tr>')
+        if c["sentence"]:
+            rows.append(f'<tr class="why"><td></td><td colspan="6">{esc(c["sentence"])} '
+                        f'<span class="muted">Abgelehnt oder gemeldet von: '
+                        f'{esc(DOOR_WORDS.get(c["door"], "—"))}. {esc(c["hint"])}</span></td></tr>')
+    filters = [f'<a href="{link(problems="0" if flt["problems"] else "1")}">'
+               f'{"Alle Aufrufe zeigen" if flt["problems"] else "Nur Probleme zeigen"}</a>']
+    if flt["view"]:
+        filters.append(f'Sicht <b>{esc(flt["view"])}</b> (<a href="{link(view="")}">alle Sichten</a>)')
+    if flt["day"]:
+        filters.append(f'Tag <b>{esc(flt["day"])}</b> (<a href="{link(day="")}">alle Tage</a>)')
+    day_form = (f'<form method="get" action="me" style="display:inline">'
+                f'<input type="hidden" name="problems" value="{"1" if flt["problems"] else "0"}">'
+                f'<input type="hidden" name="view" value="{esc(flt["view"])}">'
+                f'<input type="date" name="day" value="{esc(flt["day"])}"> <button class="quiet">Tag</button></form>')
+    empty = ("Keine Probleme in den letzten 30 Tagen." if flt["problems"] and not flt["view"]
+             and not flt["day"] else "Keine Aufrufe für diesen Filter.")
+    body = f'''<div class="card"><h2>Meine Aufrufe</h2>
+<p class="hint">Deine Aufrufe über dieses Gateway in den letzten {ME_DAYS} Tagen – aus dem Chat,
+aus Apps der Plattform. Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
+Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.</p>
+<p>{" · ".join(filters)} · {day_form}</p>
+<div class="scroll"><table><tr><th>Zeit (UTC)</th><th>Sicht</th><th>Eintrag</th><th>Chat · Assistent</th>
+<th>Verfahren</th><th>Ausgang</th><th>Dauer</th></tr>
+{"".join(rows) or f'<tr><td colspan=7 class=muted>{empty}</td></tr>'}</table></div>
+<p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
+Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
+<p class="hint">{esc(ME_REALM_NOTE)}</p></div>'''
+    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meine Werkzeuge — OAAP MCP-Gateway</title>
+{STYLE}<style>tr.why td{{border-top:0;padding-top:0;font-size:.85rem}}</style>
+<header class="oaap">
+  <a class="brand" href="me">{LOGO_SVG}
+    <span><b>MEINE WERKZEUGE</b><small>Deine Aufrufe über das MCP-Gateway</small></span></a>
+  <div class="userbox">{esc(user)}</div>
+</header>
+<main>
+{body}</main>
+<footer class="oaap">OAAP MCP-Gateway {VERSION} — du siehst nur deine eigenen Aufrufe</footer></html>"""
 
 
 def calls_tab(host):
@@ -2029,10 +2200,13 @@ class Handler(BaseHTTPRequestHandler):
         msg_id, method = msg.get("id"), msg.get("method")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         state = {"down": 0, "outcome": "upstream_error", "reason": "", "sse": False,
-                 "kind": CALLS[method], "name": "", "server": "", "source": ""}
+                 "kind": CALLS[method], "name": "", "server": "", "source": "",
+                 "status": 0, "door": "server"}
 
-        def done(outcome, reason=""):
-            state["outcome"], state["reason"] = outcome, reason
+        def done(outcome, reason="", status=0, door=None):
+            # 0.15 (RFC-0095 D3): wer abgelehnt hat und mit welchem HTTP-Status.
+            state["outcome"], state["reason"], state["status"] = outcome, reason, status
+            state["door"] = DEFAULT_DOOR.get(outcome, "") if door is None else door
 
         def answer(doc, status=200, headers=()):
             if state["sse"]:
@@ -2111,7 +2285,8 @@ class Handler(BaseHTTPRequestHandler):
             books.record(DB, key, vrow["name"], state["kind"], state["name"], state["server"],
                          state["source"], state["outcome"], state["reason"],
                          (time.monotonic() - t0) * 1000, bytes_up, state["down"],
-                         person=self.person, procedure=state.get("procedure", "T"))
+                         person=self.person, procedure=state.get("procedure", "T"),
+                         status=state["status"], door=state["door"])
             if state["sse"]:
                 self.close_connection = True
 
@@ -2135,11 +2310,12 @@ class Handler(BaseHTTPRequestHandler):
             # Weg zum Server: Der Sicherungsautomat zählt das nicht.
             done("refused" if not self.person or self.person.get("procedure") == "A"
                  or srow["auth_kind"] == "propagate" else "upstream_error",
-                 "destination" if srow["auth_kind"] == "propagate" else "exchange")
+                 "destination" if srow["auth_kind"] == "propagate" else "exchange",
+                 door="gateway")
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
             return False
         except upstream.UpstreamError as exc:
-            done("upstream_error", exc.kind)
+            done("upstream_error", exc.kind, exc.status)
             answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — {exc}"))
             return True
 
@@ -2219,8 +2395,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Satz geht weiter, der Sicherungsautomat zählt es nicht (RFC-0073 §4.1).
                 with sess.lock:
                     sess.upstream.pop(srow["name"], None)
-                done("refused", "destination" if server.get("door") == "destination"
-                     else "platform")
+                via = "destination" if server.get("door") == "destination" else "platform"
+                done("refused", via, exc.status, via)
                 answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {exc}"))
                 return False
             except upstream.TooLarge as exc:
@@ -2232,7 +2408,7 @@ class Handler(BaseHTTPRequestHandler):
             except upstream.UpstreamError as exc:
                 if exc.kind == "version":
                     books.note_server(DB, srow["name"], error=str(exc))
-                done("upstream_error", exc.kind)
+                done("upstream_error", exc.kind, exc.status)
                 answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: Server nicht nutzbar — "
                                                  f"{exc}"))
                 return True
@@ -2320,6 +2496,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/report"):
             self.handle_report(path)
             return
+        if path == "/me" or path.startswith("/me/"):
+            self.handle_me(path)
+            return
         if not self.is_admin():
             self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Diese Seite ist der '
                                      'Verwaltung vorbehalten.</p></div>', "", ""))
@@ -2335,6 +2514,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, charts_page(user, roles, query))
         else:
             self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start")))
+
+    def handle_me(self, path):
+        """/me und /me/v1/calls (RFC-0095 Stufe 1): die eigenen Aufrufe der Person.
+
+        Die Plattform meldet die Person an (Route /me, Rolle user) und setzt
+        X-OAAP-User-Id -- die Kennung, mit der die von ihr getragenen Aufrufe
+        (Verfahren A, P, I) in den Messzeilen stehen. Nur Zeilen genau dieser
+        Kennung; ohne sie nichts."""
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+        if path == "/me/v1/calls":
+            if not uid:
+                self.send_json(403, {"error": "Nur über die Plattform angemeldet: Es fehlt die "
+                                              "Kennung der Person."})
+                return
+            self.send_json(200, me_doc(uid, query))
+            return
+        if path != "/me":
+            self.send_json(404, {"error": "Bekannt sind /me und /me/v1/calls."})
+            return
+        if not uid:
+            self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Diese Seite zeigt deine '
+                                     'eigenen Aufrufe und braucht die Anmeldung über die Plattform.'
+                                     '</p></div>', "", ""))
+            return
+        self.send_html(200, me_page(self.identity()[0], uid, query))
 
     def handle_report(self, path):
         if not self.is_admin():

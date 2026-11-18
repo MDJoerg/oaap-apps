@@ -264,15 +264,17 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.14.0",
+      "version": "0.15.0",
       "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/mcp-gateway"
       },
       "roles": [
-        "admin",
-        "public"
+        "public",
+        "user",
+        "keyuser",
+        "admin"
       ],
       "categories": [
         "ai",

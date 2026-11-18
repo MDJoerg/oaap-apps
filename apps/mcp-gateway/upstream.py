@@ -42,9 +42,10 @@ class UpstreamError(Exception):
     Der Text nennt nie eine Adresse mit Zugangsdaten und nie einen Inhalt.
     """
 
-    def __init__(self, kind, text):
+    def __init__(self, kind, text, status=0):
         super().__init__(text)
         self.kind = kind
+        self.status = status            # HTTP-Status, wenn der Server einen nannte (0.15.0)
 
 
 class Refused(UpstreamError):
@@ -266,7 +267,8 @@ def post(server, url, message, session_id=None, version=None, timeout=60,
             if supported:
                 raise UpstreamError("version", "Der Server spricht nur die Protokollversionen "
                                     + ", ".join(supported) + "; getestet sind " + ", ".join(TESTED) + ".")
-            raise UpstreamError("http", f"Der Server antwortet mit HTTP {resp.status}.")
+            raise UpstreamError("http", f"Der Server antwortet mit HTTP {resp.status}.",
+                                resp.status)
         ctype = (resp.getheader("Content-Type") or "").split(";")[0].strip().lower()
         if ctype == "text/event-stream":
             ex.streamed = True

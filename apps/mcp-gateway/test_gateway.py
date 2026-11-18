@@ -2146,6 +2146,118 @@ st, doc = views_a(client="anderer-chat")
 check("ein anderer Chat: v-sicht nicht (nur Profile mit @* gelten für jeden Chat)", st == 200 and "v-sicht" not in [v["name"] for v in doc["views"]], doc)
 
 
+print("\n-- 0.15.0: /me, die eigenen Aufrufe der Person (RFC-0095 Stufe 1)")
+
+
+def me_get(path, uid="", roles="user", user="vp-person"):
+    headers = {"X-OAAP-User": user, "X-OAAP-Roles": roles}
+    if uid:
+        headers["X-OAAP-User-Id"] = uid
+    req = urllib.request.Request(GW + path, headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    return resp.status, resp.read().decode()
+
+
+def me_json(uid, query=""):
+    st, raw = me_get("/me/v1/calls" + query, uid)
+    return st, (json.loads(raw) if st == 200 else raw)
+
+
+ohne = list(app.DB.execute("SELECT status, door FROM usage WHERE user_sub='u-ohne' "
+                           "AND reason='destination'"))
+check("Messzeile: Ablehnung der Destination mit status 403 und door destination",
+      ohne and all(r["status"] == 403 and r["door"] == "destination" for r in ohne),
+      [dict(r) for r in ohne])
+ok_rows = list(app.DB.execute("SELECT status, door FROM usage WHERE user_sub='u-anna' "
+                              "AND outcome='ok'"))
+check("… ein gelungener Aufruf: status 0, keine Tür", ok_rows
+      and all(r["status"] == 0 and r["door"] == "" for r in ok_rows))
+
+# Köder: eine zweite Person mit einer Sicht, deren Name sonst nirgends vorkommt,
+# und ein Schlüsselaufruf (keine Person) in einer eigenen Sicht.
+any_key = books.keys(app.DB)[0]
+books.record(app.DB, any_key, "koeder-sicht", "tool", "koeder_tool", "papier", "echo", "ok", "",
+             5, 10, 10, person={"iss": "platform", "sub": "u-koeder", "client": "kchat"},
+             procedure="A")
+books.record(app.DB, any_key, "nur-schluessel", "tool", "echo", "papier", "echo", "ok", "",
+             5, 10, 10)
+books.record(app.DB, any_key, "koeder-sicht", "tool", "alt_tool", "papier", "echo", "refused",
+             "suspended", 1, 10, 0, person={"iss": "platform", "sub": "u-koeder", "client": "kchat"},
+             procedure="A")
+app.DB.execute("UPDATE usage SET door='', status=0 WHERE tool='alt_tool'")    # eine Zeile von vor 0.15
+books.record(app.DB, any_key, "koeder-sicht", "tool", "fremd", "papier", "echo", "ok", "", 1, 1, 1,
+             person={"iss": "https://auth.example/realms/x", "sub": "u-koeder"}, procedure="X")
+app.DB.commit()
+
+st, doc = me_json("u-ohne", "?problems=0")
+want = app.DB.execute("SELECT COUNT(*) FROM usage WHERE user_iss='platform' AND user_sub='u-ohne'"
+                      ).fetchone()[0]
+check("/me/v1/calls: genau die Zeilen dieser Person, keine fremde (Köder koeder-sicht fehlt)",
+      st == 200 and len(doc["calls"]) == want > 0
+      and all(c["view"] != "koeder-sicht" for c in doc["calls"]), (st, want, doc))
+den = [c for c in doc["calls"] if c["reason"] == "destination"]
+check("Ablehnung in Worten, mit dem, der abgelehnt hat",
+      den and all(c["sentence"] == "Die Destination oder das Zielsystem hat abgelehnt (HTTP 403)."
+                  and c["door"] == "destination" and "Verwaltung des Mandanten" in c["hint"]
+                  for c in den), den[:1])
+check("die Antwort trägt keinen Satz des Servers (nichts aus der Destination)",
+      "no sap_user" not in json.dumps(doc) and "sap_user" not in json.dumps(doc))
+st, doc = me_json("u-ohne")
+check("„nur Probleme“ ist voreingestellt, wenn es in 7 Tagen welche gab",
+      st == 200 and doc["filter"]["problems"] is True
+      and doc["calls"] and all(c["outcome"] != "ok" for c in doc["calls"]), doc["filter"])
+
+st, doc = me_json("u-koeder", "?problems=0")
+names = [c["name"] for c in doc["calls"]] if st == 200 else []
+check("Köder-Person sieht ihre Zeilen, nie den Schlüsselaufruf (nur-schluessel)",
+      st == 200 and "koeder_tool" in names
+      and all(c["view"] != "nur-schluessel" for c in doc["calls"]), (st, doc))
+check("Aufrufe mit Anmeldung am Anmeldedienst (anderer Issuer) stehen in Stufe 1 nicht da (D2)",
+      "fremd" not in names and "Anmeldedienst" in doc["note"], names)
+alt = [c for c in doc["calls"] if c["name"] == "alt_tool"]
+check("eine Zeile von vor 0.15 (ohne Tür) bekommt trotzdem ihren Satz: gesperrt, Gateway",
+      alt and "gesperrt" in alt[0]["sentence"] and alt[0]["door"] == "gateway", alt)
+st, doc = me_json("u-anna", "?problems=0&view=p-sicht")
+check("Filter nach Sicht", st == 200 and doc["calls"]
+      and {c["view"] for c in doc["calls"]} == {"p-sicht"}, doc.get("filter"))
+day = app.DB.execute("SELECT substr(time,1,10) FROM usage WHERE user_sub='u-anna' LIMIT 1").fetchone()[0]
+st, doc = me_json("u-anna", "?problems=0&day=2001-01-01")
+check("Filter nach Tag: ein Tag ohne Aufrufe ist leer", st == 200 and doc["calls"] == [], doc)
+st, doc = me_json("u-anna", f"?problems=0&day={day}")
+check("… der Tag mit Aufrufen nicht", st == 200 and len(doc["calls"]) > 0)
+
+# Eine Ablehnung durch das Gateway selbst, Ende zu Ende: ein Tool, das die Sicht nicht hat.
+st, sid_m = session_a("p-sicht", client="pchat", uid="u-me", asrt=ASRT_ANNA)
+rpc_a("p-sicht", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                  "params": {"name": "gibt_es_nicht", "arguments": {}}}, sid_m,
+      client="pchat", uid="u-me", asrt=ASRT_ANNA, assistant="sap")
+rows_after("SELECT * FROM usage WHERE user_sub='u-me'", 1)
+st, doc = me_json("u-me")
+c = doc["calls"][0] if st == 200 and doc["calls"] else {}
+check("Gateway lehnt ab (unbekanntes Werkzeug): door gateway, Satz in Worten, Chat und Assistent",
+      c.get("door") == "gateway" and "gibt es in der Sicht nicht" in c.get("sentence", "")
+      and c.get("client") == "pchat" and c.get("assistant") == "sap", c)
+
+st, html_ = me_get("/me", "u-ohne")
+check("/me als Seite: eigene Aufrufe, Satz der Ablehnung, Hinweis auf den Anmeldedienst",
+      st == 200 and "Meine Aufrufe" in html_ and "hat abgelehnt (HTTP 403)" in html_
+      and "koeder-sicht" not in html_ and "nur-schluessel" not in html_
+      and "vom Gateway abgewiesen" not in html_, html_[:300])
+st, _ = me_get("/me")
+check("/me ohne Kennung der Person: 403", st == 403, st)
+st, _ = me_get("/me/v1/calls")
+check("/me/v1/calls ohne Kennung: 403", st == 403, st)
+st, _ = me_get("/", "u-ohne")
+check("die Betreiberseite bleibt admin: eine Person bekommt 403", st == 403, st)
+st, _ = me_get("/me/v1/sonstwas", "u-ohne")
+check("unbekannter Pfad unter /me: 404", st == 404, st)
+check("Tür nur aus der festen Liste (ein fremdes Wort wird leer gespeichert)",
+      {r[0] for r in app.DB.execute("SELECT DISTINCT door FROM usage")} <= {"", *books.DOORS})
+
+
 gw.shutdown()
 paper.shutdown()
 

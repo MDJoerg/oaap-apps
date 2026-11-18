@@ -39,6 +39,8 @@ Plattform (Verfahren I).
   falschem Token oder für eine Sicht, die es nicht gibt.
 - **`/.well-known/oauth-protected-resource` ist `public`.** Dort
   erfährt ein MCP-Client, bei welchem Anmeldedienst er sich anmeldet.
+- **`/me` ist `user`** (0.15). Die eigene Seite der Person: ihre
+  Aufrufe, Fehler in Worten (siehe unten).
 - **`/` ist `admin`.** Server, Katalog, Sichten, Schlüssel, Verbrauch,
   Auswertung und `/report/v1/…` für ein Abrechnungssystem.
 
@@ -378,6 +380,28 @@ Einträgen des SAP-Servers in bec mühsam (Jörg, 2026-11-18).
   („kein Zugangsprofil erlaubt diese Sicht“, „Zugang Plattform fehlt“ …):
   so sieht die Verwaltung, was sie noch einrichten muss. `_views` kann nie
   eine Sicht sein (Namen beginnen mit Buchstabe oder Ziffer).
+
+## Meine Werkzeuge: `/me` für die Person (0.15)
+
+RFC-0095 Stufe 1. Wer das Gateway benutzt, ohne es zu verwalten, sieht auf
+`/me` (im Portal „Meine Werkzeuge“) die **eigenen Aufrufe der letzten 30
+Tage**: Zeit, Sicht, Eintrag, Chat und Assistent, Verfahren, Ausgang,
+Dauer. Voreingestellt ist „nur Probleme“, wenn es in den letzten 7 Tagen
+welche gab; dazu Filter nach Sicht und Tag. Dasselbe als JSON unter
+`/me/v1/calls`.
+
+- Gezeigt werden nur Messzeilen mit genau der Kennung, die die Plattform
+  als `X-OAAP-User-Id` setzt, also die Aufrufe, die sie getragen hat
+  (Verfahren A, P, I). Schlüsselaufrufe haben keine Person und stehen nie
+  da. Aufrufe mit eigener Anmeldung am Anmeldedienst (Claude Code) folgen,
+  sobald die Plattform die Kennung aus dem Realm mitgibt (D2).
+- Jeder Fehler steht **in Worten** da, mit dem, der abgelehnt hat, und mit
+  einem Hinweis, etwa: „Die Destination oder das Zielsystem hat abgelehnt
+  (HTTP 403). Frag die Verwaltung des Mandanten; nenne Zeit und Sicht.“
+- Der Satz entsteht nur aus Codes. Dafür hat jede Messzeile seit 0.15 zwei
+  Spalten mehr: `status` (HTTP-Nummer) und `door` (`gateway`, `platform`,
+  `destination`, `server`). Freien Text gibt es weiterhin nicht. Zeilen von
+  vor 0.15 bekommen die Tür, die ihr Ausgang nahelegt.
 
 ## Feste Argumente und Grenzen
 

@@ -24,6 +24,7 @@ passen würde.**
 import hashlib
 import json
 import re
+from datetime import datetime, timedelta, timezone
 
 from gwcore import context, ledger
 from gwcore.context import CONTEXT_FIELDS, labels_text  # noqa: F401
@@ -162,7 +163,13 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 0.7.2 (RFC-0074 §5.6): `yes`, wenn der Chat sagt, die Person habe diesen
     # Aufruf bestätigt -- eine Angabe des Chats, keine Prüfung des Gateways.
     ("usage", "confirmed", "TEXT NOT NULL DEFAULT ''"),
+    # 0.15 (RFC-0095 Stufe 1, D3): wer abgelehnt hat und mit welchem HTTP-Status --
+    # zwei strukturierte Spalten, damit /me den Grund in Worten sagen kann. Eine
+    # Zahl und ein Wort aus einer festen Liste: Kein Inhalt passt hinein (§10).
+    ("usage", "status", "INTEGER NOT NULL DEFAULT 0"),
+    ("usage", "door", "TEXT NOT NULL DEFAULT ''"),
 )
+DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
 # seit 0.7 die Plattform (Verfahren A: ein Chat trägt den Menschen, RFC-0074).
 WAY_PARTS = ("key", "signin", "platform")
@@ -197,6 +204,8 @@ def connect(path):
 
 def migrate(db):
     ledger.add_columns(db, ADDED_COLUMNS)
+    # 0.15: /me fragt je Person (RFC-0095).
+    db.execute("CREATE INDEX IF NOT EXISTS usage_person ON usage(user_iss, user_sub, id DESC)")
     _rebuild_01(db)
 
 
@@ -1105,7 +1114,7 @@ def remove_item(db, actor, view, kind, name):
 # ------------------------------------------------------------------ Messung
 
 def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down,
-           person=None, procedure="T"):
+           person=None, procedure="T", status=0, door=""):
     """Eine Messzeile je Aufruf. `key` ist die Schlüsselzeile vom Beginn der Anfrage.
 
     `name`/`source` sind Namen in der Sicht und beim Server — bei einer
@@ -1113,16 +1122,44 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
     """
     cols = ["time", "key_id", "view", "kind", "tool", "server", "server_tool", "procedure",
             "outcome", "reason", "ms", "bytes_up", "bytes_down", "user_sub",
-            "user_iss"] + context.snapshot_columns()
+            "user_iss", "status", "door"] + context.snapshot_columns()
     values = [now(), key["id"], view, kind, name, server, source, procedure, outcome, reason,
               int(ms), int(bytes_up), int(bytes_down), (person or {}).get("sub", ""),
-              (person or {}).get("iss", "")] + context.snapshot_values(key)
+              (person or {}).get("iss", ""), int(status or 0),
+              door if door in DOORS else ""] + context.snapshot_values(key)
     if (person or {}).get("client"):
         cols += ["client", "assistant", "confirmed"]
         values += [person["client"], person.get("assistant", ""), person.get("confirmed", "")]
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()
+
+
+PROBLEMS = ("refused", "limited", "upstream_error", "tool_error")
+
+
+def person_calls(db, iss, sub, days=30, problems=False, view="", day="", limit=500):
+    """Die Messzeilen EINER Person (RFC-0095 Stufe 1): höchstens `days` Tage zurück.
+
+    Nur Zeilen mit genau diesem Issuer und dieser Kennung -- Schlüsselaufrufe
+    haben keine Person und erscheinen nie. Ohne Kennung: nichts."""
+    if not (iss and sub):
+        return []
+    sql = ["SELECT * FROM usage WHERE user_iss=? AND user_sub=? AND time >= ?"]
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    args = [iss, sub, since]
+    if problems:
+        sql.append(f"AND outcome IN ({','.join('?' * len(PROBLEMS))})")
+        args += PROBLEMS
+    if view:
+        sql.append("AND view=?")
+        args.append(view)
+    if day:
+        sql.append("AND substr(time,1,10)=?")
+        args.append(day)
+    sql.append("ORDER BY id DESC LIMIT ?")
+    args.append(limit)
+    return list(db.execute(" ".join(sql), args))
 
 
 def count_protocol(db, key_id, view, method):
