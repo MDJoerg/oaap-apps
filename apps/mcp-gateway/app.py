@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.18.1"
+VERSION = "0.19.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -519,6 +519,19 @@ IDP_HEADER = "X-OAAP-User-Idp"
 TRUST_IDP = IDP_HEADER.lower() in {h.strip().lower() for h in
                                    (os.environ.get("OAAP_IDENTITY_HEADERS") or "").split(",")}
 # Die eigene öffentliche Adresse (RFC-0043), für den Link auf /me in der Antwort an den Chat.
+# 0.19 (Plattform ab 0.1.308, runtime 2.38, L5): die Seite DIESER Instanz im Portal --
+# dort richtet die Verwaltung die Anmeldung ein. Leer bei einer älteren Plattform.
+PORTAL_URL = (os.environ.get("OAAP_PORTAL_URL") or "").strip()
+
+
+def portal_mcp_link(text="im Portal"):
+    """Ein Link auf die Karte MCP der Instanzseite im Portal, sonst der Weg in Worten."""
+    if PORTAL_URL.startswith("https://") or PORTAL_URL.startswith("http://"):
+        return (f'<a href="{esc(PORTAL_URL)}?tab=ueberblick#mcp" target="_blank" '
+                f'rel="noopener">{esc(text)}</a>')
+    return f"{esc(text)} (Instanzen → diese Instanz → Reiter Überblick → Karte MCP)"
+
+
 PUBLIC_BASE = next((n.strip().rstrip("/") for n in (os.environ.get("OAAP_INSTANCE_NAMES") or "")
                     .split(",") if n.strip().startswith(("https://", "http://"))), "")
 
@@ -1143,7 +1156,10 @@ def keys_tab(host):
                        f'<label>Höchste Wirkungsklasse</label><select name="max_effect">'
                        f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select>'
                        f'<label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select>'
-                       f'<button>Speichern</button></form></details>')
+                       + (f'<label>Gruppen (Komma; volle Pfade, *, @&lt;chat&gt; oder @*)</label>'
+                          f'<input type="text" name="groups" value="{esc(", ".join(books.profile_groups(k)))}" required>'
+                          if k["kind"] == "profile" else "")
+                       + f'<button>Speichern</button></form></details>')
         krows.append(f'<tr><td><b>{esc(k["label"])}</b><br>{state}</td>'
                      f'<td>{esc(", ".join(books.key_views(k)))}</td>'
                      f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
@@ -1503,10 +1519,13 @@ CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code 
 def signin_card(host):
     """Wie sich Menschen anmelden (Spec §2.2) — oder warum es noch nicht geht."""
     if not ISSUER:
-        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Im Portal auf der '
-                'Instanzseite „Anmeldung einrichten“ (oder <code>oaap idp mcp &lt;konnektor&gt; --instance '
-                '&lt;name&gt;</code>), oder MCPGW_ISSUER, MCPGW_AUDIENCE und MCPGW_SIGNIN_CLIENT in der '
-                'Konfiguration der Instanz von Hand setzen (RFC-0065 D14, D15; RFC-0073 Stufe 3).</p></div>')
+        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Einrichten: '
+                + portal_mcp_link("im Portal auf der Seite dieser Instanz")
+                + ' auf <b>„Anmeldung einrichten“</b> klicken (das darf der Betreiber des Knotens, server_admin) -- die Plattform legt die Clients im Realm '
+                'an und gibt dem Gateway die Werte. Die Felder MCPGW_* in der Konfiguration der Instanz '
+                'bleiben dafür <b>leer</b>; von Hand gesetzt gewinnen sie (nur ohne Konnektor nötig). Am '
+                'Knoten: <code>oaap idp mcp &lt;konnektor&gt; --instance &lt;name&gt;</code> '
+                '(RFC-0065 D14, D15; RFC-0073 Stufe 3).</p></div>')
     err = ISSUER_KEYS.error if ISSUER_KEYS else ""
     views = [v["name"] for v in books.views(DB) if "signin" in books.view_ways(v)]
     cmd = "\n".join(f"claude mcp add --transport http {v} {endpoint(host, v)} \\\n"
@@ -1516,6 +1535,7 @@ def signin_card(host):
     return f'''<div class="card"><h2>Anmeldung von Menschen</h2>
 <p>Issuer <code>{esc(ISSUER)}</code> · Audience <code>{esc(AUDIENCE or "— fehlt")}</code> ·
 Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
+<p class="hint">Eingerichtet und abgeschaltet wird die Anmeldung {portal_mcp_link("im Portal auf der Seite dieser Instanz")}.</p>
 {"<p class=err>Schlüssel des Issuers: " + esc(err) + "</p>" if err else ""}
 <p class="hint">Im Realm braucht es einen öffentlichen Client (Rücksprung nur
 <code>http://localhost:{CALLBACK_PORT}/callback</code>) mit einem Audience-Mapper auf
@@ -2992,8 +3012,16 @@ class Handler(BaseHTTPRequestHandler):
                           if books.revoke(DB, label, user) else f"Nichts zu widerrufen: „{label}“.")
             elif path == "/key-limits":
                 label = form.get("label", "")
+                # L11 (0.19): die Gruppen eines Zugangsprofils ändern, ohne es neu anzulegen.
+                # Zuerst prüfen, damit ein Fehler in den Gruppen nichts halb ändert.
+                prow = DB.execute("SELECT kind FROM keys WHERE label=? AND revoked=''", (label,)).fetchone()
+                if "groups" in form and prow and prow["kind"] == "profile":
+                    books.clean_groups(form["groups"])
                 changed = books.set_key_limits(DB, user, label, form.get("views", ""),
                                                form.get("max_effect", "read"), form.get("ceiling", "yellow"))
+                if "groups" in form and prow and prow["kind"] == "profile" \
+                        and books.set_profile_groups(DB, user, label, form["groups"]):
+                    changed = list(changed) + ["Gruppen"]
                 notice = (f"„{label}“ geändert: {', '.join(changed)}. Gilt ab dem nächsten Aufruf."
                           if changed else f"„{label}“ unverändert.")
             elif path == "/source-sync":

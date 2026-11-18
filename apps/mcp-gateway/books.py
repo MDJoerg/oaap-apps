@@ -369,6 +369,8 @@ def set_profile_groups(db, actor, label, groups):
         db.execute("UPDATE keys SET groups=? WHERE id=?", (new, row["id"]))
         log(db, actor, "profile.groups", label, f"{row['groups']} → {new}")
         db.commit()
+        return True
+    return False
 
 
 def set_key_limits(db, actor, label, views, max_effect, ceiling):

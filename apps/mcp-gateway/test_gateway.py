@@ -2680,6 +2680,42 @@ me_post("/me/credential", "u-op-u", server="lies2", value="op-tok")
 page = admin("/server-read", NOASRT, name="lies2")
 check("L29: die Verwaltung mit eigenem Zugang liest ohne Zusicherung",
       len(books.catalog(app.DB, "lies2")) == 1 and BS_["auth"][-1] == "Bearer op-tok", page[-300:])
+
+print("\n-- 0.19.0: Gruppen eines Zugangsprofils ändern (L11), Link ins Portal (L1, L5)")
+page = admin("/key-limits", label="b-prof", views="b-sicht", max_effect="read", ceiling="red",
+             groups="@uchat, /neu-team")
+row = app.DB.execute("SELECT * FROM keys WHERE label='b-prof'").fetchone()
+check("L11: Gruppen eines Profils geändert, ohne es neu anzulegen (Prüfspur profile.groups)",
+      books.profile_groups(row) == ["/neu-team", "@uchat"] and "Gruppen" in page
+      and any(r["action"] == "profile.groups" and r["subject"] == "b-prof" for r in books.audit(app.DB, 30)),
+      (dict(row), page[-300:]))
+page = admin("/key-limits", label="b-prof", views="b-sicht,u-sicht", max_effect="read", ceiling="red",
+             groups="kaputt ohne pfad")
+row = app.DB.execute("SELECT * FROM keys WHERE label='b-prof'").fetchone()
+check("L11: falsche Gruppen werden abgewiesen, und dann ändert sich gar nichts (auch nicht die Sichten)",
+      books.profile_groups(row) == ["/neu-team", "@uchat"] and row["views"] == "b-sicht", dict(row))
+admin("/key-limits", label="b-prof", views="b-sicht", max_effect="read", ceiling="red", groups="@uchat")
+st, page = admin_get("/?tab=zugaenge")
+check("L11: das Formular „Ändern“ eines Profils hat das Feld Gruppen",
+      'name="groups" value="@uchat"' in page, page[:0])
+old_portal, old_iss = app.PORTAL_URL, app.ISSUER
+app.PORTAL_URL = "https://bec.oaap.example/instances/bec-tools"
+st, page = admin_get("/?tab=anmeldung")
+check("L5: der Reiter Anmeldung verlinkt die Instanzseite im Portal (Karte MCP)",
+      'href="https://bec.oaap.example/instances/bec-tools?tab=ueberblick#mcp"' in page, page[-500:])
+app.ISSUER = ""
+st, page = admin_get("/?tab=anmeldung")
+check("L1/L5: ohne Anmeldung: Link, „Anmeldung einrichten“ und dass die Felder MCPGW_* leer bleiben",
+      "bec-tools?tab=ueberblick#mcp" in page and "Anmeldung einrichten" in page and "<b>leer</b>" in page,
+      page[-600:])
+app.PORTAL_URL = ""
+st, page = admin_get("/?tab=anmeldung")
+check("L5: ohne Angabe der Plattform (vor 0.1.308) der Weg in Worten",
+      "Instanzen → diese Instanz → Reiter Überblick → Karte MCP" in page, page[-600:])
+app.PORTAL_URL, app.ISSUER = old_portal, old_iss
+y = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "oaap-app.yaml"), encoding="utf-8").read()
+check("L1: die Konfiguration sagt bei den Feldern der Anmeldung, dass sie leer bleiben",
+      y.count("leer lassen bei „Anmeldung einrichten“") == 4 and "LEER LASSEN" in y)
 sechs.shutdown()
 
 
