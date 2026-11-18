@@ -1981,6 +1981,89 @@ except app.NoPerson as exc:
 check("P: ohne Person (Schlüssel) abgewiesen, nie ein technischer Rückfall", "Schlüssel" in said, said)
 dest.shutdown()
 
+print("\n-- 0.13.0: Sicht kopieren, umbenennen, Zuordnung als Baum")
+
+
+def admin_pairs(path, pairs):
+    req = urllib.request.Request(GW + path, data=urlencode(pairs).encode(), method="POST",
+                                 headers={"X-OAAP-User": "betreiber", "X-OAAP-Roles": "admin",
+                                          "Host": "gw.example"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode()
+
+
+T = "\t"
+admin("/server-save", name="papier", address=PAPER, auth="none", light="green")
+admin("/server-read", name="papier")
+admin("/view-save", name="baum-a", max_effect="execute")
+_, page = admin_get("/view?name=baum-a")
+check("die Seite einer Sicht zeigt den Baum aller Kataloge, nichts angekreuzt",
+      'class="treeform"' in page and f'value="papier{T}tool{T}echo"' in page
+      and f'value="papier{T}tool{T}echo" checked' not in page, page[page.find("Zuordnen"):][:300])
+seen = [("seen", f"papier{T}tool{T}{n}") for n in ("echo", "write_thing", "slow")]
+page = admin_pairs("/view-items", [("view", "baum-a")] + seen + [
+    ("pick", f"papier{T}tool{T}echo"), ("pick", f"papier{T}tool{T}write_thing"),
+    (f"eff{T}papier{T}tool{T}echo", "read"), (f"eff{T}papier{T}tool{T}write_thing", "write")])
+got = {i["name"]: i["effect"] for i in books.items(app.DB, "baum-a")}
+check("angekreuzt = freigegeben, mit der Klasse daneben", got == {"echo": "read", "write_thing": "write"}, got)
+check("die Seite nennt, was freigegeben wurde", "freigegeben: echo, write_thing" in page, page[:400])
+_, page = admin_get("/view?name=baum-a")
+check("danach angekreuzt", f'value="papier{T}tool{T}echo" checked' in page)
+page = admin_pairs("/view-items", [("view", "baum-a")] + seen + [
+    ("pick", f"papier{T}tool{T}echo"), (f"eff{T}papier{T}tool{T}echo", "execute")])
+got = {i["name"]: i["effect"] for i in books.items(app.DB, "baum-a")}
+check("Haken weg = heraus; geänderte Klasse übernommen", got == {"echo": "execute"}, got)
+check("Prüfspur: Freigabe, Herausnehmen, Zuschnitt",
+      {"item.approve", "item.remove", "item.tailor"} <= {r["action"] for r in books.audit(app.DB)
+                                                          if r["subject"].startswith("baum-a/")})
+admin_pairs("/view-items", [("view", "baum-a")])
+check("was das Formular nicht zeigte, bleibt", [i["name"] for i in books.items(app.DB, "baum-a")] == ["echo"])
+page = admin_pairs("/view-items", [("view", "baum-a"), ("seen", f"papier{T}tool{T}gibtsnicht"),
+                                   ("pick", f"papier{T}tool{T}gibtsnicht"), ("seen", f"papier{T}tool{T}slow"),
+                                   ("pick", f"papier{T}tool{T}slow")])
+check("ein Eintrag, den es nicht gibt: Satz, der Rest gilt",
+      "nicht freigegeben" in page and "gibtsnicht" in page
+      and sorted(i["name"] for i in books.items(app.DB, "baum-a")) == ["echo", "slow"], page[:400])
+status, page = admin_get("/?tab=sichten")
+check("Reiter Sichten: Baum dessen, was in den Sichten liegt",
+      "Was in den Sichten liegt" in page and 'name="back" value="sichten"' in page, status)
+page = admin_pairs("/view-items", [("view", "baum-a"), ("back", "sichten"),
+                                   ("seen", f"papier{T}tool{T}echo"), ("seen", f"papier{T}tool{T}slow"),
+                                   ("pick", f"papier{T}tool{T}echo")])
+check("dort herausnehmen; zurück auf den Reiter",
+      [i["name"] for i in books.items(app.DB, "baum-a")] == ["echo"] and "Was in den Sichten liegt" in page)
+
+KB = secret_from(admin("/issue", label="baum-schluessel", views="baum-a", max_effect="execute", ceiling="red"))
+admin("/issue", label="baum-profil", kind="profile", groups="/baum", views="baum-a,lesen")
+_, page = admin_get("/view?name=baum-a")
+check("Kopieren/Umbenennen nennt die Leser", "baum-schluessel (Schlüssel)" in page
+      and "baum-profil (Profil)" in page and "Assistenten" in page, page[page.find("Kopieren oder"):][:400])
+page = admin("/view-copy", view="baum-a", new="baum-k", mode="copy")
+check("kopiert: beide Sichten, gleiche Freigaben, Schlüssel unverändert",
+      [dict(i)["approved_fp"] for i in books.items(app.DB, "baum-k")]
+      == [dict(i)["approved_fp"] for i in books.items(app.DB, "baum-a")]
+      and books.view_row(app.DB, "baum-a") and books.view_row(app.DB, "baum-k")["max_effect"] == "execute"
+      and dict(books.view_readers(app.DB, "baum-a")) == {"baum-schluessel": "key", "baum-profil": "profile"}
+      and books.view_readers(app.DB, "baum-k") == [], page[:300])
+page = admin("/view-copy", view="baum-a", new="baum-k", mode="rename")
+check("auf einen vorhandenen Namen: abgewiesen", "gibt es schon" in page and books.view_row(app.DB, "baum-a"))
+page = admin("/view-copy", view="baum-a", new="Baum B", mode="rename")
+check("ungültiger Name: abgewiesen", "Kleinbuchstaben" in page and books.view_row(app.DB, "baum-a"))
+page = admin("/view-copy", view="baum-a", new="baum-b", mode="rename")
+prof = [r for r in books.keys(app.DB) if r["label"] == "baum-profil"][0]
+check("umbenannt: alte Sicht weg, Schlüssel und Profil umgestellt, die andere Sicht des Profils bleibt",
+      books.view_row(app.DB, "baum-a") is None and [i["name"] for i in books.items(app.DB, "baum-b")] == ["echo"]
+      and books.key_views(prof) == ["baum-b", "lesen"]
+      and "umstellen" in page, (page[:300], books.key_views(prof)))
+sid, _ = session("baum-b", KB)
+check("derselbe Schlüssel erreicht die neue Sicht", "echo" in listed("baum-b", KB, sid))
+st, _, _, _ = rpc("baum-a", {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                             "params": {"protocolVersion": "2025-11-25"}}, KB, addr="198.51.100.77")
+check("die alte Adresse antwortet wie jede unbekannte Sicht", st == 401, st)
+check("Prüfspur: view.rename mit den umgestellten Lesern",
+      any(r["action"] == "view.rename" and "baum-schluessel" in r["detail"] and "baum-profil" in r["detail"]
+          for r in books.audit(app.DB)))
+
 
 gw.shutdown()
 paper.shutdown()

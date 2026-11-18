@@ -328,6 +328,36 @@ Die Beschreibung lässt sich durch einen eigenen Text ersetzen. Der
 festgehaltene Text des Servers bleibt dahinter: Ändert der Server ihn,
 wird der Eintrag trotzdem gesperrt.
 
+## Zuordnen als Baum, Sichten kopieren und umbenennen (0.13)
+
+Bis 0.12 kam jeder Eintrag einzeln über den Katalog eines Servers in eine
+Sicht („In Sicht legen“, je Zeile Sicht und Klasse wählen) -- bei 31
+Einträgen des SAP-Servers in bec mühsam (Jörg, 2026-11-18).
+
+- **Seite einer Sicht → „Zuordnen“:** alle Kataloge als Baum
+  *Server → Art → Eintrag* mit Ankreuzfeldern, wie in einem Dateibaum.
+  Angekreuzt = in dieser Sicht. Haken setzen gibt frei -- dieselbe Prüfung
+  wie „In Sicht legen“, Name vorgeschlagen, Wirkungsklasse daneben
+  (Vorschlag aus den Angaben des Servers); Haken entfernen nimmt heraus;
+  eine geänderte Klasse wird übernommen. Ein Haken an Server oder Art setzt
+  alle darunter (mit Skript; ohne geht jedes Blatt einzeln). Was nicht
+  freigebbar ist (Schema nach außen, Verfahren X/I/P in einer Sicht für
+  Schlüssel), ist ausgegraut und nennt den Grund. Ein Eintrag, den sein
+  Server nicht mehr anbietet, steht nicht im Baum und bleibt, wie er ist:
+  Herausgenommen wird nur, was das Formular gezeigt hat.
+- **Reiter Sichten → „Was in den Sichten liegt“:** die umgekehrte
+  Richtung, *Sicht → Server → Art → Eintrag*, alles angekreuzt; Haken weg
+  und „Ohne Haken herausnehmen“.
+- **Kopieren oder umbenennen** (Seite der Sicht): Die Freigaben gehen mit,
+  wie sie sind (derselbe festgehaltene Text, wer, wann). *Umbenennen*
+  stellt gültige Schlüssel und Zugangsprofile auf den neuen Namen um und
+  löscht die alte Sicht (Prüfspur `view.rename` mit den Umgestellten).
+  Die Seite nennt vorher, wer den Namen nennt. **Nicht** umgestellt werden
+  MCP-Clients mit der Adresse `/mcp/<alt>` und Assistenten eines Chats
+  (Feld „Sicht“) -- sie stehen außerhalb des Gateways; dort den neuen
+  Namen eintragen. Die alte Adresse antwortet danach wie jede unbekannte
+  Sicht. Messzeilen behalten den alten Namen: sie sagen, was war.
+
 ## Feste Argumente und Grenzen
 
 Beispiel: Ein ABAP-MCP-Server hat `search_objects(package, name)`. In

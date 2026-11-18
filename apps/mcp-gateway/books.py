@@ -702,6 +702,96 @@ def delete_view(db, actor, name):
     db.commit()
 
 
+def view_readers(db, name):
+    """Wer den Namen einer Sicht nennt (0.13.0): gültige Schlüssel und Zugangsprofile.
+
+    Chat-Assistenten nennen die Sicht auch -- sie stehen in einer anderen App;
+    die Seite sagt das, prüfen kann das Gateway es nicht."""
+    return [(r["label"], r["kind"]) for r in db.execute(
+        "SELECT label,kind,views FROM keys WHERE revoked='' ORDER BY label") if name in key_views(r)]
+
+
+def copy_view(db, actor, src, new, move_readers=False):
+    """Kopiert eine Sicht mit allen Einträgen unter neuem Namen (0.13.0).
+
+    Die Freigaben gehen mit, wie sie sind (festgehaltener Text, Fingerabdruck,
+    wer wann) -- dieselbe Prüfung, kein neuer Text. Mit `move_readers` ist es
+    ein Umbenennen: Schlüssel und Zugangsprofile nennen danach die neue Sicht,
+    die alte ist weg. Messzeilen behalten den alten Namen: sie sagen, was war.
+    Gibt die umgestellten Leser zurück."""
+    valid_name(new, "einer Sicht")
+    old = view_row(db, src)
+    if not old:
+        raise ValueError(f"Eine Sicht „{src}“ gibt es nicht.")
+    if view_row(db, new):
+        raise ValueError(f"Eine Sicht „{new}“ gibt es schon.")
+    stamp = now()
+    cols = [c for c in old.keys() if c not in ("name", "created", "updated")]
+    db.execute(f"INSERT INTO views (name,{','.join(cols)},created,updated) "
+               f"VALUES (?,{','.join('?' * len(cols))},?,?)",
+               [new] + [old[c] for c in cols] + [stamp, stamp])
+    rows = items(db, src)
+    if rows:
+        icols = [c for c in rows[0].keys() if c != "view"]
+        for r in rows:
+            db.execute(f"INSERT INTO items (view,{','.join(icols)}) VALUES (?,{','.join('?' * len(icols))})",
+                       [new] + [r[c] for c in icols])
+    moved = []
+    if move_readers:
+        for r in db.execute("SELECT id,label,views FROM keys WHERE revoked=''").fetchall():
+            names = key_views(r)
+            if src in names:
+                db.execute("UPDATE keys SET views=? WHERE id=?",
+                           (",".join(new if v == src else v for v in names), r["id"]))
+                moved.append(r["label"])
+        db.execute("DELETE FROM items WHERE view=?", (src,))
+        db.execute("DELETE FROM views WHERE name=?", (src,))
+        log(db, actor, "view.rename", src, f"→ {new}; {len(rows)} Einträge; "
+            f"Schlüssel/Profile umgestellt: {', '.join(moved) or 'keine'}")
+    else:
+        log(db, actor, "view.copy", new, f"Kopie von {src}; {len(rows)} Einträge")
+    db.commit()
+    return moved
+
+
+def set_view_items(db, actor, view, wanted, seen, effects=None):
+    """Zuordnung als Baum (0.13.0): `wanted` = angekreuzte (server, kind, source),
+    `seen` = alle, die das Formular zeigte. Was gezeigt und nicht angekreuzt
+    war, geht heraus; was angekreuzt und noch nicht drin ist, wird freigegeben
+    (dieselbe Prüfung wie „In Sicht legen“, Name vorgeschlagen). `effects`
+    setzt die Wirkungsklasse von Tools. Was das Formular nicht zeigte (etwa ein
+    Eintrag, den der Server nicht mehr anbietet), bleibt, wie es ist.
+    Gibt (hinzu, heraus, geändert, fehler) zurück -- Fehler je Eintrag, der Rest gilt."""
+    effects = effects or {}
+    if not view_row(db, view):
+        raise ValueError(f"Eine Sicht „{view}“ gibt es nicht.")
+    have = {}
+    for i in items(db, view):
+        have.setdefault((i["server"], i["kind"], i["source"]), []).append(i)
+    added, removed, changed, errors = [], [], [], []
+    for key in sorted(set(seen) - set(wanted)):
+        for i in have.get(key, []):
+            remove_item(db, actor, view, i["kind"], i["name"])
+            removed.append(i["name"])
+    for key in sorted(set(wanted) & set(seen)):
+        server, kind, source = key
+        eff = effects.get(key) or "read"
+        if key in have:
+            for i in have[key]:
+                if kind == "tool" and effects.get(key) and i["effect"] != eff:
+                    try:
+                        tailor_item(db, actor, view, kind, i["name"], effect=eff)
+                        changed.append(i["name"])
+                    except ValueError as exc:
+                        errors.append(f"{i['name']}: {exc}")
+            continue
+        try:
+            added.append(approve(db, actor, view, kind, server, source, None, eff))
+        except ValueError as exc:
+            errors.append(f"{server}:{source}: {exc}")
+    return added, removed, changed, errors
+
+
 def exchange_servers(db, view):
     return [r["name"] for r in db.execute(
         "SELECT DISTINCT s.name FROM items i JOIN servers s ON s.name=i.server "

@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -983,7 +983,7 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
 <div><label>Name (Pfad)</label><input type="text" name="name" required></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
 <div><label>Zugänge</label><select name="ways">{options(books.WAYS, "key", books.WAY_WORDS)}</select></div>
-<div><button>Anlegen</button></div></form></details></div>'''
+<div><button>Anlegen</button></div></form></details></div>''' + views_tree()
 
 
 def keys_tab(host):
@@ -1290,6 +1290,178 @@ def tailor_form(item):
             f'{"".join(fields)}<div><button class="quiet">Übernehmen</button></div></form>')
 
 
+# ------------------------------------------------------- Bäume (0.13.0)
+# Zuordnung wie in einem Dateibaum: Server → Art → Eintrag, Ankreuzfelder.
+# Ohne Skript geht alles (jedes Blatt ist ein eigenes Feld); das Skript
+# setzt nur die Haken der Gruppen (ganz, teilweise, keiner).
+
+SEP = "\t"
+TREE_STYLE = """<style>
+ul.tree{list-style:none;margin:.15rem 0 .15rem 1.2rem;padding:0}
+ul.tree.top{margin-left:0}
+ul.tree li{margin:.12rem 0}
+ul.tree details>summary{cursor:pointer}
+ul.tree label{display:inline;font-weight:normal;margin:0}
+ul.tree input[type=checkbox]{width:auto;margin:0 .35rem 0 0;vertical-align:middle}
+ul.tree select{width:auto;max-width:10rem;padding:.05rem .3rem;font-size:.8rem;margin-left:.4rem}
+ul.tree .d{display:block;margin-left:1.6rem;font-size:.8rem}
+</style>"""
+TREE_SCRIPT = """<script>
+for (const f of document.querySelectorAll("form.treeform")) {
+  const leaves = li => [...li.querySelectorAll("input.leaf:not(:disabled)")];
+  const sync = () => { for (const g of f.querySelectorAll("input.grp")) {
+    const c = leaves(g.closest("li")), n = c.filter(x => x.checked).length;
+    g.checked = n > 0 && n === c.length; g.indeterminate = n > 0 && n < c.length; } };
+  f.addEventListener("change", e => {
+    if (e.target.classList.contains("grp")) for (const x of leaves(e.target.closest("li"))) x.checked = e.target.checked;
+    sync(); });
+  sync();
+}
+</script>"""
+
+
+def tree_key(server, kind, source):
+    return SEP.join((server, kind, source))
+
+
+def tree_leaf(key, checked, label, extra="", disabled_why=""):
+    dis = " disabled" if disabled_why else ""
+    return (f'<li><input type="hidden" name="seen" value="{esc(key)}">'
+            f'<label><input type="checkbox" class="leaf" name="pick" value="{esc(key)}"'
+            f'{" checked" if checked else ""}{dis}>{label}</label>{extra}'
+            + (f'<span class="d err">{esc(disabled_why)}</span>' if disabled_why else "") + '</li>')
+
+
+def tree_node(label, inner, open_=True):
+    return (f'<li><details{" open" if open_ else ""}><summary><input type="checkbox" class="grp" '
+            f'aria-label="alle">{label}</summary><ul class="tree">{inner}</ul></details></li>')
+
+
+def assign_tree(name):
+    """Seite einer Sicht: alle Kataloge, angekreuzt = in dieser Sicht."""
+    v = books.view_row(DB, name)
+    key_view = "key" in books.view_ways(v)
+    have = {}
+    for i in books.items(DB, name):
+        have.setdefault((i["server"], i["kind"], i["source"]), []).append(i)
+    servers = []
+    for s in books.servers(DB):
+        person = s["auth_kind"] in books.PERSON_KINDS and key_view
+        kinds, n_in, n_all = [], 0, 0
+        for kind in compose.KINDS:
+            leaves = []
+            for c in books.catalog(DB, s["name"], kind):
+                if not c["present"]:
+                    continue
+                key = (s["name"], kind, c["name"])
+                doc = json.loads(c["doc"])
+                inside = have.get(key, [])
+                why = ""
+                if person:
+                    why = "Verfahren X, I oder P -- die Sicht nimmt Schlüssel an"
+                elif kind == "tool" and argcheck.remote_refs(doc.get("inputSchema")):
+                    why = "Schema verweist nach außen -- nicht freigebbar"
+                elif kind == "template" and not compose.template_supported(c["name"]):
+                    why = "Vorlage nicht eindeutig prüfbar"
+                if why and inside:
+                    why = ""                  # was drin ist, lässt sich immer herausnehmen
+                label = f'<code>{esc(c["name"])}</code>'
+                for i in inside:
+                    if i["name"] != c["name"]:
+                        label += f' <span class="muted">→ {esc(i["name"])}</span>'
+                    state = books.item_state(DB, i)
+                    if state != "active":
+                        label += " " + badge(*STATE_WORDS[state])
+                extra = ""
+                if kind == "tool" and not why:
+                    ann = doc.get("annotations") or {}
+                    cur = inside[0]["effect"] if inside else (
+                        "read" if ann.get("readOnlyHint") else
+                        "execute" if ann.get("destructiveHint") else "write")
+                    extra = (f'<select name="eff{SEP}{esc(tree_key(*key))}" aria-label="Wirkungsklasse">'
+                             f'{options(books.EFFECTS, cur, books.EFFECT_WORDS)}</select>')
+                desc = (doc.get("description") or doc.get("title") or "")[:160]
+                if desc:
+                    extra += f'<span class="d muted">{esc(desc)}</span>'
+                leaves.append(tree_leaf(tree_key(*key), bool(inside), label, extra, why))
+                n_all += 1
+                n_in += bool(inside)
+            if leaves:
+                kinds.append(tree_node(f'{esc(KIND_PLURAL[kind])} <span class="muted">({len(leaves)})</span>',
+                                       "".join(leaves), open_=False))
+        if kinds:
+            servers.append(tree_node(f'<b>{esc(s["name"])}</b> {badge(s["light"], s["light"])} '
+                                     f'<span class="muted">{n_in} von {n_all} in der Sicht</span>',
+                                     "".join(kinds), open_=n_in > 0))
+    if not servers:
+        return '<p class="muted">Noch kein Server mit gelesenem Katalog.</p>'
+    return (f'<form class="treeform" method="post" action="view-items">'
+            f'<input type="hidden" name="view" value="{esc(name)}">'
+            f'<ul class="tree top">{"".join(servers)}</ul>'
+            f'<div style="margin-top:.6rem"><button>Zuordnung speichern</button></div></form>')
+
+
+def views_tree():
+    """Reiter Sichten: was in jeder Sicht liegt, Sicht → Server → Art → Eintrag; Haken weg = heraus."""
+    out = []
+    for v in books.views(DB):
+        rows = books.items(DB, v["name"])
+        if not rows:
+            continue
+        by = {}
+        for i in rows:
+            by.setdefault(i["server"], {}).setdefault(i["kind"], {}).setdefault(i["source"], []).append(i)
+        servers = []
+        for server, kinds in sorted(by.items()):
+            knodes = []
+            for kind in compose.KINDS:
+                if kind not in kinds:
+                    continue
+                leaves = []
+                for source, its in sorted(kinds[kind].items()):
+                    label = " ".join(
+                        f'<code>{esc(i["name"])}</code>'
+                        + (f' <span class="muted">({esc(source)})</span>' if i["name"] != source else "")
+                        + (f' <span class="muted">{esc(books.EFFECT_WORDS[i["effect"]])}</span>'
+                           if kind == "tool" else "")
+                        + ("" if books.item_state(DB, i) == "active"
+                           else " " + badge(*STATE_WORDS[books.item_state(DB, i)]))
+                        for i in its)
+                    leaves.append(tree_leaf(tree_key(server, kind, source), True, label))
+                knodes.append(tree_node(f'{esc(KIND_PLURAL[kind])} <span class="muted">({len(leaves)})</span>',
+                                        "".join(leaves)))
+            servers.append(tree_node(f'<b>{esc(server)}</b>', "".join(knodes)))
+        out.append(f'<li><details><summary><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a> '
+                   f'<span class="muted">{len(rows)} {"Eintrag" if len(rows) == 1 else "Einträge"}</span></summary>'
+                   f'<form class="treeform" method="post" action="view-items">'
+                   f'<input type="hidden" name="view" value="{esc(v["name"])}">'
+                   f'<input type="hidden" name="back" value="sichten">'
+                   f'<ul class="tree">{"".join(servers)}</ul>'
+                   f'<button class="quiet">Ohne Haken herausnehmen</button></form></details></li>')
+    if not out:
+        return ""
+    return (f'<div class="card"><h2>Was in den Sichten liegt</h2><p class="hint">Je Sicht als Baum. '
+            f'Haken entfernen und „Ohne Haken herausnehmen“ -- hinzufügen geht auf der Seite der Sicht '
+            f'(Baum aller Kataloge) oder beim Server.</p><ul class="tree top">{"".join(out)}</ul></div>'
+            + TREE_STYLE + TREE_SCRIPT)
+
+
+def copy_card(name):
+    readers = books.view_readers(DB, name)
+    words = ", ".join(f'{label} ({"Profil" if kind == "profile" else "Schlüssel"})' for label, kind in readers)
+    return f'''<div class="card"><h2>Kopieren oder umbenennen</h2>
+<p class="hint">Den Namen einer Sicht nennen: {esc(words or "kein gültiger Schlüssel und kein Profil")} --
+außerdem die Adresse <code>/mcp/{esc(name)}</code> bei jedem MCP-Client und die Assistenten eines Chats
+(Feld „Sicht“). <b>Umbenennen</b> stellt Schlüssel und Profile um und löscht die alte Sicht; Clients und
+Assistenten stellt das Gateway nicht um -- dort den neuen Namen eintragen. <b>Kopieren</b> lässt alles, wie
+es ist; die Freigaben gehen in beiden Fällen mit (derselbe festgehaltene Text).</p>
+<form class="grid" method="post" action="view-copy"><input type="hidden" name="view" value="{esc(name)}">
+<div><label>Neuer Name</label><input type="text" name="new" required></div>
+<div><label>Was</label><select name="mode"><option value="copy">kopieren</option>
+<option value="rename">umbenennen</option></select></div>
+<div><button>Ausführen</button></div></form></div>'''
+
+
 def view_page(user, roles, host, name, notice=""):
     v = books.view_row(DB, name)
     if not v:
@@ -1357,7 +1529,12 @@ Muster mit <code>*</code> und <code>?</code>.</p>
 <th>Zuschnitt, Freigabe</th><th></th></tr>
 {"".join(rows) or '<tr><td colspan=6 class=muted>Leer.</td></tr>'}</table></div>
 <form method="post" action="view-delete" style="margin-top:1rem"><input type="hidden" name="name" value="{esc(name)}">
-<button class="quiet">Sicht löschen</button></form></div>''')
+<button class="quiet">Sicht löschen</button></form></div>
+<div class="card"><h2>Zuordnen</h2><p class="hint">Alle Kataloge als Baum: angekreuzt = in dieser Sicht.
+Haken setzen gibt frei (Name der Sicht wird vorgeschlagen, Wirkungsklasse daneben), Haken entfernen nimmt
+heraus. Ein Eintrag, den sein Server nicht mehr anbietet, steht hier nicht und bleibt, wie er ist.</p>
+{assign_tree(name)}</div>
+{copy_card(name)}{TREE_STYLE}{TREE_SCRIPT}''')
     return page(f"Sicht {name}", "".join(parts), user, roles, "sichten")
 
 
@@ -1634,6 +1811,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/issue", "/revoke", "/key-limits", "/source-sync", "/context", "/server-save",
                     "/server-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
+                    "/view-copy", "/view-items",
                     "/item-confirm", "/item-tailor"):
             self.handle_admin_post(path)
             return
@@ -2179,11 +2357,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
-        form = {}
+        form, multi = {}, {}
         for pair in raw.decode("utf-8", "replace").split("&"):
             if pair:
                 name, _, value = pair.partition("=")
                 form[unquote_plus(name)] = unquote_plus(value)
+                multi.setdefault(unquote_plus(name), []).append(unquote_plus(value))
         notice, secret, back = "", None, None
         try:
             if path == "/issue":
@@ -2238,6 +2417,28 @@ class Handler(BaseHTTPRequestHandler):
                 notice = (f"„{name}“ freigegeben in Sicht „{form.get('view', '')}“; "
                           "der Text ist festgehalten.")
                 back = ("view", form.get("view", ""))
+            elif path == "/view-copy":
+                src, new = form.get("view", ""), form.get("new", "").strip()
+                rename = form.get("mode") == "rename"
+                moved = books.copy_view(DB, user, src, new, move_readers=rename)
+                notice = (f"Sicht „{src}“ heißt jetzt „{new}“. Umgestellt: {', '.join(moved) or 'kein Schlüssel, kein Profil'}. "
+                          f"MCP-Clients und Chat-Assistenten, die „{src}“ nennen, dort umstellen."
+                          if rename else f"Sicht „{new}“ als Kopie von „{src}“ angelegt; „{src}“ bleibt.")
+                back = ("view", new)
+            elif path == "/view-items":
+                split = lambda v: tuple(v.split(SEP, 2))
+                wanted = [split(v) for v in multi.get("pick", []) if v.count(SEP) == 2]
+                seen = [split(v) for v in multi.get("seen", []) if v.count(SEP) == 2]
+                effects = {split(k[4:]): val for k, val in form.items()
+                           if k.startswith("eff" + SEP) and k[4:].count(SEP) == 2}
+                added, removed, changed, errors = books.set_view_items(
+                    DB, user, form.get("view", ""), wanted, seen, effects)
+                bits = ([f"freigegeben: {', '.join(added)}"] if added else []) + \
+                       ([f"herausgenommen: {', '.join(removed)}"] if removed else []) + \
+                       ([f"Klasse geändert: {', '.join(changed)}"] if changed else []) + \
+                       ([f"nicht freigegeben -- {' | '.join(errors)}"] if errors else [])
+                notice = "; ".join(bits) or "Zuordnung unverändert."
+                back = ("view", form.get("view", "")) if form.get("back") != "sichten" else None
             elif path == "/item-confirm":
                 books.confirm(DB, user, form.get("view", ""), form.get("kind", "tool"),
                               form.get("name", ""), form.get("effect") or None)
@@ -2264,7 +2465,8 @@ class Handler(BaseHTTPRequestHandler):
 # Nach einer Handlung zeigt die Seite den Reiter, zu dem sie gehört (0.9.0).
 POST_TAB = {"/issue": "zugaenge", "/revoke": "zugaenge", "/key-limits": "zugaenge", "/context": "zugaenge",
             "/source-sync": "server", "/server-delete": "server", "/server-save": "server",
-            "/view-delete": "sichten", "/view-save": "sichten"}
+            "/view-delete": "sichten", "/view-save": "sichten", "/view-items": "sichten",
+            "/view-copy": "sichten"}
 
 
 def json_field(form, name):
