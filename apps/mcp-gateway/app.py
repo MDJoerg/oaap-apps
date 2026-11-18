@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.18.0"
+VERSION = "0.18.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -641,8 +641,9 @@ def read_catalog(name, person=None):
                        f"„Katalog jetzt lesen“ klicken.")
     if srow["auth_kind"] == "personal" and not person:
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren U liest mit dem eigenen "
-                       f"Zugang der Betreiberin -- auf der Seite des Gateways auf „Katalog jetzt "
-                       f"lesen“ klicken, nachdem du ihn auf /me hinterlegt hast.")
+                       f"Zugang einer Person -- auf der Seite des Gateways auf „Katalog jetzt "
+                       f"lesen“ klicken, nachdem du ihn auf /me hinterlegt hast; oder eine Person "
+                       f"mit Zugang liest die erste Werkzeugliste auf ihrer Seite /me.")
     if srow["auth_kind"] == "platform" and not person and not discover:
         # Eine Plattform vor 0.1.300 nennt keine Erkundungs-Tür (L8a, 18.11.).
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht einen Menschen, "
@@ -1311,6 +1312,27 @@ def me_readiness(uid):
             "ready": all(r["state"] == "ready" for r in rows)}
 
 
+def me_catalog_read(uid, server):
+    """L29 (0.18.1): die ERSTE Werkzeugliste eines Servers mit Verfahren U, gelesen mit dem
+    Zugang dieser Person. Nur solange sie noch nie gelesen wurde -- ein Zugang mit
+    weniger Rechten soll die Liste der anderen nie verkürzen. Freigeben bleibt Sache der
+    Verwaltung; die Prüfspur nennt die Person mit Kennung."""
+    srow = books.server_row(DB, server)
+    if not srow or srow["auth_kind"] != "personal":
+        return f"Der Server „{server}“ nimmt keinen persönlichen Zugang."
+    if srow["last_read"]:
+        return (f"Die Werkzeugliste von {server} ist schon gelesen; neu lesen kann sie die "
+                "Verwaltung.")
+    if books.personal_row(DB, "platform", uid, server) is None:
+        return f"Für {server} hast du noch keinen Zugang hinterlegt."
+    ok_, text = read_catalog(server, {"iss": "platform", "sub": uid, "procedure": "U"})
+    books.log(DB, f"person:{uid}", "catalog.first", server, "gelesen" if ok_ else "nicht gelesen")
+    if ok_:
+        return (f"Werkzeugliste von {server} gelesen. Die Verwaltung gibt die Werkzeuge in "
+                "einer Sicht frei; bis dahin kannst du sie noch nicht benutzen.")
+    return text
+
+
 def me_credentials_card(uid, notice=""):
     """„Meine Zugangsdaten“ (RFC-0095 §4.2): je Server mit Verfahren U eintragen,
     ersetzen, löschen. Nur schreiben: Gezeigt wird wann, nie der Wert."""
@@ -1332,7 +1354,14 @@ def me_credentials_card(uid, notice=""):
         if spec.get("link"):
             how += (" " if how else "") + (f'<a href="{esc(spec["link"])}" target="_blank" '
                                            f'rel="noopener noreferrer">Wo du ihn bekommst</a>')
-        drop = (f'<form method="post" action="me/credential-delete" style="display:inline">'
+        # L29 (0.18.1): Noch nie gelesen und die Person hat einen Zugang -- sie darf die
+        # ERSTE Werkzeugliste lesen. Danach ist das wieder Sache der Verwaltung, damit ein
+        # Zugang mit weniger Rechten die Liste der anderen nie verkürzt.
+        first = (f'<form method="post" action="me/catalog-read" style="display:inline">'
+                 f'<input type="hidden" name="server" value="{esc(s["name"])}">'
+                 f'<button class="quiet">Werkzeugliste für die Verwaltung lesen</button></form> '
+                 if have and not s["last_read"] else "")
+        drop = first + (f'<form method="post" action="me/credential-delete" style="display:inline">'
                 f'<input type="hidden" name="server" value="{esc(s["name"])}">'
                 f'<button class="quiet">Löschen</button></form>' if have else "")
         user_in = ('<input type="text" name="user" autocomplete="username" required '
@@ -2260,7 +2289,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/mcp/"):
             self.handle_mcp_post()
             return
-        if path in ("/me/credential", "/me/credential-delete"):
+        if path in ("/me/credential", "/me/credential-delete", "/me/catalog-read"):
             self.handle_me_post(path)
             return
         if path in ("/issue", "/revoke", "/key-limits", "/source-sync", "/context", "/server-save",
@@ -2867,6 +2896,8 @@ class Handler(BaseHTTPRequestHandler):
                                      f"eingerichtet ({exc}).") from None
                 replaced = books.personal_store(DB, "platform", uid, server, sealed)
                 notice = f"Zugang für {server} {'ersetzt' if replaced else 'gespeichert'}."
+            elif path == "/me/catalog-read":
+                notice = me_catalog_read(uid, server)
             else:
                 gone = books.personal_delete(DB, "platform", uid, server)
                 notice = f"Zugang für {server} gelöscht." if gone else "Da war kein Zugang."
@@ -2914,6 +2945,17 @@ class Handler(BaseHTTPRequestHandler):
         if not (uid and assertion):
             return None
         return {"iss": "platform", "sub": uid, "assertion": assertion, "procedure": "A"}
+
+    def operator_for(self, name):
+        """Die Betreiberin als Person für das Lesen des Katalogs von `name`. L29 (0.18.1):
+        Verfahren U braucht keine Zusicherung -- es schickt nur den eigenen Zugang --, also
+        genügt die Kennung, die die Plattform auf dieser angemeldeten Route setzt."""
+        person = self.operator()
+        srow = books.server_row(DB, name)
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        if person is None and uid and srow and srow["auth_kind"] == "personal":
+            person = {"iss": "platform", "sub": uid, "procedure": "U"}
+        return person
 
     def handle_admin_post(self, path):
         raw = self.read_body(1 << 20) or b""
@@ -2978,7 +3020,7 @@ class Handler(BaseHTTPRequestHandler):
                 books.delete_server(DB, user, form.get("name", ""))
                 notice = f"Server „{form.get('name', '')}“ gelöscht."
             elif path == "/server-read":
-                _, notice = read_catalog(form.get("name", ""), self.operator())
+                _, notice = read_catalog(form.get("name", ""), self.operator_for(form.get("name", "")))
                 back = ("server", form.get("name", ""))
             elif path == "/view-save":
                 reqs = {r: form["req_" + r] for r in books.REQUESTS if "req_" + r in form}

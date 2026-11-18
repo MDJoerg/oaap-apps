@@ -2643,6 +2643,43 @@ st, _, msgs = rpc_a("b-sicht", {"jsonrpc": "2.0", "id": 83, "method": "tools/cal
 check("Basic: ein alter Wert ohne Benutzer geht nicht hinaus, Hinweis „neu eintragen“",
       "neu ein" in json.dumps(msgs, ensure_ascii=False) and all("alt-ohne" not in (a or "") for a in BS_["auth"][n:]),
       msgs)
+
+print("\n-- 0.18.1: L29, den Katalog von Verfahren U lesen ohne Zusicherung, erste Liste von /me")
+for nm in ("lies", "lies2"):
+    admin("/server-save", name=nm, address=SECHS, auth="personal", light="green", personal_send="bearer")
+NOASRT = {"X-OAAP-User-Id": "u-op-u"}
+page = admin("/server-read", NOASRT, name="lies")
+check("L29: Verwaltung ohne Zusicherung, ohne eigenen Zugang: Verweis auf /me (nicht „braucht Zusicherung“)",
+      "noch keinen Zugang" in page and not books.catalog(app.DB, "lies"), page[-400:])
+st, html_ = me_get("/me", "u-hans-u")
+check("/me ohne Zugang: kein Knopf für die Werkzeugliste", "me/catalog-read" not in html_)
+me_post("/me/credential", "u-hans-u", server="lies", value="hans-tok")
+st, html_ = me_get("/me", "u-hans-u")
+check("/me mit Zugang, Liste nie gelesen: Knopf „Werkzeugliste für die Verwaltung lesen“",
+      "Werkzeugliste für die Verwaltung lesen" in html_)
+st, html_ = me_post("/me/catalog-read", "u-hans-u", server="lies")
+check("L29: die Person liest die erste Liste mit IHREM Zugang",
+      "Werkzeugliste von lies gelesen" in html_ and len(books.catalog(app.DB, "lies")) == 1
+      and BS_["auth"][-1] == "Bearer hans-tok", (html_[-300:], BS_["auth"][-1:]))
+check("L29: Prüfspur catalog.first mit Kennung der Person",
+      any(r["action"] == "catalog.first" and r["actor"] == "person:u-hans-u" and r["subject"] == "lies"
+          for r in books.audit(app.DB, 50)))
+check("L29: gelesen ist nicht freigegeben -- keine Sicht hat dadurch einen Eintrag",
+      not app.DB.execute("SELECT 1 FROM items WHERE server='lies'").fetchone())
+st, html_ = me_get("/me", "u-hans-u")
+n = len(BS_["auth"])
+st, html2 = me_post("/me/catalog-read", "u-hans-u", server="lies")
+check("L29: danach kein Knopf mehr, ein zweites Lesen durch die Person abgewiesen, nichts hinaus",
+      "Werkzeugliste für die Verwaltung lesen" not in html_ and "schon gelesen" in html2 and len(BS_["auth"]) == n)
+st, html_ = me_post("/me/catalog-read", "u-ida-u", server="lies2")
+check("L29: ohne eigenen Zugang liest niemand, auch nicht bei nie gelesener Liste",
+      "noch keinen Zugang" in html_ and not books.catalog(app.DB, "lies2"), html_[-300:])
+st, html_ = me_post("/me/catalog-read", "u-hans-u", server="papier")
+check("L29: ein Server ohne Verfahren U: nicht über /me", "keinen persönlichen Zugang" in html_)
+me_post("/me/credential", "u-op-u", server="lies2", value="op-tok")
+page = admin("/server-read", NOASRT, name="lies2")
+check("L29: die Verwaltung mit eigenem Zugang liest ohne Zusicherung",
+      len(books.catalog(app.DB, "lies2")) == 1 and BS_["auth"][-1] == "Bearer op-tok", page[-300:])
 sechs.shutdown()
 
 
