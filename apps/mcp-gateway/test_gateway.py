@@ -504,6 +504,16 @@ def listed(view, key, sid):
     return {t["name"]: t for t in msgs[-1]["result"]["tools"]}
 
 
+def rows_after(sql, n, wait=3.0):
+    """Die Messzeile schreibt das Gateway NACH der Antwort: kurz warten, bis sie da ist."""
+    end = time.monotonic() + wait
+    while True:
+        rows = list(app.DB.execute(sql))
+        if len(rows) >= n or time.monotonic() > end:
+            return rows
+        time.sleep(0.05)
+
+
 def err(msgs):
     """Der Fehler der letzten Nachricht — {} statt eines Absturzes, wenn ein Ergebnis kam."""
     return (msgs[-1].get("error") or {}) if msgs else {}
@@ -1180,7 +1190,9 @@ check("Anmeldung: Sitzung", bool(s1) and (init1 or {}).get("result", {}).get("se
       == "angemeldet", init1)
 st, _, msgs, _ = call("angemeldet", T1, s1, "echo", {"text": "angemeldet"})
 check("Aufruf als angemeldeter Mensch", "Echo" in json.dumps(msgs), msgs)
-row = list(app.DB.execute("SELECT * FROM usage ORDER BY id DESC LIMIT 1"))[0]
+# Die Zeile dieser Person, nicht die jüngste: ein langsamer Aufruf von vorher
+# schreibt seine Zeile unter Last noch danach (war ab und zu rot).
+row = rows_after("SELECT * FROM usage WHERE user_sub='person-1' ORDER BY id DESC", 1)[0]
 profiles = {k["label"]: k for k in books.keys(app.DB)}
 check("Messzeile: Profil a-team (Gruppe /team), sub und Issuer, Kontext des Profils",
       row["key_id"] == profiles["a-team"]["id"] and row["user_sub"] == "person-1"
@@ -1577,16 +1589,6 @@ check("… und die Zusicherung der Plattform an dieses Gateway als Act-Zusicheru
       IS_["asrt"] and IS_["asrt"][-1] == ASRT, IS_["asrt"])
 check("… kein Act-Token, kein Tausch beim Anmeldedienst",
       not any(IS_["act"]) and not IDP["exchanges"], (IS_["act"], IDP["exchanges"]))
-def rows_after(sql, n, wait=3.0):
-    """Die Messzeile schreibt das Gateway NACH der Antwort: kurz warten, bis sie da ist."""
-    end = time.monotonic() + wait
-    while True:
-        rows = list(app.DB.execute(sql))
-        if len(rows) >= n or time.monotonic() > end:
-            return rows
-        time.sleep(0.05)
-
-
 row = rows_after("SELECT * FROM usage WHERE view='a-sicht' ORDER BY id", 1)
 check("Messzeile: Verfahren A, Kennung der Person, Issuer platform, Chat, Assistent, Profil",
       row and row[-1]["procedure"] == "A" and row[-1]["user_sub"] == "u-anna"
@@ -1610,10 +1612,12 @@ check("ohne Zusicherung (nur Chat und Kennung): kein Verfahren A, 401",
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 6, "method": "tools/list"}, sid,
                     client="")
 check("ohne Namen des Chats: kein Verfahren A, 401", st == 401, (st, msgs))
+n_a = app.DB.execute("SELECT COUNT(*) FROM usage WHERE view='a-sicht'").fetchone()[0]
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                                 "params": {"name": "whoami", "arguments": {}}}, sid,
                     assistant="Reklamation Böse /..")
-row = rows_after("SELECT assistant FROM usage WHERE view='a-sicht' ORDER BY id DESC", 2)
+# Auf GENAU diese neue Zeile warten -- zwei gab es schon vorher (war ab und zu rot).
+row = rows_after("SELECT assistant FROM usage WHERE view='a-sicht' ORDER BY id DESC", n_a + 1)
 check("ein Assistentenname, der keiner ist, wird nicht aufgeschrieben",
       row and row[0]["assistant"] == "", [dict(r) for r in row])
 st, _ = session_a("a-sicht", client="anderer-chat")
@@ -2188,6 +2192,10 @@ books.record(app.DB, any_key, "koeder-sicht", "tool", "alt_tool", "papier", "ech
              "suspended", 1, 10, 0, person={"iss": "platform", "sub": "u-koeder", "client": "kchat"},
              procedure="A")
 app.DB.execute("UPDATE usage SET door='', status=0 WHERE tool='alt_tool'")    # eine Zeile von vor 0.15
+books.record(app.DB, any_key, "koeder-sicht", "tool", "alt_dest", "papier", "echo", "refused",
+             "destination", 1, 10, 0, person={"iss": "platform", "sub": "u-koeder", "client": "kchat"},
+             procedure="P")
+app.DB.execute("UPDATE usage SET door='', status=0 WHERE tool='alt_dest'")
 books.record(app.DB, any_key, "koeder-sicht", "tool", "fremd", "papier", "echo", "ok", "", 1, 1, 1,
              person={"iss": "https://auth.example/realms/x", "sub": "u-koeder"}, procedure="X")
 app.DB.commit()
@@ -2220,6 +2228,10 @@ check("Aufrufe mit Anmeldung am Anmeldedienst (anderer Issuer) stehen in Stufe 1
 alt = [c for c in doc["calls"] if c["name"] == "alt_tool"]
 check("eine Zeile von vor 0.15 (ohne Tür) bekommt trotzdem ihren Satz: gesperrt, Gateway",
       alt and "gesperrt" in alt[0]["sentence"] and alt[0]["door"] == "gateway", alt)
+alt = [c for c in doc["calls"] if c["name"] == "alt_dest"]
+check("0.15.1: eine alte Zeile refused/destination ohne Tür rät nicht, wer abgelehnt hat",
+      alt and "von vor 0.15" in alt[0]["sentence"] and "Gateway konnte" not in alt[0]["sentence"]
+      and alt[0]["door"] == "", alt)
 st, doc = me_json("u-anna", "?problems=0&view=p-sicht")
 check("Filter nach Sicht", st == 200 and doc["calls"]
       and {c["view"] for c in doc["calls"]} == {"p-sicht"}, doc.get("filter"))

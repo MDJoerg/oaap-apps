@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.15.0"
+VERSION = "0.15.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -1099,6 +1099,13 @@ def call_sentence(row):
             "destination", "platform"):
         who = DOOR_WORDS[door]
         return (f"{who[0].upper() + who[1:]} hat abgelehnt{code}.", HINT_TENANT, door)
+    raw_door = row["door"] if "door" in row.keys() else ""
+    if outcome == "refused" and reason == "destination" and not raw_door:
+        # Vor 0.15 hieß „destination“ beides: das Gateway trug die Person nicht
+        # (keine Zusicherung) ODER die Destination lehnte ab. Nicht raten (0.15.1).
+        return ("Auf dem Weg zum Zielsystem abgelehnt: von der Destination, vom Zielsystem "
+                "oder weil keine Zusicherung der Plattform mitkam (Zeile von vor 0.15, ohne "
+                "genauere Angabe).", HINT_TENANT, "")
     if outcome == "refused" and reason == "destination":
         return ("Das Gateway konnte dich nicht bis zur Destination tragen (keine Zusicherung "
                 "der Plattform in diesem Aufruf).", HINT_TENANT, door)
