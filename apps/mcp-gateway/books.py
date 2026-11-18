@@ -560,7 +560,8 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
                 "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
                 "WHERE v.ways LIKE '%key%'")):
             raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren X "
-                             "braucht einen Menschen — erst die Sicht auf „Anmeldung“ stellen.")
+                             "braucht einen Menschen — erst die Sicht auf „Anmeldung“ (oder für einen "
+                             "Chat auf „Plattform“) stellen.")
     else:
         exchange_json = "{}"
     if light not in LIGHT_RANK:
@@ -1092,7 +1093,7 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     if server_row(db, server)["auth_kind"] in PERSON_KINDS and "key" in view_ways(view_row(db, view)):
         raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht einen angemeldeten "
                          f"Menschen; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
-                         "„Anmeldung“ stellen.")
+                         "„Anmeldung“ (oder für einen Chat auf „Plattform“) stellen.")
     cat = catalog_row(db, server, kind, source)
     if not cat or not cat["present"]:
         raise ValueError(f"Der Server „{server}“ bietet {compose.KIND_WORDS[kind]} „{source}“ "

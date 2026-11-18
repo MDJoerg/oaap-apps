@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -794,6 +794,18 @@ def entitled(key, vrow, way):
 
 WAY_NAMES = {"platform": "„Plattform“ (Menschen aus einem Chat)", "signin": "„Anmeldung“",
              "key": "„Schlüssel“"}
+LIGHT_DE = {"green": "grün", "yellow": "gelb", "red": "rot"}
+
+
+def worst_server(view):
+    """Der Server, der die Ampel einer Sicht bestimmt (der schlechteste), oder ''."""
+    worst, name = -1, ""
+    for s in books.view_servers(DB, view):
+        srow = books.server_row(DB, s)
+        rank = books.LIGHT_RANK[srow["light"] if srow else "red"]
+        if rank > worst:
+            worst, name = rank, s
+    return name
 
 
 def why_not(key, vrow, way):
@@ -803,13 +815,34 @@ def why_not(key, vrow, way):
     Zugangsprofil“, auch wenn es das Profil gab und nur Ampel oder Zugang nicht passten."""
     if not vrow or vrow["name"] not in books.key_views(key):
         return "kein Zugangsprofil erlaubt diese Sicht."
-    if way not in books.view_ways(vrow):
+    ways = books.view_ways(vrow)
+    if way not in ways:
+        # L12 (0.20): * und /pfad meinen Menschen, die sich AM GATEWAY anmelden
+        # (Zugang „Anmeldung“), @<chat> und @* Menschen, die ein Chat herträgt
+        # (Zugang „Plattform“). Wer für einen Chat * schrieb, bekam „Anmeldung
+        # einschalten“ geraten -- der Chat braucht aber @<chat>.
+        if way == "signin" and "platform" in ways:
+            return (f"die Sicht {vrow['name']} nimmt Menschen aus einem Chat (Zugang „Plattform“), "
+                    "das Profil nennt aber Gruppen der Anmeldung am Gateway (* oder /pfad). Für einen "
+                    "Chat im Profil @<chat-instanz> oder @* nennen; den Zugang „Anmeldung“ bei der Sicht "
+                    "nur einschalten, wenn sich Menschen selbst am Gateway anmelden (z. B. Claude Code).")
+        if way == "platform":
+            return (f"die Sicht {vrow['name']} hat den Zugang „Plattform“ nicht, den Menschen aus einem "
+                    "Chat (@<chat-instanz>, @*) brauchen -- auf der Betreiberseite bei der Sicht "
+                    "einschalten.")
         return (f"die Sicht {vrow['name']} hat den Zugang {WAY_NAMES.get(way, way)} nicht -- "
                 "auf der Betreiberseite bei der Sicht einschalten.")
     light = books.view_light(DB, vrow["name"])
     if books.LIGHT_RANK[light] > books.LIGHT_RANK.get(key["ceiling"], 1):
-        return (f"die Ampel der Sicht {vrow['name']} ist {light}, das Zugangsprofil reicht bis "
-                f"{key['ceiling']} -- die Ampel der Quelle senken oder die des Profils erhöhen.")
+        # L13 (0.20): „die Ampel der Quelle senken“ war mehrdeutig. Jetzt mit
+        # Farben, dem Server, der die Ampel bestimmt, und beiden Wegen.
+        srv = worst_server(vrow["name"])
+        lw, cw = LIGHT_DE.get(light, light), LIGHT_DE.get(key["ceiling"], key["ceiling"])
+        return (f"die Ampel der Sicht {vrow['name']} ist {lw}"
+                + (f" (Server {srv} ist {lw} eingestuft)" if srv else "")
+                + f", das Zugangsprofil reicht nur bis {cw}. Entweder beim Profil „Ampel höchstens“ "
+                f"auf {lw} stellen, oder -- wenn der Server harmloser ist als eingestuft -- seine "
+                f"Ampel auf {cw} oder grün stellen (neue Quellen beginnen rot).")
     return None
 
 
@@ -1156,7 +1189,8 @@ def keys_tab(host):
                        f'<label>Höchste Wirkungsklasse</label><select name="max_effect">'
                        f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select>'
                        f'<label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select>'
-                       + (f'<label>Gruppen (Komma; volle Pfade, *, @&lt;chat&gt; oder @*)</label>'
+                       + (f'<label>Gruppen (Komma): * oder /pfad = Anmeldung am Gateway; '
+                          f'@&lt;chat&gt; oder @* = Menschen aus einem Chat</label>'
                           f'<input type="text" name="groups" value="{esc(", ".join(books.profile_groups(k)))}" required>'
                           if k["kind"] == "profile" else "")
                        + f'<button>Speichern</button></form></details>')
@@ -1168,17 +1202,22 @@ def keys_tab(host):
                      f'<td class="muted">{esc(context_line(k))}</td><td>{action}</td></tr>')
     vnames = [v["name"] for v in books.views(DB)]
     return f'''<div class="card"><div class="chead"><h2>Schlüssel und Zugangsprofile</h2></div>
-<p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert:
-Es gilt für angemeldete Menschen der genannten Gruppen (volle Pfade wie /sap-dev, oder * für alle)
-— und mit <code>@&lt;chat-instanz&gt;</code> oder <code>@*</code> für Menschen, die ein Chat der
-Plattform herträgt (Verfahren A, die Sicht braucht dafür den Zugang „Plattform“).</p>
+<p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert,
+es gilt für Menschen — und die kommen auf zwei Wegen:</p>
+<ul class="hint">
+<li><b>Selbst am Gateway angemeldet</b> (z. B. Claude Code mit Anmeldung): Gruppen <code>*</code> für alle,
+die sich anmelden dürfen, oder volle Pfade wie <code>/sap-dev</code>. Die Sicht braucht den Zugang „Anmeldung“.</li>
+<li><b>Von einem Chat der Plattform hergetragen</b> (Verfahren A): <code>@&lt;chat-instanz&gt;</code>, etwa
+<code>@bec-chat</code>, oder <code>@*</code> für jeden Chat des Mandanten. Die Sicht braucht den Zugang „Plattform“.
+Ein <code>*</code> gilt für einen Chat <b>nicht</b>.</li>
+</ul>
 <div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
 <th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
 <details class="add"><summary>+ Schlüssel ausstellen oder Zugangsprofil anlegen</summary>
 <form class="grid" method="post" action="issue">
 <div><label>Etikett</label><input type="text" name="label" required></div>
 <div><label>Art</label><select name="kind">{options(("key", "profile"), "key", {"key": "Schlüssel", "profile": "Zugangsprofil"})}</select></div>
-<div><label>Gruppen (nur Zugangsprofil, Komma)</label><input type="text" name="groups"></div>
+<div><label>Gruppen (nur Zugangsprofil, Komma): * oder /pfad, für einen Chat @&lt;chat&gt; oder @*</label><input type="text" name="groups"></div>
 <div><label>Sichten (Komma) — bekannt: {esc(", ".join(vnames) or "keine")}</label>
 <input type="text" name="views" required></div>
 <div><label>Höchste Wirkungsklasse</label><select name="max_effect">{options(books.EFFECTS, "read", books.EFFECT_WORDS)}</select></div>
@@ -1521,7 +1560,7 @@ def signin_card(host):
     if not ISSUER:
         return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Einrichten: '
                 + portal_mcp_link("im Portal auf der Seite dieser Instanz")
-                + ' auf <b>„Anmeldung einrichten“</b> klicken (das darf der Betreiber des Knotens, server_admin) -- die Plattform legt die Clients im Realm '
+                + ' auf <b>„Anmeldung einrichten“</b> klicken (das darf die Verwaltung des Mandanten, tenant_admin, ab Plattform 0.1.309; davor nur der Betreiber, server_admin) -- die Plattform legt die Clients im Realm '
                 'an und gibt dem Gateway die Werte. Die Felder MCPGW_* in der Konfiguration der Instanz '
                 'bleiben dafür <b>leer</b>; von Hand gesetzt gewinnen sie (nur ohne Konnektor nötig). Am '
                 'Knoten: <code>oaap idp mcp &lt;konnektor&gt; --instance &lt;name&gt;</code> '

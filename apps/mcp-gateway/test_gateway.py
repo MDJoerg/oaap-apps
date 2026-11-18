@@ -1555,9 +1555,12 @@ check("0.7.3: die Tabelle warnt beim Profil: a-zwei ohne Zugang Plattform",
 admin("/server-save", name="kp", address=TUER, auth="platform", light="red")
 st, why = init_a("a-sicht")
 check("0.7.3: Ampel der Sicht über der des Profils: 403 nennt Ampel und Abhilfe",
-      st == 403 and "Ampel der Sicht a-sicht ist red" in why and "bis yellow" in why, why)
+      st == 403 and "Ampel der Sicht a-sicht ist rot" in why and "bis gelb" in why, why)
+check("L13 (0.20): mit dem Server, der die Ampel bestimmt, und beiden Wegen -- kein „senken“",
+      "Server kp ist rot eingestuft" in why and "„Ampel höchstens“ auf rot" in why
+      and "auf gelb oder grün" in why and "senken" not in why, why)
 st_p, page = admin_get("/?tab=zugaenge")
-check("... und die Tabelle warnt ebenso", "a-sicht: die Ampel der Sicht a-sicht ist red" in page, None)
+check("... und die Tabelle warnt ebenso", "a-sicht: die Ampel der Sicht a-sicht ist rot" in page, None)
 admin("/server-save", name="kp", address=TUER, auth="platform", light="green")
 page = admin("/key-limits", label="a-chat", views="a-sicht,gibtsnicht", max_effect="read", ceiling="yellow")
 row = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]
@@ -2716,6 +2719,22 @@ app.PORTAL_URL, app.ISSUER = old_portal, old_iss
 y = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "oaap-app.yaml"), encoding="utf-8").read()
 check("L1: die Konfiguration sagt bei den Feldern der Anmeldung, dass sie leer bleiben",
       y.count("leer lassen bei „Anmeldung einrichten“") == 4 and "LEER LASSEN" in y)
+
+print("\n-- 0.20.0: * und @<chat> erklärt (L12), Ampel verständlich (L13)")
+admin("/view-save", name="nur-chat", max_effect="read", ways="platform")
+admin("/issue", label="stern-prof", kind="profile", groups="*", views="nur-chat",
+      max_effect="read", ceiling="red")
+st, page = admin_get("/?tab=zugaenge")
+check("L12: ein Profil mit * an einer Chat-Sicht rät zu @<chat>, nicht zu „Anmeldung einschalten“",
+      "nur-chat: die Sicht nur-chat nimmt Menschen aus einem Chat" in page
+      and "@&lt;chat-instanz&gt; oder @*" in page, page[-1500:])
+check("L12: die Seite erklärt beide Wege und dass * für einen Chat nicht gilt",
+      "Selbst am Gateway angemeldet" in page and "Von einem Chat der Plattform hergetragen" in page
+      and "gilt für einen Chat <b>nicht</b>" in page, None)
+old_iss = app.ISSUER
+app.ISSUER = ""
+check("L4: der Reiter Anmeldung sagt, dass tenant_admin einrichten darf", "tenant_admin" in app.signin_card("x"), None)
+app.ISSUER = old_iss
 sechs.shutdown()
 
 
