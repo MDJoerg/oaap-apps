@@ -30,6 +30,9 @@ SHARED = {
     # RFC-0097 Stufe 1: Prüfung und Sichtbarkeit von Assistenten -- der Chat
     # (Konfiguration, alte Datei) und das MCP-Gateway (wo sie jetzt liegen).
     "assistants": ["chat", "mcp-gateway"],
+    # Markdown mit Mermaid und SVG, formatiert/roh -- im Chat und in den Vorgängen
+    # dieselbe Darstellung (Ziel: der Ordner static/md der App).
+    "mdview": ["chat:static/md", "vorgaenge:static/md"],
 }
 
 
@@ -61,20 +64,22 @@ def main(argv):
     for module, apps in SHARED.items():
         source = os.path.join(ROOT, "lib", module)
         for app in apps:
-            copy = os.path.join(ROOT, "apps", app, module)
+            app, _, sub = app.partition(":")
+            copy = os.path.join(ROOT, "apps", app, *(sub or module).split("/"))
             diffs = compare(source, copy)
+            where = f"apps/{app}/{sub or module}"
             if not diffs:
-                print(f"  ok    apps/{app}/{module}")
+                print(f"  ok    {where}")
                 continue
             if fix:
                 shutil.rmtree(copy, ignore_errors=True)
                 shutil.copytree(source, copy,
                                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-                print(f"  neu   apps/{app}/{module} ({len(diffs)} Abweichungen ersetzt)")
+                print(f"  neu   {where} ({len(diffs)} Abweichungen ersetzt)")
                 continue
             bad += 1
             for kind, path in diffs:
-                print(f"  FEHL  apps/{app}/{module}/{path}: {kind}")
+                print(f"  FEHL  {where}/{path}: {kind}")
     if bad:
         print(f"\n{bad} Kopie(n) weichen von lib/ ab. Geändert wird nur in lib/, "
               "dann: python3 check-shared.py --fix")

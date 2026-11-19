@@ -333,6 +333,51 @@ app.STORE.set_status(c6s, "u-x", "X", "answered", "So geht es.")
 st, b, _ = call("GET", "/platform/feedback/mine?numbers=" + n6, {**SOURCE, **user("u-anna")})
 ok("0.6.0: beantwortet -> answered true", st == 200 and json.loads(b)["cases"][n6]["answered"] is True, (st, b))
 
+# --- 0.7.0: Name, Rechte-Hinweis, Darstellung, OAAP-Kopf- und Fußzeile
+st, b, _ = call("POST", "/platform/feedback", {**SOURCE, **user("u-joerg", name="J%C3%B6rg%20M%C3%BCller"), **ORIGIN},
+                {"kind": "question", "title": "Umlaute", "body": "**fett** und\n```mermaid\ngraph TD\nA-->B\n```"},
+                "application/json")
+n7 = json.loads(b)["number"]
+ok("0.7.0: der Anzeigename wird dekodiert (RFC-0040 D4)", app.STORE.get(n7)["reporter_name"] == "Jörg Müller",
+   app.STORE.get(n7)["reporter_name"])
+st, b, _ = call("POST", f"/v/{n7}/comment", {**user("u-joerg", name="J%C3%B6rg%20M%C3%BCller"), **ORIGIN},
+                "text=Danke", "application/x-www-form-urlencoded")
+ok("0.7.0: ... auch im Kommentar", app.STORE.get(n7)["entries"][-1]["actor_name"] == "Jörg Müller",
+   app.STORE.get(n7)["entries"][-1]["actor_name"])
+st, pg, _ = call("GET", f"/v/{n7}", user("u-joerg", name="J%C3%B6rg%20M%C3%BCller"))
+ok("0.7.0: Meldende ohne Rechte: Hinweis statt fehlendem Formular -- Eingang braucht die App-Rolle admin",
+   st == 200 and "Den Status kannst du hier nicht ändern" in pg and "<code>admin</code>" in pg
+   and "tenant_admin" in pg and "Als Meldende kannst du kommentieren" in pg, pg[-1500:])
+ok("0.7.0: OAAP-Kopfzeile mit Benutzermenü: dekodierter Name, Abmelden als POST",
+   "<header class=oaap>" in pg and "<summary id=uname>Jörg Müller</summary>" in pg
+   and '<form method=post action="/auth/logout">' in pg, None)
+ok("0.7.0: Fußzeile mit Version und den eigenen Rechten",
+   "<footer class=oaap><b>Vorgänge 0.7.0</b>" in pg and "Bearbeiten in keinem Bereich" in pg, None)
+ok("0.7.0: Text als Markdown zum Formatieren (roh im Element, escaped) und der Umschalter",
+   "data-md" in pg and "**fett**" in pg and "A--&gt;B" in pg and 'data-md-mode=raw' in pg
+   and "/static/md/view.js" in pg and "<script>x" not in pg, None)
+st, pg, _ = call("GET", f"/v/{n7}", user("u-admin", roles="user,admin"))
+ok("0.7.0: wer den Eingang bearbeitet, bekommt keinen Hinweis, sondern das Formular",
+   st == 200 and "Den Status kannst du hier nicht ändern" not in pg and "action='/v/" in pg
+   and "bearbeiten: Eingang" in pg, pg[-800:])
+st, js, _ = call("GET", "/static/md/view.js", user("u-joerg"))
+ok("0.7.0: /static/md/view.js wird ausgeliefert", st == 200 and "OAAPView" in js, st)
+ok("0.7.0: ... nur die genannten Dateien", all(call("GET", x, user("u-joerg"))[0] != 200
+                                             for x in ("/static/md/../../app.py", "/static/md/MERMAID-LICENSE",
+                                                       "/static/app.py")))
+import sqlite3  # noqa: E402
+_mdb = os.path.join(DATA, "alt.db")
+_s = store.Store(_mdb)
+_s.create(kind="bug", title="alt", body="", reporter="u-x", reporter_name="J%C3%B6rg")
+_c = sqlite3.connect(_mdb)
+_c.execute("UPDATE cases SET reporter_name='J%C3%B6rg'")
+_c.execute("PRAGMA user_version = 0")
+_c.commit()
+_c.close()
+_s2 = store.Store(_mdb)
+ok("0.7.0: schon gespeicherte, kodierte Namen werden beim Start einmal dekodiert",
+   _s2.listing(reporter="u-x")[0]["reporter_name"] == "Jörg", _s2.listing(reporter="u-x"))
+
 srv.shutdown()
 print("")
 print("ALLE PASS" if not fails else f"{fails} FAIL")

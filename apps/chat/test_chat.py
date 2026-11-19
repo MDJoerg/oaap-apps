@@ -588,14 +588,21 @@ def raw_get(path):
         return e.code, "", b""
 
 
-st, ct, body = raw_get("/static/markdown.js")
-check("0.3.0: /static/markdown.js wird ausgeliefert (JavaScript)", st == 200 and "javascript" in ct
+st, ct, body = raw_get("/static/md/markdown.js")
+check("0.3.0/0.13.0: /static/md/markdown.js wird ausgeliefert (JavaScript)", st == 200 and "javascript" in ct
       and b"ChatMarkdown" in body, (st, ct))
-st, ct, body = raw_get("/static/mermaid.min.js")
+st, ct, body = raw_get("/static/md/view.js")
+check("0.13.0: /static/md/view.js (formatiert/roh, Mermaid, SVG als Bild) wird ausgeliefert",
+      st == 200 and b"OAAPView" in body and b"data:image/svg+xml" in body, st)
+st, ct, body = raw_get("/static/md/mermaid.min.js")
 check("... Mermaid ebenso (mitgeliefert, nichts von außen)", st == 200 and len(body) > 1_000_000, st)
 check("... nur die genannten Dateien: ../app.py, %2e%2e und andere Namen nie ausgeliefert",
-      all(raw_get(x)[0] != 200 for x in ("/static/../app.py", "/static/%2e%2e/app.py", "/static/MERMAID-LICENSE",
+      all(raw_get(x)[0] != 200 for x in ("/static/../app.py", "/static/%2e%2e/app.py", "/static/MERMAID-LICENSE", "/static/md/MERMAID-LICENSE", "/static/markdown.js",
                                          "/static/", "/static/app.py")))
+class _H:
+    headers = {"X-OAAP-Display-Name": "J%C3%B6rg%20M%C3%BCller"}
+check("0.13.0: der Anzeigename wird dekodiert (RFC-0040 D4), nicht „J%C3%B6rg…“ im Prompt",
+      app.Handler.person_name(_H()) == "Jörg Müller", app.Handler.person_name(_H()))
 _, cr = req("POST", "/api/conv", {"assistant": "projekte"})
 st, r = req("POST", f"/api/conv/{cr['id']}/rename", {"title": "  Drucker   im Büro  "})
 check("umbenennen: Titel gesetzt, Leerraum zusammengezogen", st == 200 and r["title"] == "Drucker im Büro", r)

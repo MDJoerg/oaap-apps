@@ -88,6 +88,7 @@ body[data-bg=cool] #log{background-image:linear-gradient(160deg,rgba(56,189,248,
 .md blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--line);color:var(--muted)}
 .md a{color:var(--accent)} .md hr{border:0;border-top:1px solid var(--line)}
 .mermaid-src svg{max-width:100%;height:auto;background:#fff;border-radius:.3rem}
+.svg-src img{max-width:100%;height:auto;background:#fff;border-radius:.3rem}
 .thinking{align-self:flex-start;display:flex;align-items:center;gap:.6rem;color:var(--muted);font-size:.9rem;
 padding:.5rem .8rem;border:1px solid var(--line);border-radius:.7rem;background:var(--panel)}
 .dots{display:inline-flex;gap:.25rem}
@@ -376,7 +377,8 @@ dialog input,dialog textarea,dialog select{width:100%}
   </form>
 </dialog>
 
-<script src="static/markdown.js"></script>
+<script src="static/md/markdown.js"></script>
+<script src="static/md/view.js"></script>
 <script>
 "use strict";
 let S = null, C = null, busy = false, CMDS = [], SETUP = null, PENDING = null, SEL = 0;
@@ -416,7 +418,7 @@ const SVG = new Map();
 let mermaidReady = null;
 function loadMermaid(){
   if (!mermaidReady) mermaidReady = new Promise((ok, no) => {
-    const sc = document.createElement("script"); sc.src = "static/mermaid.min.js";
+    const sc = document.createElement("script"); sc.src = "static/md/mermaid.min.js";
     sc.onload = () => { window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: isDark() ? "dark" : "default"}); ok(); };
     sc.onerror = no; document.head.appendChild(sc);
   });
@@ -881,6 +883,7 @@ function render(status){
   if (LIGHT && !lightOk() && !busy) tail.appendChild(lightWarn());
   if (status) tail.appendChild(status);
   log.scrollTop = log.scrollHeight;
+  if (window.OAAPView) window.OAAPView.drawSvg(msgs);      // 0.13.0: ```svg als Bild
   drawMermaid(msgs).then(() => { log.scrollTop = log.scrollHeight; });
 }
 

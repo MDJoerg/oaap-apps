@@ -37,6 +37,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import unquote
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -44,7 +45,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -503,8 +504,10 @@ def step(person, person_name, assertion, assistant, conv, decision):
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # Nur diese Dateien, nie ein Pfad aus der Anfrage (kein Weg aus dem Ordner hinaus).
-STATIC = {"markdown.js": "application/javascript; charset=utf-8",
-          "mermaid.min.js": "application/javascript; charset=utf-8"}
+# 0.13.0: die Darstellung liegt in static/md, Kopie aus lib/mdview (check-shared.py).
+STATIC = {"md/markdown.js": "application/javascript; charset=utf-8",
+          "md/view.js": "application/javascript; charset=utf-8",
+          "md/mermaid.min.js": "application/javascript; charset=utf-8"}
 
 
 def own_instance_guess():
@@ -1116,8 +1119,11 @@ class Handler(BaseHTTPRequestHandler):
         return store.Who(uid, roles, AUTHZ.grants(uid) if uid else None)
 
     def person_name(self):
-        return (self.headers.get("X-OAAP-Display-Name") or self.headers.get("X-OAAP-User")
-                or "der angemeldeten Person").strip()[:80]
+        # 0.13.0: Der Anzeigename kommt prozentkodiert, sobald er mehr als ASCII enthält
+        # (oaap.core.identity, RFC-0040 D4: immer dekodieren) -- sonst stand
+        # „J%C3%B6rg“ im Prompt.
+        return unquote(self.headers.get("X-OAAP-Display-Name") or self.headers.get("X-OAAP-User")
+                       or "der angemeldeten Person").strip()[:80]
 
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)

@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import re
 import urllib.error
@@ -54,7 +54,7 @@ import mcp_door
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -209,9 +209,48 @@ def next_statuses(who, c):
 
 # ------------------------------------------------------------------ Optik
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATIC = {"/static/md/markdown.js": "markdown.js", "/static/md/view.js": "view.js",
+          "/static/md/mermaid.min.js": "mermaid.min.js"}
+_REQ = threading.local()          # wer gerade fragt -- für Kopf- und Fußzeile
+
+LOGO = ('<svg viewBox="0 0 100 100" width="26" height="26" aria-hidden="true">'
+        '<polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="none" stroke="#fff" '
+        'stroke-width="7" stroke-linejoin="round"/><polygon points="50,28 69,39 69,61 50,72 31,61 31,39" '
+        'fill="#93c5fd"/></svg>')
+
 STYLE = """<link rel="stylesheet" href="/platform/theme.css">
 <style>
-  *{box-sizing:border-box}
+  *{box-sizing:border-box} [hidden]{display:none!important}
+  /* 0.7.0: OAAP-Design (oaap-design §5, §5.1): dunkelblaue Kopfzeile mit Marke und
+     Benutzermenü, Fußzeile mit Version und den eigenen Rechten */
+  body{display:flex;flex-direction:column;min-height:100vh;background:var(--oaap-bg, #f4f6fa)}
+  header.oaap{display:flex;align-items:center;gap:.8rem;padding:.55rem 1rem;color:#fff;
+       background:linear-gradient(90deg, var(--oaap-blue-950, #172554), var(--oaap-blue-900, #1e3a8a))}
+  header.oaap .brand{display:flex;align-items:center;gap:.55rem;color:#fff;text-decoration:none}
+  header.oaap .brand b{letter-spacing:.06em;font-size:.95rem} header.oaap .brand small{opacity:.8;font-size:.82rem}
+  header.oaap .sp{flex:1}
+  details.user{position:relative} details.user summary{list-style:none;cursor:pointer;padding:.35rem .7rem;
+       border-radius:6px;border:1px solid rgba(255,255,255,.3);font-size:.88rem}
+  details.user summary::-webkit-details-marker{display:none}
+  details.user[open] summary{background:rgba(255,255,255,.12)}
+  details.user .menu{position:absolute;right:0;top:calc(100% + .35rem);min-width:15rem;z-index:5;
+       background:var(--oaap-surface, #fff);color:var(--oaap-text, #1f2937);border:1px solid var(--oaap-border, #e5e7eb);
+       border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:.6rem .7rem}
+  details.user .menu a{display:block;padding:.35rem 0;color:var(--oaap-blue-600, #2563eb);text-decoration:none}
+  details.user .menu form{margin:.3rem 0 0} details.user .menu button{width:100%}
+  details.user .menu .hint{font-size:.78rem;color:var(--oaap-muted, #6b7280);margin:.35rem 0 0}
+  footer.oaap{margin-top:auto;padding:.6rem 1rem;font-size:.8rem;color:#cbd5e1;background:var(--oaap-blue-950, #172554)}
+  footer.oaap b{color:#fff;font-weight:600}
+  .seg{display:inline-flex;border:1px solid var(--oaap-color-border, #d8dbe0);border-radius:6px;overflow:hidden;vertical-align:middle}
+  .seg button{background:transparent;color:var(--oaap-color-text, #1a1d21);border:0;border-radius:0;padding:.25rem .65rem;font-size:.82rem}
+  .seg button[aria-pressed=true]{background:var(--oaap-color-primary, #2f6fed);color:#fff}
+  html[data-md-view=raw] .md-f{display:none} html:not([data-md-view=raw]) .md-raw[data-mounted]{display:none}
+  .md-f > :first-child{margin-top:0} .md-f > :last-child{margin-bottom:0}
+  .md-f table{width:auto} .md-f pre{background:var(--oaap-color-bg, #fff);padding:.5rem;border-radius:4px;overflow:auto}
+  .md-f code{font-size:.88em} .md-f blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--oaap-color-border, #d8dbe0)}
+  .mermaid-src svg,.svg-src img{max-width:100%;height:auto;background:#fff;border-radius:4px}
+  .rights{border-left:3px solid var(--oaap-color-warning, #b45309);background:var(--oaap-color-bg, #fff);padding:.55rem .8rem;margin:.8rem 0;font-size:.9rem}
   body{font-family:var(--oaap-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
        font-size:var(--oaap-font-size-base, 15px);margin:0;
        background:var(--oaap-color-bg, #fff);color:var(--oaap-color-text, #1a1d21)}
@@ -242,16 +281,69 @@ STYLE = """<link rel="stylesheet" href="/platform/theme.css">
 </style>"""
 
 
+def rights_summary(who, store):
+    """Ein Satz für die Fußzeile: was diese Person hier darf."""
+    if who is None:
+        return ""
+    try:
+        queues = store.queues() if store else []
+    except Exception:  # noqa: BLE001 -- die Fußzeile darf keine Seite verhindern
+        queues = []
+    work = [q["title"] for q in queues if who.may("triage", q["id"])]
+    read = [q["title"] for q in queues if who.may("read", q["id"]) and q["title"] not in work]
+    parts = []
+    if work:
+        parts.append("bearbeiten: " + ", ".join(work))
+    if read:
+        parts.append("lesen: " + ", ".join(read))
+    if not parts:
+        return "Du siehst deine eigenen Meldungen und kannst sie kommentieren. Bearbeiten in keinem Bereich."
+    return "Deine Bereiche — " + " · ".join(parts)
+
+
 def page(title, body, tab=""):
     tabs = [("/", "Übersicht", "home"), ("/neu", "Neuer Vorgang", "new"),
             ("/bereiche", "Bereiche", "queues"), ("/partner", "Partner", "partners")]
     nav = "".join(f'<a href="{h}" class="{"on" if k == tab else ""}">{esc(t)}</a>'
                   for h, t, k in tabs)
+    who = getattr(_REQ, "who", None)
+    user = ""
+    if who is not None:
+        # oaap-design §5.1: dasselbe Benutzermenü wie im Portal. Der Name kommt vom
+        # Gateway; /auth/whoami sagt, ob es ein Passwort gibt. Abmelden ist ein POST.
+        user = (f'<details class=user><summary id=uname>{esc(who.name)}</summary><div class=menu>'
+                f'<div class=muted id=ulogin></div>'
+                f'<a id=upw href="/auth/password" hidden>Passwort ändern</a>'
+                f'<form method=post action="/auth/logout"><button>Abmelden</button></form>'
+                f'<p class=hint>Als andere Person weiter: abmelden und neu anmelden.</p></div></details>')
+    foot = rights_summary(who, getattr(_REQ, "store", None))
     return (f"<!doctype html><html lang=de><head><meta charset=utf-8>"
             f"<meta name=viewport content='width=device-width,initial-scale=1'>"
             f"<title>{esc(title)} · Vorgänge</title>{STYLE}"
-            f'<script src="/platform/feedback.js" defer></script></head>'
-            f"<body><main><h1>{esc(title)}</h1><nav class=tabs>{nav}</nav>{body}</main></body></html>")
+            f'<script src="/platform/feedback.js" defer></script>'
+            f'<script src="/static/md/markdown.js" defer></script>'
+            f'<script src="/static/md/view.js" defer></script></head>'
+            f'<body><header class=oaap><a class=brand href="/">{LOGO}<span><b>OAAP</b> '
+            f'<small>Vorgänge</small></span></a><span class=sp></span>{user}</header>'
+            f"<main><h1>{esc(title)}</h1><nav class=tabs>{nav}</nav>{body}</main>"
+            f"<footer class=oaap><b>Vorgänge {esc(VERSION)}</b>"
+            + (f" · {esc(foot)}" if foot else "") + "</footer>"
+            + """<script>
+addEventListener("DOMContentLoaded", function () {
+  if (window.OAAPView) { OAAPView.mode(); OAAPView.mount(document); }
+  document.querySelectorAll("[data-md-mode]").forEach(function (b) {
+    b.onclick = function () { OAAPView.mode(b.getAttribute("data-md-mode")); };
+  });
+  fetch("/auth/whoami", {headers: {"Accept": "application/json"}})
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (me) {
+      var n = document.getElementById("uname"); if (!n) return;
+      if (me.display_name || me.username) n.textContent = me.display_name || me.username;
+      document.getElementById("ulogin").textContent = me.username ? "angemeldet als " + me.username : "";
+      if (me.links && me.links.password) document.getElementById("upw").hidden = false;
+    }).catch(function () {});
+});
+</script></body></html>""")
 
 
 def pill(status):
@@ -320,9 +412,14 @@ class Handler(BaseHTTPRequestHandler):
         if not uid:
             return None
         roles = {r.strip() for r in self.headers.get("X-OAAP-Roles", "").split(",") if r.strip()}
-        name = (self.headers.get("X-OAAP-Display-Name", "").strip()
+        # 0.7.0: Der Anzeigename kommt prozentkodiert, sobald er mehr als ASCII enthält
+        # (oaap.core.identity, RFC-0040 D4: immer dekodieren) -- bis 0.6.0 stand
+        # „J%C3%B6rg%20M%C3%BCller“ im Vorgang.
+        name = (unquote(self.headers.get("X-OAAP-Display-Name", "")).strip()
                 or self.headers.get("X-OAAP-User", "").strip() or uid)
-        return Who(uid, name, roles, self.authz.grants(uid))
+        who = Who(uid, name, roles, self.authz.grants(uid))
+        _REQ.who, _REQ.store = who, self.store
+        return who
 
     def is_partner(self):
         """Ein Maschinenzugang, den wir einem Partner ausgestellt haben, traegt
@@ -370,10 +467,15 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        _REQ.who = _REQ.store = None
         u = urlparse(self.path)
         p = u.path
         if p == "/healthz":
             return self.send(200, "ok", "text/plain")
+        if p in STATIC:
+            # 0.7.0: Markdown, Mermaid, SVG -- Kopie aus lib/mdview, nur diese Namen
+            with open(os.path.join(HERE, "static", "md", STATIC[p]), "rb") as fh:
+                return self.send(200, fh.read(), "application/javascript; charset=utf-8")
         if p == "/platform/feedback/session":
             return self.feedback_session()
         if p == "/platform/feedback/mine":
@@ -402,6 +504,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, page("Nicht gefunden", ""))
 
     def do_POST(self):
+        _REQ.who = _REQ.store = None
         p = urlparse(self.path).path
         if not self.read_body():
             return self.send(413, "")
@@ -883,7 +986,7 @@ Betreff und Text.</p>
                 head = "Antwort an den Partner gesendet"
             else:
                 head = "Kommentar"
-            text = f"<div class=body>{esc(e['text'])}</div>" if e["text"] else ""
+            text = f"<div class=body data-md>{esc(e['text'])}</div>" if e["text"] else ""
             ent.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div>{text}</div>")
         forms = ""
         base = f"/v/{quote(c['number'])}"
@@ -930,11 +1033,29 @@ Betreff und Text.</p>
                       + f"<div class=muted><code>{esc(o['handover_id'][:8])}</code> · {state}</div>")
         observers = (f"<div class=muted>Beobachtet von: {esc(', '.join(qt.get(o, o) for o in c['observers']))}</div>"
                      if c["observers"] else "")
-        body = (f"<div class=card><div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
+        # 0.7.0: Wer hier nichts umstellen kann, erfährt warum -- statt eines fehlenden Formulars.
+        rights = ""
+        if not nxt and c["status"] not in ("closed", "rejected"):
+            if c["queue"] == DEFAULT_QUEUE:
+                how = ("Im Bereich <b>Eingang</b> stellen den Status Personen mit der App-Rolle "
+                       "<code>admin</code> um (die Plattformrolle <code>tenant_admin</code> reicht dafür "
+                       "nicht; sie vergibt die Rolle im Portal unter Benutzer).")
+            else:
+                how = (f"Im Bereich <b>{esc(qt.get(c['queue'], c['queue']))}</b> stellt den Status um, wem "
+                       "„Rollen &amp; Rechte“ die Vorlage <i>Bearbeiter/in</i> oder <i>Clearing</i> "
+                       "mit diesem Bereich gibt.")
+            mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, den "
+                    "Vorgang schließen." if c["reporter"] == who.id else "")
+            rights = f"<div class=rights>Den Status kannst du hier nicht ändern. {how}{mine}</div>"
+        toggle = ('<div style="float:right" class=seg role=group aria-label="Darstellung">'
+                  '<button type=button data-md-mode=formatted aria-pressed=true>Formatiert</button>'
+                  '<button type=button data-md-mode=raw aria-pressed=false>Roh</button></div>')
+        body = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
                 f"{pill(c['status'])} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
                 f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
-                f"<div class=body style='margin-top:.6rem'>{esc(c['body'])}</div>{techbox}</div>"
-                + "<h2>Verlauf</h2>" + "".join(ent) + forms)
+                f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div>"
+                f"{techbox}</div>"
+                + "<h2>Verlauf</h2>" + "".join(ent) + rights + forms)
         return self.send(200, page(f"{c['number']}: {c['title']}", body))
 
     def case_post(self, who, number, action, f):

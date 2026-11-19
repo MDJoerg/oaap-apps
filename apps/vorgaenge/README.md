@@ -217,6 +217,29 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## Darstellung, Rechte-Hinweis, OAAP-Rahmen (seit 0.7.0)
+
+- **Anzeigename:** Die App dekodiert ihn jetzt (RFC-0040 D4). Was 0.6.0
+  noch kodiert gespeichert hat („J%C3%B6rg%20M%C3%BCller“), korrigiert die
+  App einmal beim Start.
+- **Text als Markdown:** Beschreibung und Einträge erscheinen formatiert,
+  mit Tabellen, Mermaid-Diagrammen und ```svg als Bild. Oben rechts
+  schaltet „Formatiert / Roh“ für die ganze Seite um; der Browser merkt
+  sich die Wahl. Ohne JavaScript bleibt der rohe Text stehen. Es ist
+  dieselbe Darstellung wie im Chat (`static/md/`, Kopie aus `lib/mdview`).
+- **Wer den Status ändern darf:** Wer hier nichts umstellen darf, liest
+  den Grund. Im Eingang braucht es die App-Rolle `admin`; `tenant_admin`
+  reicht nicht, er vergibt `admin` aber im Portal. In anderen Bereichen
+  braucht es die Vorlage Bearbeiter/in oder Clearing aus „Rollen &
+  Rechte“.
+- **Kopfzeile im OAAP-Design (oaap-design §5.1):** Sie zeigt Marke und
+  App, rechts das Benutzermenü. Darin stehen der Name, „angemeldet als“,
+  „Passwort ändern“ (nur mit Passwort, laut `/auth/whoami`) und
+  „Abmelden“ als POST an `/auth/logout`. Danach kann sich eine andere
+  Person anmelden.
+- **Fußzeile:** Sie zeigt die Version und die eigenen Bereiche
+  (bearbeiten oder lesen).
+
 ## Unterart, Felder und Bereich vom Feedback-Weg (seit 0.6.0, RFC-0101 Stufe 3)
 
 `/platform/feedback` nimmt zusätzlich an:

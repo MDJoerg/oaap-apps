@@ -21,6 +21,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from urllib.parse import unquote
 
 KINDS = ("bug", "question", "idea", "change", "internal")
 # was der Knopf anbietet; `internal` legt man in der App an (§6)
@@ -232,6 +233,17 @@ class Store:
                 attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT '', acked TEXT NOT NULL DEFAULT '');
             """)
+
+        # 0.7.0: Bis 0.6.0 standen Anzeigenamen so da, wie das Gateway sie schickt --
+        # prozentkodiert, sobald sie mehr als ASCII enthalten (RFC-0040 D4). Einmal
+        # dekodieren; danach dekodiert die App beim Lesen der Kopfzeile.
+        with self.lock, self.db:
+            if self.db.execute("PRAGMA user_version").fetchone()[0] < 1:
+                for table, col in (("cases", "reporter_name"), ("entries", "actor_name")):
+                    for r in self.db.execute(f"SELECT rowid, {col} FROM {table} WHERE {col} LIKE '%\\%%' ESCAPE '\\'").fetchall():
+                        self.db.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?",
+                                        (unquote(r[1]), r[0]))
+                self.db.execute("PRAGMA user_version = 1")
 
     # ------------------------------------------------------------ Bereiche
     def queues(self):

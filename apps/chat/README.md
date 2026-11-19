@@ -320,11 +320,22 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
   zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
 
+## Anzeigename, SVG, gemeinsame Darstellung (0.13.0)
+
+- **Anzeigename:** Der Chat dekodiert ihn jetzt. Die Plattform schickt ihn
+  prozentkodiert, sobald er Umlaute enthält. Bis 0.12.0 stand
+  „J%C3%B6rg%20M%C3%BCller“ im Prompt an das Modell.
+- **SVG-Blöcke:** ```svg-Blöcke erscheinen als Bild. Ein `<img>` mit
+  data:-Adresse kann kein Skript ausführen und nichts nachladen.
+- **Gemeinsames Modul:** Markdown, Mermaid und die Ansicht liegen jetzt in
+  `static/md/`, als Kopie aus `lib/mdview` (`check-shared.py`). Die App
+  Vorgänge nutzt dieselbe Darstellung.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 185 Prüfpunkte gegen eine nachgebaute Plattform
-node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
+py -3 apps/chat/test_chat.py      # 187 Prüfpunkte gegen eine nachgebaute Plattform
+node apps/chat/test_markdown.js   # 27 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 
 Die Messungen am Knoten mit echtem Modell:

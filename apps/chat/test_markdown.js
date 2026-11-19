@@ -1,6 +1,6 @@
 // Tests für static/markdown.js -- node apps/chat/test_markdown.js
 "use strict";
-const md = require("./static/markdown.js");
+const md = require("./static/md/markdown.js");
 let pass = 0, fail = 0;
 function check(name, ok, info) {
   if (ok) { pass++; console.log("  PASS  " + name); }
@@ -35,6 +35,10 @@ check("Trennlinie", r("a\n\n---\n\nb").includes("<hr>"));
 const mm = r("```mermaid\ngraph TD\n  A-->B\n```");
 check("Mermaid-Block wird Platzhalter mit escaptem Quelltext und sichtbarem Code",
       mm === '<div class="mermaid-src" data-src="graph TD\n  A--&gt;B"><pre><code>graph TD\n  A--&gt;B</code></pre></div>', mm);
+
+const sv = r("```svg\n<svg xmlns='http://www.w3.org/2000/svg'><script>x()</script></svg>\n```");
+check("SVG-Block wird Platzhalter, Quelltext escaped (das Bild macht view.js, als <img>)",
+      sv.startsWith('<div class="svg-src" data-src="&lt;svg') && !sv.includes("<script") && !sv.includes("<svg"), sv);
 
 // Sicherheit
 const bad = [
