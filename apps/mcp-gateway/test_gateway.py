@@ -1716,6 +1716,13 @@ check("Besitzer bleiben: Carl sieht seinen privaten, Revision 1", [a["rev"] for 
       if a["id"] == "m-carl"] == [1], d)
 st, d = ax("GET", "")
 check("... und Anna nicht", "m-carl" not in ids_of(d), d)
+import sqlite3 as _sq3  # noqa: E402
+_other = _sq3.connect(app.DB_PATH)
+_seen = [r[0] for r in _other.execute(
+    "SELECT subject FROM audit WHERE action='assistant.migrate' ORDER BY id")]
+_other.close()
+check("0.22.1: die Prüfspur hat BEIDE Übernahmen festgeschrieben (gelesen über eine zweite Verbindung)",
+      _seen[-2:] == ["m-carl", "m-alle"], _seen)
 st, d = ax("POST", "/_migrate", mig, roles="user,tenant_admin")
 check("ein zweites Mal: nichts überschrieben (400 mit den Kennungen)", st == 400
       and "gibt es im Gateway schon" in json.dumps(d, ensure_ascii=False), (st, d))

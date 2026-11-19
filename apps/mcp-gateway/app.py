@@ -60,7 +60,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.22.0"
+VERSION = "0.22.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -2441,6 +2441,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             rev = books.assistant_write(DB, self.assistant_owned(body, who), by)
             books.log(DB, by, "assistant.save", body["id"], f"rev={rev}")
+            DB.commit()          # 0.22.1: log() schreibt, festgeschrieben wird hier
             self.send_json(200, {"saved": body["id"], "rev": rev})
             return
         if rest in ("_import", "_migrate"):
@@ -2466,6 +2467,7 @@ class Handler(BaseHTTPRequestHandler):
                 rev = books.assistant_write(DB, doc, ("migration:" if migrate else "import:") + by)
                 books.log(DB, by, "assistant.migrate" if migrate else "assistant.import", a["id"],
                           f"rev={rev}")
+                DB.commit()      # 0.22.1: sonst blieb der letzte Eintrag offen (bec, 19.11.)
             self.send_json(200, {"migrated" if migrate else "imported": len(body["assistants"])})
             return
         aid, _, sub = rest.partition("/")
@@ -2485,6 +2487,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         books.assistant_set_state(DB, aid, state, by)
         books.log(DB, by, "assistant.state", aid, state)
+        DB.commit()
         self.send_json(200, {"id": aid, "state": state})
 
     def assistant_view_problem(self, a):
