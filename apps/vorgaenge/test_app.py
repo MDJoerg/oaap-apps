@@ -352,7 +352,7 @@ ok("0.7.0: OAAP-Kopfzeile mit Benutzermenü: dekodierter Name, Abmelden als POST
    "<header class=oaap>" in pg and "<summary id=uname>Jörg Müller</summary>" in pg
    and '<form method=post action="/auth/logout">' in pg, None)
 ok("0.7.0: Fußzeile mit Version und den eigenen Rechten",
-   "<footer class=oaap><b>Vorgänge 0.7.0</b>" in pg and "Bearbeiten in keinem Bereich" in pg, None)
+   f"<footer class=oaap><b>Vorgänge {app.VERSION}</b>" in pg and "Bearbeiten in keinem Bereich" in pg, None)
 ok("0.7.0: Text als Markdown zum Formatieren (roh im Element, escaped) und der Umschalter",
    "data-md" in pg and "**fett**" in pg and "A--&gt;B" in pg and 'data-md-mode=raw' in pg
    and "/static/md/view.js" in pg and "<script>x" not in pg, None)
@@ -377,6 +377,66 @@ _c.close()
 _s2 = store.Store(_mdb)
 ok("0.7.0: schon gespeicherte, kodierte Namen werden beim Start einmal dekodiert",
    _s2.listing(reporter="u-x")[0]["reporter_name"] == "Jörg", _s2.listing(reporter="u-x"))
+
+# --- 0.8.0 (RFC-0103 Stufe 1): tenant_admin in jedem Bereich, Zuständige je Bereich
+TA = user("u-ta", roles="user,tenant_admin", name="Tenant Admin")
+app.STORE.add_queue("jira", "Jira-Fragen")
+app.STORE.add_queue("partner", "Partner")
+st, b, _ = report(uid="u-melder", kind="question", title="Stufe 1")
+n8 = json.loads(b)["number"]
+st, pg, _ = call("GET", f"/v/{n8}", TA)
+ok("0.8.0: der tenant_admin (ohne App-Rolle admin) sieht den Vorgang im Eingang und darf verschieben",
+   st == 200 and "/move'" in pg and "Den Status kannst du hier nicht ändern" not in pg, pg[-800:])
+st, b, _ = call("POST", f"/v/{n8}/move", {**TA, **ORIGIN}, "queue=jira&text=", "application/x-www-form-urlencoded")
+ok("0.8.0: ... und verschiebt ihn nach jira", st == 303 and app.STORE.get(n8)["queue"] == "jira", (st, b[-300:]))
+st, b, _ = call("POST", f"/v/{n8}/status", {**TA, **ORIGIN}, "status=in_progress&text=", "application/x-www-form-urlencoded")
+ok("0.8.0: der tenant_admin ändert den Status auch in jira", st == 303 and app.STORE.get(n8)["status"] == "in_progress",
+   (st, b[-300:]))
+ta = app.Who("u-ta", "TA", {"user", "tenant_admin"}, [])
+ok("0.8.0: KÖDER: der tenant_admin übergibt nicht (Daten verlassen den Mandanten)",
+   not ta.may("hand_over", "jira") and ta.may("move", "partner") and ta.may("read", "irgendwo"), None)
+call("GET", "/", user("u-hans", name="Hans%20M%C3%BCller"))
+ok("0.8.0: wer die App öffnet, steht in der Auswahl (Name dekodiert)",
+   any(x["uid"] == "u-hans" and x["name"] == "Hans Müller" for x in app.STORE.people()), app.STORE.people())
+st, b, _ = call("POST", "/bereiche/mitglied", {**TA, **ORIGIN}, "op=set&queue=jira&uid=u-niemand&kind=handler",
+                "application/x-www-form-urlencoded")
+ok("0.8.0: eine Person, die die App nie geöffnet hat: abgelehnt mit dem Weg",
+   st == 400 and "öffnet die App" in b, (st, b[-300:]))
+st, b, _ = call("POST", "/bereiche/mitglied", {**TA, **ORIGIN}, "op=set&queue=jira&uid=u-hans&kind=handler",
+                "application/x-www-form-urlencoded")
+ok("0.8.0: der tenant_admin trägt Hans als Bearbeiter von jira ein",
+   st == 303 and app.STORE.memberships("u-hans") == {"jira": "handler"}, (st, app.STORE.memberships("u-hans")))
+HANS = user("u-hans", name="Hans")
+st, b, _ = call("POST", f"/v/{n8}/status", {**HANS, **ORIGIN}, "status=answered&text=Erledigt", "application/x-www-form-urlencoded")
+ok("0.8.0: Hans (nur Zuständiger, kein Grant) beantwortet den Vorgang in jira",
+   st == 303 and app.STORE.get(n8)["status"] == "answered", (st, b[-300:]))
+st, b, _ = report(uid="u-melder", kind="question", title="Im Partner-Bereich")
+n9 = json.loads(b)["number"]
+app.STORE.move(app.STORE.get(n9), "u-ta", "TA", "partner")
+st, b, _ = call("POST", f"/v/{n9}/status", {**HANS, **ORIGIN}, "status=triage&text=", "application/x-www-form-urlencoded")
+st2, pg, _ = call("GET", f"/v/{n9}", HANS)
+ok("0.8.0: KÖDER: Hans (Bearbeiter von jira) handelt nicht im Bereich partner",
+   st in (400, 404) and app.STORE.get(n9)["status"] == "new" and st2 == 404, (st, st2))
+hans = app.Who("u-hans", "Hans", {"user"}, [], {"jira": "handler"})
+clr = app.Who("u-c", "C", {"user"}, [], {"jira": "clearing"})
+ok("0.8.0: Bearbeiter/in übergibt nicht, Clearing schon (nur im eigenen Bereich)",
+   not hans.may("hand_over", "jira") and clr.may("hand_over", "jira") and not clr.may("hand_over", "partner"), None)
+st, b, _ = call("POST", "/bereiche/mitglied", {**HANS, **ORIGIN}, "op=set&queue=jira&uid=u-melder&kind=handler",
+                "application/x-www-form-urlencoded")
+ok("0.8.0: KÖDER: Zuständige tragen keine weiteren ein", st == 400 and "tenant_admin" in b, (st, b[-200:]))
+st, pg, _ = call("GET", "/bereiche", TA)
+ok("0.8.0: Seite Bereiche: Zuständige je Bereich, pflegen, letzte Änderungen",
+   st == 200 and "Hans (Bearbeiter/in)" in pg and "Zuständige pflegen" in pg and "Zuletzt geändert" in pg,
+   pg[-1200:])
+st, pg, _ = call("GET", "/bereiche", HANS)
+ok("0.8.0: ... ohne Pflege-Formular für Hans, mit „bearbeiten“ bei jira",
+   st == 200 and "Zuständige pflegen" not in pg and "bearbeiten" in pg, None)
+st, b, _ = call("POST", "/bereiche/mitglied", {**TA, **ORIGIN}, "op=remove&queue=jira&uid=u-hans",
+                "application/x-www-form-urlencoded")
+ok("0.8.0: entfernen: danach darf Hans in jira nichts mehr",
+   st == 303 and app.STORE.memberships("u-hans") == {}, app.STORE.memberships("u-hans"))
+st, b, _ = call("POST", "/bereiche", {**TA, **ORIGIN}, "id=finanzen&title=Finanzen", "application/x-www-form-urlencoded")
+ok("0.8.0: der tenant_admin legt Bereiche an", st == 303 and app.STORE.queue("finanzen"), (st, b[-200:]))
 
 srv.shutdown()
 print("")

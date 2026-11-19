@@ -217,6 +217,24 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## tenant_admin und Zuständige je Bereich (seit 0.8.0, RFC-0103 Stufe 1)
+
+- **tenant_admin:** Er bearbeitet jeden Bereich: lesen, kommentieren,
+  Status ändern, verschieben, schließen, Bereiche anlegen, Zuständige
+  pflegen. Übergeben darf er nur als Clearing, weil dabei Daten den
+  Mandanten verlassen. Bis 0.7.0 galt nur die App-Rolle `admin`, und nur
+  im Eingang. RFC-0061 §2.2 hatte das anders beschrieben.
+- **Zuständige je Bereich:** Der tenant_admin pflegt sie auf der Seite
+  „Bereiche“, als Bearbeiter/in oder als Clearing (darf zusätzlich
+  übergeben). Für einen kleinen Mandanten braucht es so kein „Rollen &
+  Rechte“. Grants von dort zählen weiter, beide Wege zusammen.
+- **Wer pflegt:** Zuständige tragen keine weiteren ein. Änderungen stehen
+  unter „Zuletzt geändert“.
+- **Auswahl der Personen:** Gewählt wird aus den Personen, die die App
+  schon einmal geöffnet haben. Ein Verzeichnis aller Benutzer bekommt
+  diese App nicht, das hat nur „Rollen & Rechte“ mit eigenem Schlüssel.
+  Fehlt jemand, öffnet die Person die App einmal.
+
 ## Darstellung, Rechte-Hinweis, OAAP-Rahmen (seit 0.7.0)
 
 - **Anzeigename:** Die App dekodiert ihn jetzt (RFC-0040 D4). Was 0.6.0

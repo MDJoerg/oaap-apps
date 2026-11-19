@@ -234,6 +234,7 @@ class Store:
                 last_error TEXT NOT NULL DEFAULT '', acked TEXT NOT NULL DEFAULT '');
             """)
 
+        self._members_schema()
         # 0.7.0: Bis 0.6.0 standen Anzeigenamen so da, wie das Gateway sie schickt --
         # prozentkodiert, sobald sie mehr als ASCII enthalten (RFC-0040 D4). Einmal
         # dekodieren; danach dekodiert die App beim Lesen der Kopfzeile.
@@ -244,6 +245,90 @@ class Store:
                         self.db.execute(f"UPDATE {table} SET {col}=? WHERE rowid=?",
                                         (unquote(r[1]), r[0]))
                 self.db.execute("PRAGMA user_version = 1")
+
+    # ------------------------------------------- Zuständige (0.8.0, RFC-0103 D2)
+    # Wer einen Bereich bearbeitet, pflegt der tenant_admin hier -- ohne „Rollen &
+    # Rechte“. Grants von dort zählen zusätzlich (Who.may). Personen kennt die App nur,
+    # wenn sie sie einmal geöffnet haben: ein Verzeichnis der Plattform bekommt sie nicht.
+    MEMBER_KINDS = ("handler", "clearing")
+
+    def _members_schema(self):
+        with self.lock, self.db:
+            self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS people (
+                uid TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
+                seen TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS queue_members (
+                queue TEXT NOT NULL, uid TEXT NOT NULL, kind TEXT NOT NULL,
+                added_by TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (queue, uid));
+            CREATE TABLE IF NOT EXISTS queue_log (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, queue TEXT NOT NULL,
+                actor TEXT NOT NULL, action TEXT NOT NULL, uid TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '');
+            """)
+
+    def see_person(self, uid, name, username=""):
+        """Wer die App öffnet, steht danach in der Auswahl für Zuständige."""
+        if not uid:
+            return
+        with self.lock, self.db:
+            self.db.execute(
+                "INSERT INTO people (uid, name, username, seen) VALUES (?,?,?,?) "
+                "ON CONFLICT(uid) DO UPDATE SET name=excluded.name, username=excluded.username, "
+                "seen=excluded.seen", (uid, _clip(name, 120), _clip(username, 120), _now()))
+
+    def people(self):
+        with self.lock:
+            return [dict(r) for r in self.db.execute("SELECT * FROM people ORDER BY name")]
+
+    def person_name(self, uid):
+        with self.lock:
+            r = self.db.execute("SELECT name FROM people WHERE uid=?", (uid,)).fetchone()
+        return r["name"] if r else uid
+
+    def members(self, queue):
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                "SELECT m.*, COALESCE(p.name, m.uid) AS name, COALESCE(p.username, '') AS username "
+                "FROM queue_members m LEFT JOIN people p ON p.uid = m.uid WHERE m.queue=? "
+                "ORDER BY name", (queue,))]
+
+    def memberships(self, uid):
+        """{Bereich: handler|clearing} für diese Person."""
+        if not uid:
+            return {}
+        with self.lock:
+            return {r["queue"]: r["kind"] for r in self.db.execute(
+                "SELECT queue, kind FROM queue_members WHERE uid=?", (uid,))}
+
+    def set_member(self, queue, uid, kind, actor):
+        if kind not in self.MEMBER_KINDS:
+            raise Refused("Zuständig als Bearbeiter/in oder Clearing.")
+        with self.lock, self.db:
+            if not self.db.execute("SELECT 1 FROM queues WHERE id=?", (queue,)).fetchone():
+                raise Refused("Diesen Bereich gibt es nicht.")
+            if not self.db.execute("SELECT 1 FROM people WHERE uid=?", (uid,)).fetchone():
+                raise Refused("Diese Person kennt die App noch nicht. Sie öffnet die App "
+                              "Vorgänge einmal, danach steht sie in der Auswahl.")
+            self.db.execute("INSERT INTO queue_members VALUES (?,?,?,?,?) "
+                            "ON CONFLICT(queue, uid) DO UPDATE SET kind=excluded.kind, "
+                            "added_by=excluded.added_by, at=excluded.at",
+                            (queue, uid, kind, actor, _now()))
+            self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid, kind) "
+                            "VALUES (?,?,?,?,?,?)", (_now(), queue, actor, "set", uid, kind))
+
+    def remove_member(self, queue, uid, actor):
+        with self.lock, self.db:
+            if self.db.execute("DELETE FROM queue_members WHERE queue=? AND uid=?",
+                               (queue, uid)).rowcount:
+                self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid) "
+                                "VALUES (?,?,?,?,?)", (_now(), queue, actor, "remove", uid))
+
+    def queue_log(self, limit=30):
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                "SELECT l.*, COALESCE(p.name, l.uid) AS name, COALESCE(a.name, l.actor) AS actor_name "
+                "FROM queue_log l LEFT JOIN people p ON p.uid = l.uid "
+                "LEFT JOIN people a ON a.uid = l.actor ORDER BY seq DESC LIMIT ?", (limit,))]
 
     # ------------------------------------------------------------ Bereiche
     def queues(self):

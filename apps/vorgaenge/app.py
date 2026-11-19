@@ -54,7 +54,7 @@ import mcp_door
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -162,16 +162,39 @@ RETENTION = RETENTION_MONTHS
 
 # ------------------------------------------------------------------ Rechte
 
+# 0.8.0 (RFC-0103 D2): was Zuständige eines Bereichs dürfen -- dieselben Tätigkeiten
+# wie die Rollenvorlagen „Bearbeiter/in“ und „Clearing“ im Manifest.
+MEMBER_ACTIVITIES = {"handler": {"read", "comment", "triage", "move", "close"},
+                     "clearing": {"read", "comment", "triage", "move", "close", "hand_over"}}
+
+
 class Who:
-    def __init__(self, uid, name, roles, grants):
+    def __init__(self, uid, name, roles, grants, members=None):
         self.id, self.name, self.roles, self.grants = uid, name, roles, grants
+        self.members = members or {}          # {Bereich: handler|clearing}
 
     @property
     def admin(self):
         return "admin" in self.roles
 
+    @property
+    def tenant_admin(self):
+        return "tenant_admin" in self.roles
+
+    @property
+    def manager(self):
+        """Legt Bereiche an und pflegt ihre Zuständigen (RFC-0103 D1/D2)."""
+        return self.admin or self.tenant_admin
+
     def may(self, activity, queue):
+        # RFC-0103 D1: der tenant_admin bearbeitet jeden Bereich -- so stand es in
+        # RFC-0061 §2.2; 0.1–0.7 prüften nur die App-Rolle admin, und nur im Eingang.
+        # Übergeben (Daten verlassen den Mandanten) nicht: das bleibt beim Clearing.
+        if self.tenant_admin and activity != "hand_over":
+            return True
         if self.admin and queue == DEFAULT_QUEUE:
+            return True
+        if activity in MEMBER_ACTIVITIES.get(self.members.get(queue), ()):
             return True
         return bool(self.grants) and authz_client.may_in(
             self.grants, f"case.{activity}", queue=queue)
@@ -417,7 +440,12 @@ class Handler(BaseHTTPRequestHandler):
         # „J%C3%B6rg%20M%C3%BCller“ im Vorgang.
         name = (unquote(self.headers.get("X-OAAP-Display-Name", "")).strip()
                 or self.headers.get("X-OAAP-User", "").strip() or uid)
-        who = Who(uid, name, roles, self.authz.grants(uid))
+        try:
+            self.store.see_person(uid, name, self.headers.get("X-OAAP-User", "").strip())
+            members = self.store.memberships(uid)
+        except Exception:  # noqa: BLE001 -- ohne Ablage keine Zuständigkeit, aber eine Seite
+            members = {}
+        who = Who(uid, name, roles, self.authz.grants(uid), members)
         _REQ.who, _REQ.store = who, self.store
         return who
 
@@ -531,6 +559,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.new_post(who, f)
             if p == "/bereiche":
                 return self.queues_post(who, f)
+            if p == "/bereiche/mitglied":
+                return self.member_post(who, f)
             if p == "/partner":
                 return self.partners_post(who, f)
             if p.startswith("/v/") and p.endswith("/uebergabe"):
@@ -901,19 +931,56 @@ Betreff und Text.</p>
 
     def queues_page(self, who, msg=""):
         queues = self.store.queues()
-        rows = "".join(
-            f"<tr><td><code>{esc(q['id'])}</code></td><td>{esc(q['title'])}</td>"
-            f"<td>{'ja' if who.may('read', q['id']) else ''}</td></tr>" for q in queues)
-        body = (f"<p>Ein Bereich ist der Ort, an dem Vorgänge geklärt werden. Wer einen "
-                f"Bereich bearbeitet, vergibt der Mandant in <b>Rollen &amp; Rechte</b>: "
-                f"App <i>Vorgänge</i>, Rollenvorlage <i>Bearbeiter/in</i> oder <i>Clearing</i>, "
-                f"und als Kontext <b>Zuständigkeitsbereich</b> die Kennung aus der ersten Spalte. "
-                f"Den Bereich <code>{DEFAULT_QUEUE}</code> sehen außerdem die Admins des Mandanten.</p>"
+        kind_word = {"handler": "Bearbeiter/in", "clearing": "Clearing"}
+        people = self.store.people() if who.manager else []
+        rows = []
+        for q in queues:
+            mem = self.store.members(q["id"])
+            names = ", ".join(f"{esc(m['name'])} ({kind_word.get(m['kind'], m['kind'])})" for m in mem) or \
+                '<span class=muted>noch niemand</span>'
+            mine = ("bearbeiten" if who.may("triage", q["id"]) else "lesen" if who.may("read", q["id"]) else "")
+            row = (f"<tr><td><code>{esc(q['id'])}</code></td><td>{esc(q['title'])}</td>"
+                   f"<td>{names}</td><td>{mine}</td></tr>")
+            if who.manager:
+                opts = "".join(f"<option value='{esc(p['uid'])}'>{esc(p['name'])}"
+                               f"{' (' + esc(p['username']) + ')' if p['username'] and p['username'] != p['name'] else ''}"
+                               f"</option>" for p in people)
+                rm = "".join(
+                    f"<form method=post action=/bereiche/mitglied class=inline style='margin:.2rem 0'>"
+                    f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=uid value='{esc(m['uid'])}'>"
+                    f"<input type=hidden name=op value=remove><span>{esc(m['name'])}</span>"
+                    f"<button style='background:transparent;color:var(--oaap-color-danger,#c4342f);"
+                    f"border:1px solid currentColor;padding:.1rem .5rem'>entfernen</button></form>" for m in mem)
+                row += (f"<tr><td></td><td colspan=3><details><summary class=muted>Zuständige pflegen</summary>{rm}"
+                        f"<form method=post action=/bereiche/mitglied class=inline>"
+                        f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=op value=set>"
+                        f"<div><label>Person</label><select name=uid required>{opts}</select></div>"
+                        f"<div><label>als</label><select name=kind><option value=handler>Bearbeiter/in</option>"
+                        f"<option value=clearing>Clearing (darf auch übergeben)</option></select></div>"
+                        f"<button>Eintragen</button></form>"
+                        f"<p class=muted>Fehlt jemand? Die Person öffnet die App Vorgänge einmal, danach steht "
+                        f"sie hier. Ein Verzeichnis aller Benutzer bekommt diese App nicht.</p></details></td></tr>")
+            rows.append(row)
+        rows = "".join(rows)
+        body = (f"<p>Ein Bereich ist eine Zuständigkeit: ein Thema oder ein Team. Vorgänge kommen im "
+                f"<b>Eingang</b> an und werden von dort in den passenden Bereich verschoben.</p>"
+                f"<p>Wer einen Bereich bearbeitet, trägt der <code>tenant_admin</code> hier ein. "
+                f"<b>Bearbeiter/innen</b> lesen, kommentieren, ändern den Status, verschieben und "
+                f"schließen; das <b>Clearing</b> darf zusätzlich an einen Partner-Mandanten übergeben. "
+                f"Der <code>tenant_admin</code> bearbeitet jeden Bereich (übergeben nur als Clearing). "
+                f"In großen Mandanten geht dasselbe über <b>Rollen &amp; Rechte</b> (Vorlagen "
+                f"<i>Bearbeiter/in</i>, <i>Clearing</i>, Kontext = Kennung des Bereichs); beides zählt.</p>"
                 f"<p class=muted>Löschfrist: {RETENTION} Monate nach dem Schließen oder Ablehnen "
                 f"wird die meldende Person aus einem Vorgang entfernt "
                 f"(Einstellung <code>VORGAENGE_RETENTION_MONTHS</code> dieser Instanz).</p>"
-                f"<table><tr><th>Kennung</th><th>Titel</th><th>Ich sehe ihn</th></tr>{rows}</table>")
-        if who.admin:
+                f"<table><tr><th>Kennung</th><th>Titel</th><th>Zuständige</th><th>Ich darf</th></tr>{rows}</table>")
+        if who.manager:
+            log = self.store.queue_log(15)
+            if log:
+                body += ("<h2>Zuletzt geändert</h2><table>" + "".join(
+                    f"<tr><td class=muted>{esc(x['at'][:16].replace('T', ' '))}</td><td>{esc(x['queue'])}</td>"
+                    f"<td>{esc(x['name'])} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt'}</td>"
+                    f"<td class=muted>von {esc(x['actor_name'])}</td></tr>" for x in log) + "</table>")
             body += """<h2>Bereich anlegen</h2>
 <form method=post action=/bereiche class=inline>
  <div><label for=i>Kennung</label><input id=i name=id pattern='[a-z0-9][a-z0-9-]{0,39}' required></div>
@@ -922,9 +989,21 @@ Betreff und Text.</p>
         return self.send(200, page("Bereiche", body, "queues"))
 
     def queues_post(self, who, f):
-        if not who.admin:
-            raise Refused("Bereiche legen die Admins des Mandanten an.")
+        if not who.manager:
+            raise Refused("Bereiche legt der tenant_admin an.")
         self.store.add_queue(f.get("id"), f.get("title"))
+        return self.redirect("/bereiche")
+
+    def member_post(self, who, f):
+        """0.8.0 (RFC-0103 D2): Zuständige pflegt nur der tenant_admin (oder admin) --
+        Zuständige tragen keine weiteren ein."""
+        if not who.manager:
+            raise Refused("Zuständige eines Bereichs trägt der tenant_admin ein.")
+        queue, uid = f.get("queue", ""), f.get("uid", "")
+        if f.get("op") == "remove":
+            self.store.remove_member(queue, uid, who.id)
+        else:
+            self.store.set_member(queue, uid, f.get("kind", ""), who.id)
         return self.redirect("/bereiche")
 
     def case_page(self, who, number, msg=""):
@@ -1036,14 +1115,12 @@ Betreff und Text.</p>
         # 0.7.0: Wer hier nichts umstellen kann, erfährt warum -- statt eines fehlenden Formulars.
         rights = ""
         if not nxt and c["status"] not in ("closed", "rejected"):
-            if c["queue"] == DEFAULT_QUEUE:
-                how = ("Im Bereich <b>Eingang</b> stellen den Status Personen mit der App-Rolle "
-                       "<code>admin</code> um (die Plattformrolle <code>tenant_admin</code> reicht dafür "
-                       "nicht; sie vergibt die Rolle im Portal unter Benutzer).")
-            else:
-                how = (f"Im Bereich <b>{esc(qt.get(c['queue'], c['queue']))}</b> stellt den Status um, wem "
-                       "„Rollen &amp; Rechte“ die Vorlage <i>Bearbeiter/in</i> oder <i>Clearing</i> "
-                       "mit diesem Bereich gibt.")
+            how = (f"Im Bereich <b>{esc(qt.get(c['queue'], c['queue']))}</b> stellen ihn die "
+                   "Zuständigen dieses Bereichs um (Seite „Bereiche“) und der "
+                   "<code>tenant_admin</code>"
+                   + (", im Eingang auch die App-Rolle <code>admin</code>" if c["queue"] == DEFAULT_QUEUE else "")
+                   + ". In großen Mandanten vergibt „Rollen &amp; Rechte“ dasselbe mit den Vorlagen "
+                   "<i>Bearbeiter/in</i> und <i>Clearing</i>.")
             mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, den "
                     "Vorgang schließen." if c["reporter"] == who.id else "")
             rights = f"<div class=rights>Den Status kannst du hier nicht ändern. {how}{mine}</div>"
