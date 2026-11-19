@@ -34,6 +34,7 @@ Gebaut als gewöhnliche OAAP-App: ein HTTP-Port, Persistenz nur unter
 dem deklarierten Mount, Konfiguration über deklarierte Variablen, Logs
 nach stdout, Gesundheitspfad, nur Standardbibliothek.
 """
+import hmac
 import html
 import json
 import os
@@ -61,7 +62,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.26.0"
+VERSION = "0.27.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -180,6 +181,25 @@ def discover_door(name):
 HELP_ACTOR = "plattform (RFC-0094 D6)"
 
 
+def reading_tools(name):
+    """Die lesenden Tools im Katalog eines Servers: angeboten und `readOnlyHint: true`.
+
+    Eine Regel für zwei Leser: die einmalige Freigabe einer Hilfe (RFC-0094 D6)
+    und eine Sicht der Einrichtungstür mit `{"server", "effect": "read"}`
+    (RFC-0104 §3.3). Ein Tool ohne den Hinweis gilt nie als lesend."""
+    out = []
+    for row in books.catalog(DB, name, "tool"):
+        if not row["present"]:
+            continue
+        try:
+            doc = json.loads(row["doc"] or "{}")
+        except ValueError:
+            continue
+        if (doc.get("annotations") or {}).get("readOnlyHint") is True:
+            out.append(row)
+    return out
+
+
 def help_auto_done(name):
     """Ist die einmalige Freigabe für diesen Hilfe-Server schon gelaufen?"""
     return DB.execute("SELECT 1 FROM audit WHERE action='help.auto' AND subject=? LIMIT 1",
@@ -202,16 +222,8 @@ def auto_approve_help(name):
         return []
     views = [v["name"] for v in books.views(DB) if "platform" in books.view_ways(v)]
     done = []
-    for row in books.catalog(DB, name):
-        if not row["present"] or row["kind"] not in ("tool", "prompt"):
-            continue
-        if row["kind"] == "tool":
-            try:
-                doc = json.loads(row["doc"] or "{}")
-            except ValueError:
-                continue
-            if (doc.get("annotations") or {}).get("readOnlyHint") is not True:
-                continue
+    rows = [r for r in books.catalog(DB, name, "prompt") if r["present"]] + reading_tools(name)
+    for row in rows:
         for view in views:
             if any(i["server"] == name and i["source"] == row["name"]
                    for i in books.items(DB, view, row["kind"])):
@@ -2365,6 +2377,14 @@ def modern(msg):
 WELL_KNOWN = "/.well-known/oauth-protected-resource"
 
 
+def assistant_view_problem(a):
+    """Die Sicht eines Assistenten muss es hier geben (via-Tür und Einrichtungstür)."""
+    view = a.get("view") if isinstance(a, dict) else None
+    if isinstance(view, str) and not books.view_row(DB, view):
+        return [f"view: die Sicht {view} gibt es in diesem Gateway nicht."]
+    return []
+
+
 class Refusal(Exception):
     """Das Gateway weist einen Aufruf ab, bevor er zum Server geht."""
 
@@ -2766,10 +2786,7 @@ class Handler(BaseHTTPRequestHandler):
                              "text": r["text"] is not None})
 
     def assistant_view_problem(self, a):
-        view = a.get("view") if isinstance(a, dict) else None
-        if isinstance(view, str) and not books.view_row(DB, view):
-            return [f"view: die Sicht {view} gibt es in diesem Gateway nicht."]
-        return []
+        return assistant_view_problem(a)
 
     def assistant_owned(self, a, who, importer=False):
         """Wem er gehört: bei einem bestehenden der bisherige Besitzer, sonst wer speichert.
@@ -2859,6 +2876,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.route()
+        if path == SETUP_PATH:
+            self.handle_setup("POST")
+            return
         if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
             self.assistants_post(path)
             return
@@ -3360,6 +3380,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION})
             return
+        if path == SETUP_PATH:
+            self.handle_setup("GET")
+            return
         if path.startswith(WELL_KNOWN):
             self.resource_metadata(path[len(WELL_KNOWN):])
             return
@@ -3512,6 +3535,48 @@ class Handler(BaseHTTPRequestHandler):
         self.send_bytes(200, "text/csv; charset=utf-8", REPORT.to_csv(doc).encode("utf-8"),
                         [("X-OAAP-Complete-Until", doc["complete_until"]),
                          ("X-OAAP-Complete", "true" if doc["complete"] else "false")])
+
+    # ---- Einrichtungstür (0.27, RFC-0104 Stufe 2)
+
+    def handle_setup(self, method):
+        """GET/POST /oaap/setup -- nur mit dem Einrichtungsschlüssel der Instanz.
+
+        Kein OAAP_SETUP_KEY in der Umgebung: jeder Aufruf 403. Identitäts-Kopfzeilen
+        zählen hier nicht (§3.1), auch nicht die eines tenant_admin."""
+        raw = self.read_body(1 << 20) if method == "POST" else b""
+        want = (os.environ.get("OAAP_SETUP_KEY") or "").strip()
+        got = (self.headers.get("Authorization") or "").strip()
+        given = got[7:].strip() if got[:7].lower() == "bearer " else ""
+        if not (want and given and hmac.compare_digest(given.encode("utf-8"), want.encode("utf-8"))):
+            self.send_json(403, {"v": 1, "error": "Die Einrichtungstür öffnet nur der "
+                                                  "Einrichtungsschlüssel dieser Instanz."})
+            return
+        actor = setup_actor(self.headers.get("X-OAAP-Setup-Actor"))
+        if method == "GET":
+            query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+            if "kind" not in query and "id" not in query:
+                self.send_json(200, {"v": 1, "kinds": list(SETUP_KINDS)})
+                return
+            kind, sid = query.get("kind", ""), query.get("id", "")
+            if kind not in SETUP_KINDS or not 0 < len(sid) <= 128:
+                self.send_json(400, {"v": 1, "error": "kind ist eine von " + ", ".join(SETUP_KINDS)
+                                                      + ", id ein Name."})
+                return
+            state, ready, note = setup_state(kind, sid)
+            self.send_json(200, {"v": 1, "kind": kind, "id": sid, "state": state, "ready": ready,
+                                 "note": note})
+            return
+        try:
+            body = json.loads(raw or b"")
+        except ValueError:
+            self.send_json(400, {"v": 1, "error": "Kein JSON (oder größer als 1 MiB)."})
+            return
+        try:
+            doc = setup_post(body, actor)
+        except ValueError as exc:
+            self.send_json(400, {"v": 1, "error": str(exc)})
+            return
+        self.send_json(200, doc)
 
     # ---- Betreiber
 
@@ -3751,6 +3816,508 @@ def save_server(form, user):
     if srow:
         guard_of(srow)
     return f"Server „{name}“ gespeichert."
+
+
+# ------------------------------------------------------------- Einrichtungstür (0.27)
+#
+# RFC-0104 Stufe 2, §3.1 und §3.3: Ein Profil des Mandanten (etwa
+# `ki-arbeitsplatz`) richtet das Gateway ein, ohne dass ein Mensch klickt. Der
+# Knoten ruft diese Instanz über den internen Listener der Plattform mit
+# `Authorization: Bearer <OAAP_SETUP_KEY>`; nur die Plattform kennt den Wert.
+# Identitäts-Kopfzeilen zählen hier nicht -- auch ein tenant_admin kommt ohne
+# den Schlüssel nicht durch. Jede Art benutzt dieselben Funktionen wie die
+# Betreiberseite (books.save_view, books.approve, books.issue, books.save_server,
+# books.assistant_write, sync_sources, read_catalog): eine Regel, zwei Türen.
+# Was ein Mensch angelegt oder geändert hat, wird nie überschrieben: Ein
+# Unterschied ist `conflict`.
+
+SETUP_PATH = "/oaap/setup"
+SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant")
+SETUP_SECRET_FIELDS = {"key", "token", "secret", "password", "credentials"}
+SETUP_FIELDS = {
+    "refresh": set(),
+    "server_light": {"light"},
+    "view": {"accesses", "tools", "max_effect"},
+    "profile": {"group", "views", "ceiling", "max_effect"},
+    "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
+                  "commands", "views", "support_queue"},
+}
+SETUP_PROFILE_ID = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._-]{0,63}$")
+SETUP_LOCK = threading.Lock()
+
+
+class SetupRefused(Exception):
+    """Die App erlaubt es nicht; der Text sagt warum."""
+
+
+def setup_secret_field(value):
+    """Der Name eines Feldes, das ein Geheimnis tragen würde (auch verschachtelt), oder ''."""
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if str(k).lower() in SETUP_SECRET_FIELDS:
+                return str(k)
+            hit = setup_secret_field(v)
+            if hit:
+                return hit
+    elif isinstance(value, list):
+        for v in value:
+            hit = setup_secret_field(v)
+            if hit:
+                return hit
+    return ""
+
+
+def setup_server(sid):
+    """Der Server zu einer Kennung: der mit diesem Namen, sonst der aus dieser Instanz
+    (ein Server einer Quelle kann umbenannt sein, 0.14.0)."""
+    return books.server_row(DB, sid) or DB.execute("SELECT * FROM servers WHERE source=?",
+                                                   (sid,)).fetchone()
+
+
+def catalog_tools(name):
+    return [r for r in books.catalog(DB, name, "tool") if r["present"]]
+
+
+def setup_observed(kind, sid):
+    """Was jetzt unter dieser Kennung da ist, als Abbildung -- oder None."""
+    if kind == "server_light":
+        srow = setup_server(sid)
+        return {"server": srow["name"], "light": srow["light"]} if srow else None
+    if kind == "view":
+        vrow = books.view_row(DB, sid)
+        if not vrow:
+            return None
+        return {"ways": vrow["ways"], "max_effect": vrow["max_effect"],
+                "requests": books.view_requests(vrow),
+                "items": [[i["kind"], i["name"], i["server"], i["source"], i["effect"],
+                           i["description"], i["fixed"], i["bounds"], i["approved_fp"]]
+                          for i in books.items(DB, sid)]}
+    if kind == "profile":
+        row = DB.execute("SELECT * FROM keys WHERE label=?", (sid,)).fetchone()
+        if not row:
+            return None
+        return {"kind": row["kind"], "revoked": row["revoked"], "groups": row["groups"],
+                "views": books.key_views(row), "max_effect": row["max_effect"],
+                "ceiling": row["ceiling"], "budget_calls": row["budget_calls"],
+                "rate_per_min": row["rate_per_min"]}
+    if kind == "assistant":
+        row = books.assistant_row(DB, sid)
+        return {"rev": row["rev"], "state": row["state"], "doc": row["doc"]} if row else None
+    return None
+
+
+def setup_gone(kind, obs):
+    """Ist das Beobachtete nur noch ein Rest (widerrufen, gelöscht) oder gar nicht da?"""
+    return (obs is None or (kind == "profile" and bool(obs["revoked"]))
+            or (kind == "assistant" and obs["state"] == "deleted"))
+
+
+def setup_wish(kind, sid, item, planned, actor):
+    """Der Wunsch in der Form, in der er verglichen und angelegt wird. Wirft SetupRefused.
+
+    `planned` (nur bei `dry`): was weiter vorn in derselben Prüfung angelegt würde --
+    eine Sicht, die eine Prüfung erst anlegen würde, macht ein Profil dahinter nicht
+    `refused`. `pending` heißt: erst nach dem Einlesen vergleichbar."""
+    if kind == "server_light":
+        if item.get("light") not in books.LIGHTS:
+            raise SetupRefused("light ist green, yellow oder red.")
+        return {"light": item["light"]}
+    if kind == "view":
+        if not books.NAME.match(sid):
+            raise SetupRefused("Der Name einer Sicht besteht aus Kleinbuchstaben, Ziffern und "
+                               "Bindestrichen, höchstens 48 Zeichen.")
+        acc = item.get("accesses")
+        if not isinstance(acc, list) or not acc or not all(a in books.WAY_PARTS for a in acc):
+            raise SetupRefused("accesses: eine Liste aus key, signin und platform.")
+        ways = ",".join(p for p in books.WAY_PARTS if p in acc)
+        tools, wanted, pending = item.get("tools"), set(), False
+        shape = 'tools: {"server": <s>, "effect": "read"} oder eine Liste von {"server", "tool"}.'
+        if isinstance(tools, dict):
+            if set(tools) - {"server", "effect"} or tools.get("effect") != "read" \
+                    or not isinstance(tools.get("server"), str):
+                raise SetupRefused(shape)
+            srow = setup_server(tools["server"])
+            rows = reading_tools(srow["name"]) if srow else []
+            if rows:
+                wanted = {(srow["name"], r["name"], "read") for r in rows}
+            elif ("refresh", tools["server"]) in planned:
+                pending = True
+            elif not srow:
+                raise SetupRefused(f"Einen Server „{tools['server']}“ gibt es nicht (erst refresh).")
+            else:
+                raise SetupRefused(f"Der Katalog von „{srow['name']}“ hat keine lesenden Tools "
+                                   "(erst refresh; lesend heißt readOnlyHint: true).")
+        elif isinstance(tools, list) and tools:
+            for t in tools:
+                if not isinstance(t, dict) or set(t) - {"server", "tool", "effect"} \
+                        or not isinstance(t.get("server"), str) or not isinstance(t.get("tool"), str):
+                    raise SetupRefused(shape)
+                eff = t.get("effect", "read")
+                if eff not in books.EFFECTS:
+                    raise SetupRefused("effect ist read, write oder execute.")
+                srow = setup_server(t["server"])
+                cat = books.catalog_row(DB, srow["name"], "tool", t["tool"]) if srow else None
+                if cat and cat["present"]:
+                    wanted.add((srow["name"], t["tool"], eff))
+                elif ("refresh", t["server"]) in planned:
+                    pending = True
+                else:
+                    raise SetupRefused(f"Der Server „{t['server']}“ bietet das Tool „{t['tool']}“ "
+                                       "nicht an (erst refresh).")
+        else:
+            raise SetupRefused(shape)
+        effects = [e for _s, _t, e in wanted] or ["read"]
+        max_effect = item.get("max_effect") or max(effects, key=lambda e: books.EFFECT_RANK[e])
+        if max_effect not in books.EFFECTS:
+            raise SetupRefused("max_effect ist read, write oder execute.")
+        wish = {"ways": ways, "max_effect": max_effect, "tools": sorted(list(w) for w in wanted)}
+        if pending:
+            wish["pending"] = True
+        return wish
+    if kind == "profile":
+        if not SETUP_PROFILE_ID.match(sid):
+            raise SetupRefused("Das Etikett eines Zugangsprofils: Buchstaben, Ziffern, @ . _ -, "
+                               "höchstens 64 Zeichen.")
+        group = item.get("group")
+        try:
+            groups = books.clean_groups([group] if isinstance(group, str) else [])
+        except ValueError as exc:
+            raise SetupRefused(str(exc)) from None
+        views = item.get("views")
+        if not isinstance(views, list) or not views or not all(isinstance(v, str) for v in views):
+            raise SetupRefused("views: eine Liste von Sichten.")
+        missing = [v for v in views if not books.view_row(DB, v) and ("view", v) not in planned]
+        if missing:
+            raise SetupRefused("Diese Sichten gibt es nicht: " + ", ".join(missing) + ".")
+        ceiling, max_effect = item.get("ceiling", "yellow"), item.get("max_effect", "read")
+        if ceiling not in books.LIGHTS:
+            raise SetupRefused("ceiling ist green, yellow oder red.")
+        if max_effect not in books.EFFECTS:
+            raise SetupRefused("max_effect ist read, write oder execute.")
+        return {"groups": groups, "views": views, "ceiling": ceiling, "max_effect": max_effect}
+    if kind == "assistant":
+        vis = item.get("visibility", "tenant")
+        if vis not in ("tenant", {"scope": "tenant"}):
+            raise SetupRefused("visibility: die Einrichtung legt nur Assistenten für den ganzen "
+                               "Mandanten an (tenant); private und solche eines Teams legen "
+                               "Menschen an.")
+        doc = {"id": sid, "visibility": {"scope": "tenant"}, "owner": ("setup:" + actor)[:64]}
+        for f in SETUP_FIELDS["assistant"] - {"visibility"}:
+            if f in item:
+                doc[f] = item[f]
+        if "system" not in doc and isinstance(doc.get("title"), str) and isinstance(doc.get("view"), str):
+            doc["system"] = (f"Du bist der Assistent „{doc['title']}“. Antworte knapp und nutze "
+                             f"die Werkzeuge der Sicht {doc['view']}; sag, wenn sie keine Antwort "
+                             "hergeben.")
+        errs = arules.problems(doc)
+        if not errs and ("view", doc["view"]) not in planned:
+            errs = assistant_view_problem(doc)
+        if errs:
+            raise SetupRefused(" ".join(errs))
+        return doc
+    raise SetupRefused("unbekannte Art")
+
+
+def setup_matches(kind, sid, wish, obs):
+    """Ist das, was da ist, schon wie gewünscht?"""
+    if setup_gone(kind, obs) or wish.get("pending"):
+        return False
+    if kind == "server_light":
+        return obs["light"] == wish["light"]
+    if kind == "view":
+        if obs["ways"] != wish["ways"] or obs["max_effect"] != wish["max_effect"]:
+            return False
+        rows = books.items(DB, sid)
+        tools = sorted([i["server"], i["source"], i["effect"]] for i in rows if i["kind"] == "tool")
+        uis = {books.ui_uri(i) for i in rows if i["kind"] == "tool"} - {None}
+        extra = [i for i in rows if i["kind"] != "tool"
+                 and not (i["kind"] == "resource" and i["name"] in uis)]
+        return tools == wish["tools"] and not extra
+    if kind == "profile":
+        return (obs["kind"] == "profile" and obs["groups"] == wish["groups"]
+                and sorted(obs["views"]) == sorted(wish["views"])
+                and obs["ceiling"] == wish["ceiling"] and obs["max_effect"] == wish["max_effect"])
+    if kind == "assistant":
+        strip = lambda d: {k: v for k, v in d.items() if k != "owner"}
+        return strip(obs["doc"]) == strip(wish)
+    return False
+
+
+def setup_difference(kind, wish, obs):
+    """Ein Satz, was abweicht -- für die Notiz eines `conflict`."""
+    if kind == "profile":
+        if obs["kind"] != "profile":
+            return "Das Etikett trägt einen Schlüssel, kein Zugangsprofil."
+        if obs["revoked"]:
+            return ("Das Zugangsprofil ist widerrufen; ein Etikett bleibt seinem Eintrag für "
+                    "immer (bitte ein anderes wählen).")
+        bits = [f"{w} {obs[k] if k != 'views' else ','.join(obs[k])} statt "
+                f"{wish[k] if k != 'views' else ','.join(wish[k])}"
+                for k, w in (("groups", "Gruppen"), ("views", "Sichten"), ("ceiling", "Ampel"),
+                             ("max_effect", "Wirkungsklasse"))
+                if (sorted(obs[k]) != sorted(wish[k]) if k == "views" else obs[k] != wish[k])]
+        return "Das Zugangsprofil gibt es schon, anders: " + "; ".join(bits) + "."
+    if kind == "assistant":
+        if obs["state"] == "deleted":
+            return (f"Der Assistent ist gelöscht, seine Revisionen bleiben (zuletzt @{obs['rev']}); "
+                    "eine erste Revision @1 gibt es nicht mehr.")
+        if obs["state"] != "active":
+            return f"Der Assistent ist {obs['state']} (@{obs['rev']})."
+        diff = sorted(k for k in set(obs["doc"]) | set(wish) if k != "owner"
+                      and obs["doc"].get(k) != wish.get(k))
+        return f"Den Assistenten gibt es schon (@{obs['rev']}), anders in: {', '.join(diff)}."
+    if kind == "view":
+        if wish.get("pending"):
+            return "Die Sicht gibt es schon; ihr Inhalt lässt sich erst nach dem Einlesen vergleichen."
+        bits = []
+        if obs["ways"] != wish["ways"]:
+            bits.append(f"Zugänge {obs['ways']} statt {wish['ways']}")
+        if obs["max_effect"] != wish["max_effect"]:
+            bits.append(f"bis {obs['max_effect']} statt {wish['max_effect']}")
+        have = sorted({f"{i[2]}:{i[3]}" for i in obs["items"] if i[0] == "tool"})
+        want = sorted({f"{s}:{t}" for s, t, _e in wish["tools"]})
+        if have != want or not bits:
+            bits.append(f"Einträge {', '.join(have) or 'keine'} statt {', '.join(want)}"
+                        if have != want else "Einträge oder Wirkungsklassen geändert")
+        return "Die Sicht gibt es schon, anders: " + "; ".join(bits) + "."
+    return ""
+
+
+def setup_set_light(srow, light, by):
+    """Die Ampel über books.save_server, mit allem anderen, wie es ist -- dieselben Regeln."""
+    books.save_server(DB, by, srow["name"], srow["address"], srow["auth_kind"], light,
+                      json.loads(srow["limits"] or "{}"),
+                      exchange=(json.loads(srow["exchange"] or "{}")
+                                if srow["auth_kind"] == "exchange" else None),
+                      personal=(json.loads(srow["personal"] or "{}")
+                                if srow["auth_kind"] == "personal" else None))
+
+
+def setup_make(kind, sid, wish, by):
+    """Legt an, mit den Funktionen der Betreiberseite. Wirft ValueError mit einem Satz."""
+    if kind == "view":
+        books.save_view(DB, by, sid, wish["max_effect"], None, wish["ways"])
+        try:
+            for server, source, eff in wish["tools"]:
+                books.approve(DB, by, sid, "tool", server, source, None, eff)
+        except ValueError:
+            books.delete_view(DB, by, sid)            # nichts halb stehen lassen
+            raise
+        return f"Sicht „{sid}“ angelegt, {len(wish['tools'])} Tool(s) freigegeben."
+    if kind == "profile":
+        books.issue(DB, sid, by, views=wish["views"], max_effect=wish["max_effect"],
+                    ceiling=wish["ceiling"], kind="profile", groups=wish["groups"])
+        return f"Zugangsprofil „{sid}“ angelegt."     # ein Profil hat keinen benutzbaren Wert
+    if kind == "assistant":
+        rev = books.assistant_write(DB, wish, by)
+        books.log(DB, by, "assistant.save", sid, f"rev={rev}")
+        DB.commit()
+        return f"Assistent „{sid}“ angelegt, Revision @{rev}."
+    raise ValueError("unbekannte Art")
+
+
+def setup_refresh(sid, dry, planned):
+    """refresh: Quellen einlesen, dann den Katalog über die Erkundungs-Tür (ohne Person)."""
+    srow = setup_server(sid)
+    had = bool(srow) and bool(catalog_tools(srow["name"]))
+    if dry:
+        if had:
+            return "present", f"{len(catalog_tools(srow['name']))} Tool(s) im Katalog."
+        planned.add(("refresh", sid))
+        return "would_make", "Liest die Quellen der Plattform und den Katalog ein."
+    ok, text = sync_sources()
+    srow = setup_server(sid)
+    if not srow:
+        return "refused", f"Einen Server „{sid}“ gibt es nach dem Einlesen nicht. {text}".strip()
+    ok, text = read_catalog(srow["name"])
+    if catalog_tools(srow["name"]):
+        return ("present" if had else "made"), text
+    return "refused", text if not ok else f"Der Katalog von „{srow['name']}“ hat keine Tools."
+
+
+def setup_item(item, dry, actor, planned):
+    """Ein Wunsch: (result, note)."""
+    kind, sid = item["kind"], item["id"]
+    if kind not in SETUP_KINDS:
+        return "refused", "Diese Art kennt das MCP-Gateway nicht; es kennt " + ", ".join(SETUP_KINDS) + "."
+    secret = setup_secret_field(item)
+    if secret:
+        return "refused", (f"{secret}: Geheimnisse gehen nie durch die Einrichtung (RFC-0104 §3.1); "
+                           "Zugangsdaten trägt ein Mensch auf der Seite des Gateways ein.")
+    extra = sorted(set(item) - {"kind", "id"} - SETUP_FIELDS[kind])
+    if extra:
+        return "refused", f"Unbekannte Felder für {kind}: {', '.join(extra)}."
+    if kind == "refresh":
+        return setup_refresh(sid, dry, planned)
+    by = "setup:" + actor
+    try:
+        wish = setup_wish(kind, sid, item, planned, actor)
+    except SetupRefused as exc:
+        return "refused", str(exc)
+    if kind == "server_light":
+        srow = setup_server(sid)
+        if not srow:
+            if ("refresh", sid) in planned:
+                return "would_make", f"Ampel {wish['light']}, sobald der Server eingelesen ist."
+            return "refused", f"Einen Server „{sid}“ gibt es nicht (erst refresh)."
+        if srow["light"] == wish["light"]:
+            return "present", f"Ampel {srow['light']}."
+        if srow["light"] != "red":
+            return "conflict", (f"Die Ampel von „{srow['name']}“ ist {srow['light']}, von Hand gesetzt; "
+                                "die Einrichtung ändert nur das Rot, mit dem jeder neue Server beginnt.")
+        if dry:
+            return "would_make", f"Ampel red → {wish['light']}."
+        try:
+            setup_set_light(srow, wish["light"], by)
+        except ValueError as exc:
+            return "refused", str(exc)
+        books.setup_remember(DB, kind, sid, actor, books.setup_digest(wish),
+                             books.setup_digest(setup_observed(kind, sid)))
+        return "made", f"Ampel von „{srow['name']}“: red → {wish['light']}."
+    obs = setup_observed(kind, sid)
+    if obs is not None:
+        if setup_matches(kind, sid, wish, obs):
+            return "present", ""
+        rec = books.setup_record(DB, kind, sid)
+        if rec and not rec["removed"] and not setup_gone(kind, obs) \
+                and rec["wish"] == books.setup_digest(wish) \
+                and rec["made"] == books.setup_digest(obs):
+            # Unverändert, wie die Einrichtung es anlegte -- auch wenn der Katalog seither wuchs.
+            return "present", "Unverändert, wie die Einrichtung es angelegt hat."
+        return "conflict", setup_difference(kind, wish, obs)
+    if dry:
+        planned.add((kind, sid))
+        return "would_make", ("Erst nach dem Einlesen genau bestimmbar." if wish.get("pending") else "")
+    try:
+        note = setup_make(kind, sid, wish, by)
+    except ValueError as exc:
+        return "refused", str(exc)
+    books.setup_remember(DB, kind, sid, actor, books.setup_digest(wish),
+                         books.setup_digest(setup_observed(kind, sid)))
+    return "made", note
+
+
+def setup_remove(item, actor):
+    """Rückgängig, nur solange das Ding so ist, wie die Einrichtung es anlegte: (result, note)."""
+    kind, sid = item["kind"], item["id"]
+    if kind not in SETUP_KINDS:
+        return "refused", "Diese Art kennt das MCP-Gateway nicht."
+    if kind == "refresh":
+        return "gone", "Einlesen hinterlässt nichts zu entfernen."
+    by = "setup:" + actor
+    obs = setup_observed(kind, sid)
+    rec = books.setup_record(DB, kind, sid)
+    if not rec or rec["removed"]:
+        if setup_gone(kind, obs) or (kind == "server_light" and obs["light"] == "red"):
+            return "gone", ""
+        return "conflict", "Nicht von der Einrichtung angelegt -- es bleibt."
+    if setup_gone(kind, obs):
+        books.setup_forget(DB, kind, sid)
+        return "gone", ""
+    if books.setup_digest(obs) != rec["made"]:
+        return "conflict", "Seit der Einrichtung von Hand geändert -- es bleibt."
+    try:
+        if kind == "server_light":
+            setup_set_light(setup_server(sid), "red", by)
+        elif kind == "view":
+            books.delete_view(DB, by, sid)
+        elif kind == "profile":
+            books.revoke(DB, sid, by)
+        elif kind == "assistant":
+            books.assistant_set_state(DB, sid, "deleted", by)
+            books.log(DB, by, "assistant.state", sid, "deleted")
+            DB.commit()
+    except ValueError as exc:
+        return "conflict", str(exc)
+    books.setup_forget(DB, kind, sid)
+    return "removed", ""
+
+
+def setup_state(kind, sid):
+    """GET ?kind=&id=: (state, ready, note) -- `ready` ist, was `setup.ready` fragt."""
+    if kind in ("refresh", "server_light"):
+        srow = setup_server(sid)
+        if not srow:
+            return "absent", False, f"Einen Server „{sid}“ gibt es nicht."
+        n = len(catalog_tools(srow["name"]))
+        if kind == "refresh":
+            return "present", n > 0, f"{n} Tool(s) im Katalog."
+        return "present", True, f"Ampel {srow['light']}."
+    obs = setup_observed(kind, sid)
+    if setup_gone(kind, obs):
+        return "absent", False, ""
+    if kind == "view":
+        rows = books.items(DB, sid)
+        active = sum(1 for i in rows if books.item_state(DB, dict(i)) == "active")
+        return "present", active > 0, f"{len(rows)} Eintrag/Einträge, {active} freigegeben und aktiv."
+    if kind == "profile":
+        if obs["kind"] != "profile":
+            return "absent", False, "Das Etikett trägt einen Schlüssel, kein Zugangsprofil."
+        missing = [v for v in obs["views"] if not books.view_row(DB, v)]
+        return "present", not missing, ("Sichten fehlen: " + ", ".join(missing)) if missing else ""
+    view_ok = not assistant_view_problem(obs["doc"])
+    return ("present", obs["state"] == "active" and view_ok,
+            f"@{obs['rev']}, {obs['state']}" + ("" if view_ok else ", Sicht fehlt"))
+
+
+SETUP_ACTOR_MAX = 120
+
+
+def setup_actor(value):
+    """Der Name aus X-OAAP-Setup-Actor, für die Prüfspur. HTTP liest Kopfzeilen als
+    Latin-1; kam UTF-8 (etwa „jörg“), wird es zurückgeholt."""
+    value = value or ""
+    try:
+        value = value.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    text = "".join(ch for ch in value if ch.isprintable())
+    return " ".join(text.split())[:SETUP_ACTOR_MAX] or "plattform"
+
+
+def setup_body_items(body):
+    """Prüft die Form: (dry, mode, list) oder ValueError mit einem Satz."""
+    if not isinstance(body, dict) or body.get("v") != 1:
+        raise ValueError('Erwartet {"v": 1, "items": [...]} oder {"v": 1, "remove": [...]}.')
+    if ("items" in body) == ("remove" in body):
+        raise ValueError("Genau eines von items und remove.")
+    mode = "items" if "items" in body else "remove"
+    entries = body[mode]
+    if not isinstance(entries, list) or not entries or len(entries) > 200:
+        raise ValueError(f"{mode}: eine Liste mit 1 bis 200 Einträgen.")
+    for e in entries:
+        if not isinstance(e, dict) or not isinstance(e.get("kind"), str) \
+                or not isinstance(e.get("id"), str) or not 0 < len(e["id"]) <= 128 \
+                or not 0 < len(e["kind"]) <= 40:
+            raise ValueError("Jeder Eintrag ist ein Objekt mit kind und id (Text).")
+    dry = body.get("dry", False)
+    if not isinstance(dry, bool):
+        raise ValueError("dry ist true oder false.")
+    return dry, mode, entries
+
+
+def setup_post(body, actor):
+    """POST: die Ergebnisse, eins je Eintrag, in Reihenfolge. Ohne `dry` hält die
+    Einrichtung am ersten conflict/refused an (§3.1: „the build stops there“) -- was
+    dahinter steht, wird nicht mehr angefasst und als refused gemeldet."""
+    dry, mode, entries = setup_body_items(body)
+    results, planned, stopped = [], set(), ""
+    with SETUP_LOCK:
+        for e in entries:
+            if stopped:
+                result, note = "refused", f"Nicht ausgeführt: die Einrichtung hält bei {stopped}."
+            elif mode == "remove":
+                result, note = setup_remove(e, actor)
+            else:
+                result, note = setup_item(e, dry, actor, planned)
+                if not dry and result in ("conflict", "refused"):
+                    stopped = f"{e['kind']}/{e['id']}"
+            if not dry and result not in ("present",):
+                books.log(DB, "setup:" + actor, "setup." + result, f"{e['kind']}/{e['id']}",
+                          note[:500])
+                DB.commit()
+            results.append({"kind": e["kind"], "id": e["id"], "result": result, "note": note})
+    return {"v": 1, "results": results}
 
 
 # ------------------------------------------------------------- Kommandozeile

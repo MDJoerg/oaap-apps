@@ -422,9 +422,10 @@ python3 apps/ai-gateway/test_catalog.py    # Tresor, Übernahme, Laden
 python3 apps/ai-gateway/test_report.py     # die eine Abfrage: Zeitraum, Kontext-Kopie, CSV
 python3 apps/ai-gateway/test_cohort.py     # Kohorten: Tabelle lesen, Kennungen, Ausgabe
 python3 apps/ai-gateway/test_gateway.py    # die Konformitätsliste der Spec §9
+python3 apps/ai-gateway/test_setup.py      # Einrichtungstür und Freigabe für einen Chat (RFC-0104)
 ```
 
-Alle fünf laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
+Alle laufen ohne Netz, ohne Docker und ohne Modell: Die letzte Datei
 stellt eine **Papier-Bezugsquelle** hin, die sich OpenAI-kompatibel
 verhält und auf Ansage ausfällt.
 
@@ -505,6 +506,71 @@ nur mehr ablehnen, nie mehr erlauben.
   übergangen.
 - Die Messzeile hat die neue Spalte `light`: die verlangte Farbe, leer
   ohne Kopfzeile. Das ist ein Wort aus einer festen Liste, kein Inhalt.
+
+## Einrichtungstür und Freigabe für einen Chat (RFC-0104 Stufe 2)
+
+Seit 0.10.0 (Manifest 0.18) lässt sich das Gateway beim Aufbau eines
+Mandanten aus einem Profil (`ki-arbeitsplatz`) einrichten, und ein Chat
+desselben Mandanten erreicht es ohne API-Schlüssel.
+
+**Die Einrichtungstür** `setup: {path: /oaap/setup}` (Modul
+`setupdoor.py`). Der Knoten ruft sie im Schritt `app.setup` über seinen
+internen Endpunkt, mit `Authorization: Bearer <OAAP_SETUP_KEY>` — ein
+Wert, den nur die Plattform hält — und `X-OAAP-Setup-Actor: <wer den
+Aufbau gestartet hat>`. Von außen liegt der Pfad unter `/` und damit
+hinter `admin`; auch dort ist die Tür ohne den Schlüssel zu, jede
+Identitäts-Kopfzeile wird übergangen. Fehlt `OAAP_SETUP_KEY` in der
+Umgebung, ist jeder Aufruf `403`.
+
+| Art | Eintrag | `ready` |
+| --- | --- | --- |
+| `supplier` | `{"id": <name>, "url": "https://…/v1", "light"}` — **ohne** Zugangsdaten | Zugangsdaten gespeichert **und** der Verbindungstest der Seite antwortet jetzt mit 2xx |
+| `alias` | `{"id": <modellname>, "supplier", "model"}` — genau ein Ziel | der Modellname ist routbar |
+| `client` | `{"id": <chat-instanz>, "aliases": [...], "ceiling", "personal_data"}` — die Freigabe | nicht widerrufen, nicht abgelaufen |
+
+- `GET` nennt die Arten, `GET ?kind=&id=` den Zustand (`present`/`absent`,
+  `ready`, `note`). `POST {"v": 1, "dry": …, "items": [...]}` legt an;
+  Antworten je Eintrag: `present`, `made`, `would_make`, `conflict`,
+  `refused`. `POST {"v": 1, "remove": [...]}`: `removed`, `gone` oder
+  `conflict`.
+- **Nie überschreiben:** Gibt es unter der Kennung schon etwas, das
+  anders ist, heißt das `conflict` und es bleibt. Ein gleicher Eintrag
+  von Hand ist `present`, wird aber nicht übernommen.
+- **Keine Geheimnisse:** Felder namens `key`, `token`, `secret`,
+  `password`, `credentials`, `credential`, `api_key` → `refused`. Die
+  Zugangsdaten einer Quelle trägt ein Mensch unter Bezugsquellen ein;
+  das ist kein Konflikt.
+- **Gemerkt** wird je angelegtem Eintrag Auslöser, Zeit und Digest
+  (Tabelle `setup_items`), in der Prüfspur steht `setup:<auslöser>`.
+  `remove` entfernt nur, was die Einrichtung angelegt hat und was noch so
+  ist. Eine Quelle mit Zugangsdaten, ein Modellname, auf den ein gültiger
+  Schlüssel beschränkt ist, und alles von Hand Geänderte bleiben
+  (`conflict`). Eine Freigabe, die schon Verbrauch hat, wird widerrufen
+  statt gelöscht, damit die Messzeilen zuzuordnen bleiben.
+
+**Die Freigabe für einen Chat** (`ai_gateway: {serve: true}`). Der Chat
+ruft über die via-Tür der Plattform; die Tür prüft seinen Client-Schlüssel
+und die Zusicherung der Person und setzt `X-OAAP-AI-Client`,
+`X-OAAP-User-Id` und `X-OAAP-User-Assertion`. Nur alle drei zusammen
+zählen (wie Verfahren A beim MCP-Gateway); dann berechtigt die Zeile der
+Art `client` in `keys`, deren Etikett der Name des Chats ist.
+
+- Modellnamen, Obergrenze, pbD-Freigabe, Budget, Rate, `X-OAAP-Light` und
+  Messzeile laufen über denselben Code wie bei einem Schlüssel.
+- Eine Freigabe hat **keinen Schlüsselwert**: ihr Digest ist
+  `client:<etikett>` statt eines SHA-256, und `store.find` gibt eine Zeile
+  der Art `client` nie zurück — auch nicht für einen leeren Wert.
+- `X-OAAP-AI-Client` allein (oder zwei von drei) führt auf den
+  gewöhnlichen Weg über den API-Schlüssel: ohne Schlüssel `403`. Ein Chat
+  ohne Freigabe bekommt dieselbe `403` wie ein unbekannter Schlüssel.
+- Gezählt wird die Freigabe (`key_id` in `usage`), **nie die Person**
+  (RFC-0104 §9 O1), obwohl die Tür sie mitliefert.
+- Im Reiter **Schlüssel** stehen Freigaben mit dem Zeichen „Freigabe für
+  Chat“: widerrufen, Modellnamen und Kontext ändern wie bei einem
+  Schlüssel; „neu ausstellen“ gibt es für sie nicht.
+
+Prüfen: `python3 apps/ai-gateway/test_setup.py` (Köder 2, 3, 5, 6, 7 aus
+RFC-0104 §8).
 
 ## Was noch fehlt
 

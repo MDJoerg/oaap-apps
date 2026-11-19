@@ -23,10 +23,12 @@ Seit 0.5.1 (RFC-0065 Stufe 0) steht der Teil, den auch das MCP-Gateway
 führt — Schlüssel, Kontext, Prüfspur, Rate —, in `gwcore/`. Hier bleibt,
 was nur dieses Gateway hat: seine Tabellen, Modellnamen, Ampel, Token.
 """
+import secrets
+
 from gwcore import context, ledger
 from gwcore.context import (CONTEXT_FIELDS, LABEL_NAME, MAX_LABELS, MAX_TEXT,  # noqa: F401
                             labels_text, parse_labels)
-from gwcore.ledger import (RateLimiter, audit, digest, find, keys, log, now,  # noqa: F401
+from gwcore.ledger import (RateLimiter, audit, digest, keys, log, now,  # noqa: F401
                            revoke, update_context)
 
 SCHEMA = """
@@ -95,6 +97,17 @@ CREATE TABLE IF NOT EXISTS meta (
   name  TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+-- Seit 0.10.0 (RFC-0104 §3.1): was die Einrichtungstür angelegt hat --
+-- wer (der Auslöser des Aufbaus), wann und ein Digest des gewünschten
+-- Eintrags. Entfernt wird nur, was noch genau so ist.
+CREATE TABLE IF NOT EXISTS setup_items (
+  kind   TEXT NOT NULL,
+  id     TEXT NOT NULL,
+  actor  TEXT NOT NULL,
+  time   TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  PRIMARY KEY (kind, id)
+);
 """
 
 # Spalten, die nach 0.2 dazukamen (RFC-0064). Sie werden bei jedem Start
@@ -121,6 +134,11 @@ ADDED_COLUMNS = (
     # 0.9.0 (RFC-0101 §2.2): die Ampel, die die Anfrage als Decke verlangte
     # (X-OAAP-Light), leer ohne. Ein Wort aus einer festen Liste, kein Inhalt.
     ("usage", "light", "TEXT NOT NULL DEFAULT ''"),
+    # 0.10.0 (RFC-0104 §4): `key` = ein API-Schlüssel wie bisher, `client` =
+    # die Freigabe für einen Chat derselben Plattform. Eine Freigabe hat
+    # keinen benutzbaren Digest (siehe grant()) und wird nie über einen
+    # Bearer-Wert gefunden (siehe find()).
+    ("keys", "kind", "TEXT NOT NULL DEFAULT 'key'"),
 )
 
 # Sichtbares Präfix. Manche fertigen Clients und SDKs erwarten einen
@@ -169,6 +187,58 @@ def issue(db, label, actor, aliases=(), ceiling="yellow", personal_data=False,
               f"pbd={'freigegeben' if personal_data else 'nein'}"
               + (f" ablauf={expires}" if expires else "") + (f" kohorte={cohort}" if cohort else ""))
     return ledger.issue(db, label, actor, KEY_PREFIX, extra, ctx, tenant, detail)
+
+
+def find(db, value):
+    """Ein Schlüssel über seinen Bearer-Wert -- **nie** eine Freigabe für einen Chat.
+
+    Doppelt verriegelt: Der Digest einer Freigabe ist `client:<etikett>`,
+    kein SHA-256 aus 64 Hexzeichen, also passt kein Wert darauf; und selbst
+    wenn eine Zeile der Art `client` gefunden würde, gibt es sie hier nicht.
+    Ein leerer Wert findet nie etwas.
+    """
+    if not value:
+        return None
+    row = ledger.find(db, value)
+    if row is None or row["kind"] == "client":
+        return None
+    return row
+
+
+CLIENT_DIGEST = "client:"
+
+
+def grant(db, label, actor, aliases=(), ceiling="yellow", personal_data=False):
+    """Die Freigabe für einen Chat (RFC-0104 §4): eine Zeile der Art `client` in `keys`.
+
+    Etikett = Name der Chat-Instanz. Es gibt keinen Wert, der zu ihr passt --
+    sie gilt nur für einen Aufruf durch die via-Tür der Plattform, die
+    `X-OAAP-AI-Client` selbst setzt. Modellnamen, Ampel, Freigabe für
+    personenbezogene Daten, Budget und Rate wirken wie bei einem Schlüssel.
+    """
+    label = (label or "").strip()
+    if not label:
+        raise ValueError("Eine Freigabe braucht den Namen der Chat-Instanz.")
+    if db.execute("SELECT 1 FROM keys WHERE label=?", (label,)).fetchone():
+        raise ValueError(f"Das Etikett {label!r} ist schon vergeben.")
+    key_id = secrets.token_hex(6)
+    names = ",".join(sorted(dict.fromkeys(a for a in aliases if a)))
+    db.execute("INSERT INTO keys (id,label,digest,created,aliases,ceiling,personal_data,kind) "
+               "VALUES (?,?,?,?,?,?,?,'client')",
+               (key_id, label, CLIENT_DIGEST + label, now(), names, ceiling or "yellow",
+                1 if personal_data else 0))
+    log(db, actor, "client.grant", label,
+        f"aliases={names or 'alle'} bis={ceiling or 'yellow'} "
+        f"pbd={'freigegeben' if personal_data else 'nein'}")
+    db.commit()
+    return key_id
+
+
+def grant_of(db, client):
+    """Die Freigabe für die Chat-Instanz `client`, oder None. Nur Zeilen der Art `client`."""
+    if not client:
+        return None
+    return db.execute("SELECT * FROM keys WHERE label=? AND kind='client'", (client,)).fetchone()
 
 
 def expired(row, at=None):

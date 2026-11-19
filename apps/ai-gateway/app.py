@@ -22,6 +22,10 @@ Zwei Wege in dieselbe App, mit verschiedenen Rollen im Manifest:
   liefert die geprüfte Identität als Kopfzeile (App Deployment
   Contract); einen eigenen Login gibt es hier so wenig wie in jeder
   anderen OAAP-App.
+- Seit 0.10.0 (RFC-0104): `/oaap/setup`, die Einrichtungstür für den
+  Aufbau aus einem Profil (setupdoor.py, nur mit OAAP_SETUP_KEY), und auf
+  `/v1` die Freigabe für einen Chat, der durch die via-Tür der Plattform
+  ohne API-Schlüssel kommt (`platform_client`, `authorize`).
 
 Die Regel, die alles trägt (Spec §6): **In keinem Protokoll stehen
 jemals Prompts oder Antworten.** Gezählt wird, nicht mitgeschrieben —
@@ -50,11 +54,12 @@ import cohort
 import dash
 import relay
 import report
+import setupdoor
 import store
 import supply
 import vault
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -1141,13 +1146,19 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
         light = light_badge(ceiling_of(row), short=True) + " und besser"
         if pbd_of(row):
             light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
+        # 0.10.0 (RFC-0104 §4): eine Freigabe für einen Chat ist kein Schlüssel zum
+        # Weitergeben -- es gibt keinen Wert, also auch nichts „neu auszustellen“.
+        is_grant = row["kind"] == "client"
+        kind_note = ('<br><span class="badge" title="Kein Schlüsselwert: gilt nur für Aufrufe '
+                     'dieses Chats durch die via-Tür der Plattform (RFC-0104)">Freigabe für '
+                     'Chat</span>' if is_grant else "")
         if row["revoked"]:
             state = '<span class="badge err">widerrufen</span>'
-            action = renew_link(row)
+            action = "" if is_grant else renew_link(row)
         elif store.expired(row):
             state = (f'<span class="badge off">abgelaufen</span><br><span class="muted">'
                      f'{esc(dash.until(row["expires"]))}</span>')
-            action = renew_link(row)
+            action = "" if is_grant else renew_link(row)
         else:
             state = '<span class="badge green">gültig</span>' + (
                 f'<br><span class="muted">bis {esc(dash.until(row["expires"]))}</span>'
@@ -1164,8 +1175,8 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
                       f'{aliases_form(row)}')
         last = t["last"] if t else ""
         rows.append(
-            f'<tr{" class=dim" if not store.usable(row) else ""}><td><b>{esc(row["label"])}</b><br>'
-            f'<span class="muted">{esc(context_line(row))}</span></td>'
+            f'<tr{" class=dim" if not store.usable(row) else ""}><td><b>{esc(row["label"])}</b>'
+            f'{kind_note}<br><span class="muted">{esc(context_line(row))}</span></td>'
             f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
             f'<td class="num">{budget}</td>'
             f'<td class="num">{t["calls"] if t else 0}<br><span class="muted" title="{esc(last or "")}">'
@@ -1180,6 +1191,10 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
     stehen in der Prüfspur; einzelne Anfragen stehen dort nicht. Ein geänderter
     Kontext gilt <b>ab der nächsten Anfrage</b> — gezählte Anfragen behalten den,
     mit dem sie kamen.</p>
+  <p class="hint">Eine <b>Freigabe für Chat</b> legt der Aufbau eines Profils an
+    (RFC-0104): Sie hat keinen Schlüsselwert und gilt nur für Aufrufe dieses Chats
+    durch die via-Tür der Plattform. Widerrufen, Modellnamen und Kontext wie bei
+    einem Schlüssel; gezählt wird der Chat, nie die Person.</p>
   <div class="scroll"><table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
     <th class="num">Token</th><th class="num">Aufrufe</th><th class="num">Daten ↑/↓</th><th></th></tr>{"".join(rows) or
     '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table></div>
@@ -1630,6 +1645,14 @@ def probe_supplier(name):
     return {"name": name, "status": status, "ms": ms, "ids": ids, "error": error, "via": via}
 
 
+# 0.10.0 (RFC-0104 §3.1): die Einrichtungstür. Von außen unter `/` und damit
+# hinter `admin`; hinein kommt nur, wer OAAP_SETUP_KEY kennt (setupdoor.py).
+SETUP_PATH = "/oaap/setup"
+DOOR = setupdoor.Door(DB, mode=lambda: MODE, master=lambda: MASTER, reload=reload_supply,
+                      probe=lambda name: probe_supplier(name),
+                      loaded=lambda: (SUPPLIERS, ALIASES))
+
+
 def asset_answer():
     """Die Antwort der Tür /oaap/assets (Manifest 0.15, RFC-0087 §8.2)."""
     suppliers, aliases = SUPPLIERS, ALIASES
@@ -2023,13 +2046,43 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- Schlüsselprüfung
 
+    def platform_client(self):
+        """Der Chat, für den die via-Tür der Plattform ruft (RFC-0104 §4), oder ''.
+
+        Nur wenn alle drei da sind: `X-OAAP-AI-Client` (von der Tür gesetzt),
+        die Kennung der Person und ihre Zusicherung — wie Verfahren A beim
+        MCP-Gateway. Auf dem öffentlichen /v1 entfernt die Plattform die
+        beiden Identitäts-Kopfzeilen; wer `X-OAAP-AI-Client` allein schickt,
+        landet deshalb auf dem gewöhnlichen Weg über den API-Schlüssel. Die
+        Person wird nur auf Vorhandensein geprüft und nirgends aufgeschrieben
+        (§9 O1): gezählt wird die Freigabe, nicht der Mensch."""
+        client = (self.headers.get("X-OAAP-AI-Client") or "").strip()
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        assertion = (self.headers.get("X-OAAP-User-Assertion") or "").strip()
+        return client if (client and uid and assertion) else ""
+
     def authorize(self):
-        """Gibt die Schlüsselzeile zurück oder beantwortet die Anfrage selbst."""
+        """Gibt die Schlüsselzeile zurück oder beantwortet die Anfrage selbst.
+
+        Seit 0.10.0 ist die Zeile bei einem Aufruf durch die via-Tür die
+        Freigabe des Chats (Art `client`); alles danach — Modellnamen, Ampel,
+        pbD, Budget, Rate, Messzeile — läuft für sie genauso wie für einen
+        Schlüssel."""
         addr = self.client_addr()
         if failing_hard(addr):
             self.send_error_doc(429, "Zu viele Fehlversuche. Später erneut.",
                                 "too_many_requests", [("Retry-After", "60")])
             return None
+        client = self.platform_client()
+        if client:
+            row = store.grant_of(DB, client)
+            if not row or not store.usable(row):
+                # Dieselbe Antwort wie für einen unbekannten Schlüssel (§8 Köder 6).
+                # Kein Fehlversuch: die Plattform rät nicht, und hinter ihrer
+                # Adresse sitzen alle Chats des Knotens.
+                self.send_json(403, DENIED)
+                return None
+            return row
         header = self.headers.get("Authorization", "")
         value = header[7:].strip() if header[:7].lower() == "bearer " else ""
         row = store.find(DB, value)
@@ -2052,6 +2105,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION})
+            return
+        if path == SETUP_PATH:
+            self.handle_setup_get()
             return
         if path == "/oaap/assets":
             # RFC-0087 §8.2: der Knoten fragt über seinen internen Endpunkt;
@@ -2202,8 +2258,44 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST
 
+    # ---- Einrichtungstür (RFC-0104 §3.1)
+
+    SETUP_DENIED = {"v": 1, "error": "Nur mit dem Einrichtungsschlüssel dieser Instanz."}
+
+    def handle_setup_get(self):
+        # Keine Identitäts-Kopfzeile zählt hier, auch nicht admin — nur der Schlüssel.
+        if not setupdoor.allowed(self.headers):
+            self.send_json(403, self.SETUP_DENIED)
+            return
+        params = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+        if "kind" not in params and "id" not in params:
+            self.send_json(200, DOOR.kinds())
+            return
+        try:
+            self.send_json(200, DOOR.state(params.get("kind", ""), params.get("id", "").strip()))
+        except setupdoor.Malformed as exc:
+            self.send_json(400, {"v": 1, "error": str(exc)})
+
+    def handle_setup_post(self):
+        raw = self.read_body()            # erst lesen, dann ablehnen (Keep-Alive)
+        if not setupdoor.allowed(self.headers):
+            self.send_json(403, self.SETUP_DENIED)
+            return
+        try:
+            what, items, dry = setupdoor.parse(raw)
+        except setupdoor.Malformed as exc:
+            self.send_json(400, {"v": 1, "error": str(exc)})
+            return
+        actor = setupdoor.actor_of(self.headers)
+        results = (DOOR.apply(items, dry, actor) if what == "apply"
+                   else DOOR.remove(items, actor))
+        self.send_json(200, {"v": 1, "results": results})
+
     def do_POST(self):
         path = self.path.split("?")[0].rstrip("/") or "/"
+        if path == SETUP_PATH:
+            self.handle_setup_post()
+            return
         if path in ("/v1/chat/completions", "/v1/embeddings"):
             self.handle_inference(path)
             return
@@ -2606,7 +2698,8 @@ def cli(argv):
                   f'{"WIDERRUFEN" if row["revoked"] else "gültig":10} '
                   f'aliasse={row["aliases"] or "alle"} bis={row["ceiling"]} '
                   f'pbD={"freigegeben" if row["personal_data"] else "nein"} '
-                  f'| {context_line(row)}')
+                  + ("art=freigabe-für-chat " if row["kind"] == "client" else "")
+                  + f'| {context_line(row)}')
         return 0
     if action == "revoke" and len(argv) > 2:
         print("widerrufen" if store.revoke(DB, argv[2], "cli") else "unbekannt oder schon widerrufen")

@@ -1,12 +1,12 @@
-oaap_manifest: "0.17"
+oaap_manifest: "0.18"
 
 app:
   id: help
   name: OAAP-Hilfe
-  version: 0.6.1
+  version: 0.7.0
   type: native
   class: frontend
-  description: "Die Dokumentation eines Mandanten für Menschen und jede KI (RFC-0078, RFC-0094 Stufe 1). Seit 0.6.0 ein Treffer je Dokument (weitere Abschnitte darunter) und ein Hinweis, wenn die Plattform-Doku fehlt (Destination docs-origin). Seit 0.5.0 mit klickbaren Links auf die eigene Leseseite in help_search und help_read: die Doku der installierten Apps als Hilfsprodukte (der Knoten reicht sie herein, sobald eine App sie im Manifest erklärt), dazu die OAAP-Doku samt CLI-Referenz (abschaltbar). Startseite mit Kacheln je Produkt, Suche mit Filtern nach Produkt und Dokumenttyp, Lese-API und MCP (help_search, help_read, help_topics, help_products, Prompts guide/cli); im Chat des eigenen Mandanten ohne Freigabeschritt (MCP-Gateway ab 0.11.0). Keine eigene KI."
+  description: "Die Dokumentation eines Mandanten für Menschen und jede KI (RFC-0078, RFC-0094 Stufe 1). Seit 0.7.0 mit Einrichtungstür /oaap/setup (RFC-0104): der Aufbau aus einem Profil holt die Doku ohne Handgriff (Art fetch). Seit 0.6.0 ein Treffer je Dokument (weitere Abschnitte darunter) und ein Hinweis, wenn die Plattform-Doku fehlt (Destination docs-origin). Seit 0.5.0 mit klickbaren Links auf die eigene Leseseite in help_search und help_read: die Doku der installierten Apps als Hilfsprodukte (der Knoten reicht sie herein, sobald eine App sie im Manifest erklärt), dazu die OAAP-Doku samt CLI-Referenz (abschaltbar). Startseite mit Kacheln je Produkt, Suche mit Filtern nach Produkt und Dokumenttyp, Lese-API und MCP (help_search, help_read, help_topics, help_products, Prompts guide/cli); im Chat des eigenen Mandanten ohne Freigabeschritt (MCP-Gateway ab 0.11.0). Keine eigene KI."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen.
@@ -31,6 +31,11 @@ routes:
   # SHA-256 in HELP_MAINT_KEY_SHA256 steht -- ohne ihn 401, nie Daten.
   - path: /maint
     roles: [public]
+  # Die Einrichtungstür (RFC-0104 §3.1): von außen nur für admin erreichbar,
+  # und auch dann ohne den Einrichtungsschlüssel der Instanz (OAAP_SETUP_KEY)
+  # 403. Der Knoten ruft sie über den internen Zuhörer des Gateways.
+  - path: /oaap
+    roles: [admin]
   # Angemeldet: Seite, API und MCP-Tür mit dem Zielgruppenfilter nach den
   # Rollen der Person (D5: Relevanz, keine Geheimhaltung). Über das
   # MCP-Gateway des Mandanten erreicht eine KI die Tür als diese Person.
@@ -49,6 +54,11 @@ mcp:
 # jedem Entfernen nachgeführt. Nie die eines anderen Mandanten.
 docs_sources:
   read: true
+
+# RFC-0104 (Manifest 0.18): die Einrichtungstür. Art `fetch`, id `docs`:
+# die Plattform-Doku jetzt holen (wie „Jetzt holen“ auf /admin).
+setup:
+  path: /oaap/setup
 
 destinations:
   - name: docs-origin

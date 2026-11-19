@@ -81,9 +81,9 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.3   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.3   |
 | [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.7   |
-| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.9.0   |
-| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.26.0   |
-| [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.15.0   |
+| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.10.0   |
+| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.27.0   |
+| [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.16.0   |
 | [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.2   |
 | [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.4.1   |
 | [Marketplace](apps/marketplace/)   | Digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen; Schaufenster mit Suche, Facetten, Bildern, Freischalt-Anfragen; Einchecken per API, Feed für Paketkataloge (RFC-0077 Stufen 1–2) | 0.3.1   |
@@ -97,7 +97,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.3   |
 | [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.2   |
 | [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.2   |
-| [OAAP-Hilfe](apps/help/)           | Die Doku für jede KI (RFC-0078): Suche über MCP, API und Seite, nach Rolle gefiltert; holt über die Destination `docs-origin`, Kopie im Paket; zentral zusätzlich öffentlich (`HELP_PUBLIC`); fehlende Anleitungen anfordern (`HELP_REQUESTS`) | 0.6.1   |
+| [OAAP-Hilfe](apps/help/)           | Die Doku für jede KI (RFC-0078): Suche über MCP, API und Seite, nach Rolle gefiltert; holt über die Destination `docs-origin`, Kopie im Paket; zentral zusätzlich öffentlich (`HELP_PUBLIC`); fehlende Anleitungen anfordern (`HELP_REQUESTS`) | 0.7.0   |
 | [Kundenzufriedenheit](data_models/kundenzufriedenheit/) | `data_models`-Artefakt (kein App-Dienst): dritte Herkunftsgruppe auf Firma, gepflegt im Zwillings-Browser (RFC-0031) | 0.1.0   |
 
 ## Installation

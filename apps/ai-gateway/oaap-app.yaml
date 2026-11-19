@@ -1,12 +1,12 @@
-oaap_manifest: "0.15"
+oaap_manifest: "0.18"
 
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.9.0
+  version: 0.10.0
   type: native
   class: frontend
-  description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023) Seit 0.9.0 nimmt jede Anfrage mit X-OAAP-Light eine zusaetzliche Decke an, die die des Schluessels nur verschaerft (Ampel des Gespraechs, RFC-0101)."
+  description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023) Seit 0.9.0 nimmt jede Anfrage mit X-OAAP-Light eine zusaetzliche Decke an, die die des Schluessels nur verschaerft (Ampel des Gespraechs, RFC-0101). Seit 0.10.0 Einrichtungstuer fuer den Aufbau aus einem Profil und Freigabe fuer einen Chat ohne Schluessel (RFC-0104)."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -122,6 +122,21 @@ destinations:
 # Der Pfad liegt unter `/` und ist von außen damit nur für `admin` offen.
 assets:
   path: /oaap/assets
+
+# Seit 0.10.0 (Manifest 0.18, RFC-0104 §3.1): die Einrichtungstür. Der Knoten
+# ruft sie beim Aufbau eines Profils (Schritt app.setup) über seinen internen
+# Endpunkt mit OAAP_SETUP_KEY. Arten: supplier (ohne Zugangsdaten), alias,
+# client. Der Pfad liegt unter `/` und ist von außen damit nur für `admin`
+# offen -- und auch dort ohne den Schlüssel zu.
+setup:
+  path: /oaap/setup
+
+# Seit 0.10.0 (RFC-0104 §4): Dieses Gateway steht in der Liste
+# /platform/ai/gateways der Chats seines Mandanten; ein Chat ruft es über die
+# via-Tür der Plattform ohne API-Schlüssel, berechtigt durch eine Freigabe
+# der Art `client` (Reiter Schlüssel).
+ai_gateway:
+  serve: true
 
 health:
   path: /healthz

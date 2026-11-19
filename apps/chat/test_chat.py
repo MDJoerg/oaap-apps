@@ -1048,6 +1048,182 @@ check("0.15.0: gezählt werden die offenen eigenen (nicht geschlossen, nicht abg
       and "filter(st => !CASE_ENDED.includes(st.status)).length" in html)
 GWA["on"] = False
 
+# ------------------------------------------------ 0.16.0 (RFC-0104 §4): das KI-Gateway ohne Schlüssel
+# Die nachgebaute Plattform bekommt die Liste /aigw (nur mit dem KI-Client-Schlüssel) und je
+# KI-Gateway eine via-Tür /aivia/<name>/, die wie die echte beide Nachweise verlangt.
+AK = "ai-client-key-456"
+AI = {"gws": ["aigw1"], "calls": [], "nogrant": {"aigw-ohne"}}
+_get0, _post0 = Fake.do_GET, Fake.do_POST
+
+
+def _ai_door(self):
+    """(Name, Rest) einer via-Tür, oder None; 401/403 wie die Plattform und das Gateway."""
+    if not self.path.startswith("/aivia/"):
+        return None
+    name, _, rest = self.path[len("/aivia/"):].partition("/")
+    act = self.headers.get("X-OAAP-Act-Assertion", "")
+    AI["calls"].append({"gw": name, "path": "/" + rest, "auth": self.headers.get("Authorization", ""),
+                        "act": act, "light": self.headers.get("X-OAAP-Light", "")})
+    if self.headers.get("Authorization") != "Bearer " + AK or not act.startswith("ZS-"):
+        self.reply(401, {"error": {"message": "unauthorized"}})
+        return False
+    if name in AI["nogrant"]:
+        self.reply(403, {"error": {"message": "unknown key"}})
+        return False
+    return name, "/" + rest
+
+
+def _ai_get(self):
+    if self.path == "/aigw":
+        if self.headers.get("Authorization") != "Bearer " + AK:
+            return self.reply(401, {})
+        port = self.server.server_address[1]
+        return self.reply(200, {"v": 1, "gateways": [
+            {"name": n, "app": "ai-gateway", "via": f"http://127.0.0.1:{port}/aivia/{n}/"} for n in AI["gws"]]})
+    door = _ai_door(self)
+    if door is None:
+        return _get0(self)
+    if door is False:
+        return None
+    name, rest = door
+    if rest == "/models":
+        return self.reply(200, {"object": "list", "data": [{"id": "standard", "oaap_light": "green"},
+                                                           {"id": name + "-modell", "oaap_light": "green"}]})
+    if rest == "/usage":
+        return self.reply(200, {"ceiling": "green"})
+    return self.reply(404, {})
+
+
+def _ai_post(self):
+    if not self.path.startswith("/aivia/"):
+        return _post0(self)
+    body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+    door = _ai_door(self)
+    if door is False:
+        return None
+    name, rest = door
+    if rest != "/chat/completions":
+        return self.reply(404, {})
+    AI["calls"][-1]["body"] = body
+    last = body["messages"][-1]
+    return self.reply(200, {"choices": [{"message": {"role": "assistant",
+                                                     "content": f"{name}: " + str(last.get("content"))[:40]}}]})
+
+
+Fake.do_GET, Fake.do_POST = _ai_get, _ai_post
+saved = (app.KI_URL, app.AI_CLIENT_KEY, app.AI_CLIENT_URL, app.AI_GATEWAY)
+app.AI_CLIENT_KEY, app.AI_CLIENT_URL = AK, f"http://127.0.0.1:{FP}/aigw"
+try:
+    # 1. eine Destination ki gewinnt (bec bleibt, wie es ist)
+    n_model = len(MODEL)
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: mit Destination ki: sie ist der Weg, die KI-Gateways werden nicht gefragt",
+          it["destination"]["ok"] and "geht vor" in it["destination"]["detail"] and "ai_gateway" not in it
+          and not AI["calls"], (it, AI["calls"]))
+    _, c = req("POST", "/api/conv", {"assistant": "projekte"})
+    st, r = req("POST", f"/api/conv/{c['id']}/send", {"text": "Hallo Destination"})
+    check("0.16.0: ... und ein Modellzug geht an die Destination, nicht an die via-Tür",
+          r.get("state") == "done" and len(MODEL) == n_model + 1 and not AI["calls"], (r, AI["calls"]))
+
+    # 2. ohne Destination, genau ein KI-Gateway: seine via-Tür
+    app.KI_URL = ""
+    st, s = req("GET", "/api/state")
+    check("0.16.0: ohne Destination, mit KI-Client: der Zustand meldet ein Modell", s["model"] is True, s)
+    st, r = req("GET", "/api/models")
+    call = AI["calls"][-1] if AI["calls"] else {}
+    check("0.16.0: /api/models über die via-Tür: <via>/models, Client-Schlüssel und die Zusicherung DIESER Anfrage",
+          st == 200 and [m["id"] for m in r["models"]] == ["standard", "aigw1-modell"] and r["error"] == ""
+          and call.get("path") == "/models" and call.get("auth") == "Bearer " + AK
+          and call.get("act") == f"ZS-anna-{N['n']}", (r, call))
+    AI["calls"].clear()
+    n_model = len(MODEL)
+    _, c = req("POST", "/api/conv", {"assistant": "projekte"})
+    st, r = req("POST", f"/api/conv/{c['id']}/send", {"text": "Hallo Gateway"})
+    sent = N["n"]
+    comp = [x for x in AI["calls"] if x["path"] == "/chat/completions"]
+    check("0.16.0: ein Modellzug geht an <via>/chat/completions, mit Schlüssel, Zusicherung und Ampel",
+          r.get("state") == "done" and len(MODEL) == n_model and len(comp) == 1
+          and comp[0]["gw"] == "aigw1" and comp[0]["auth"] == "Bearer " + AK
+          and comp[0]["act"] == f"ZS-anna-{sent}" and comp[0]["light"] == "green"
+          and r["messages"][-1]["content"].startswith("aigw1: Hallo Gateway"), (r, AI["calls"]))
+    check("0.16.0: KÖDER: weder Client-Schlüssel noch Zusicherung im Rumpf an das Modell",
+          AK not in json.dumps(comp[0].get("body")) and "ZS-" not in json.dumps(comp[0].get("body")))
+    check("0.16.0: die Werkzeuge kommen weiter über die MCP-Tür (Client-Schlüssel des MCP)",
+          len(comp[0]["body"].get("tools") or []) == 3, comp[0].get("body", {}).get("tools"))
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: Einrichtung prüfen nennt den Weg (KI-Gateway aigw1, via-Tür) und den Modellnamen",
+          all(i["ok"] for i in r["items"]) and "aigw1" in it["ai_gateway"]["title"]
+          and "via-Tür" in it["ai_gateway"]["title"] and it["model"]["ok"] and "destination" not in it, r)
+    st, r = req("GET", "/api/light?assistant=projekte")
+    check("0.16.0: Ampel des Assistenten: Farbe des Modells und Decke über die via-Tür",
+          st == 200 and r["model"]["light"] == "green" and r["ceiling"] == "green", r)
+    AI["calls"].clear()
+    st, r = req("GET", "/api/models", assertion=False)
+    check("0.16.0: ohne Zusicherung kein Ruf an die via-Tür, aber ein Satz",
+          r["models"] == [] and "Zusicherung" in r["error"] and not [x for x in AI["calls"]], (r, AI["calls"]))
+
+    # 3. mehrere KI-Gateways
+    AI["gws"] = ["aigw1", "aigw2"]
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: mehrere KI-Gateways ohne CHAT_AI_GATEWAY: Einrichtung prüfen sagt es, nennt beide",
+          not it["ai_gateway"]["ok"] and "mehrere" in it["ai_gateway"]["detail"]
+          and "aigw1, aigw2" in it["ai_gateway"]["detail"] and "CHAT_AI_GATEWAY" in it["ai_gateway"]["next"]
+          and "model" not in it, it)
+    _, c = req("POST", "/api/conv", {"assistant": "projekte"})
+    AI["calls"].clear()
+    st, r = req("POST", f"/api/conv/{c['id']}/send", {"text": "Hallo mehrere"})
+    check("0.16.0: ... und der Chat sagt es im Gespräch, statt eins zu raten",
+          r.get("state") == "error" and "CHAT_AI_GATEWAY" in r.get("said", "")
+          and not [x for x in AI["calls"] if x["path"] == "/chat/completions"], r)
+    app.AI_GATEWAY = "aigw2"
+    st, r = req("POST", f"/api/conv/{c['id']}/send", {"text": "Hallo zwei"})
+    check("0.16.0: CHAT_AI_GATEWAY nennt eins: dorthin",
+          r.get("state") == "done" and r["messages"][-1]["content"].startswith("aigw2:"), r)
+    app.AI_GATEWAY = "gibtsnicht"
+    st, r = req("GET", "/api/models")
+    check("0.16.0: CHAT_AI_GATEWAY nennt ein unbekanntes: der Satz nennt den Wert und die Liste",
+          r["models"] == [] and "gibtsnicht" in r["error"] and "aigw1, aigw2" in r["error"], r)
+    app.AI_GATEWAY = ""
+    AI["gws"] = []
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: kein KI-Gateway im Mandanten: nicht ok, mit dem Grund",
+          not it["ai_gateway"]["ok"] and "kein KI-Gateway" in it["ai_gateway"]["detail"], it)
+
+    # 4. keine Freigabe im KI-Gateway (403)
+    AI["gws"] = ["aigw-ohne"]
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: ohne Freigabe: der Weg ist da, das Gateway antwortet 403 -- „im KI-Gateway fehlt die "
+          "Freigabe für diesen Chat“, der Schritt nennt die Freigabe der Art client und die Instanz",
+          it["ai_gateway"]["ok"] and not it["model"]["ok"]
+          and "im KI-Gateway fehlt die Freigabe für diesen Chat" in it["model"]["detail"]
+          and "client" in it["model"]["next"] and "vuebung-chat" in it["model"]["next"], it)
+    st, r = req("GET", "/api/models")
+    check("0.16.0: ... /api/models sagt denselben Grund", r["models"] == [] and app.NO_GRANT in r["error"], r)
+    _, c = req("POST", "/api/conv", {"assistant": "projekte"})
+    st, r = req("POST", f"/api/conv/{c['id']}/send", {"text": "Hallo ohne"})
+    check("0.16.0: ... und das Gespräch auch", r.get("state") == "error" and app.NO_GRANT in r.get("said", ""), r)
+
+    # 5. weder Destination noch KI-Client
+    app.AI_CLIENT_KEY = ""
+    st, r = req("GET", "/api/setup?assistant=projekte")
+    it = items(r)
+    check("0.16.0: weder Destination noch KI-Client: nicht ok, beide Wege im nächsten Schritt",
+          not it["destination"]["ok"] and "Portal" in it["destination"]["next"]
+          and "ai_client" in it["destination"]["next"] and "model" not in it, it)
+    st, s = req("GET", "/api/state")
+    check("0.16.0: ... und der Zustand meldet kein Modell", s["model"] is False, s)
+finally:
+    app.KI_URL, app.AI_CLIENT_KEY, app.AI_CLIENT_URL, app.AI_GATEWAY = saved
+    Fake.do_GET, Fake.do_POST = _get0, _post0
+st, _ct, html = raw_get("/")
+check("0.16.0: die Seite fragt „Einrichtung prüfen“ auch, wenn das Modell fehlt (S.model)",
+      "!S.model" in html.decode("utf-8"))
+
 srv.shutdown()
 fake.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)

@@ -11,7 +11,9 @@ Zwei Pfade (O3): ohne Präfix angemeldet, mit Zielgruppenfilter nach den
 Rollen der Person; unter /public/ dieselben Türen öffentlich und
 ungefiltert -- nur mit HELP_PUBLIC=on (zentrale Instanz, D8).
 Dazu /admin (Route nur für admin): Quellen, Abruf „jetzt holen“, eigene
-Notizen ablegen (Quelle `local`).
+Notizen ablegen (Quelle `local`). Und /oaap/setup (RFC-0104 §3.1, Route nur
+für admin): die Einrichtungstür für den Aufbau aus einem Profil, geprüft nur
+mit OAAP_SETUP_KEY (setup_door.py).
 
 Keine eigene KI (D2). Kein Zustand eines Knotens (D1). Nach außen nur über
 die Destination `docs-origin` (RFC-0068). Nur Standardbibliothek.
@@ -30,13 +32,14 @@ import guide_requests
 import maint_door
 import mcp_door
 import render
+import setup_door
 import sources as src
 import index as ix
 import apps_source
 from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
@@ -203,6 +206,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "documents": self.lib.index.count()})
         if u.path == "/maint" or u.path.startswith("/maint/"):
             return self.maint_get(u.path, q)
+        if u.path == setup_door_path():
+            return self.setup_call(q=q)
         p = self.route(u.path)
         if p is None:
             return self.send(404, self.page("Nicht gefunden", "<p>Diese Seite gibt es nicht.</p>"))
@@ -250,6 +255,8 @@ class Handler(BaseHTTPRequestHandler):
         raw = urlparse(self.path).path
         if raw == "/maint" or raw.startswith("/maint/"):
             return self.maint_post(raw, body)
+        if raw == setup_door_path():
+            return self.setup_call(body=body)
         p = self.route(raw)
         if p is None:
             return self.send(404, "")
@@ -291,6 +298,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(400, self.page("Nicht möglich", f"<p class=err>{esc(e)}</p><p><a href='/admin'>Zurück</a></p>"))
             return self.send(303, "", headers={"Location": "/admin?m=" + quote(m)})
         return self.send(404, "")
+
+    # --- die Einrichtungstür (RFC-0104 §3.1): nur OAAP_SETUP_KEY, nie Identität
+    def setup_call(self, q=None, body=None):
+        if not setup_door.authorized(self.headers, self.lib.env):
+            return self.json(403, {"v": 1, "error": "Nur mit dem Einrichtungsschlüssel der Instanz."})
+        actor = setup_door.actor_of(self.headers)
+        if body is None:
+            one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
+            code, doc = setup_door.get(self.lib, one("kind"), one("id"))
+            return self.json(code, doc)
+        try:
+            code, doc = setup_door.post(self.lib, body, actor)
+        except setup_door.Malformed as e:
+            return self.json(400, {"v": 1, "error": str(e)})
+        print("setup actor=%s %s" % (actor, json.dumps(
+            [[r["kind"], r["id"], r["result"]] for r in doc["results"]], ensure_ascii=False)), flush=True)
+        return self.json(code, doc)
 
     # --- die Bearbeitungstür (RFC-0078 §15.3): Schlüssel, nie die Plattform-Anmeldung
     def maint_ok(self):
@@ -565,6 +589,11 @@ class Handler(BaseHTTPRequestHandler):
 <form method=post action="/admin/local"><p><input type=text name=name placeholder="dateiname.md (a-z, 0-9, / _ . -)" required></p>
 <p><textarea name=text rows=12 placeholder="---&#10;id: szenarien/server-aufsetzen&#10;---&#10;# …"></textarea></p><button>Speichern</button></form>"""
         return self.send(200, self.page("Verwaltung", body))
+
+
+def setup_door_path():
+    """Wie im Manifest (`setup.path`); nur ohne Präfix, nie unter /public/."""
+    return "/oaap/setup"
 
 
 def watch_loop(lib, seconds=30):

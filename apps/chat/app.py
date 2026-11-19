@@ -6,6 +6,8 @@ MCP-Gateways, ein Modell über das KI-Gateway, der Verlauf als Datei.
     Browser --Sitzung--> Chat               (die Plattform gibt die Zusicherung an DIESE Instanz)
     Chat --via-Tür auf der eigenen Seite--> MCP-Gateway --> App      (als die Person, Verfahren A)
     Chat --Destination ki--> KI-Gateway --> Modell                   (der Schlüssel bleibt auf der Plattform)
+    Chat --via-Tür /platform/ai/via/<gw>/--> KI-Gateway --> Modell  (0.16.0, RFC-0104 §4: ohne Destination,
+                                                                     Client-Schlüssel + Zusicherung der Person)
 
 - Ein Assistent hat keine Rechte (D1): jeder Werkzeugaufruf läuft als die
   Person, die gerade schreibt; die Sicht begrenzt die Werkzeuge, die App die Daten.
@@ -45,12 +47,18 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
 CLIENT_URL = (os.environ.get("OAAP_MCP_CLIENT_URL") or "").strip()
 KI_URL = (os.environ.get("OAAP_DESTINATION_KI_URL") or "").strip()
+# 0.16.0 (RFC-0104 §4, Manifest 0.18 `ai_client`): ohne Destination ki erreicht der Chat
+# das KI-Gateway seines Mandanten über eine via-Tür auf der eigenen Seite -- wie das
+# MCP-Gateway (Verfahren A): Client-Schlüssel und Zusicherung der Person, beide nötig.
+AI_CLIENT_KEY = (os.environ.get("OAAP_AI_CLIENT_KEY") or "").strip()
+AI_CLIENT_URL = (os.environ.get("OAAP_AI_CLIENT_URL") or "").strip()
+AI_GATEWAY = (os.environ.get("CHAT_AI_GATEWAY") or "").strip()
 SANDBOX_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_UI_SANDBOX_ORIGINS") or "").split(",")
                    if o.strip()]
 OWN_ORIGINS = [o.strip() for o in (os.environ.get("OAAP_INSTANCE_NAMES") or "").split(",") if o.strip()]
@@ -355,10 +363,96 @@ class McpWay:
 
 # --------------------------------------------------------------- das Modell
 
-def ask_model(assistant, person_name, msgs, tools, light=""):
-    if not KI_URL:
-        raise Stop("Keine Destination ki zugeordnet -- der Chat erreicht kein Modell. "
-                   "(Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“)")
+NO_MODEL_WAY = ("Keine Destination ki zugeordnet und kein KI-Gateway über die Plattform erreichbar -- "
+                "der Chat erreicht kein Modell. (Portal: Seite der Instanz, Reiter Netz & Adressen, "
+                "Destinationen, „Zuordnen“; oder ein KI-Gateway im Mandanten installieren, ab Plattform "
+                "mit Manifest 0.18)")
+NO_GRANT = "im KI-Gateway fehlt die Freigabe für diesen Chat"
+
+
+class ModelWay:
+    """Wohin die Fragen an das Modell gehen (RFC-0104 §4): `destination` (die Destination ki,
+    wie bis 0.15.0) oder `gateway` (die via-Tür eines KI-Gateways des Mandanten)."""
+
+    def __init__(self, kind, base, name, headers=None):
+        self.kind, self.base, self.name, self.headers = kind, base.rstrip("/"), name, dict(headers or {})
+
+    @property
+    def label(self):
+        return ("Destination ki" if self.kind == "destination"
+                else f"KI-Gateway {self.name} (via-Tür, ohne Schlüssel)")
+
+    def request(self, path, data=None, headers=None, method=None):
+        h = dict(self.headers)
+        h.update(headers or {})
+        return urllib.request.Request(self.base + path, data=data, headers=h, method=method)
+
+    def refused(self, code):
+        """Der Satz zu einer Ablehnung (401/403) -- je nach Weg ein anderer Grund."""
+        if self.kind == "destination":
+            return "der Schlüssel der Destination ki ist ungültig oder widerrufen"
+        if code == 403:
+            return NO_GRANT
+        return ("die Plattform ließ den Ruf nicht durch: die Anmeldung ist älter als fünf Minuten "
+                "(Seite neu laden) oder der Client-Schlüssel der Instanz fehlt")
+
+
+def ai_gateways():
+    """Die KI-Gateways des Mandanten (GET OAAP_AI_CLIENT_URL), oder Stop."""
+    req = urllib.request.Request(AI_CLIENT_URL, headers={"Authorization": "Bearer " + AI_CLIENT_KEY,
+                                                         "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            doc = json.loads(r.read(1_000_000))
+    except urllib.error.HTTPError as exc:
+        raise Stop(f"Die Plattform antwortete {exc.code} auf die Liste der KI-Gateways.") from None
+    except (OSError, ValueError) as exc:
+        raise Stop(f"Liste der KI-Gateways nicht gelesen: {type(exc).__name__}") from None
+    if not isinstance(doc, dict) or doc.get("v") != 1 or not isinstance(doc.get("gateways"), list):
+        raise Stop("Die Liste der KI-Gateways hat eine unbekannte Form.")
+    return [g for g in doc["gateways"] if isinstance(g, dict) and isinstance(g.get("name"), str)]
+
+
+def model_way(assertion):
+    """Welchen Weg der Chat zum Modell nimmt (RFC-0104 §4), oder Stop mit dem Grund:
+    1. eine Destination ki, die der Instanz zugeordnet ist -- wie bisher (eine Wahl von Hand gewinnt);
+    2. sonst genau ein KI-Gateway in der Liste des Mandanten -- seine via-Tür;
+    3. mehrere -- das nennt CHAT_AI_GATEWAY; ohne den Wert sagt der Chat es."""
+    if KI_URL:
+        return ModelWay("destination", KI_URL, "ki")
+    if not (AI_CLIENT_KEY and AI_CLIENT_URL):
+        raise Stop(NO_MODEL_WAY)
+    gws = ai_gateways()
+    names = ", ".join(g["name"] for g in gws)
+    if AI_GATEWAY:
+        hit = [g for g in gws if g["name"] == AI_GATEWAY]
+        if not hit:
+            raise Stop(f"CHAT_AI_GATEWAY nennt das KI-Gateway {AI_GATEWAY}, aber im Mandanten gibt es "
+                       + (f"nur: {names}." if gws else "keins."))
+    elif len(gws) == 1:
+        hit = gws
+    elif not gws:
+        raise Stop("Keine Destination ki zugeordnet, und im Mandanten ist kein KI-Gateway installiert "
+                   "-- der Chat erreicht kein Modell.")
+    else:
+        raise Stop(f"Im Mandanten gibt es mehrere KI-Gateways ({names}); die Einstellung "
+                   "CHAT_AI_GATEWAY der Instanz nennt keins.")
+    via = str(hit[0].get("via") or "")
+    if not via:
+        raise Stop(f"Die Plattform nennt für das KI-Gateway {hit[0]['name']} keine via-Tür.")
+    if not assertion:
+        raise Stop(NO_ASSERTION, 401)
+    return ModelWay("gateway", via, hit[0]["name"],
+                    {"Authorization": "Bearer " + AI_CLIENT_KEY, ACT_ASSERTION: assertion})
+
+
+def model_ready():
+    """Hat der Chat überhaupt einen Weg zum Modell (ohne die Liste zu fragen)?"""
+    return bool(KI_URL or (AI_CLIENT_KEY and AI_CLIENT_URL))
+
+
+def ask_model(assistant, person_name, msgs, tools, light="", assertion=""):
+    way = model_way(assertion)
     d = datetime.now()
     today = WEEKDAYS[d.weekday()] + d.strftime(", %d.%m.%Y")
     system = (assistant["system"] + f"\n\nHeute ist {today}. Du sprichst mit {person_name}. "
@@ -371,8 +465,7 @@ def ask_model(assistant, person_name, msgs, tools, light=""):
     headers = {"Content-Type": "application/json"}
     if light in LIGHT_RANK:
         headers[LIGHT_HEADER] = light
-    req = urllib.request.Request(KI_URL.rstrip("/") + "/chat/completions",
-                                 data=json.dumps(body).encode(), headers=headers, method="POST")
+    req = way.request("/chat/completions", data=json.dumps(body).encode(), headers=headers, method="POST")
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as r:
@@ -383,7 +476,8 @@ def ask_model(assistant, person_name, msgs, tools, light=""):
             said = json.loads(said).get("error", {}).get("message") or said
         except (ValueError, AttributeError):
             pass
-        raise Stop(f"Das KI-Gateway antwortete {exc.code}: {str(said)[:200]}") from None
+        why = f" -- {way.refused(exc.code)}" if way.kind == "gateway" and exc.code in (401, 403) else ""
+        raise Stop(f"Das KI-Gateway antwortete {exc.code}: {str(said)[:200]}{why}") from None
     except TimeoutError:
         raise Stop(f"Das Modell hat in {MODEL_TIMEOUT} s nicht geantwortet.") from None
     except (OSError, ValueError) as exc:
@@ -487,7 +581,7 @@ def step(person, person_name, assertion, assistant, conv, decision):
     effects.clear()
     effects.update(effects_now)
     conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
-    reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv))
+    reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv), assertion)
     reply["at"] = now()
     if assistant.get("rev"):
         reply["rev"] = assistant["rev"]       # für Bewertungen (RFC-0101 Stufe 2)
@@ -594,45 +688,93 @@ def setup_report(person, assertion, a):
     elif gw:
         add("view", False, f"Sicht {a['view']} als du", "Keine Zusicherung der Plattform in dieser Anfrage.",
             "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
-    if not add("destination", bool(KI_URL), "Ein Modell ist angebunden (Destination ki)",
-               "" if KI_URL else "Dieser Instanz ist keine Destination ki zugeordnet.",
-               "" if KI_URL else "Im Portal: Instanz → Destinationen → beim Bedarf „ki“ eine Destination des "
-               "Mandanten zuordnen. Hat der Mandant keine, legt der Betreiber des Knotens eine an (Ziel: ein "
-               "KI-Gateway, mit einem Schlüssel nur für den Modellnamen -- Portal → Destinationen, ab Plattform 0.1.244; sonst oaap destination add)."):
+    # 0.16.0 (RFC-0104 §4): welcher Weg zum Modell, und was ihm fehlt.
+    if not model_ready():
+        add("destination", False, "Ein Modell ist angebunden",
+            "Dieser Instanz ist keine Destination ki zugeordnet, und die Plattform hat ihr keinen "
+            "Zugang zu den KI-Gateways des Mandanten gegeben.",
+            "Im Portal: Instanz → Destinationen → beim Bedarf „ki“ eine Destination des Mandanten "
+            "zuordnen. Hat der Mandant keine, legt der Betreiber des Knotens eine an (Ziel: ein KI-Gateway, "
+            "mit einem Schlüssel nur für den Modellnamen -- Portal → Destinationen, ab Plattform 0.1.244; "
+            "sonst oaap destination add). Ohne Destination: ein KI-Gateway im Mandanten installieren und "
+            "den Chat neu ausrollen (Manifest 0.18, ai_client).")
         return items
-    req = urllib.request.Request(KI_URL.rstrip("/") + "/models", headers={"Accept": "application/json"})
+    try:
+        way = model_way(assertion)
+    except Stop as exc:
+        if exc.status == 401:
+            add("ai_gateway", False, "Modell über das KI-Gateway des Mandanten", exc.text,
+                "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
+        else:
+            add("ai_gateway", False, "Modell über das KI-Gateway des Mandanten", exc.text,
+                "Mehrere KI-Gateways: in der Konfiguration der Instanz CHAT_AI_GATEWAY auf den Namen "
+                "eines davon setzen. Keins: ein KI-Gateway aus dem Store in diesem Mandanten installieren. "
+                "Oder im Portal eine Destination ki zuordnen -- die geht immer vor.")
+        return items
+    if way.kind == "destination":
+        add("destination", True, "Ein Modell ist angebunden (Destination ki)",
+            "Die Destination ki geht vor; KI-Gateways des Mandanten fragt der Chat dann nicht."
+            if AI_CLIENT_KEY and AI_CLIENT_URL else "")
+    else:
+        add("ai_gateway", True, f"Ein Modell ist angebunden: {way.label}",
+            "Der Chat ruft das KI-Gateway über die Plattform, mit seinem Client-Schlüssel und deiner "
+            "Zusicherung; einen Schlüssel des KI-Gateways braucht er nicht.")
+    req = way.request("/models", headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             ids = [m.get("id") for m in (json.loads(r.read(1_000_000)).get("data") or []) if isinstance(m, dict)]
+        whose = "der Schlüssel der Destination" if way.kind == "destination" else "dieser Chat"
         add("model", a["model"] in ids, f"Modellname {a['model']} ist am KI-Gateway freigegeben",
-            "" if a["model"] in ids else "Der Schlüssel der Destination erreicht: " + (", ".join(ids) or "nichts") + ".",
+            "" if a["model"] in ids else f"Am KI-Gateway erreicht {whose}: " + (", ".join(ids) or "nichts") + ".",
             "" if a["model"] in ids else f"Auf der Seite des KI-Gateways den Modellnamen {a['model']} anlegen "
-            "und dem Schlüssel der Destination erlauben -- oder im Assistenten einen vorhandenen Namen wählen.")
+            + ("und dem Schlüssel der Destination erlauben" if way.kind == "destination"
+               else "und der Freigabe dieses Chats (Art client) erlauben")
+            + " -- oder im Assistenten einen vorhandenen Namen wählen.")
     except urllib.error.HTTPError as exc:
-        add("model", False, "Das KI-Gateway antwortet", f"Antwort {exc.code}.",
-            "Der Schlüssel der Destination ist ungültig oder widerrufen: neuen Schlüssel ausstellen und "
-            "bei der Destination hinterlegen." if exc.code in (401, 403) else "Läuft das KI-Gateway?")
+        if way.kind == "destination":
+            add("model", False, "Das KI-Gateway antwortet", f"Antwort {exc.code}.",
+                "Der Schlüssel der Destination ist ungültig oder widerrufen: neuen Schlüssel ausstellen und "
+                "bei der Destination hinterlegen." if exc.code in (401, 403) else "Läuft das KI-Gateway?")
+        elif exc.code == 403:
+            group = own_instance_guess()
+            add("model", False, f"Das KI-Gateway {way.name} antwortet",
+                f"Antwort 403: {NO_GRANT}.",
+                "Auf der Seite des KI-Gateways unter Schlüssel eine Freigabe der Art „client“ für diese "
+                "Instanz anlegen (" + (f"Name {group}, vermutet aus der Adresse" if group
+                                       else "Name dieser Instanz") + ") und ihr die Modellnamen erlauben "
+                "-- oder den Aufbau aus dem Profil laufen lassen, der sie anlegt.")
+        elif exc.code == 401:
+            add("model", False, f"Das KI-Gateway {way.name} antwortet", f"Antwort 401: {way.refused(401)}.",
+                "Seite neu laden; hilft das nicht, die Instanz neu ausrollen (Client-Schlüssel).")
+        else:
+            add("model", False, f"Das KI-Gateway {way.name} antwortet", f"Antwort {exc.code}.",
+                "Läuft das KI-Gateway, und kennt es Aufrufe über die via-Tür (RFC-0104)?")
     except (OSError, ValueError) as exc:
         add("model", False, "Das KI-Gateway antwortet", f"Nicht erreicht ({type(exc).__name__}).",
-            "Läuft das KI-Gateway, und stimmt das Ziel der Destination?")
+            "Läuft das KI-Gateway, und stimmt das Ziel der Destination?" if way.kind == "destination"
+            else f"Läuft das KI-Gateway {way.name}?")
     return items
-def ki_models():
-    """Die Modellnamen, die der Schlüssel der Destination ki erreicht (0.6.0, L27).
+def ki_models(assertion=""):
+    """Die Modellnamen, die der Schlüssel der Destination ki erreicht (0.6.0, L27) --
+    oder, ohne Destination, dieser Chat über die via-Tür (0.16.0, RFC-0104 §4).
 
     Das Formular „Assistent“ bietet nur diese an: ein frei getippter Name
     scheiterte erst beim ersten Gespräch (bec, 18.11.: „chat-default“ war
     angelegt, aber dem Schlüssel nicht erlaubt). Gibt (Liste, Fehlersatz).
     """
-    if not KI_URL:
-        return [], "Dieser Instanz ist keine Destination ki zugeordnet."
-    req = urllib.request.Request(KI_URL.rstrip("/") + "/models", headers={"Accept": "application/json"})
+    if not model_ready():
+        return [], "Dieser Instanz ist keine Destination ki zugeordnet (und kein KI-Gateway über die Plattform)."
+    try:
+        way = model_way(assertion)
+    except Stop as exc:
+        return [], exc.text
+    req = way.request("/models", headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read(1_000_000)).get("data") or []
     except urllib.error.HTTPError as exc:
-        return [], (f"Das KI-Gateway lehnt ab (HTTP {exc.code}): der Schlüssel der Destination ki "
-                    "ist ungültig oder widerrufen." if exc.code in (401, 403)
-                    else f"Das KI-Gateway antwortet {exc.code}.")
+        return [], (f"Das KI-Gateway lehnt ab (HTTP {exc.code}): {way.refused(exc.code)}."
+                    if exc.code in (401, 403) else f"Das KI-Gateway antwortet {exc.code}.")
     except (OSError, ValueError) as exc:
         return [], f"Das KI-Gateway ist nicht erreichbar ({type(exc).__name__})."
     out = [{"id": m["id"], "light": m.get("oaap_light", ""), "meaning": m.get("oaap_light_meaning", "")}
@@ -695,11 +837,16 @@ def conv_light(conv):
     return x if x in LIGHT_RANK else DEFAULT_LIGHT
 
 
-def ki_ceiling():
-    """Die Decke des Schlüssels der Destination ki (GET /v1/usage des KI-Gateways), oder ''."""
-    if not KI_URL:
+def ki_ceiling(assertion=""):
+    """Die Decke des Schlüssels der Destination ki (GET /v1/usage des KI-Gateways), oder ''.
+    Ohne Destination dieselbe Frage über die via-Tür (die Decke der Freigabe des Chats)."""
+    try:
+        way = model_way(assertion) if model_ready() else None
+    except Stop:
+        way = None
+    if way is None:
         return ""
-    req = urllib.request.Request(KI_URL.rstrip("/") + "/usage", headers={"Accept": "application/json"})
+    req = way.request("/usage", headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             c = json.loads(r.read(1_000_000)).get("ceiling")
@@ -715,7 +862,7 @@ def light_report(a, assertion):
     Die Farben sagen die Gateways selbst: das KI-Gateway je Modellname für den Schlüssel des
     Chats (/v1/models), das MCP-Gateway je Sicht für die Person (/_views). Was dort fehlt,
     bleibt leer -- dann sagt `said`, warum, und die Gateways entscheiden beim Aufruf."""
-    models, merr = ki_models()
+    models, merr = ki_models(assertion)
     m = next((x for x in models if x["id"] == a.get("model")), None)
     mlight = m["light"] if m and m.get("light") in LIGHT_RANK else ""
     _gw, rows, _all, verr = gateway_views(a.get("gateway") or "", assertion)
@@ -723,7 +870,7 @@ def light_report(a, assertion):
     vlight = v.get("light") if v and v.get("light") in LIGHT_RANK else ""
     known = [x for x in (mlight, vlight) if x]
     needs = max(known, key=LIGHT_RANK.get) if known else ""
-    ceiling = ki_ceiling() or max((x["light"] for x in models if x.get("light") in LIGHT_RANK),
+    ceiling = ki_ceiling(assertion) or max((x["light"] for x in models if x.get("light") in LIGHT_RANK),
                                   key=LIGHT_RANK.get, default="")
     said = merr or verr or ("" if m else f"Der Modellname {a.get('model')} ist für den Schlüssel "
                             "des Chats nicht erreichbar.") or ("" if v else
@@ -1164,11 +1311,11 @@ class Handler(BaseHTTPRequestHandler):
                 "tenant_admin": "tenant_admin" in who.roles,
                 "teams_known": (home.grants_known is not False) if home.mode == "gateway"
                 else who.grants is not None,
-                "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
+                "client": bool(CLIENT_KEY and CLIENT_URL), "model": model_ready(),
                 "sandbox_origins": SANDBOX_ORIGINS, "default_light": DEFAULT_LIGHT,
                 "conversations": list_convs(person)})
         if path == "/api/models":
-            models, err = ki_models()
+            models, err = ki_models(self.headers.get(ASSERTION, "").strip())
             return self.json(200, {"models": models, "error": err})
         if path == "/api/views":
             from urllib.parse import parse_qs, urlparse
@@ -1563,7 +1710,7 @@ class Handler(BaseHTTPRequestHandler):
             doc["gateway"] = gateway_for(a.get("gateway") or "")["name"]
         except Stop:
             doc["gateway"] = ""
-        models, _err = ki_models()
+        models, _err = ki_models(assertion)
         ml = next((x.get("light") for x in models if x["id"] == doc["model"]), "")
         doc["model_light"] = ml if ml in LIGHT_RANK else ""
         st, said = gw_assist("POST", f"/{aid}/ratings", assertion, doc)
@@ -1620,7 +1767,7 @@ def main():
     os.makedirs(DATA, exist_ok=True)
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"oaap-chat {VERSION} auf {PORT}; MCP-Client: {'ja' if CLIENT_KEY and CLIENT_URL else 'nein'}; "
-          f"Modell: {'ja' if KI_URL else 'nein'}; Berechtigungen: "
+          f"Modell: {'Destination ki' if KI_URL else ('KI-Gateway über die Plattform' + (' ' + AI_GATEWAY if AI_GATEWAY else '') if model_ready() else 'nein')}; Berechtigungen: "
           f"{'ja' if AUTHZ.url else 'nein (Team-Assistenten unsichtbar)'}; Assistenten "
           f"in der Datei {len(STORE.all())}" + (f"; FEHLER: {' '.join(SETUP_ERRORS)}" if SETUP_ERRORS else ""),
           flush=True)

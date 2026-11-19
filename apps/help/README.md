@@ -154,11 +154,40 @@ claude mcp add --transport http oaap-help https://<adresse-der-instanz>/public/m
   (O1, gemessen). Der Client kann `version` mitgeben.
 - `apps`/`marketplace` als Quellen, Bilder aus dem Archiv (Stufe 3).
 
+## Einrichtungstür (0.7.0, RFC-0104)
+
+Baut der Knoten einen Mandanten aus einem Profil (z. B. `ki-arbeitsplatz`),
+holt er die Doku über die Einrichtungstür `/oaap/setup` statt über einen
+Handgriff auf `/admin`. Die Tür prüft nur einen Schlüssel:
+`Authorization: Bearer <OAAP_SETUP_KEY>` -- den macht die Plattform bei der
+Installation, keine Seite zeigt ihn. Ohne diesen Wert im Environment lehnt
+die App jeden Ruf ab (403); Rollen-Kopfzeilen zählen hier nicht, auch ein
+`tenant_admin` kommt ohne den Schlüssel nicht durch. Von außen liegt der Pfad
+zusätzlich hinter der Route `/oaap` (nur `admin`); unter `/public/` gibt es
+ihn nicht.
+
+| Art | id | was | `present` / `ready` |
+|---|---|---|---|
+| `fetch` | `docs` | die Plattform-Doku jetzt holen (wie „Jetzt holen“) | Dokumente aus `docs-origin` sind da (der mitgelieferte Stand zählt nicht) |
+
+- `GET /oaap/setup` → `{"v":1,"kinds":["fetch"]}`;
+  `GET /oaap/setup?kind=fetch&id=docs` → `state`, `ready`, `note`.
+- `POST` mit `{"v":1,"dry":true,"items":[{"kind":"fetch","id":"docs"}]}` →
+  `would_make` oder `present`; ohne `dry` → `made` (dann `present`), bei
+  gescheitertem Abruf `refused` mit dem Grund (z. B. Destination nicht
+  zugeordnet). Mit `HELP_OAAP_DOCS=off` → `refused`.
+- `remove` → `gone`: nichts zu entfernen, die geholte Doku bleibt.
+- Ein Feld `key`, `token`, `secret`, `password` oder `credentials` → `refused`.
+- `X-OAAP-Setup-Actor` steht im Protokoll und, für Gemachtes, mit Zeit und
+  Digest in `/data/setup.json`.
+
 ## Test
 
 ```sh
 python3 test_help.py
 python3 test_requests.py
+python3 test_apps_docs.py
+python3 test_setup.py
 ```
 
 Ohne Knoten: eine nachgebaute Destination liefert Archive; geprüft werden

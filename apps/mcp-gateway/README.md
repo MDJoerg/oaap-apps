@@ -534,6 +534,7 @@ python3 apps/mcp-gateway/test_signin.py     # Tokenprüfung: Unterschrift, Issue
 python3 apps/mcp-gateway/test_gateway.py    # Konformitätsliste der Spec §12, Ende zu Ende
 python3 apps/mcp-gateway/test_sources.py    # Quellen der Plattform (§3.6)
 python3 apps/mcp-gateway/test_platform_settings.py  # Einstellungen von der Plattform (§3.8)
+python3 apps/mcp-gateway/test_setup.py      # Einrichtungstür (RFC-0104 Stufe 2)
 ```
 
 Die letzte Datei stellt zwei **Papier-MCP-Server** hin, die sich auf
@@ -657,6 +658,44 @@ RFC-0103 D10. `POST …/<id>/cases` nimmt zusätzlich `outcome`
 (`accepted`, `reopened`, `no_response`); der letzte gilt, gezählt wird der
 Vorgang weiter einmal. Die Auswertung je Revision zeigt „davon Lösung
 passt“ neben den Vorgängen.
+
+## Einrichtungstür (RFC-0104 Stufe 2)
+
+Seit 0.27 kann ein Profil des Mandanten (etwa `ki-arbeitsplatz`) das
+Gateway einrichten, ohne dass ein Mensch klickt. Das Manifest (0.18)
+erklärt `setup: {path: /oaap/setup}`.
+- **Wer hineinkommt:** nur wer `Authorization: Bearer <OAAP_SETUP_KEY>`
+  schickt. Den Wert erzeugt die Plattform bei der Installation; keine
+  Seite zeigt ihn. Der Knoten ruft über seinen internen Listener.
+  Identitäts-Kopfzeilen zählen auf diesem Pfad nicht, auch nicht die
+  eines `tenant_admin`. Fehlt der Schlüssel in der Umgebung, ist jede
+  Antwort 403. `X-OAAP-Setup-Actor` (wer den Aufbau gestartet hat) steht
+  in der Prüfspur als `setup:<name>`.
+- **Aufrufe:**
+  - `GET` nennt die Arten.
+  - `GET ?kind=&id=` sagt `state`, `ready` und eine Notiz.
+  - `POST {"v": 1, "dry": false, "items": [...]}` legt an.
+  - `POST {"v": 1, "remove": [...]}` nimmt zurück.
+  - Ergebnis je Eintrag: `present`, `made`, `would_make` (mit `dry`),
+    `conflict`, `refused`, beim Zurücknehmen `removed` oder `gone`.
+- **Arten:** Jede benutzt dieselbe Funktion wie die Betreiberseite.
+  - `refresh`: Quellen einlesen und den Katalog über die Erkundungs-Tür
+    lesen (wie „Quellen jetzt einlesen“ und „Katalog lesen“).
+  - `server_light`: eine Ampel, nur aus dem Rot eines neuen Servers.
+  - `view`: Zugänge und Tools. `{"server", "effect": "read"}` heißt: alle
+    Tools des Servers mit `readOnlyHint: true`, dieselbe Regel wie bei
+    der Hilfe (RFC-0094 D6).
+  - `profile`: ein Zugangsprofil, etwa für `@<chat>`.
+  - `assistant`: erste Revision `@1`, nur Sichtbarkeit Mandant.
+- **Nie überschreiben:** Weicht etwas ab, das es unter dem Namen schon
+  gibt, heißt das `conflict`. Ohne `dry` hält die Einrichtung dort an;
+  was danach steht, wird nicht angefasst. Zurückgenommen wird nur, was
+  die Einrichtung angelegt hat und was seither keiner geändert hat (die
+  App merkt sich wer, wann und einen Digest). Zurücknehmen heißt: die
+  Ampel wieder rot, die Sicht löschen, das Profil widerrufen, den
+  Assistenten löschen.
+- **Keine Geheimnisse:** Ein Feld `key`, `token`, `secret`, `password`
+  oder `credentials` (auch verschachtelt) ergibt `refused`.
 
 ## Was noch fehlt
 

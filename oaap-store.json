@@ -211,7 +211,7 @@
       "id": "ai-gateway",
       "name": "OAAP KI-Gateway",
       "type": "native",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "released": "2026-11-19",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -264,7 +264,7 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.26.0",
+      "version": "0.27.0",
       "released": "2026-11-19",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -320,7 +320,7 @@
       "id": "chat",
       "name": "Chat",
       "type": "native",
-      "version": "0.15.0",
+      "version": "0.16.0",
       "released": "2026-11-19",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -996,8 +996,8 @@
       "id": "help",
       "name": "OAAP-Hilfe",
       "type": "native",
-      "version": "0.6.1",
-      "released": "2026-11-18",
+      "version": "0.7.0",
+      "released": "2026-11-19",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/help"

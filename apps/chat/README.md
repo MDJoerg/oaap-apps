@@ -11,6 +11,7 @@ Rechte.
 Browser ──Sitzung──▶ Chat
 Chat ──via-Tür auf der eigenen Seite──▶ MCP-Gateway ──▶ App   (als die Person, Verfahren A)
 Chat ──Destination ki──▶ KI-Gateway ──▶ Modell               (Schlüssel bleibt auf der Plattform)
+Chat ──via-Tür /platform/ai/via/<gw>/──▶ KI-Gateway ──▶ Modell (ab 0.16.0 ohne Destination, als die Person)
 ```
 
 ## Was die App zusagt
@@ -320,6 +321,35 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
   zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
 
+## KI-Gateway ohne Schlüssel (0.16.0, RFC-0104 §4)
+
+Der Chat braucht keine Destination `ki` mehr. Er erklärt im Manifest
+`ai_client: {use: true}`; die Plattform gibt ihm dann einen Client-Schlüssel
+(`OAAP_AI_CLIENT_KEY`) und die Liste der KI-Gateways seines Mandanten
+(`OAAP_AI_CLIENT_URL`). Gerufen wird das KI-Gateway über eine via-Tür auf der
+eigenen Seite, genau wie das MCP-Gateway: mit dem Client-Schlüssel **und**
+der Zusicherung der Person dieser Anfrage (`X-OAAP-Act-Assertion`). Allein
+öffnet keins von beiden etwas.
+
+- **Welcher Weg** (der Reihe nach):
+  1. Ist der Instanz eine Destination `ki` zugeordnet, gilt sie -- wie bisher.
+     Eine Wahl von Hand gewinnt (`bec` bleibt, wie es ist).
+  2. Sonst: genau ein KI-Gateway im Mandanten → dessen via-Tür.
+  3. Mehrere: die Einstellung `CHAT_AI_GATEWAY` nennt eins. Ohne sie rät
+     der Chat nicht, sondern sagt es (im Gespräch und in „Einrichtung prüfen“).
+- **Was diesen Weg nimmt:** jede Modellfrage (`/chat/completions`), die
+  Liste der Modellnamen im Formular „Assistent“ (`/models`), die Farben und
+  die Decke für die Ampel (`/models`, `/usage`) und die Ampel des Gesprächs
+  als `X-OAAP-Light`.
+- **Einrichtung prüfen** nennt den Weg („Destination ki“ oder „KI-Gateway
+  <name> (via-Tür, ohne Schlüssel)“). Antwortet das KI-Gateway 403, steht
+  dort: „im KI-Gateway fehlt die Freigabe für diesen Chat“ -- auf der Seite
+  des KI-Gateways fehlt dann eine Freigabe der Art `client` mit dem Namen
+  dieser Instanz (der Aufbau aus dem Profil legt sie an).
+- **Was das KI-Gateway sieht:** den Namen des Chats und die Person, nie den
+  Schlüssel des Chats. Das kann es erst ab der Fassung, die RFC-0104 Stufe 2
+  umsetzt; die Plattform braucht Manifest 0.18.
+
 ## Ansicht „Vorgänge“ (0.15.0, RFC-0103 Stufe 4)
 
 - **Wo:** In der Leiste über „Assistenten“ der Eintrag „Vorgänge“ mit der
@@ -364,7 +394,7 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 187 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 213 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 27 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

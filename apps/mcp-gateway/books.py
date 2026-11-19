@@ -196,6 +196,19 @@ CREATE TABLE IF NOT EXISTS items (
   approved_at  TEXT NOT NULL,
   PRIMARY KEY (view, kind, name)
 );
+-- 0.27 (RFC-0104 Stufe 2, §3.1): was die Einrichtungstür angelegt hat -- wer (der
+-- Name aus X-OAAP-Setup-Actor), wann, ein Digest des Wunsches und einer des
+-- Zustands direkt danach. Entfernt wird nur, solange der Zustand noch dieser ist.
+CREATE TABLE IF NOT EXISTS setup_made (
+  kind     TEXT NOT NULL,
+  id       TEXT NOT NULL,
+  actor    TEXT NOT NULL,
+  at       TEXT NOT NULL,
+  wish     TEXT NOT NULL,
+  made     TEXT NOT NULL,
+  removed  TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (kind, id)
+);
 """
 
 # Rückfragen vom Server an den Client, je Sicht (Spec §6.1). Eine Sicht aus
@@ -1646,3 +1659,27 @@ def assistant_export(db, aid, rev=None):
 def ratings_mine(db, who, limit=500):
     return [_rating(r, with_who=True) for r in db.execute(
         "SELECT * FROM ratings WHERE who=? ORDER BY id DESC LIMIT ?", (who, int(limit)))]
+
+
+# ------------------------------------------------------------------ Einrichtung (0.27)
+
+def setup_digest(doc):
+    """Digest eines Wunsches oder eines Zustands: kanonisches JSON, SHA-256."""
+    return fingerprint(doc)
+
+
+def setup_record(db, kind, sid):
+    return db.execute("SELECT * FROM setup_made WHERE kind=? AND id=?", (kind, sid)).fetchone()
+
+
+def setup_remember(db, kind, sid, actor, wish, made):
+    db.execute("INSERT INTO setup_made (kind,id,actor,at,wish,made,removed) VALUES (?,?,?,?,?,?,'') "
+               "ON CONFLICT(kind,id) DO UPDATE SET actor=excluded.actor,at=excluded.at,"
+               "wish=excluded.wish,made=excluded.made,removed=''",
+               (kind, sid, actor, now(), wish, made))
+    db.commit()
+
+
+def setup_forget(db, kind, sid):
+    db.execute("UPDATE setup_made SET removed=? WHERE kind=? AND id=?", (now(), kind, sid))
+    db.commit()
