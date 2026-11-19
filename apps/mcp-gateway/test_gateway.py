@@ -1763,6 +1763,15 @@ revs = {r["rev"]: r for r in ax("GET", "/a-viel/revisions")[1]["revisions"]}
 check("D6: die verdichtete Zeile behält Nummer, Zeit und wer", revs[3]["compacted"] is True
       and revs[3]["changed_by"] == "u-anna" and len(revs) == 26, revs.get(3))
 
+print("\n-- 0.24.0 RFC-0101 Stufe 3: support_queue am Assistenten (D6)")
+st, d = ax("POST", "", adoc("a-sq", support_queue="sap-support"))
+st2, d2 = ax("GET", "/a-sq")
+check("support_queue wird gespeichert und mit der Revision gelesen",
+      st == 200 and st2 == 200 and d2.get("support_queue") == "sap-support", (st, d, d2))
+st, d = ax("POST", "", adoc("a-sq2", support_queue="Kein Bereich!"))
+check("support_queue, die keine Bereichskennung ist: abgelehnt mit einem Satz",
+      st == 400 and "support_queue" in json.dumps(d, ensure_ascii=False), (st, d))
+
 print("\n-- 0.23.0 RFC-0101 Stufe 2: Sterne je Antwort und Gespräch")
 
 

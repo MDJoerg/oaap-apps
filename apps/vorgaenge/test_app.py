@@ -292,6 +292,47 @@ ok("ohne X-OAAP-User-Id 401", st == 401, st)
 st, b, _ = call("GET", "/healthz")
 ok("healthz 200", st == 200 and b == "ok", st)
 
+# --- 0.6.0 (RFC-0101 Stufe 3): Unterart, Felder, Bereich, Status der eigenen Vorgänge
+app.STORE.add_queue("sap-support", "SAP-Support")
+st, b, _ = report(kind="question", title="Nicht zufrieden: SAP", subkind="chat-answer",
+                  fields={"assistant": "sap", "rev": 3, "tools": [{"name": "whoami", "outcome": "ok"}],
+                          "doc_gap": True}, queue="sap-support")
+ok("0.6.0: Unterart und Felder angenommen (201)", st == 201, (st, b))
+n6 = json.loads(b)["number"]
+c6 = app.STORE.get(n6)
+ok("0.6.0: Felder getrennt vom Beglaubigten gespeichert",
+   c6["tech"].get("subkind") == "chat-answer" and c6["tech"]["fields"]["rev"] == 3
+   and "fields" not in c6["tech"]["attested"], c6["tech"])
+ok("0.6.0: der Bereich, den die Seite nennt", c6["queue"] == "sap-support", c6["queue"])
+st, b, _ = report(kind="question", title="x", subkind="chat-answer", fields={}, queue="gibt-es-nicht")
+ok("0.6.0: ein unbekannter Bereich -> Eingang", st == 201 and app.STORE.get(json.loads(b)["number"])["queue"]
+   == "eingang", (st, b))
+st, b, _ = report(kind="question", title="x", fields={"a": 1})
+ok("0.6.0: Felder ohne Unterart abgelehnt", st == 400 and "Unterart" in b, (st, b))
+st, b, _ = report(kind="question", title="x", subkind="Chat Answer")
+ok("0.6.0: Unterart, die keine Kennung ist: abgelehnt", st == 400, (st, b))
+st, b, _ = report(kind="question", title="x", subkind="chat-answer", fields={"Bad-Key": 1})
+ok("0.6.0: Feldname mit Großbuchstaben/Bindestrich abgelehnt", st == 400, (st, b))
+st, b, _ = report(kind="question", title="x", subkind="chat-answer", fields={"t": "x" * 41000})
+ok("0.6.0: Felder über 40000 Bytes abgelehnt", st == 400, (st, b))
+GRANTS["u-sap"] = [{"object": "case", "activities": ["read"], "fields": {"queue": ["sap-support"]}}]
+st, b, _ = call("GET", "/v/" + n6, user("u-anna"))
+ok("0.6.0: die Meldende sieht die Angaben der App auf ihrem Vorgang",
+   st == 200 and "Angaben der App" in b and "chat-answer" in b and "nicht beglaubigt" in b, (st, b[-600:]))
+st, b, _ = call("GET", "/platform/feedback/mine?numbers=" + n6 + "," + num, {**SOURCE, **user("u-anna")})
+d6 = json.loads(b) if st == 200 else {}
+ok("0.6.0: /platform/feedback/mine nennt den Status eigener Vorgänge",
+   st == 200 and d6["cases"][n6]["status"] == "new" and d6["cases"][n6]["answered"] is False, (st, b))
+st, b, _ = call("GET", "/platform/feedback/mine?numbers=" + n6, {**SOURCE, **user("u-bert")})
+ok("0.6.0: KÖDER: Bert erfährt nichts über Annas Vorgang (fehlt wie unbekannt)",
+   st == 200 and json.loads(b)["cases"] == {}, (st, b))
+st, b, _ = call("GET", "/platform/feedback/mine?numbers=" + n6, user("u-anna"))
+ok("0.6.0: /platform/feedback/mine nicht über das Gateway: 404", st == 404, st)
+c6s = app.STORE.get(n6)
+app.STORE.set_status(c6s, "u-x", "X", "answered", "So geht es.")
+st, b, _ = call("GET", "/platform/feedback/mine?numbers=" + n6, {**SOURCE, **user("u-anna")})
+ok("0.6.0: beantwortet -> answered true", st == 200 and json.loads(b)["cases"][n6]["answered"] is True, (st, b))
+
 srv.shutdown()
 print("")
 print("ALLE PASS" if not fails else f"{fails} FAIL")

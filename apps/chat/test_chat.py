@@ -894,6 +894,68 @@ _, cp = req("POST", "/api/conv", {"assistant": "projekte"})
 st, r = req("POST", f"/api/conv/{cp['id']}/rate", {"stars": 3})
 check("0.10.0: D8: ohne Revision (Assistent aus der Konfiguration) keine Sterne",
       st == 400 and "keine Antwort" in r.get("error", ""), (st, r))
+
+# ------------------------------------------------ 0.11.0: Nicht zufrieden (RFC-0101 Stufe 3)
+st, pre = req("GET", f"/api/conv/{c9['id']}/unhappy?index={ix[0]}")
+check("0.11.0: der Dialog ist vorbelegt: Frage, Antwort, Werkzeug mit Ausgang, Revision",
+      st == 200 and pre["question"] == "Projekte?" and pre["answer"] == v10["messages"][ix[0]]["content"]
+      and [(t["name"], t["effect"], t["outcome"]) for t in pre["tools"]] == [("list_projects", "read", "ok")]
+      and pre["rev"] == 2 and pre["index"] == ix[0] and pre["round"] == 1, (st, pre))
+check("0.11.0: D9: keine Aufruf-Kennungen, und der Dialog sagt warum",
+      pre.get("call_ids") is None and "RFC-0098" in pre.get("call_ids_note", ""), pre.get("call_ids_note"))
+st, pre0 = req("GET", f"/api/conv/{c9['id']}/unhappy")
+check("0.11.0: aus dem Menü (ohne Antwort): die letzte Antwort", st == 200 and pre0["index"] == ix[0], (st, pre0))
+st, r = req("GET", f"/api/conv/{c9['id']}/unhappy?index=0")
+check("0.11.0: die Frage der Person ist keine Antwort (400)", st == 400, (st, r))
+base = {"index": ix[0], "question": "Projekte (ohne Namen)?", "answer": "Fertig.", "expected": ""}
+st, r = req("POST", f"/api/conv/{c9['id']}/unhappy", base)
+check("0.11.0: ohne Erwartung kein Vorgang (400, Pflicht)", st == 400 and "erwartet" in r.get("error", ""), (st, r))
+st, r = req("POST", f"/api/conv/{c9['id']}/unhappy", dict(base, expected="Eine Liste mit Status."))
+case = r.get("case") or {}
+f11 = case.get("fields") or {}
+check("0.11.0: der Vorgang: Frage, Unterart chat-answer, Bezug Gespräch, bearbeiteter Text, Erwartung",
+      st == 200 and case["kind"] == "question" and case["subkind"] == "chat-answer"
+      and case["object"] == {"kind": "conversation", "id": c9["id"]}
+      and "Projekte (ohne Namen)?" in case["body"] and "Eine Liste mit Status." in case["body"]
+      and f11["expected"] == "Eine Liste mit Status.", (st, r))
+check("0.11.0: die Umstände: assistant@rev, Modell, Ampel, Sicht, Gateway, Runde, Zeit",
+      f11.get("assistant") == "alt-privat" and f11.get("rev") == 2 and f11.get("light") == "yellow"
+      and f11.get("model") and f11.get("view") and "gateway" in f11 and f11.get("round") == 1
+      and f11.get("from") and f11.get("to"), f11)
+check("0.11.0: KÖDER: ohne Haken je Karte keine Argumente, keine Ergebnisse, keine Kennungen",
+      all(set(t) == {"name", "effect", "outcome"} for t in f11.get("tools", [])) and "call_ids" not in f11
+      and "Ergebnis" not in json.dumps(case, ensure_ascii=False), f11)
+check("0.11.0: ohne „Doku fehlt“ keine Hilfeseiten; ohne support_queue kein Bereich (Eingang)",
+      f11.get("doc_gap") is False and f11.get("doc_pages") == [] and "queue" not in case, case)
+st, r = req("POST", f"/api/conv/{c9['id']}/unhappy",
+            dict(base, expected="x", share_tools=[pre["tools"][0]["id"]], doc_gap=True))
+t11 = (r.get("case") or {}).get("fields", {}).get("tools") or [{}]
+check("0.11.0: mit Haken an der Karte: Argumente und Ergebnis dieser Karte reisen mit",
+      st == 200 and t11[0].get("arguments") == {} and "Ergebnis" in t11[0].get("result", ""), (st, r))
+check("0.11.0: mit „Doku fehlt“: doc_gap true", r["case"]["fields"]["doc_gap"] is True, r["case"]["fields"])
+st, r = req("POST", f"/api/conv/{c9['id']}/unhappy", dict(base, expected="x" * 1501))
+check("0.11.0: zu lange Erwartung: 400 mit Satz", st == 400 and "kürzen" in r.get("error", ""), (st, r))
+st, r = req("POST", "/api/assistants", asst("alt-privat", "private", system="Neu.", support_queue="sap-support"))
+st2, r2 = req("POST", f"/api/conv/{c9['id']}/unhappy", dict(base, expected="x"))
+check("0.11.0: D6: support_queue des Assistenten wird der Bereich des Vorgangs",
+      st == 200 and st2 == 200 and r2["case"].get("queue") == "sap-support", (st, r, st2, r2))
+_bad = app.store.problems(dict(asst("x", "private"), support_queue="Kein Bereich"))
+check("0.11.0: support_queue, die keine Bereichskennung ist: abgelehnt (dieselbe Regel wie im Gateway)",
+      any("support_queue" in e for e in _bad), _bad)
+st, r = req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "V-2026-0042"})
+req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "V-2026-0042"})
+check("0.11.0: die Vorgangsnummer bleibt im eigenen Verlauf, an der Antwort, einmal",
+      st == 200 and [(c["number"], c["index"]) for c in r["cases"]] == [("V-2026-0042", ix[0])]
+      and req("GET", f"/api/conv/{c9['id']}")[1]["cases"][0]["number"] == "V-2026-0042", (st, r))
+st, r = req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "<script>"})
+check("0.11.0: keine Vorgangsnummer: 400", st == 400, (st, r))
+_msgs = [{"role": "user", "content": "Wie?"},
+         {"role": "tool", "name": "help_search", "content": '{"link": "https://hilfe.example/read/a#s2"}'},
+         {"role": "assistant", "content": "Siehe [Anleitung A](https://hilfe.example/read/a#s2) und "
+                                          "[fremd](https://evil.example/x)."}]
+check("0.11.0: Hilfeseiten: nur, was die Antwort verlinkt UND ein Hilfe-Werkzeug geliefert hat",
+      app.doc_pages(_msgs[2]["content"], _msgs) == [{"title": "Anleitung A", "url": "https://hilfe.example/read/a#s2"}],
+      app.doc_pages(_msgs[2]["content"], _msgs))
 st, r = req("POST", "/api/assistants/alt-privat/state", {"state": "inactive"})
 st2, r2 = req("POST", "/api/conv", {"assistant": "alt-privat"})
 check("0.9.0: deaktiviert: kein neues Gespräch (409)", st == 200 and st2 == 409, (st, r, st2, r2))
@@ -921,6 +983,10 @@ check("0.9.0: die Seite zeigt Fassung, deaktiviert, Übernehmen und Deaktivieren
       '"Fassung " + a.rev' in html and "Ins MCP-Gateway übernehmen" in html and '"Deaktivieren"' in html)
 check("0.10.0: die Seite hat Sterne an der Antwort, „Gespräch bewerten“ und den Haken",
       "function rateRow(" in html and 'id="rateconv"' in html and "Frage und Antwort mitgeben" in html)
+check("0.11.0: die Seite hat den Dialog, den Haken je Karte, die Statusabfrage und das Feld support_queue",
+      "function openSad(" in html and 'id="saddlg"' in html and "Argumente und Ergebnis mitgeben" in html
+      and "/platform/feedback/mine" in html and 'name="support_queue"' in html
+      and "Nicht zufrieden? An den Support geben" in html)
 GWA["on"] = False
 
 srv.shutdown()

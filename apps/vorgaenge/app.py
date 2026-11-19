@@ -52,9 +52,9 @@ import urllib.request
 import authz_client
 import mcp_door
 from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   NEXT, OPEN, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
+                   NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
 
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -376,6 +376,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "ok", "text/plain")
         if p == "/platform/feedback/session":
             return self.feedback_session()
+        if p == "/platform/feedback/mine":
+            return self.feedback_mine(parse_qs(u.query))
         if p == "/mcp":
             return self.send(405, "", "text/plain")
         if self.is_partner():
@@ -470,7 +472,21 @@ class Handler(BaseHTTPRequestHandler):
         if not src or not uid:
             # nicht ueber das Gateway gekommen, oder ohne Sitzung: nichts zeigen
             return self.json(404, {"ok": False})
-        return self.json(200, {"ok": True, "kinds": list(BUTTON_KINDS)})
+        return self.json(200, {"ok": True, "kinds": list(BUTTON_KINDS), "fields": True})
+
+    def feedback_mine(self, q):
+        """0.6.0 (RFC-0101 D11): der Status eigener Vorgänge für die Seite einer App --
+        damit der Chat ein Gespräch als beantwortet markieren kann. Nur, was die Person
+        selbst gemeldet hat; eine fremde Nummer fehlt in der Antwort wie eine unbekannte."""
+        src = self.attested()
+        uid = self.headers.get("X-OAAP-User-Id", "").strip()
+        if not src or not uid:
+            return self.json(404, {"ok": False})
+        nums = [n.strip() for n in ",".join(q.get("numbers") or []).split(",") if n.strip()]
+        got = self.store.status_of(nums, uid)
+        return self.json(200, {"cases": {n: {"status": s, "label": STATUS_LABEL.get(s, s),
+                                             "answered": s in ("answered", "closed")}
+                                         for n, s in got.items()}})
 
     def feedback_post(self):
         src = self.attested()
@@ -492,11 +508,16 @@ class Handler(BaseHTTPRequestHandler):
             # Client kann darunter nichts ablegen, sein Teil heisst `browser`
             attested = dict(src, user_id=who.id,
                             roles=sorted(who.roles))
+            # 0.6.0: ein Bereich, den die Seite nennt (der Chat: support_queue des
+            # Assistenten, RFC-0101 D6); unbekannt oder ungültig -> Eingang
+            queue = doc.get("queue")
+            queue = queue if isinstance(queue, str) and QUEUE_ID.fullmatch(queue) else DEFAULT_QUEUE
             made = self.store.create(kind=doc.get("kind"), title=doc.get("title"),
                                 body=doc.get("body") or "", reporter=who.id,
                                 reporter_name=who.name, obj=doc.get("object"),
                                 attested=attested, browser=doc.get("browser"),
-                                allowed_kinds=BUTTON_KINDS)
+                                allowed_kinds=BUTTON_KINDS, queue=queue,
+                                subkind=doc.get("subkind"), fields=doc.get("fields"))
         except (Refused, ValueError) as e:
             return self.json(400, {"error": str(e) if isinstance(e, Refused) else "Ungültige Meldung."})
         print(f"case {made['number']} from {src['instance']}", flush=True)
@@ -827,6 +848,16 @@ Betreff und Text.</p>
             techbox = ("<details><summary class=muted>Technische Angaben aus dem Browser</summary><pre>"
                        + esc("\n".join(f"{k}: {v}" for k, v in tech["browser"].items()))
                        + "</pre></details>")
+        if tech.get("subkind"):
+            # 0.6.0: was die Seite der App mitgab -- nicht beglaubigt, und so beschriftet
+            rows = "".join(
+                f"<tr><th style='text-align:left;vertical-align:top;padding-right:.8rem'>{esc(k)}</th>"
+                f"<td><pre style='margin:0;white-space:pre-wrap'>"
+                f"{esc(v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, indent=1))}</pre></td></tr>"
+                for k, v in (tech.get("fields") or {}).items())
+            techbox += (f"<details open><summary class=muted>Angaben der App "
+                        f"(Unterart <code>{esc(tech['subkind'])}</code>, von der Seite mitgegeben, "
+                        f"nicht beglaubigt)</summary><table>{rows}</table></details>")
         ent = []
         for e in c["entries"]:
             when = esc(e["at"][:16].replace("T", " "))

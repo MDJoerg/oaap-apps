@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -927,6 +927,142 @@ def rating_body(conv, index, stars, share):
     return conv.get("assistant") or "", body
 
 
+# ------------------------------------------------ 0.11.0: Nicht zufrieden (RFC-0101 Stufe 3)
+# Der Chat baut den Vorgang, der Browser schickt ihn an /platform/feedback seiner eigenen
+# Herkunft -- dort bezeugt die Plattform die Person (§4.3). Der Chat hält keinen Schlüssel
+# für Vorgänge und legt nie selbst einen an.
+CASE_NUMBER = re.compile(r"^V-\d{4}-\d{4,6}$")
+LINK = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^)\s]{1,500})\)")
+UNHAPPY_Q, UNHAPPY_A, UNHAPPY_E = 4000, 4000, 1500
+NO_CALL_IDS = ("Aufruf-Kennungen gehen nicht mit: dieser Mandant führt sie noch nicht (RFC-0098 "
+               "Stufe 3). Zeit, Assistent und Revision grenzen die Protokollzeilen ein.")
+
+
+def final_answer(m):
+    return m.get("role") == "assistant" and bool(m.get("content")) and not m.get("tool_calls")
+
+
+def unhappy_round(conv, index):
+    """(i, u) = Antwort und Frage ihrer Runde -- oder (None, Satz). `index` None = die letzte."""
+    msgs = conv["messages"]
+    if index is None:
+        answers = [k for k, m in enumerate(msgs) if final_answer(m)]
+        if not answers:
+            return None, "In diesem Gespräch gibt es noch keine Antwort."
+        i = answers[-1]
+    else:
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(msgs) \
+                or not final_answer(msgs[index]):
+            return None, "Diese Antwort gibt es in diesem Gespräch nicht."
+        i = index
+    u = max((k for k in range(i) if msgs[k].get("role") == "user"), default=0)
+    return i, u
+
+
+def round_tools(conv, msgs):
+    """Je Werkzeugaufruf der Runde: Name, Wirkung, Ausgang -- und, nur für den Dialog der
+    Person, Argumente und Ergebnis (D10: sie gehen nur mit Haken je Karte mit)."""
+    args = {}
+    for m in msgs:
+        for c in m.get("tool_calls") or []:
+            args[c.get("id")] = loop.call_args(c)[0]
+    lines = tool_lines(conv, msgs)
+    out, k = [], 0
+    for m in msgs:
+        if m.get("role") != "tool":
+            continue
+        if k >= len(lines):
+            break
+        out.append(dict(lines[k], id=str(m.get("tool_call_id") or k),
+                        arguments=args.get(m.get("tool_call_id")) or {},
+                        result=str(m.get("content") or "")[:3000]))
+        k += 1
+    return out
+
+
+def doc_pages(answer, msgs):
+    """Hilfeseiten, die die Antwort verlinkt und die ein Hilfe-Werkzeug der Runde geliefert
+    hat (help 0.5 `link`) -- was gelesen wurde und nicht gereicht hat."""
+    found = "\n".join(str(m.get("content") or "") for m in msgs
+                      if m.get("role") == "tool" and "help" in str(m.get("name") or ""))
+    out, seen = [], set()
+    for title, url in LINK.findall(answer or ""):
+        base = url.split("#")[0]
+        if base in found and url not in seen:
+            seen.add(url)
+            out.append({"title": title.strip(), "url": url})
+    return out[:20]
+
+
+def unhappy_prefill(conv, index):
+    """Was der Dialog vorbelegt: Frage, Antwort, Werkzeuge, Hilfeseiten, Umstände."""
+    got = unhappy_round(conv, index)
+    if got[0] is None:
+        return None, got[1]
+    i, u = got
+    msgs = conv["messages"]
+    ans = msgs[i]
+    rnd = msgs[u:i + 1]
+    return {"index": i, "round": sum(1 for m in msgs[:i] if m.get("role") == "user"),
+            "question": str(msgs[u].get("content") or "") if msgs[u].get("role") == "user" else "",
+            "answer": str(ans.get("content") or ""),
+            "tools": round_tools(conv, rnd), "doc_pages": doc_pages(ans.get("content"), rnd),
+            "rev": ans.get("rev") or None, "model": ans.get("model") or "",
+            "light": ans.get("light") or conv_light(conv),
+            "from": msgs[u].get("at") or "", "to": ans.get("at") or "",
+            "ms": stamp_ms(msgs[u].get("at"), ans.get("at")), "call_ids": None,
+            "call_ids_note": NO_CALL_IDS}, ""
+
+
+def unhappy_case(conv, a, gw_name, body):
+    """(Dokument für POST /platform/feedback, None) -- oder (None, Satz)."""
+    pre, err = unhappy_prefill(conv, body.get("index"))
+    if pre is None:
+        return None, err
+    q = str(body.get("question") or "").strip()
+    ans = str(body.get("answer") or "").strip()
+    exp = str(body.get("expected") or "").strip()
+    if not exp:
+        return None, "Bitte schreib, was du erwartet hättest."
+    if not q and not ans:
+        return None, "Frage oder Antwort braucht der Support, mindestens eins."
+    if len(q) > UNHAPPY_Q or len(ans) > UNHAPPY_A or len(exp) > UNHAPPY_E:
+        return None, (f"Frage und Antwort höchstens je {UNHAPPY_Q} Zeichen, die Erwartung "
+                      f"höchstens {UNHAPPY_E}. Bitte kürzen.")
+    share = body.get("share_tools") if isinstance(body.get("share_tools"), list) else []
+    share = {str(x) for x in share}
+    tools = []
+    for t in pre["tools"]:
+        x = {"name": t["name"], "effect": t["effect"], "outcome": t["outcome"]}
+        if t["id"] in share:
+            x["arguments"] = t["arguments"]
+            x["result"] = t["result"]
+        tools.append(x)
+    gap = body.get("doc_gap") is True
+    fields = {"assistant": a["id"], "rev": pre["rev"], "model": pre["model"], "light": pre["light"],
+              "view": a.get("view") or "", "gateway": gw_name, "scope": "answer",
+              "round": pre["round"], "from": pre["from"], "to": pre["to"], "ms": pre["ms"],
+              "tools": tools, "expected": exp, "doc_gap": gap,
+              "doc_pages": pre["doc_pages"] if gap else [],
+              "call_ids_note": NO_CALL_IDS, "chat": VERSION}
+    # Obergrenze der App Vorgänge (40000 Bytes): zuerst die Ergebnisse kürzen, nie die Namen
+    for t in reversed(tools):
+        if len(json.dumps(fields, ensure_ascii=False).encode()) <= 36000:
+            break
+        if "result" in t:
+            t["result"] = "(für den Vorgang zu lang, weggelassen)"
+    if len(json.dumps(fields, ensure_ascii=False).encode()) > 36000:
+        return None, "Die mitgegebenen Werkzeugdaten sind zu groß. Bitte weniger Karten ankreuzen."
+    title = f"Nicht zufrieden: {a.get('title') or a['id']} (Runde {pre['round']})"[:200]
+    text = (f"Frage:\n{q or '(weggelassen)'}\n\nAntwort:\n{ans or '(weggelassen)'}\n\n"
+            f"Erwartet:\n{exp}")
+    doc = {"kind": "question", "subkind": "chat-answer", "title": title, "body": text,
+           "object": {"kind": "conversation", "id": conv["id"]}, "fields": fields}
+    if a.get("support_queue"):
+        doc["queue"] = a["support_queue"]
+    return doc, None
+
+
 def view_of(conv):
     """Was der Browser zeigt -- ohne eigene Vermerke, die er nicht braucht."""
     shown = []
@@ -944,7 +1080,9 @@ def view_of(conv):
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
             "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),
             "light": conv_light(conv), "stars": conv.get("stars"),
-            "rateable": any(rateable(m) for m in conv["messages"])}
+            "rateable": any(rateable(m) for m in conv["messages"]),
+            "cases": conv.get("cases") or [],
+            "answered": any(final_answer(m) for m in conv["messages"])}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1085,13 +1223,22 @@ class Handler(BaseHTTPRequestHandler):
             if a is None:
                 return self.json(404, {"error": "Kein solcher Assistent."})
             return self.json(200, dict(a, origin=origin, manage=public(a, origin, who)["manage"]))
-        m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands|/view)?$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands|/view|/unhappy)?$", path)
         if m:
             conv = load_conv(person, m.group(1))
             if not conv:
                 return self.json(404, {"error": "Kein solches Gespräch."})
             if not m.group(2):
                 return self.json(200, view_of(conv))
+            if m.group(2) == "/unhappy":
+                raw = (self.path.split("index=", 1)[1].split("&")[0] if "index=" in self.path else "")
+                pre, err = unhappy_prefill(conv, int(raw) if raw.isdigit() else None)
+                if pre is None:
+                    return self.json(400, {"error": err})
+                a, _ = home.find(conv.get("assistant") or "", who)
+                pre["assistant"] = {"id": conv.get("assistant"), "title": (a or {}).get("title") or conv.get("assistant"),
+                                    "queue": (a or {}).get("support_queue") or ""}
+                return self.json(200, pre)
             if m.group(2) == "/view":
                 return self.view_doc(person, who, conv)
             return self.commands(person, who, conv)
@@ -1273,7 +1420,21 @@ class Handler(BaseHTTPRequestHandler):
             if conv is None:
                 return self.json(404, {"error": "Kein solches Gespräch."})
             return self.view_call(person, who, conv, body)
-        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light|rate)$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/unhappy$", path)
+        if m:
+            conv = load_conv(person, m.group(1))
+            if conv is None:
+                return self.json(404, {"error": "Kein solches Gespräch."})
+            a, _ = Home(assertion).find(conv.get("assistant") or "", who)
+            if a is None:
+                return self.json(404, {"error": "Den Assistenten dieses Gesprächs gibt es für dich nicht (mehr)."})
+            try:
+                gw_name = gateway_for(a.get("gateway") or "")["name"]
+            except Stop:
+                gw_name = ""
+            doc, err = unhappy_case(conv, a, gw_name, body)
+            return self.json(400, {"error": err}) if doc is None else self.json(200, {"case": doc})
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light|rate|case)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")
         cid, action = m.groups()
@@ -1307,6 +1468,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(200, view_of(conv))
             if action == "rate":
                 return self.rate(person, who, conv, body)
+            if action == "case":
+                # 0.11.0: die Nummer, die /platform/feedback der Person genannt hat -- nur ein
+                # Zeiger im eigenen Verlauf; den Status liest die Seite als die Person (D11).
+                number = str(body.get("number") or "")
+                index = body.get("index")
+                if not CASE_NUMBER.match(number) or unhappy_round(conv, index)[0] is None:
+                    return self.json(400, {"error": "Vorgangsnummer und Antwort passen nicht."})
+                cases = conv.setdefault("cases", [])
+                if not any(c["number"] == number for c in cases):
+                    cases.append({"number": number, "index": index, "at": now()})
+                    del cases[:-50]
+                save_conv(person, conv)
+                return self.json(200, view_of(conv))
             return self.round(person, who, conv, action, body)
         finally:
             lock.release()

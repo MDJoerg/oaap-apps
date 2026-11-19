@@ -625,6 +625,14 @@ bis 5 Sternen. Der Chat schickt das über die via-Tür als die Person:
 - Die Betreiberseite zeigt die Bewertungen noch nicht. Das kommt mit der
   Auswertung je Revision (RFC-0097 Stufe 2 / RFC-0101 Stufe 4).
 
+## Bereich für „Nicht zufrieden“ (0.24)
+
+RFC-0101 Stufe 3. Ein Assistent darf `support_queue` tragen: den Bereich
+der App Vorgänge, in den „Nicht zufrieden“ zu diesem Assistenten geht
+(D6). Geprüft wird mit derselben Regel wie im Chat (`assistants/`, Kopie
+aus `lib/`). Das Feld wird mit der Revision festgehalten. Der Vorgang
+selbst geht nicht durch das Gateway, sondern über die Feedback-Route.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

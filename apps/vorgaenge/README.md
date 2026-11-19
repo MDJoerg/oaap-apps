@@ -217,6 +217,29 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## Unterart, Felder und Bereich vom Feedback-Weg (seit 0.6.0, RFC-0101 Stufe 3)
+
+`/platform/feedback` nimmt zusätzlich an:
+
+| Feld | was |
+|---|---|
+| `subkind` | eine Kennung, z. B. `chat-answer` (Kleinbuchstaben, Ziffern, Bindestrich, ≤ 40) |
+| `fields` | nur mit `subkind`: flache Schlüssel (`a-z0-9_`), JSON-Werte bis vier Ebenen, ≤ 60 Schlüssel, ≤ 40000 Bytes |
+| `queue` | ein Bereich dieser Instanz; unbekannt oder ungültig → Eingang |
+
+- **Getrennt gespeichert:** Felder liegen getrennt von dem, was das
+  Gateway beglaubigt. Die Seite des Vorgangs zeigt sie als „Angaben der
+  App … nicht beglaubigt“, für die Bearbeitenden und die Meldende.
+- **Was nicht mitreist:** Eine Übergabe an einen Partner nimmt sie nicht
+  mit. Die Löschfrist entfernt sie mit den übrigen technischen Angaben.
+- **Status der eigenen Vorgänge:** `GET /platform/feedback/mine?numbers=V-…,V-…`
+  (höchstens 50) liefert je Nummer Status, Wort und `answered`. Das gilt
+  nur für Vorgänge, die die Person selbst gemeldet hat. Eine fremde
+  Nummer fehlt wie eine unbekannte. Damit markiert der Chat ein beantwortetes
+  „Nicht zufrieden“ (RFC-0101 D11).
+- **Keine Vorlagen:** Das ist keine Vorlage nach RFC-0061 §6. Pflichtfelder
+  je Unterart prüft die App noch nicht.
+
 ## Was die App nicht tut (noch)
 
 - **Keine Benachrichtigung.** Der Posteingang ist die Übersicht.

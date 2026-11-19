@@ -76,6 +76,14 @@ BROWSER_FIELDS = {"path": 300, "user_agent": 300, "screen": 60,
 
 TITLE_MAX = 200
 BODY_MAX = 10000
+# 0.6.0 (RFC-0101 Stufe 3): Unterart und Felder, die die Seite einer App mitgibt
+# (`chat-answer` vom Chat). Keine Vorlagen nach RFC-0061 §6 -- nur eine geprüfte
+# Form: Kennung, flache Schlüssel, JSON-Werte, eine Obergrenze. Getrennt von dem,
+# was das Gateway beglaubigt, und so angezeigt.
+SUBKIND = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
+FIELD_KEY = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+FIELDS_MAX = 40000
+FIELDS_KEYS = 60
 
 
 class Refused(Exception):
@@ -120,6 +128,40 @@ def _months_before(ts, months):
 def _clip(v, n):
     v = "" if v is None else str(v)
     return v[:n]
+
+
+def _plain(v, depth=0):
+    """Nur JSON-Werte, höchstens vier Ebenen tief."""
+    if depth > 4:
+        return False
+    if v is None or isinstance(v, (str, bool, int, float)):
+        return True
+    if isinstance(v, list):
+        return all(_plain(x, depth + 1) for x in v)
+    if isinstance(v, dict):
+        return all(isinstance(k, str) and _plain(x, depth + 1) for k, x in v.items())
+    return False
+
+
+def check_fields(subkind, fields):
+    """(Unterart, Felder) geprüft -- oder Refused mit einem Satz."""
+    if subkind in (None, ""):
+        if fields:
+            raise Refused("Felder gibt es nur mit einer Unterart (subkind).")
+        return "", {}
+    if not isinstance(subkind, str) or not SUBKIND.match(subkind):
+        raise Refused("subkind: Kleinbuchstaben, Ziffern, Bindestrich, höchstens 40 Zeichen.")
+    fields = {} if fields is None else fields
+    if not isinstance(fields, dict) or len(fields) > FIELDS_KEYS:
+        raise Refused(f"fields: ein Objekt mit höchstens {FIELDS_KEYS} Schlüsseln.")
+    for k, v in fields.items():
+        if not FIELD_KEY.match(k):
+            raise Refused(f"fields: {k[:40]!r} ist kein Feldname (a-z, 0-9, _).")
+        if not _plain(v):
+            raise Refused(f"fields.{k}: nur Text, Zahlen, Listen und Objekte, höchstens vier Ebenen.")
+    if len(json.dumps(fields, ensure_ascii=False).encode("utf-8")) > FIELDS_MAX:
+        raise Refused(f"fields: zusammen höchstens {FIELDS_MAX} Bytes.")
+    return subkind, fields
 
 
 class Store:
@@ -235,7 +277,7 @@ class Store:
 
     def create(self, *, kind, title, body, reporter, reporter_name,
                queue=DEFAULT_QUEUE, obj=None, attested=None, browser=None,
-               allowed_kinds=KINDS, asserted=None):
+               allowed_kinds=KINDS, asserted=None, subkind=None, fields=None):
         """Legt einen Vorgang an. `attested` kommt vom Gateway (oder, fuer
         einen in der App angelegten Vorgang, von der App selbst), `browser`
         vom Client -- getrennt gespeichert, Client-Felder gefiltert."""
@@ -261,6 +303,9 @@ class Store:
         if isinstance(browser, dict):
             tech["browser"] = {k: _clip(browser.get(k), n)
                                for k, n in BROWSER_FIELDS.items() if browser.get(k)}
+        sub, flds = check_fields(subkind, fields)
+        if sub:
+            tech["subkind"], tech["fields"] = sub, flds
         cid = str(uuid.uuid4())
         at = _now()
         with self.lock, self.db:
@@ -325,6 +370,17 @@ class Store:
         sql += " ORDER BY updated DESC LIMIT 500"
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, args)]
+
+    def status_of(self, numbers, reporter):
+        """0.6.0: Status der eigenen Vorgänge -- nur die, die diese Person gemeldet hat."""
+        numbers = [n for n in numbers if isinstance(n, str) and n][:50]
+        if not numbers or not reporter:
+            return {}
+        with self.lock:
+            rows = self.db.execute(
+                f"SELECT number, status FROM cases WHERE reporter=? AND number IN "
+                f"({','.join('?' * len(numbers))})", (reporter, *numbers)).fetchall()
+        return {r["number"]: r["status"] for r in rows}
 
     def comment(self, c, actor, actor_name, text):
         text = (text or "").strip()

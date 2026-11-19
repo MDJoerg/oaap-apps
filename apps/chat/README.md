@@ -272,12 +272,44 @@ das ganze Gespräch. 0 heißt „unbrauchbar“.
   weg. Im Verlauf der Person steht nur, was das Gateway angenommen hat.
 - Assistenten aus der Konfiguration (`CHAT_ASSISTANT`) und Antworten ohne
   Revision bekommen keine Sterne (RFC-0101 D8).
-- „Nicht zufrieden? An den Support geben“ kommt mit Stufe 3.
+- „Nicht zufrieden? An den Support geben“ kommt mit Stufe 3 (0.11.0).
+
+## Nicht zufrieden (0.11.0)
+
+RFC-0101 Stufe 3. Unter jeder Schlussantwort steht „Nicht zufrieden“, nach
+0–2 Sternen als Angebot „Nicht zufrieden? An den Support geben“; im Menü
+„Nicht zufrieden …“ für die letzte Antwort. Nur, wenn die App Vorgänge im
+Mandanten antwortet (`/platform/feedback/session`).
+
+- **Der Dialog:** Frage und Antwort vorbelegt und bearbeitbar, die
+  Werkzeuge der Runde als Karten (Name, Wirkung, Ausgang), „Was hättest du
+  erwartet?“ (Pflicht), „In der Dokumentation fehlt etwas“.
+- **Argumente und Ergebnisse** nur für angekreuzte Karten (D10).
+- **Der Weg:** Der Chat baut den Vorgang (`POST api/conv/<id>/unhappy`),
+  der Browser schickt ihn an `/platform/feedback` seiner eigenen Adresse.
+  Dort bezeugt die Plattform die Person. Der Chat hat keinen Schlüssel für
+  Vorgänge.
+- **Der Vorgang:** `question`, Unterart `chat-answer`, Bezug
+  `{kind: conversation, id}`, Bereich `support_queue` des Assistenten
+  (sonst Eingang). Felder: `assistant`, `rev`, `model`, `light`, `view`,
+  `gateway`, `scope`, `round`, `from`, `to`, `ms`, `tools`, `expected`,
+  `doc_gap`, `doc_pages`, `call_ids_note`, `chat`.
+- **Hilfeseiten:** Links der Antwort, die ein Hilfe-Werkzeug derselben
+  Runde geliefert hat.
+- **Aufruf-Kennungen** gehen nicht mit. Dazu fehlt RFC-0098 Stufe 3, und
+  der Dialog sagt das.
+- **Marke:** Die Nummer bleibt im eigenen Verlauf an der Antwort. Die
+  Seite fragt `/platform/feedback/mine` als die Person und zeigt
+  „beantwortet“ (D11).
+- **Editor:** neues Feld „Bereich für Nicht zufrieden“ (`support_queue`).
+  Braucht Vorgänge ab 0.6.0. Eine ältere Instanz lehnt Unterart und Felder
+  nicht ab, sie übergeht sie still. Der Vorgang landet dann im Eingang,
+  ohne die Felder.
 
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 162 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 180 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

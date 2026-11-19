@@ -163,6 +163,18 @@ form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
 .rate input,dialog .rate input{width:auto;margin:0}
 .rate .said{margin-left:.4rem}
 dialog .rate{margin:.6rem 0 0}
+/* ---- 0.11.0 (RFC-0101 Stufe 3): Nicht zufrieden */
+.rate button.sad{font-size:.75rem;text-decoration:underline;margin-left:.4rem}
+.rate button.sad.ask{color:var(--ink);text-decoration:none;border:1px solid var(--line);padding:.1rem .45rem}
+.casemark{align-self:flex-start;font-size:.78rem;color:var(--muted);margin-top:calc(var(--gap) * -.5)}
+.casemark.done{color:var(--ink)}
+.tcard{border:1px solid var(--line);border-radius:.4rem;padding:.35rem .55rem;margin:.3rem 0;font-size:.85rem}
+.tcard label,dialog .tcard label{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem 0 0;font-size:.78rem}
+.tcard input,dialog .tcard input{width:auto;margin:0}
+.tcard pre{max-height:8rem;overflow:auto;font-size:.75rem;margin:.3rem 0 0;white-space:pre-wrap}
+dialog label.inl{display:flex;align-items:center;gap:.4rem;color:var(--ink)}
+dialog label.inl input{width:auto;margin:0}
+#sadpages{font-size:.82rem;margin:.2rem 0 0 1.4rem;padding:0}
 
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
@@ -218,6 +230,7 @@ dialog input,dialog textarea,dialog select{width:100%}
     <details class="menu" id="menu"><summary role="button" aria-label="Menü" title="Menü">⋯</summary>
       <div class="mbody">
         <button id="rateconv" type="button">Gespräch bewerten</button>
+        <button id="sadconv" type="button" hidden>Nicht zufrieden …</button>
         <button id="ren" type="button">Umbenennen</button>
         <button id="del" type="button">Löschen</button>
         <hr>
@@ -272,6 +285,21 @@ dialog input,dialog textarea,dialog select{width:100%}
   <p class="muted" style="font-size:.8rem">Ohne Haken bekommt das MCP-Gateway nur Sterne und Umstände
   (Assistent und Revision, Modell, Ampel, welche Werkzeuge mit welchem Ausgang), keinen Text und keinen Namen.</p>
 </dialog>
+<dialog id="saddlg">
+  <div class="dhead"><b>Nicht zufrieden &mdash; an den Support geben</b><button type="button" class="hbtn" id="sadclose">Schließen</button></div>
+  <p class="muted" style="font-size:.85rem">Kürze Frage und Antwort, nimm Namen heraus, ergänze, was fehlt. Der Support bekommt nur, was hier steht.</p>
+  <label for="sadq">Frage</label><textarea id="sadq" rows="3" maxlength="4000"></textarea>
+  <label for="sada">Antwort</label><textarea id="sada" rows="5" maxlength="4000"></textarea>
+  <div id="sadtools"></div>
+  <label for="sade">Was hättest du erwartet? (Pflicht)</label><textarea id="sade" rows="3" maxlength="1500"></textarea>
+  <label class="inl"><input type="checkbox" id="sadgap"> In der Dokumentation fehlt etwas</label>
+  <ul id="sadpages" hidden></ul>
+  <p class="muted" style="font-size:.8rem" id="sadids"></p>
+  <p class="muted" style="font-size:.8rem">Der Vorgang trägt deinen Namen. Lesen kann ihn, wer im Mandanten Rückmeldungen bearbeitet<span id="sadq2"></span>.
+  Dazu gehen Assistent, Revision, Modell, Ampel, Sicht und die Namen und Ausgänge der Werkzeuge mit.</p>
+  <p class="err" id="saderr"></p>
+  <div class="row"><button class="primary" type="button" id="sadsend">An den Support geben</button></div>
+</dialog>
 <dialog id="reqdlg">
   <div class="dhead"><b id="reqtitle">Anfrage an die Verwaltung</b><button type="button" class="hbtn" id="reqclose">Schließen</button></div>
   <p class="muted" style="font-size:.88rem" id="reqintro"></p>
@@ -324,6 +352,7 @@ dialog input,dialog textarea,dialog select{width:100%}
         <option value="tenant">alle im Mandanten</option></select></div>
       <div style="flex:1"><label>Team (bei „ein Team“)</label><input name="team"></div>
     </div>
+    <label>Bereich für „Nicht zufrieden“ in der App Vorgänge (leer = Eingang)</label><input name="support_queue" pattern="[a-z0-9][a-z0-9-]{0,39}" placeholder="z. B. sap-support">
     <label><input type="checkbox" name="commands" style="width:auto"> /Befehle aus den Prompts der Sicht anbieten</label>
     <label><input type="checkbox" name="views" style="width:auto"> Ansichten der Werkzeuge zeigen (MCP Apps)</label>
     <p class="err" id="aerr"></p>
@@ -539,7 +568,82 @@ $("reqsend").onclick = async () => {
 async function loadFeedback(){
   try { const r = await fetch("/platform/feedback/session", {credentials: "same-origin"}); FEEDBACK = r.ok; }
   catch (e) { FEEDBACK = false; }
+  if (FEEDBACK && C) { SHOWN = {id: null, n: 0}; render(); loadCaseStatus(); }
 }
+
+// ---- 0.11.0 (RFC-0101 Stufe 3): „Nicht zufrieden“ wird ein Vorgang. Der Chat baut ihn
+// (api/conv/…/unhappy), der Browser schickt ihn an /platform/feedback dieser Seite --
+// die Plattform bezeugt dich. Die Nummer bleibt in deinem Verlauf; ob der Vorgang beantwortet
+// ist, fragt die Seite als du bei den Vorgängen nach (D11).
+let SAD = null, CASESTAT = {};
+function sadOnly(index){
+  const box = el("div", "rate"), b = el("button", "sad", "Nicht zufrieden");
+  b.type = "button"; b.onclick = () => openSad(index); box.appendChild(b); return box;
+}
+function caseMark(k){
+  const st = CASESTAT[k.number];
+  const d = el("div", "casemark" + (st && st.answered ? " done" : ""),
+               "Vorgang " + k.number + (st ? " · " + st.label + (st.answered ? " — die Antwort steht in der App Vorgänge" : "") : " · an den Support gegeben"));
+  return d;
+}
+async function loadCaseStatus(){
+  if (!FEEDBACK || !C || !(C.cases || []).length) return;
+  const cid = C.id;
+  try {
+    const r = await fetch("/platform/feedback/mine?numbers=" + encodeURIComponent(C.cases.map(x => x.number).join(",")),
+                          {credentials: "same-origin"});
+    if (!r.ok) return;
+    const d = await r.json();
+    Object.assign(CASESTAT, d.cases || {});
+  } catch (e) { return; }
+  if (C && C.id === cid) { SHOWN = {id: null, n: 0}; render(); }
+}
+async function openSad(index){
+  if (!C) return;
+  const r = await api("GET", "api/conv/" + C.id + "/unhappy" + (index === null ? "" : "?index=" + index));
+  if (r.error) { render(el("div", "err", r.error)); return; }
+  SAD = r;
+  $("sadq").value = r.question.slice(0, 4000); $("sada").value = r.answer.slice(0, 4000);
+  $("sade").value = ""; $("sadgap").checked = false; $("saderr").textContent = "";
+  const tb = $("sadtools"); tb.textContent = "";
+  if (r.tools.length) tb.appendChild(el("label", "", "Werkzeuge dieser Runde (Name und Ausgang gehen immer mit)"));
+  for (const t of r.tools) {
+    const c = el("div", "tcard");
+    c.appendChild(el("div", "", t.name + " · " + ({read: "liest", write: "ändert", execute: "führt aus"}[t.effect] || t.effect)
+                     + " · " + ({ok: "ok", refused: "abgelehnt", error: "Fehler"}[t.outcome] || t.outcome)));
+    const lab = el("label"), cb = el("input"); cb.type = "checkbox"; cb.dataset.id = t.id;
+    lab.append(cb, "Argumente und Ergebnis mitgeben");
+    const det = el("details"); det.appendChild(el("summary", "muted", "ansehen"));
+    det.appendChild(el("pre", "", JSON.stringify(t.arguments || {}, null, 1) + "\n— Ergebnis —\n" + (t.result || "")));
+    c.append(lab, det); tb.appendChild(c);
+  }
+  const pg = $("sadpages"); pg.textContent = "";
+  for (const x of r.doc_pages) { const li = el("li"), a = el("a", "", x.title); a.href = x.url; a.target = "_blank"; a.rel = "noopener"; li.appendChild(a); pg.appendChild(li); }
+  pg.hidden = true;
+  $("sadgap").onchange = () => { pg.hidden = !$("sadgap").checked || !r.doc_pages.length; };
+  $("sadids").textContent = r.call_ids_note || "";
+  $("sadq2").textContent = r.assistant && r.assistant.queue ? " (Bereich „" + r.assistant.queue + "“)" : "";
+  $("saddlg").showModal();
+}
+$("sadclose").onclick = () => $("saddlg").close();
+$("sadsend").onclick = async () => {
+  if (!SAD || !C) return;
+  const cid = C.id, index = SAD.index;
+  const share = [...$("sadtools").querySelectorAll("input[type=checkbox]")].filter(x => x.checked).map(x => x.dataset.id);
+  const b = await api("POST", "api/conv/" + cid + "/unhappy", {index, question: $("sadq").value, answer: $("sada").value,
+    expected: $("sade").value, doc_gap: $("sadgap").checked, share_tools: share});
+  if (b.error) { $("saderr").textContent = b.error; return; }
+  let r;
+  try { r = await fetch("/platform/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                body: JSON.stringify(b.case), credentials: "same-origin"}); }
+  catch (e) { $("saderr").textContent = "Die Vorgänge sind nicht erreichbar."; return; }
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  if (!r.ok) { $("saderr").textContent = d.error || ("Antwort " + r.status); return; }
+  $("saddlg").close();
+  const v = await api("POST", "api/conv/" + cid + "/case", {index, number: d.number});
+  if (!v.error && C && C.id === cid) { C = v; SHOWN = {id: null, n: 0}; }
+  render(el("div", "muted", "Gesendet als Vorgang " + (d.number || "") + ". Die Antwort kommt über die App Vorgänge."));
+};
 
 // ---- Seitenleiste: einklappbar, Gespräche durchsuchbar und gruppiert
 function toggleSide(force){
@@ -637,6 +741,12 @@ function rateRow(index){
     lab.append(cb, "Frage und Antwort mitgeben"); box.appendChild(lab);
     if (has) { const w = el("button", "back", "zurückziehen"); w.type = "button"; w.onclick = () => send(null); box.appendChild(w); }
     if (said) box.appendChild(el("span", "said", said));
+    // 0.11.0: „Nicht zufrieden“ gibt es immer; bei 0–2 Sternen als ausdrückliches Angebot (§3.1)
+    if (FEEDBACK && index !== null) {
+      const low = has && cur <= 2;
+      const b = el("button", "sad" + (low ? " ask" : ""), low ? "Nicht zufrieden? An den Support geben" : "Nicht zufrieden");
+      b.type = "button"; b.onclick = () => openSad(index); box.appendChild(b);
+    }
   }
   draw();
   return box;
@@ -650,6 +760,8 @@ function msgNodes(m, i){
   } else if (m.role === "assistant" && m.content) {
     out.push(mdEl(m.content));
     if (m.rate && typeof i === "number") out.push(rateRow(i));
+    else if (FEEDBACK && typeof i === "number" && C && !m.calls) out.push(sadOnly(i));
+    for (const k of (C && C.cases || []).filter(x => x.index === i)) out.push(caseMark(k));
   }
   for (const c of m.calls || []) out.push(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
   if (m.role === "tool") {
@@ -673,6 +785,7 @@ function render(status){
   }
   $("ren").disabled = $("del").disabled = !C;
   $("rateconv").disabled = !C || !C.rateable;
+  $("sadconv").hidden = !FEEDBACK; $("sadconv").disabled = !C || !C.answered;
   let head = $("loghead"), msgs = $("logmsgs"), tail = $("logtail");
   if (!head) {
     log.textContent = "";
@@ -929,7 +1042,7 @@ function showCommands(){
 async function refreshState(){ S = await api("GET", "api/state"); if (S.error) return; renderSide(); if (VIEW === "asst") renderAssistants(); }
 async function openConv(id){
   showView("chat");
-  C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); loadLight();
+  C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); loadLight(); loadCaseStatus();
 }
 function startDraft(aid){
   showView("chat");
@@ -963,6 +1076,7 @@ $("fs").hidden = !document.documentElement.requestFullscreen;
 $("fs").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); };
 document.addEventListener("fullscreenchange", () => { $("fs").textContent = document.fullscreenElement ? "Vollbild beenden" : "Vollbild"; });
 $("chk").onclick = () => checkSetup(C ? C.assistant : $("pick").value);
+$("sadconv").onclick = () => { if (C && C.answered) openSad(null); };
 $("rateconv").onclick = () => {
   if (!C || !C.rateable) return;
   const box = $("ratebox"); box.textContent = ""; box.appendChild(rateRow(null)); $("ratedlg").showModal();
@@ -1087,7 +1201,7 @@ function fill(a){
   F.elements.id.readOnly = !!a;
   $("dtitle").textContent = a ? "Assistent ändern" : "Neuer Assistent";
   loadModels(a ? a.model : "");
-  if (a) for (const k of ["id", "title", "greeting", "system", "view", "gateway"]) F.elements[k].value = a[k] || "";
+  if (a) for (const k of ["id", "title", "greeting", "system", "view", "gateway", "support_queue"]) F.elements[k].value = a[k] || "";
   loadViews();
   if (!a) return;
   F.elements.scope.value = a.visibility.scope;
@@ -1177,6 +1291,7 @@ F.onsubmit = async ev => {
              owner: "-", commands: F.elements.commands.checked, views: F.elements.views.checked};
   if (F.elements.greeting.value.trim()) a.greeting = F.elements.greeting.value.trim();
   if (F.elements.gateway.value.trim()) a.gateway = F.elements.gateway.value.trim();
+  if (F.elements.support_queue.value.trim()) a.support_queue = F.elements.support_queue.value.trim();
   const r = await api("POST", "api/assistants", a);
   if (r.errors || r.error) { $("aerr").textContent = r.errors ? r.errors.join(" ") : r.error; return; }
   $("dlg").close(); $("alisterr").textContent = "„" + a.title + "“ gespeichert.";
