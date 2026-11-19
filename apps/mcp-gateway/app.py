@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.20.1"
+VERSION = "0.21.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -113,6 +113,9 @@ ASSISTANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 # 0.7.2 (RFC-0074 §5.6): der Chat sagt, dass die Person DIESEN Aufruf bestätigt hat.
 # Nur zur Auskunft in der Messzeile, nur bei Verfahren A; nie eine Erlaubnis.
 CONFIRMED_HEADER = "X-OAAP-Confirmed"
+# 0.21.0 (RFC-0101 §2.2): die Ampel eines Gesprächs als zusätzliche Decke DIESER
+# Anfrage -- verschärft die Decke des Schlüssels/Profils, lockert sie nie.
+LIGHT_HEADER = "X-OAAP-Light"
 _TOKEN_URL = {}
 
 # Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
@@ -844,6 +847,35 @@ def why_not(key, vrow, way):
                 f"auf {lw} stellen, oder -- wenn der Server harmloser ist als eingestuft -- seine "
                 f"Ampel auf {cw} oder grün stellen (neue Quellen beginnen rot).")
     return None
+
+
+def asked_light(value):
+    """(Farbe oder '', Fehlersatz oder ''). Ein unbekannter Wert wird abgelehnt, nicht
+    übergangen: wer eine Decke verlangt, soll nicht stumm ohne sie weiterarbeiten."""
+    v = (value or "").strip().lower()
+    if not v:
+        return "", ""
+    if v not in books.LIGHT_RANK:
+        return "", f"{LIGHT_HEADER} kennt nur green, yellow oder red, nicht „{v[:20]}“."
+    return v, ""
+
+
+def light_refusal(asked, vrow):
+    """Ein Satz, wenn die Sicht schlechter ist als die Ampel des Gesprächs -- sonst None.
+
+    Die Person darf diese Sicht öffnen (die Prüfung von Schlüssel/Profil lief vorher),
+    also verrät der Satz nichts, was sie nicht ohnehin sähe."""
+    if not asked or not vrow:
+        return None
+    light = books.view_light(DB, vrow["name"])
+    if books.LIGHT_RANK[light] <= books.LIGHT_RANK[asked]:
+        return None
+    srv = worst_server(vrow["name"])
+    lw, aw = LIGHT_DE.get(light, light), LIGHT_DE.get(asked, asked)
+    return (f"das Gespräch steht auf {aw}, die Sicht {vrow['name']} ist {lw}"
+            + (f" (Server {srv})" if srv else "")
+            + ". Im Chat die Ampel des Gesprächs bewusst ändern -- oder die Verwaltung um eine "
+            f"Sicht bitten, die {aw} ist.")
 
 
 def forbidden(sentence):
@@ -2156,6 +2188,7 @@ class Refusal(Exception):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "oaap-mcp-gateway/" + VERSION
+    asked = ""          # die Ampel des Gesprächs dieser Anfrage (RFC-0101), sonst ''
 
     def log_message(self, fmt, *args):
         # Nur Methode und Pfad — Anfragen dieses Dienstes tragen ihren Inhalt im Körper (§10).
@@ -2217,6 +2250,24 @@ class Handler(BaseHTTPRequestHandler):
                         [("WWW-Authenticate", f'Bearer resource_metadata="{meta}"')])
 
     def authorize(self, view_name):
+        """Wie `_authorize`, dazu die Ampel des Gesprächs (RFC-0101 §2.2): erst wer, dann
+        ob die Sicht für diese Ampel grün genug ist. Ohne Kopfzeile unverändert."""
+        key, vrow = self._authorize(view_name)
+        if key is None:
+            return None, None
+        asked, bad = asked_light(self.headers.get(LIGHT_HEADER))
+        if bad:
+            self.send_json(400, rpc_error(None, -32600, bad, "bad_light"))
+            return None, None
+        refusal = light_refusal(asked, vrow)
+        if refusal:
+            self.note_refusal(403, None, "ampel-des-gespraechs")
+            self.send_bytes(403, "application/json; charset=utf-8", forbidden(refusal))
+            return None, None
+        self.asked = asked
+        return key, vrow
+
+    def _authorize(self, view_name):
         """Zahler (Schlüssel- oder Profilzeile) und Sicht — oder die Anfrage ist beantwortet.
 
         Setzt `self.person` bei einer Anmeldung: Issuer, sub, Gruppen und das
@@ -2633,7 +2684,7 @@ class Handler(BaseHTTPRequestHandler):
                          state["source"], state["outcome"], state["reason"],
                          (time.monotonic() - t0) * 1000, bytes_up, state["down"],
                          person=self.person, procedure=state.get("procedure", "T"),
-                         status=state["status"], door=state["door"])
+                         status=state["status"], door=state["door"], light=self.asked)
             if state["sse"]:
                 self.close_connection = True
 

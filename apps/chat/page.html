@@ -106,6 +106,21 @@ border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .confirm{align-self:flex-start;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem;max-width:46rem}
 .confirm pre{white-space:pre-wrap;color:var(--ink);background:var(--panel);padding:.5rem;border-radius:.3rem}
 .hint{align-self:center;text-align:center;max-width:32rem;margin-top:2rem}
+/* ---- 0.8.0 (RFC-0101 §2): Ampel des Gesprächs */
+:root{--green:#15803d;--yellow:#a16207;--red:#b91c1c}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--green:#4ade80;--yellow:#facc15;--red:#f87171}}
+:root[data-theme=dark]{--green:#4ade80;--yellow:#facc15;--red:#f87171}
+.lightchip{font-size:.82rem;padding:.25rem .6rem;border-radius:1rem;white-space:nowrap;display:inline-flex;align-items:center;gap:.35rem}
+.lightchip i,.lopt i{width:.7rem;height:.7rem;border-radius:50%;display:inline-block;flex:none}
+.l-green i{background:var(--green)} .l-yellow i{background:var(--yellow)} .l-red i{background:var(--red)}
+.lightwarn{align-self:stretch;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem}
+.lightwarn p{margin:.2rem 0 .5rem;color:var(--ink)}
+.lightwarn .row button{font-size:.88rem}
+.lopt{display:flex;gap:.6rem;align-items:flex-start;border:1px solid var(--line);border-radius:.5rem;padding:.55rem .7rem;margin:.4rem 0;cursor:pointer}
+.lopt input{width:auto;margin-top:.2rem}
+.lopt.off{opacity:.5;cursor:default}
+.lopt small{display:block;color:var(--muted)}
+@media (max-width:800px){.lightchip span{display:none}}
 
 /* ---- Eingabe */
 .composer{flex:none;background:var(--panel);border-top:1px solid var(--line);padding:.5rem .8rem calc(.6rem + env(safe-area-inset-bottom))}
@@ -185,6 +200,7 @@ dialog input,dialog textarea,dialog select{width:100%}
   <header>
     <button class="icon" id="sopen" type="button" title="Gespräche ein- und ausblenden" aria-label="Gespräche ein- und ausblenden">☰</button>
     <div class="htitle"><b id="ctitle">—</b><span class="muted" id="cassist"></span></div>
+    <button class="lightchip" id="lightbtn" type="button" hidden title="Ampel dieses Gesprächs: was du eingeben wirst"></button>
     <details class="menu" id="menu"><summary role="button" aria-label="Menü" title="Menü">⋯</summary>
       <div class="mbody">
         <button id="ren" type="button">Umbenennen</button>
@@ -224,6 +240,25 @@ dialog input,dialog textarea,dialog select{width:100%}
 </main>
 
 <dialog id="sdlg"><div id="sbox"></div></dialog>
+<dialog id="lightdlg">
+  <div class="dhead"><b>Ampel dieses Gesprächs</b><button type="button" class="hbtn" id="lightclose">Schließen</button></div>
+  <p class="muted" style="font-size:.88rem">Sag, was du eingeben wirst. Der Chat nimmt dann nur Modelle und Werkzeuge,
+  die solche Daten bekommen dürfen &mdash; und beide Gateways lehnen ebenfalls ab. Das schützt dich vor einem Versehen.</p>
+  <div id="lightopts"></div>
+  <label id="lightsurel" hidden><input type="checkbox" id="lightsure" style="width:auto"> <span id="lightsuret"></span></label>
+  <p class="err" id="lighterr"></p>
+  <div class="row"><button class="primary" type="button" id="lightok">Übernehmen</button></div>
+</dialog>
+<dialog id="reqdlg">
+  <div class="dhead"><b id="reqtitle">Anfrage an die Verwaltung</b><button type="button" class="hbtn" id="reqclose">Schließen</button></div>
+  <p class="muted" style="font-size:.88rem" id="reqintro"></p>
+  <label for="reqtext" id="reqlabel">Was möchtest du tun?</label>
+  <textarea id="reqtext" rows="5" maxlength="4000"></textarea>
+  <p class="muted" style="font-size:.8rem">Der Chat ergänzt Assistent, Modell, Sicht und ihre Farben. Der Vorgang trägt deinen Namen;
+  lesen kann ihn, wer im Mandanten Rückmeldungen bearbeitet.</p>
+  <p class="err" id="reqerr"></p>
+  <div class="row"><button class="primary" type="button" id="reqsend">Senden</button></div>
+</dialog>
 
 <dialog id="setdlg">
   <div class="dhead"><b>Einstellungen</b><button type="button" class="hbtn" id="setclose">Schließen</button></div>
@@ -277,6 +312,10 @@ dialog input,dialog textarea,dialog select{width:100%}
 <script>
 "use strict";
 let S = null, C = null, busy = false, CMDS = [], SETUP = null, PENDING = null, SEL = 0;
+// 0.8.0 (RFC-0101 §2): Ampel. LIGHT ist der Bericht des Servers für den aktuellen Assistenten,
+// DRAFT_LIGHT die Farbe eines Gesprächs, das noch nicht angelegt ist, FEEDBACK ob es die App
+// Vorgänge gibt (dann gehen die beiden Anfragen an die Verwaltung).
+let LIGHT = null, DRAFT_LIGHT = null, FEEDBACK = null;
 const $ = id => document.getElementById(id);
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
   if(text!==undefined) e.textContent=text; return e;}
@@ -349,6 +388,135 @@ const scopeWord = a => a.visibility.scope === "private" ? "privat" :
   a.visibility.scope === "tenant" ? "Mandant" : "Team " + a.visibility.context.team;
 // Der Assistent, der gerade gilt -- ohne offenes Gespräch der gewählte (Entwurf).
 const current = () => C ? assistant(C.assistant) : assistant($("pick").value);
+
+// ---- Ampel des Gesprächs (RFC-0101 §2)
+const LRANK = {green: 0, yellow: 1, red: 2};
+const LWORD = {green: "grün", yellow: "gelb", red: "rot"};
+const LSAYS = {green: "Sensible und personenbezogene Daten", yellow: "Firmeninformationen, nichts Sensibles",
+               red: "Nur Öffentliches"};
+const LSURE = {yellow: "Ich gebe in diesem Gespräch nichts Sensibles ein.",
+               red: "Ich gebe in diesem Gespräch nur Öffentliches ein."};
+const convLight = () => C ? C.light : (DRAFT_LIGHT || (S && S.default_light) || "green");
+const lightOk = () => !LIGHT || !LIGHT.needs || LRANK[LIGHT.needs] <= LRANK[convLight()];
+async function loadLight(){
+  const a = current();
+  LIGHT = null; renderLight();
+  if (!a) return;
+  const r = await api("GET", "api/light?" + (C ? "conv=" + C.id : "assistant=" + encodeURIComponent(a.id)));
+  if (!r.error) LIGHT = r;
+  renderLight(); render();
+}
+function renderLight(){
+  const b = $("lightbtn"), l = convLight();
+  b.hidden = VIEW !== "chat" || !current();
+  b.className = "lightchip l-" + l; b.textContent = "";
+  b.append(el("i"), el("span", "", LWORD[l] + " · " + LSAYS[l]));
+  b.setAttribute("aria-label", "Ampel dieses Gesprächs: " + LWORD[l] + ", " + LSAYS[l] + ". Ändern");
+}
+// Was zu rot ist, in einem Satz: das Modell, die Sicht oder beide.
+function tooRed(l){
+  const parts = [];
+  if (LIGHT.model.light && LRANK[LIGHT.model.light] > LRANK[l]) parts.push("das Modell " + LIGHT.model.id + " ist " + LWORD[LIGHT.model.light]);
+  if (LIGHT.view.light && LRANK[LIGHT.view.light] > LRANK[l]) parts.push("die Sicht " + LIGHT.view.name + " ist " + LWORD[LIGHT.view.light]);
+  return parts.join(", ");
+}
+// §2.3: ohne Weg in dieser Farbe offen sagen, und drei Wege anbieten.
+function lightWarn(){
+  const l = convLight(), a = current(), box = el("div", "lightwarn");
+  box.appendChild(el("b", "", l === "green" ? "Für sensible Daten gibt es mit diesem Assistenten keinen sicheren Weg."
+                                            : "Für " + LSAYS[l].toLowerCase() + " gibt es mit diesem Assistenten keinen Weg."));
+  box.appendChild(el("p", "", "Zu rot für diese Ampel: " + tooRed(l) + ". Senden ist gesperrt, bis du etwas änderst."));
+  const row = el("div", "row");
+  const go = el("button", "", (LIGHT.needs === "red" ? "Nur mit Öffentlichem weiter" : "Ohne Sensibles weiter")
+                + " (" + LWORD[LIGHT.needs] + ")"); go.type = "button";
+  go.onclick = () => openLight(LIGHT.needs);
+  row.appendChild(go);
+  if (FEEDBACK) {
+    const ask = el("button", "", "Grüne Option erbitten"); ask.type = "button"; ask.onclick = () => openRequest("idea");
+    const pre = el("button", "", "Vorab fragen, ob das erlaubt ist"); pre.type = "button"; pre.onclick = () => openRequest("question");
+    row.append(ask, pre);
+  } else if (FEEDBACK === false && S && S.tenant_admin) {
+    row.appendChild(el("span", "muted", "Rückmeldungen brauchen die App Vorgänge in diesem Mandanten."));
+  }
+  box.appendChild(row);
+  return box;
+}
+let LPICK = null;
+function openLight(preset){
+  const l = convLight(), ceiling = (LIGHT && LIGHT.ceiling) || "red";
+  LPICK = preset || l;
+  const box = $("lightopts"); box.textContent = "";
+  for (const x of ["green", "yellow", "red"]) {
+    const off = LRANK[x] > LRANK[ceiling];
+    const lab = el("label", "lopt l-" + x + (off ? " off" : ""));
+    const r = el("input"); r.type = "radio"; r.name = "lpick"; r.value = x; r.checked = x === LPICK; r.disabled = off;
+    r.onchange = () => { LPICK = x; sureRow(); };
+    const t = el("div"); t.append(el("b", "", LWORD[x] + " — " + LSAYS[x]));
+    let note = x === "green" ? "Nur Wege, auf denen die Daten das Unternehmen nicht verlassen." :
+               x === "yellow" ? "Auch Wege zu Anbietern unter Zusage (Vertrag, EU, kein Training)." :
+               "Auch externe Anbieter, bei denen Daten abfließen können.";
+    if (off) note = "Der Schlüssel dieses Chats reicht nur bis " + LWORD[ceiling] + ".";
+    else if (LIGHT && LIGHT.needs && LRANK[LIGHT.needs] > LRANK[x]) note += " Mit diesem Assistenten nicht möglich: " + tooRed(x) + ".";
+    t.append(el("small", "", note));
+    lab.append(r, el("i"), t); box.appendChild(lab);
+  }
+  $("lighterr").textContent = ""; sureRow(); $("lightdlg").showModal();
+}
+function sureRow(){
+  const worse = LRANK[LPICK] > LRANK[convLight()];
+  $("lightsurel").hidden = !worse; $("lightsure").checked = false;
+  $("lightsuret").textContent = LSURE[LPICK] || "";
+}
+$("lightbtn").onclick = () => openLight();
+$("lightclose").onclick = () => $("lightdlg").close();
+$("lightok").onclick = async () => {
+  const worse = LRANK[LPICK] > LRANK[convLight()];
+  if (worse && !$("lightsure").checked) { $("lighterr").textContent = "Bitte bestätige den Satz oben."; return; }
+  if (C) {
+    const r = await api("POST", "api/conv/" + C.id + "/light", {light: LPICK, sure: worse || undefined});
+    if (r.error) { $("lighterr").textContent = r.error; return; }
+    C = r;
+  } else DRAFT_LIGHT = LPICK;
+  $("lightdlg").close(); renderLight(); render();
+};
+// Die beiden Anfragen an die Verwaltung werden Vorgänge (RFC-0061) über die bezeugte Route
+// /platform/feedback dieser Seite -- die Plattform bezeugt dich, der Chat hat keinen Schlüssel dafür.
+let RKIND = "idea";
+function openRequest(kind){
+  RKIND = kind;
+  const a = current();
+  $("reqtitle").textContent = kind === "idea" ? "Grüne Option erbitten" : "Vorab fragen, ob das erlaubt ist";
+  $("reqintro").textContent = kind === "idea"
+    ? "Bitte die Verwaltung, für „" + a.title + "“ einen Weg anzubieten, der " + LSAYS[convLight()].toLowerCase() + " bekommen darf."
+    : "Beschreibe, was du mit „" + a.title + "“ vorhast. Die Verwaltung sagt dir, ob das so erlaubt ist.";
+  $("reqlabel").textContent = kind === "idea" ? "Was möchtest du tun?" : "Dein Vorhaben";
+  $("reqtext").value = ""; $("reqerr").textContent = ""; $("reqdlg").showModal();
+}
+$("reqclose").onclick = () => $("reqdlg").close();
+$("reqsend").onclick = async () => {
+  const text = $("reqtext").value.trim(), a = current();
+  if (!text) { $("reqerr").textContent = "Bitte beschreibe kurz, worum es geht."; return; }
+  const l = convLight();
+  const facts = ["", "— vom Chat ergänzt —", "Assistent: " + a.id + " (" + a.title + ")",
+    "Modell: " + LIGHT.model.id + (LIGHT.model.light ? " (" + LWORD[LIGHT.model.light] + ")" : ""),
+    "Sicht: " + LIGHT.view.name + (LIGHT.view.light ? " (" + LWORD[LIGHT.view.light] + ")" : ""),
+    "Ampel des Gesprächs: " + LWORD[l] + " (" + LSAYS[l] + ")", "Chat " + ((S && S.version) || "")];
+  const doc = {kind: RKIND,
+    title: (RKIND === "idea" ? "Grüne Option erbeten: " : "Vorab-Frage: ") + a.title,
+    body: text + "\n" + facts.join("\n"), object: {kind: "assistant", id: a.id}};
+  let r;
+  try { r = await fetch("/platform/feedback", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                  body: JSON.stringify(doc), credentials: "same-origin"}); }
+  catch (e) { $("reqerr").textContent = "Die Vorgänge sind nicht erreichbar."; return; }
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  if (!r.ok) { $("reqerr").textContent = d.error || ("Antwort " + r.status); return; }
+  $("reqdlg").close();
+  render(el("div", "muted", "Gesendet als Vorgang " + (d.number || "") + ". Die Antwort kommt über die App Vorgänge."));
+};
+async function loadFeedback(){
+  try { const r = await fetch("/platform/feedback/session", {credentials: "same-origin"}); FEEDBACK = r.ok; }
+  catch (e) { FEEDBACK = false; }
+}
 
 // ---- Seitenleiste: einklappbar, Gespräche durchsuchbar und gruppiert
 function toggleSide(force){
@@ -453,6 +621,7 @@ function render(status){
     if (!S.assistants.length) head.appendChild(el("div", "muted hint", "Für dich ist noch kein Assistent sichtbar. Lege unter „Assistenten“ einen eigenen an."));
     else if (a && !a.greeting && !PENDING) head.appendChild(el("div", "muted hint", "Neues Gespräch mit " + a.title + ". Schreib deine erste Nachricht."));
     if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
+    if (LIGHT && !lightOk() && !busy) tail.appendChild(lightWarn());
     if (status) tail.appendChild(status);
     return;
   }
@@ -469,6 +638,7 @@ function render(status){
     box.append(ok, " ", no); tail.appendChild(box);
   }
   if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
+  if (LIGHT && !lightOk() && !busy) tail.appendChild(lightWarn());
   if (status) tail.appendChild(status);
   log.scrollTop = log.scrollHeight;
   drawMermaid(msgs).then(() => { log.scrollTop = log.scrollHeight; });
@@ -694,13 +864,13 @@ function showCommands(){
 async function refreshState(){ S = await api("GET", "api/state"); if (S.error) return; renderSide(); if (VIEW === "asst") renderAssistants(); }
 async function openConv(id){
   showView("chat");
-  C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands();
+  C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); loadLight();
 }
 function startDraft(aid){
   showView("chat");
-  C = null; SETUP = null; PENDING = null; SHOWN = {id: null, n: 0};
+  C = null; SETUP = null; PENDING = null; SHOWN = {id: null, n: 0}; DRAFT_LIGHT = null;
   renderSide(); if (aid && assistant(aid)) $("pick").value = aid;
-  render(); loadCommands(); closeDrawer(); if (!narrow()) $("t").focus();
+  render(); loadCommands(); loadLight(); closeDrawer(); if (!narrow()) $("t").focus();
 }
 
 // ---- Ansichten der Seite: Gespräch oder Assistenten (#assistenten; die Zurück-Taste geht)
@@ -711,6 +881,7 @@ function showView(v){
   $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
   if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) { renderAssistants(); loadReadiness(); } }
   else render();
+  renderLight();
   const want = v === "asst" ? "#assistenten" : "";
   if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
 }
@@ -742,7 +913,7 @@ $("del").onclick = async () => {
   if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
 };
 $("new").onclick = () => startDraft($("pick").value);
-$("pick").onchange = () => { if (!C) { render(); showCommands(); } };
+$("pick").onchange = () => { if (!C) { render(); showCommands(); loadLight(); } };
 $("q").addEventListener("input", renderSide);
 
 // ---- Eingabe: wächst mit dem Text, Enter sendet, Umschalt+Enter macht eine neue Zeile
@@ -752,11 +923,14 @@ $("f").onsubmit = async ev => {
   const text = $("t").value.trim(); if (!text || busy) return;
   const own = text.startsWith("/") && !/\s/.test(text) ? ownCmd(text.slice(1)) : null;
   if (own) { $("t").value = ""; grow(); showCommands(); own.run(); return; }
+  if (!lightOk()) { render(); return; }
   $("t").value = ""; grow(); showCommands();
   PENDING = text;
   if (!C || !C.id) {
     setBusy(true, "Gespräch wird angelegt …");
-    const r = await api("POST", "api/conv", {assistant: $("pick").value});
+    const dl = convLight();
+    const r = await api("POST", "api/conv", {assistant: $("pick").value, light: dl,
+                                             sure: LRANK[dl] > LRANK[(S && S.default_light) || "green"] || undefined});
     if (r.error) { PENDING = null; busy = false; $("go").disabled = false; $("t").disabled = false;
       $("t").value = text; grow(); render(el("div", "err", r.error)); return; }
     C = r; loadCommands();
@@ -930,6 +1104,7 @@ $("aimp").onchange = async ev => {
   await refreshState();
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
   $("who").textContent = (S.user || "") + " · Chat " + S.version;
+  loadFeedback();
   if (location.hash === "#assistenten") showView("asst");
   else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.

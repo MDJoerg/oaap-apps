@@ -54,7 +54,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.8.1"
+VERSION = "0.9.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -164,6 +164,33 @@ def pbd_of(row):
 
 
 LIGHT_DE = {"green": "grün", "yellow": "gelb", "red": "rot"}
+
+# 0.9.0 (RFC-0101 §2.2): die Ampel eines Gesprächs als zusätzliche Decke DIESER
+# Anfrage. Sie kann die Decke des Schlüssels nur verschärfen, nie lockern: ein
+# Chat, dessen Person „sensible Daten“ gewählt hat, schickt `green`, und dann
+# bleibt ein gelber Weg zu, auch wenn der Schlüssel bis gelb darf.
+LIGHT_HEADER = "X-OAAP-Light"
+
+
+def asked_light(value):
+    """(Farbe oder '', Fehlersatz oder ''). Ohne Kopfzeile: keine zusätzliche Decke.
+
+    Ein unbekannter Wert wird abgelehnt, nicht übergangen -- wer eine Decke
+    verlangt, soll nicht stumm ohne sie weiterarbeiten."""
+    v = (value or "").strip().lower()
+    if not v:
+        return "", ""
+    if v not in supply.LIGHT_RANK:
+        return "", f"{LIGHT_HEADER} kennt nur green, yellow oder red, nicht „{v[:20]}“."
+    return v, ""
+
+
+def request_ceiling(row, asked):
+    """Die Decke dieser Anfrage: die strengere aus Schlüssel und Gespräch."""
+    ceiling = ceiling_of(row)
+    if asked and supply.LIGHT_RANK[asked] < supply.LIGHT_RANK.get(ceiling, 9):
+        return asked
+    return ceiling
 
 
 def unreachable_aliases(names, ceiling, pbd):
@@ -1914,6 +1941,11 @@ def charts_page(user, roles, host, params):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "oaap-ai-gateway/" + VERSION
+    asked = ""          # die Ampel des Gesprächs dieser Anfrage (RFC-0101), sonst ''
+
+    def record(self, row, *args):
+        """Eine Messzeile mit der Ampel, die diese Anfrage verlangte (ein Wort, kein Inhalt)."""
+        store.record(DB, row, *args, light=self.asked)
 
     # ---- Werkzeug
 
@@ -1969,7 +2001,7 @@ class Handler(BaseHTTPRequestHandler):
         genau das ist, was der Verbraucher bekommt.
         """
         payload = error_bytes(message, code)
-        store.record(DB, row, alias, supplier, model, None, None, ms, outcome,
+        self.record(row, alias, supplier, model, None, None, ms, outcome,
                      up_bytes, len(payload))
         self.send_raw_json(status, payload, extra_headers)
 
@@ -2030,7 +2062,11 @@ class Handler(BaseHTTPRequestHandler):
             row = self.authorize()
             if row is None:
                 return
-            ceiling, pbd = ceiling_of(row), pbd_of(row)
+            asked, bad = asked_light(self.headers.get(LIGHT_HEADER))
+            if bad:
+                self.send_error_doc(400, bad, "bad_light")
+                return
+            ceiling, pbd = request_ceiling(row, asked), pbd_of(row)
             data = []
             for name in sorted(allowed_aliases(row)):
                 # Die Farbe ist die schlechteste unter den Zielen, die
@@ -2351,6 +2387,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error_doc(400, "Der Rumpf ist kein JSON-Objekt.", "bad_body")
             return
 
+        self.asked, bad = asked_light(self.headers.get(LIGHT_HEADER))
+        if bad:
+            self.send_error_doc(400, bad, "bad_light")
+            return
         alias_name = str(payload.get("model") or "").strip()
         permitted = allowed_aliases(row)
         if alias_name not in permitted:
@@ -2387,11 +2427,18 @@ class Handler(BaseHTTPRequestHandler):
         if alias is None:
             self.send_error_doc(400, f"„{alias_name}“ gibt es nicht mehr.", "unknown_model")
             return
-        ceiling, pbd = ceiling_of(row), pbd_of(row)
+        ceiling, pbd = request_ceiling(row, self.asked), pbd_of(row)
         targets = supply.candidates(alias, SUPPLIERS, ceiling, pbd)
         if not targets:
             reasons = supply.blocked_reasons(alias, SUPPLIERS, ceiling, pbd)
-            if reasons:
+            if ceiling != ceiling_of(row) and supply.candidates(alias, SUPPLIERS, ceiling_of(row), pbd):
+                # Nur die Ampel des Gesprächs sperrt (RFC-0101): der Schlüssel dürfte.
+                worst = supply.alias_light(alias, SUPPLIERS, ceiling_of(row), pbd)
+                message = (f"Das Gespräch steht auf {LIGHT_DE[ceiling]}, „{alias_name}“ führt nur "
+                           f"über {LIGHT_DE.get(worst, worst)}. Im Chat die Ampel des Gesprächs "
+                           "bewusst ändern oder einen Modellnamen mit grünerer Quelle wählen.")
+                code = "conversation_light"
+            elif reasons:
                 message = (f"Für „{alias_name}“ bleibt jede Quelle gesperrt: "
                            f"{'; '.join(reasons)}. Der Betreiber kann die Obergrenze "
                            "heraufsetzen oder eine andere Quelle eintragen.")
@@ -2440,7 +2487,7 @@ class Handler(BaseHTTPRequestHandler):
         if up.status >= 400:
             # Ein 4xx ist die Antwort auf **diese** Anfrage — Ausweichen
             # würde denselben Fehler noch einmal erzeugen.
-            store.record(DB, row, alias_name, src["name"], model,
+            self.record(row, alias_name, src["name"], model,
                          counts[0], counts[1], ms, f"upstream_{up.status}",
                          up_bytes, len(up.body))
             self.send_response(up.status)
@@ -2449,7 +2496,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(up.body)
             return True
-        store.record(DB, row, alias_name, src["name"], model,
+        self.record(row, alias_name, src["name"], model,
                      counts[0], counts[1], ms,
                      "ok" if counts[0] is not None else "ok_no_counts",
                      up_bytes, len(up.body))
@@ -2469,7 +2516,7 @@ class Handler(BaseHTTPRequestHandler):
         if up.status >= 400:
             payload = up.body or b'{"error":{"message":"upstream error"}}'
             up.close()
-            store.record(DB, row, alias_name, src["name"], model, None, None,
+            self.record(row, alias_name, src["name"], model, None, None,
                          int((time.monotonic() - started) * 1000), f"upstream_{up.status}",
                          up_bytes, len(payload))
             self.send_response(up.status)
@@ -2509,7 +2556,7 @@ class Handler(BaseHTTPRequestHandler):
         # wäre die Messzeile ein Wettlauf gegen den Client: Er hätte die
         # Antwort schon vollständig, während der Verbrauch noch nirgends
         # steht — und genau in diesem Fenster fällt ein Prozess aus.
-        store.record(DB, row, alias_name, src["name"], model, in_tokens, out_tokens,
+        self.record(row, alias_name, src["name"], model, in_tokens, out_tokens,
                      int((time.monotonic() - started) * 1000), outcome, up_bytes, sent[0])
         try:
             self.wfile.write(b"0\r\n\r\n")

@@ -20,6 +20,7 @@ RESULTS = []
 
 
 SEEN_VIEWS = {"assertion": ""}
+MODEL_LIGHT, DOOR_LIGHT = [], []   # X-OAAP-Light am Modell und an der Tür (0.8.0)
 
 
 def check(name, ok, info=None):
@@ -97,7 +98,10 @@ class Fake(BaseHTTPRequestHandler):
                 return self.reply(503, {})
             return self.reply(200, {"user": uid, "grants": GRANTS.get(uid, []), "fresh_for": 0})
         if self.path == "/v1/models":
-            return self.reply(200, {"object": "list", "data": [{"id": "standard"}, {"id": "klein"}]})
+            return self.reply(200, {"object": "list", "data": [{"id": "standard", "oaap_light": "yellow"},
+                                                               {"id": "klein", "oaap_light": "green"}]})
+        if self.path == "/v1/usage":
+            return self.reply(200, {"ceiling": "yellow"})
         if self.path == "/via/gw1/_views":
             SEEN_VIEWS["assertion"] = self.headers.get("X-OAAP-Act-Assertion", "")
             if self.headers.get("Authorization") != "Bearer " + CK or not SEEN_VIEWS["assertion"].startswith("ZS-"):
@@ -126,6 +130,7 @@ class Fake(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         if self.path.startswith("/via/gw1/"):
+            DOOR_LIGHT.append(self.headers.get("X-OAAP-Light", ""))
             a = self.headers.get("X-OAAP-Act-Assertion", "")
             if self.headers.get("Authorization") != "Bearer " + CK or not a.startswith("ZS-") \
                     or BAD_ASSERTION["on"]:
@@ -176,6 +181,7 @@ class Fake(BaseHTTPRequestHandler):
                     "content": [{"type": "text", "text": f"Ergebnis {p['name']} für {a.split('-')[1]}"}]}})
         if self.path == "/v1/chat/completions":
             MODEL.append(body)
+            MODEL_LIGHT.append(self.headers.get("X-OAAP-Light", ""))
             last = body["messages"][-1]
             users = [m for m in body["messages"] if m["role"] == "user"]
             q = users[-1]["content"] if users else ""
@@ -697,6 +703,62 @@ check("0.4.0: resources/read aus der Ansicht -- durch die Tür, als die Person",
       and v["result"]["contents"][0]["text"] == VG_HTML, v)
 st, v = req("POST", f"/api/conv/{cv['id']}/view-call", {"method": "resources/read", "uri": "ui://anderes"})
 check("... was das Gateway nicht freigibt, kommt nicht (403)", st == 403, v)
+
+# ------------------------------------------------ 0.8.0: Ampel des Gesprächs (RFC-0101 Stufe 1)
+st, s = req("GET", "/api/state")
+check("0.8.0: der Zustand nennt die Vorgabe grün", s.get("default_light") == "green", s.get("default_light"))
+_, c8 = req("POST", "/api/conv", {"assistant": "projekte"})
+check("0.8.0: ein neues Gespräch steht auf grün", c8.get("light") == "green", c8)
+MODEL_LIGHT.clear(); DOOR_LIGHT.clear()
+req("POST", f"/api/conv/{c8['id']}/send", {"text": "Projekte?"})
+req("POST", f"/api/conv/{c8['id']}/step", {})
+check("0.8.0: der Modellzug trägt X-OAAP-Light: green", MODEL_LIGHT and set(MODEL_LIGHT) == {"green"}, MODEL_LIGHT)
+check("0.8.0: jeder Aufruf an der Tür des MCP-Gateways trägt sie auch",
+      DOOR_LIGHT and set(DOOR_LIGHT) == {"green"}, DOOR_LIGHT)
+st, r = req("POST", f"/api/conv/{c8['id']}/light", {"light": "yellow"})
+check("0.8.0: zu gelb ohne Bestätigung: 409 mit dem Satz", st == 409
+      and r.get("confirm") == "Ich gebe in diesem Gespräch nichts Sensibles ein.", (st, r))
+st, r = req("POST", f"/api/conv/{c8['id']}/light", {"light": "yellow", "sure": True})
+check("0.8.0: mit Bestätigung gilt gelb", st == 200 and r["light"] == "yellow", (st, r))
+MODEL_LIGHT.clear(); DOOR_LIGHT.clear()
+req("POST", f"/api/conv/{c8['id']}/send", {"text": "Hallo"})
+check("0.8.0: danach trägt der Modellzug gelb", MODEL_LIGHT == ["yellow"], MODEL_LIGHT)
+st, r = req("POST", f"/api/conv/{c8['id']}/light", {"light": "green"})
+check("0.8.0: zurück zu grün braucht nichts", st == 200 and r["light"] == "green", (st, r))
+with open(app.conv_path("id-anna", c8["id"]), encoding="utf-8") as f:
+    hist = json.load(f).get("lights") or []
+check("0.8.0: der eigene Verlauf hält die Wechsel fest (grün, gelb, grün)",
+      [x["light"] for x in hist] == ["green", "yellow", "green"], hist)
+st, r = req("POST", f"/api/conv/{c8['id']}/light", {"light": "blau", "sure": True})
+check("0.8.0: eine unbekannte Farbe: 400", st == 400, (st, r))
+st, r = req("POST", f"/api/conv/{c8['id']}/light", {"light": "red", "sure": True}, person="bert")
+check("0.8.0: KÖDER: eine andere Person ändert die Ampel nicht (404)", st == 404, (st, r))
+st, r = req("POST", "/api/conv", {"assistant": "projekte", "light": "red"})
+check("0.8.0: ein neues Gespräch gleich rot nur mit Bestätigung (409)", st == 409
+      and "nur Öffentliches" in r.get("confirm", ""), (st, r))
+st, r = req("POST", "/api/conv", {"assistant": "projekte", "light": "red", "sure": True})
+check("0.8.0: mit Bestätigung rot", st == 200 and r["light"] == "red", (st, r))
+req("POST", "/api/assistants", asst("ampel", "private", view="vg"))
+st, r = req("GET", "/api/light?assistant=ampel")
+check("0.8.0: /api/light: Modell gelb (KI-Gateway), Sicht grün (MCP-Gateway), braucht gelb, Decke gelb",
+      st == 200 and r["model"] == {"id": "standard", "light": "yellow"}
+      and r["view"] == {"name": "vg", "light": "green"} and r["needs"] == "yellow"
+      and r["ceiling"] == "yellow" and r["light"] == "green" and r["ok"] is False, (st, r))
+_, ca = req("POST", "/api/conv", {"assistant": "ampel", "light": "yellow", "sure": True})
+st, r = req("GET", f"/api/light?conv={ca['id']}")
+check("0.8.0: ein gelbes Gespräch mit diesem Assistenten: ok", st == 200 and r["ok"] is True
+      and r["light"] == "yellow", (st, r))
+st, r = req("GET", f"/api/light?conv={ca['id']}", person="bert")
+check("0.8.0: KÖDER: das Gespräch einer anderen Person: 404", st == 404, (st, r))
+req("POST", "/api/assistants/ampel/delete", {})
+st, _ct, html = raw_get("/")
+html = html.decode("utf-8")
+check("0.8.0: die Seite hat die Ampel, den Hinweis ohne grünen Weg und die beiden Anfragen",
+      'id="lightbtn"' in html and "keinen sicheren Weg" in html and "Grüne Option erbitten" in html
+      and "Vorab fragen, ob das erlaubt ist" in html, st)
+check("0.8.0: die Anfragen gehen über die bezeugte Route, nicht über ein Backend",
+      'fetch("/platform/feedback"' in html and "cases/submit" not in html)
+check("0.8.0: Senden ist gesperrt, solange kein Weg passt", "if (!lightOk()) { render(); return; }" in html)
 
 srv.shutdown()
 fake.shutdown()

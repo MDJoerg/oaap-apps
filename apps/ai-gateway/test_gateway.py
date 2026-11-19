@@ -1150,6 +1150,58 @@ call("/supplier", "POST", admin=True, form="name=anthro&url=https%3A%2F%2Fapi.an
 row = app.DB.execute("SELECT drop_sampling FROM suppliers WHERE name='anthro'").fetchone()
 check("L15: ein schon gekippter Wert wird beim nächsten Speichern wieder an", row[0] == 1, row[0])
 
+print("\n-- 0.9.0 RFC-0101: X-OAAP-Light, die Ampel des Gesprächs als Decke je Anfrage")
+
+
+def lit(path, key, light, body=None):
+    headers = {"Authorization": "Bearer " + key, "X-OAAP-Light": light}
+    data = None
+    if body is not None:
+        data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
+    req = urllib.request.Request(BASE + path, data=data, headers=headers,
+                                 method="POST" if body is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+key_licht, _ = store.issue(app.DB, "licht-gelb", "test", ceiling="yellow")
+Fake.calls.clear()
+status, body = lit("/v1/chat/completions", key_licht, "green",
+                   {"model": "chat-default", "messages": []})
+text = body.decode("utf-8")
+check("grünes Gespräch, gelber Weg: 503, obwohl der Schlüssel bis gelb darf", status == 503, status)
+check("der Code sagt: die Ampel des Gesprächs sperrt", '"conversation_light"' in text, text[:200])
+check("der Satz nennt beide Farben", "steht auf grün" in text and "über gelb" in text, text[:300])
+check("die Quelle wurde nicht angefasst", Fake.calls == [], Fake.calls)
+status, _ = lit("/v1/chat/completions", key_licht, "green", {"model": "nur-lokal", "messages": []})
+check("grünes Gespräch, grüner Weg: geht", status == 200, status)
+rows = store.recent(app.DB, limit=1)
+check("die Messzeile trägt die verlangte Ampel", rows[0]["light"] == "green", dict(rows[0]))
+status, _ = lit("/v1/chat/completions", key_licht, "yellow", {"model": "chat-default", "messages": []})
+check("gelbes Gespräch auf gelbem Schlüssel: geht", status == 200, status)
+Fake.calls.clear()
+status, body = lit("/v1/chat/completions", key_licht, "red", {"model": "nur-fern", "messages": []})
+check("KÖDER: rot in der Kopfzeile lockert die Decke des Schlüssels nicht (503)", status == 503, status)
+check("... und es ist die Sperre des Schlüssels, nicht die des Gesprächs",
+      '"light_not_permitted"' in body.decode("utf-8") and Fake.calls == [], body[:200])
+status, body = lit("/v1/chat/completions", key_licht, "blau", {"model": "nur-lokal", "messages": []})
+check("ein unbekannter Wert wird abgelehnt, nicht übergangen (400)",
+      status == 400 and '"bad_light"' in body.decode("utf-8"), (status, body[:200]))
+status, body = lit("/v1/models", key_licht, "green")
+farben = {m["id"]: m["oaap_light"] for m in json.loads(body)["data"]}
+check("/v1/models im grünen Gespräch: nur grüne Namen",
+      status == 200 and farben and set(farben.values()) == {"green"} and "chat-default" not in farben,
+      farben)
+status, body = lit("/v1/models", key_licht, "red")
+check("/v1/models mit rot: wie ohne Kopfzeile (Decke des Schlüssels)",
+      json.loads(body)["data"] == json.loads(call("/v1/models", key=key_licht)[1])["data"])
+status, _, _ = call("/v1/chat/completions", "POST", key=key_licht,
+                    body={"model": "nur-lokal", "messages": []})
+check("ohne Kopfzeile bleibt die Messzeile leer", store.recent(app.DB, limit=1)[0]["light"] == "")
+
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")
 sys.exit(1 if fail else 0)

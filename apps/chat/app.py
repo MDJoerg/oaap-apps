@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -105,6 +105,19 @@ try:
 except (ValueError, AssertionError):
     MODEL_EXTRA = {}
     SETUP_ERRORS.append("CHAT_MODEL_EXTRA ist kein JSON-Objekt.")
+# 0.8.0 (RFC-0101 §2, W1): die Ampel des Gesprächs. Die Person sagt, was sie eingeben
+# wird; der Chat nimmt nur Modelle und Sichten bis zu dieser Farbe und schickt sie als
+# X-OAAP-Light an beide Gateways, die dann ebenfalls ablehnen. Sie verschärft die
+# Decke des Schlüssels, lockert sie nie -- ein Schutz vor Versehen, keine Kontrolle.
+LIGHTS = ("green", "yellow", "red")
+LIGHT_RANK = {x: i for i, x in enumerate(LIGHTS)}
+LIGHT_HEADER = "X-OAAP-Light"
+_DL = (os.environ.get("CHAT_DEFAULT_LIGHT") or "").strip().lower()
+# D5: grün ist die Vorgabe; der Mandant darf gelb vorgeben (Demo, Schulung), rot nie.
+DEFAULT_LIGHT = _DL if _DL in ("green", "yellow") else "green"
+if _DL and _DL not in ("green", "yellow"):
+    SETUP_ERRORS.append(f"CHAT_DEFAULT_LIGHT kennt nur green oder yellow, nicht „{_DL[:20]}“ "
+                        "(rot ist nie die Vorgabe) -- es gilt grün.")
 STORE = store.Store(os.path.join(DATA, "assistants.json"), CONFIGURED)
 AUTHZ = authz_client.Authz(app=None)
 
@@ -199,11 +212,13 @@ def gateway_for(name):
     return hit[0]
 
 
-def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False):
+def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False, light=""):
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
                "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion,
                "X-OAAP-Assistant": assistant_id}
+    if light:
+        headers[LIGHT_HEADER] = light
     if confirmed:
         headers["X-OAAP-Confirmed"] = "yes"
     if session:
@@ -238,7 +253,8 @@ def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False):
 class McpWay:
     """Die Sicht eines Assistenten, als die Person dieser Anfrage."""
 
-    def __init__(self, person, assertion, assistant):
+    def __init__(self, person, assertion, assistant, light=""):
+        self.light = light if light in LIGHT_RANK else ""
         self.views = bool(assistant.get("views"))
         gw = gateway_for(assistant.get("gateway") or "")
         self.url = f'{gw["via"]}/{assistant["view"]}'
@@ -255,7 +271,7 @@ class McpWay:
                        "capabilities": ({"extensions": {UI_EXTENSION: {"mimeTypes": [UI_MIME]}}}
                                         if self.views else {}),
                        "clientInfo": {"name": "oaap-chat", "version": VERSION}}},
-            "", self.assertion, self.aid)
+            "", self.assertion, self.aid, light=self.light)
         if status == 401:
             raise Stop("Die Plattform hat dich am MCP-Gateway nicht erkannt (401). Lade die "
                        "Seite neu und versuche es noch einmal.", 401)
@@ -266,7 +282,7 @@ class McpWay:
             raise Stop(f"Das MCP-Gateway hat keine Sitzung eröffnet ({status})"
                        + (f": {said}" if said else "."))
         mcp_post(self.url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sess,
-                 self.assertion, self.aid)
+                 self.assertion, self.aid, light=self.light)
         with _MCP_GUARD:
             _MCP[self.key] = sess
         return sess
@@ -278,14 +294,18 @@ class McpWay:
             sess = sess or self._open()
             status, _, msgs = mcp_post(self.url, {"jsonrpc": "2.0", "id": 2, "method": method,
                                                   "params": params}, sess, self.assertion,
-                                       self.aid, confirmed)
+                                       self.aid, confirmed, light=self.light)
             if status in (400, 404) and attempt == 0:     # Sitzung unbekannt oder abgelaufen
                 sess = None
                 continue
             if status == 401:
                 raise Stop("Die Plattform hat dich am MCP-Gateway nicht erkannt (401).", 401)
             if status != 200:
-                raise Stop(f"Das MCP-Gateway antwortete {status} auf {method}.")
+                # 0.8.0: eine 403 nennt den Grund (z. B. die Ampel des Gesprächs) -- weitergeben.
+                said = next((str((m.get("error") or {}).get("message") or "") for m in msgs
+                             if isinstance(m, dict) and m.get("error")), "")
+                raise Stop(f"Das MCP-Gateway antwortete {status} auf {method}"
+                           + (f": {said}" if said else "."))
             return msgs
         raise Stop("Das MCP-Gateway hat die Sitzung zweimal nicht angenommen.")
 
@@ -333,7 +353,7 @@ class McpWay:
 
 # --------------------------------------------------------------- das Modell
 
-def ask_model(assistant, person_name, msgs, tools):
+def ask_model(assistant, person_name, msgs, tools, light=""):
     if not KI_URL:
         raise Stop("Keine Destination ki zugeordnet -- der Chat erreicht kein Modell. "
                    "(Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“)")
@@ -346,9 +366,11 @@ def ask_model(assistant, person_name, msgs, tools):
     body.setdefault("temperature", 0.2)
     if tools:
         body["tools"] = tools
+    headers = {"Content-Type": "application/json"}
+    if light in LIGHT_RANK:
+        headers[LIGHT_HEADER] = light
     req = urllib.request.Request(KI_URL.rstrip("/") + "/chat/completions",
-                                 data=json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
+                                 data=json.dumps(body).encode(), headers=headers, method="POST")
     t0 = time.monotonic()
     try:
         with urllib.request.urlopen(req, timeout=MODEL_TIMEOUT) as r:
@@ -441,7 +463,7 @@ def step(person, person_name, assertion, assistant, conv, decision):
         elif eff != "read" and not decision.get("ok"):
             result, note = loop.REFUSED, {"confirmed": False}
         else:
-            way = way or McpWay(person, assertion, assistant)
+            way = way or McpWay(person, assertion, assistant, conv_light(conv))
             if assistant.get("views") and name in conv.get("ui", {}):
                 result, raw = way.call_raw(name, args, confirmed=eff != "read")
                 note = {"view": conv["ui"][name]["resourceUri"], "raw": raw, "arguments": args}
@@ -457,13 +479,13 @@ def step(person, person_name, assertion, assistant, conv, decision):
                      f"Ich habe nach {loop.MAX_MODEL_TURNS} Runden aufgehört, ohne fertig zu "
                      "werden. Formuliere die Frage bitte enger."})
         return "done"
-    way = way or McpWay(person, assertion, assistant)
+    way = way or McpWay(person, assertion, assistant, conv_light(conv))
     listed = way.tools()
     tools, effects_now = loop.tools_for_model(listed)
     effects.clear()
     effects.update(effects_now)
     conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
-    reply = ask_model(assistant, person_name, msgs, tools)
+    reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv))
     reply["at"] = now()
     msgs.append(reply)
     return "more" if reply.get("tool_calls") else "done"
@@ -657,6 +679,65 @@ def gateway_readiness(gateway, assertion, view):
     return doc if isinstance(doc, dict) and isinstance(doc.get("servers"), list) else None
 
 
+def conv_light(conv):
+    """Die Ampel eines Gesprächs. Ein Gespräch von vor 0.8.0 hat keine: es gilt die Vorgabe."""
+    x = (conv or {}).get("light")
+    return x if x in LIGHT_RANK else DEFAULT_LIGHT
+
+
+def ki_ceiling():
+    """Die Decke des Schlüssels der Destination ki (GET /v1/usage des KI-Gateways), oder ''."""
+    if not KI_URL:
+        return ""
+    req = urllib.request.Request(KI_URL.rstrip("/") + "/usage", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            c = json.loads(r.read(1_000_000)).get("ceiling")
+    except (urllib.error.HTTPError, OSError, ValueError, AttributeError):
+        return ""
+    return c if c in LIGHT_RANK else ""
+
+
+def light_report(a, assertion):
+    """Wie grün ist dieser Assistent? (RFC-0101 §2.2) Modell und Sicht je mit ihrer Farbe,
+    die Farbe, die er braucht (die schlechtere), und die Decke des Schlüssels.
+
+    Die Farben sagen die Gateways selbst: das KI-Gateway je Modellname für den Schlüssel des
+    Chats (/v1/models), das MCP-Gateway je Sicht für die Person (/_views). Was dort fehlt,
+    bleibt leer -- dann sagt `said`, warum, und die Gateways entscheiden beim Aufruf."""
+    models, merr = ki_models()
+    m = next((x for x in models if x["id"] == a.get("model")), None)
+    mlight = m["light"] if m and m.get("light") in LIGHT_RANK else ""
+    _gw, rows, _all, verr = gateway_views(a.get("gateway") or "", assertion)
+    v = next((x for x in rows if x.get("name") == a.get("view")), None)
+    vlight = v.get("light") if v and v.get("light") in LIGHT_RANK else ""
+    known = [x for x in (mlight, vlight) if x]
+    needs = max(known, key=LIGHT_RANK.get) if known else ""
+    ceiling = ki_ceiling() or max((x["light"] for x in models if x.get("light") in LIGHT_RANK),
+                                  key=LIGHT_RANK.get, default="")
+    said = merr or verr or ("" if m else f"Der Modellname {a.get('model')} ist für den Schlüssel "
+                            "des Chats nicht erreichbar.") or ("" if v else
+                            f"Die Sicht {a.get('view')} kennt das Gateway für dich nicht.")
+    return {"model": {"id": a.get("model"), "light": mlight},
+            "view": {"name": a.get("view"), "light": vlight},
+            "needs": needs, "ceiling": ceiling, "default": DEFAULT_LIGHT, "said": said}
+
+
+def light_change_refused(old, new, sure):
+    """None, wenn der Wechsel gilt -- sonst (Status, Dokument)."""
+    if new not in LIGHT_RANK:
+        return 400, {"error": "Eine Ampel ist green, yellow oder red."}
+    if LIGHT_RANK[new] > LIGHT_RANK[old] and sure is not True:
+        # §2.1: ins Rote nur bewusst -- ein Satz, ein Klick.
+        return 409, {"error": "Ein Wechsel zu einer schlechteren Farbe braucht deine Bestätigung.",
+                     "confirm": CONFIRM_SAYS[new]}
+    return None
+
+
+CONFIRM_SAYS = {"yellow": "Ich gebe in diesem Gespräch nichts Sensibles ein.",
+                "red": "Ich gebe in diesem Gespräch nur Öffentliches ein.", "green": ""}
+
+
 PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
 
 
@@ -678,7 +759,8 @@ def view_of(conv):
                            "arguments": loop.call_args(c)[0]} for c in m["tool_calls"]]
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
-            "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm")}
+            "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),
+            "light": conv_light(conv)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -749,7 +831,7 @@ class Handler(BaseHTTPRequestHandler):
                 "errors": SETUP_ERRORS, "tenant_admin": "tenant_admin" in who.roles,
                 "teams_known": who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
-                "sandbox_origins": SANDBOX_ORIGINS,
+                "sandbox_origins": SANDBOX_ORIGINS, "default_light": DEFAULT_LIGHT,
                 "conversations": list_convs(person)})
         if path == "/api/models":
             models, err = ki_models()
@@ -759,6 +841,26 @@ class Handler(BaseHTTPRequestHandler):
             gname = (parse_qs(urlparse(self.path).query).get("gateway") or [""])[0]
             gw, rows, all_, err = gateway_views(gname, self.headers.get(ASSERTION, "").strip())
             return self.json(200, {"gateway": gw, "views": rows, "all": all_, "error": err})
+        if path == "/api/light":
+            # 0.8.0 (RFC-0101 §2): Ampel des Gesprächs (oder die Vorgabe für einen Entwurf)
+            # und wie grün der Assistent ist.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            conv = None
+            cid = (q.get("conv") or [""])[0]
+            if cid:
+                conv = load_conv(person, cid) if CONV.match(cid) else None
+                if conv is None:
+                    return self.json(404, {"error": "Kein solches Gespräch."})
+            aid = conv["assistant"] if conv else (q.get("assistant") or [""])[0]
+            a, _ = STORE.get(aid)
+            if a is None or not store.can_see(a, who):
+                return self.json(404, {"error": "Kein solcher Assistent."})
+            rep_ = light_report(a, self.headers.get(ASSERTION, "").strip())
+            light = conv_light(conv) if conv else DEFAULT_LIGHT
+            rep_["light"] = light
+            rep_["ok"] = not rep_["needs"] or LIGHT_RANK[rep_["needs"]] <= LIGHT_RANK[light]
+            return self.json(200, rep_)
         if path == "/api/readiness":
             # 0.7.0: je sichtbarem Assistenten, ob seine Werkzeuge für dich eingerichtet sind.
             assertion = self.headers.get(ASSERTION, "").strip()
@@ -816,7 +918,7 @@ class Handler(BaseHTTPRequestHandler):
         if not assertion:
             return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
         try:
-            ps = McpWay(person, assertion, a).prompts()
+            ps = McpWay(person, assertion, a, conv_light(conv)).prompts()
         except Stop as exc:
             return self.json(200, {"commands": [], "said": exc.text})
         return self.json(200, {"commands": [
@@ -842,7 +944,7 @@ class Handler(BaseHTTPRequestHandler):
         if not assertion:
             return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
         try:
-            res = McpWay(person, assertion, a).read(msg["view"])
+            res = McpWay(person, assertion, a, conv_light(conv)).read(msg["view"])
         except Stop as exc:
             return self.json(exc.status if exc.status in (400, 401, 403) else 502, {"error": exc.text})
         c = next((x for x in res.get("contents") or [] if isinstance(x, dict)), {})
@@ -870,7 +972,7 @@ class Handler(BaseHTTPRequestHandler):
         if not assertion:
             return self.json(401, {"error": "Keine Zusicherung der Plattform für diese Anfrage."})
         try:
-            way = McpWay(person, assertion, a)
+            way = McpWay(person, assertion, a, conv_light(conv))
             if body.get("method") == "resources/read":
                 return self.json(200, {"result": way.read(str(body.get("uri") or ""))})
             name = str(body.get("name") or "")
@@ -925,8 +1027,12 @@ class Handler(BaseHTTPRequestHandler):
             a, _ = STORE.get(str(body.get("assistant") or ""))
             if a is None or not store.can_see(a, who):
                 return self.json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+            light = body.get("light") or DEFAULT_LIGHT
+            refused = light_change_refused(DEFAULT_LIGHT, light, body.get("sure"))
+            if refused:
+                return self.json(*refused)
             conv = {"id": secrets.token_hex(6), "assistant": a["id"], "created": now(),
-                    "messages": []}
+                    "messages": [], "light": light, "lights": [{"at": now(), "light": light}]}
             save_conv(person, conv)
             return self.json(200, view_of(conv))
         m = re.match(r"^/api/conv/([a-z0-9]{12})/view-call$", path)
@@ -935,7 +1041,7 @@ class Handler(BaseHTTPRequestHandler):
             if conv is None:
                 return self.json(404, {"error": "Kein solches Gespräch."})
             return self.view_call(person, who, conv, body)
-        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename)$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")
         cid, action = m.groups()
@@ -955,6 +1061,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json(400, {"error": "Ein Titel hat 1 bis 80 Zeichen."})
                 conv["title"] = title
                 save_conv(person, conv)
+                return self.json(200, view_of(conv))
+            if action == "light":
+                new = str(body.get("light") or "")
+                refused = light_change_refused(conv_light(conv), new, body.get("sure"))
+                if refused:
+                    return self.json(*refused)
+                if new != conv_light(conv):
+                    conv["light"] = new
+                    # Im eigenen Verlauf der Person: wann sie welche Farbe gewählt hat.
+                    conv.setdefault("lights", []).append({"at": now(), "light": new})
+                    save_conv(person, conv)
                 return self.json(200, view_of(conv))
             return self.round(person, who, conv, action, body)
         finally:
@@ -981,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json(409, {"error": "Erst den offenen Werkzeugaufruf bestätigen "
                                                     "oder ablehnen."})
                 if COMMAND.match(text):
-                    run_command(McpWay(person, assertion, a), a, conv["messages"], text)
+                    run_command(McpWay(person, assertion, a, conv_light(conv)), a, conv["messages"], text)
                 else:
                     conv["messages"].append({"role": "user", "content": text, "at": now()})
                 conv.setdefault("title", text[:60])

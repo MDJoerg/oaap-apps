@@ -552,6 +552,22 @@ Grafiken) stehen in `gwcore/` — eine Kopie von
 [`oaap-apps/lib/gwcore`](../../lib/gwcore/), gemeinsam mit dem
 KI-Gateway. Geändert wird nur dort, dann `check-shared.py --fix`.
 
+## Die Ampel des Gesprächs als Decke je Anfrage (0.21)
+
+RFC-0101 Stufe 1, wie im KI-Gateway. `X-OAAP-Light: green|yellow|red`
+verschärft die Decke von Schlüssel oder Profil für diese eine Anfrage
+und lockert sie nie. Ist die Ampel der Sicht (die ihres schlechtesten
+Servers) schlechter als die verlangte Farbe, kommt 403 mit einem Satz:
+„das Gespräch steht auf grün, die Sicht sap ist gelb (Server a4h)“.
+Die Person darf die Sicht öffnen, die Prüfung von Schlüssel und Profil
+lief vorher; der Satz verrät also nichts Neues.
+
+Geprüft wird bei **jeder** Anfrage, auch innerhalb einer offenen
+Sitzung. Wechselt die Person im Chat auf grün, wird schon der nächste
+Aufruf abgelehnt. Ein unbekannter Wert wird mit 400 abgelehnt. Die
+Messzeile trägt die verlangte Farbe in der neuen Spalte `light` (§10
+bleibt wahr: ein Wort, kein Inhalt).
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

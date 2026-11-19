@@ -486,6 +486,26 @@ gemeinsam (nicht hier). Auf der Kommandozeile:
   Speichern setzte den gespeicherten Wert deshalb auf aus. Jetzt wird für
   Anthropic immer „an“ gespeichert, wie die Seite es zeigt.
 
+## Die Ampel des Gesprächs als Decke je Anfrage (0.9.0)
+
+RFC-0101 Stufe 1. Ein Client darf mit `X-OAAP-Light: green|yellow|red`
+eine **zusätzliche Decke für diese eine Anfrage** verlangen. Der Chat
+schickt so die Ampel, die die Person für ihr Gespräch gewählt hat
+(„sensible Daten“ = grün). Die Decke der Anfrage ist die strengere aus
+Schlüssel und Kopfzeile: `green` auf einem gelben Schlüssel heißt grün,
+`red` auf einem gelben Schlüssel bleibt gelb. Die Kopfzeile kann also
+nur mehr ablehnen, nie mehr erlauben.
+
+- Sperrt nur die Ampel des Gesprächs, antwortet das Gateway mit 503 und
+  dem Code `conversation_light`. Der Satz nennt beide Farben („Das
+  Gespräch steht auf grün, „chat-default“ führt nur über gelb“).
+- `/v1/models` bietet mit der Kopfzeile nur die Namen an, die unter
+  dieser Decke erreichbar sind.
+- Ein unbekannter Wert wird mit 400 `bad_light` abgelehnt, nicht stumm
+  übergangen.
+- Die Messzeile hat die neue Spalte `light`: die verlangte Farbe, leer
+  ohne Kopfzeile. Das ist ein Wort aus einer festen Liste, kein Inhalt.
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

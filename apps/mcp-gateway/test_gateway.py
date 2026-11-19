@@ -1464,13 +1464,13 @@ ASRT = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJndyJ9.ZusicherungNurFuerDenTest012345678
 
 
 def rpc_a(view, msg, sid=None, client="chat", uid="u-anna", asrt=ASRT, assistant="reklamationen",
-          key=None, confirmed=""):
+          key=None, confirmed="", light=""):
     """Wie hinter der via-Tür: die sechs Kopfzeilen der Person und der Name des Chats."""
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     for h, v in (("X-OAAP-MCP-Client", client), ("X-OAAP-User-Id", uid),
                  ("X-OAAP-User-Assertion", asrt), ("X-OAAP-User", "vp-anna" if uid else ""),
                  ("X-OAAP-Roles", "user"), ("X-OAAP-Assistant", assistant),
-                 ("X-OAAP-Confirmed", confirmed)):
+                 ("X-OAAP-Confirmed", confirmed), ("X-OAAP-Light", light)):
         if v:
             headers[h] = v
     if key:
@@ -1526,6 +1526,45 @@ check("ein *-Profil gilt NICHT für Menschen aus einem Chat: 403", st == 403, st
 admin("/issue", label="a-chat", kind="profile", groups="@chat", views="a-sicht", cost_center="KS-CHAT")
 st, sid = session_a("a-sicht")
 check("Profil @chat: Sitzung eröffnet", st == 200 and bool(sid), st)
+
+print("\n-- 0.21.0 RFC-0101: X-OAAP-Light, die Ampel des Gesprächs als Decke je Anfrage")
+_kp_light = books.server_row(app.DB, "kp")["light"]
+_chat_ceiling = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]["ceiling"]
+app.DB.execute("UPDATE servers SET light='yellow' WHERE name='kp'")
+app.DB.execute("UPDATE keys SET ceiling='yellow' WHERE label='a-chat'")
+app.DB.commit()
+check("Ausgangslage: Sicht a-sicht ist gelb", books.view_light(app.DB, "a-sicht") == "yellow")
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                           "clientInfo": {"name": "probe", "version": "1"}}},
+                    light="green")
+said = (msgs[-1].get("error") or {}).get("message", "") if msgs else ""
+check("grünes Gespräch, gelbe Sicht: 403, obwohl das Profil bis gelb darf", st == 403, st)
+check("der Satz nennt beide Farben und den Server",
+      "Gespräch steht auf grün" in said and "a-sicht ist gelb" in said and "Server kp" in said, said)
+st, sid_l = session_a("a-sicht", light="yellow")
+check("gelbes Gespräch, gelbe Sicht: Sitzung eröffnet", st == 200 and bool(sid_l), st)
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid_l,
+                    light="green")
+check("dieselbe Sitzung, nun grün: jede Anfrage wird neu geprüft (403)", st == 403, st)
+st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, sid_l,
+                    light="blau")
+check("ein unbekannter Wert wird abgelehnt, nicht übergangen (400)",
+      st == 400 and "kennt nur green" in json.dumps(msgs, ensure_ascii=False), (st, msgs))
+app.DB.execute("UPDATE keys SET ceiling='green' WHERE label='a-chat'")
+app.DB.commit()
+st, _ = session_a("a-sicht", light="red")
+check("KÖDER: rot in der Kopfzeile lockert die Decke des Profils (grün) nicht: 403", st == 403, st)
+app.DB.execute("UPDATE keys SET ceiling='yellow' WHERE label='a-chat'")
+app.DB.commit()
+st, sid_l = session_a("a-sicht", light="yellow")
+rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                  "params": {"name": "whoami", "arguments": {}}}, sid_l, light="yellow")
+row = app.DB.execute("SELECT light FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+check("die Messzeile trägt die verlangte Ampel", row and row[0] == "yellow", row and tuple(row))
+app.DB.execute("UPDATE servers SET light=? WHERE name='kp'", (_kp_light,))
+app.DB.execute("UPDATE keys SET ceiling=? WHERE label='a-chat'", (_chat_ceiling,))
+app.DB.commit()
 
 # ---- 0.7.3: Grenzen ändern, Gründe nennen, Quellen einlesen
 admin("/view-save", name="a-zwei", max_effect="read", ways="key")

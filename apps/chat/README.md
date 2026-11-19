@@ -197,10 +197,42 @@ Die Meldung ohne Destination `ki` sagt „zugeordnet“ wie das Portal und
 nennt den Ort: Seite der Instanz, Reiter Netz & Adressen, Destinationen,
 „Zuordnen“ (L16).
 
+## Ampel je Gespräch (0.8.0)
+
+RFC-0101 Stufe 1 (I-62 W1). Jedes Gespräch hat eine Ampel, die die
+Person wählt: **grün** „Sensible und personenbezogene Daten“ (Vorgabe),
+**gelb** „Firmeninformationen, nichts Sensibles“ oder **rot** „Nur
+Öffentliches“. Die Farbe steht oben rechts und lässt sich dort ändern.
+Angeboten werden nur Farben bis zur Decke des Schlüssels der
+Destination `ki`.
+
+- Der Chat schickt die Farbe als `X-OAAP-Light` an beide Gateways, bei
+  jedem Modellzug und jedem Werkzeugaufruf. Die Gateways lehnen dann
+  ebenfalls ab (KI-Gateway ab 0.9.0, MCP-Gateway ab 0.21.0). Das
+  schützt die Person vor einem Versehen und ist keine Kontrolle über sie.
+  Die Kontrolle bleibt die Decke des Schlüssels.
+- Ins Rötere nur bewusst: Ein Satz („Ich gebe in diesem Gespräch nichts
+  Sensibles ein.“) muss angekreuzt sein, der Server verlangt dafür
+  `sure: true`. Ins Grünere braucht es nichts. Die Wechsel stehen im
+  eigenen Verlauf (`lights`).
+- Ist das Modell oder die Sicht des Assistenten röter als die Ampel
+  (die Farben sagen die Gateways, `GET api/light`), sagt der Chat das
+  offen und sperrt das Senden. Er bietet drei Wege an:
+  - „Ohne Sensibles weiter“, also der bewusste Wechsel.
+  - „Grüne Option erbitten“, ein Vorgang der Art `idea`.
+  - „Vorab fragen, ob das erlaubt ist“, ein Vorgang der Art `question`.
+- Die beiden Anfragen gehen aus dem Browser an `/platform/feedback`
+  auf der Seite des Chats. Die Plattform bezeugt die Person, der Chat
+  selbst hat keinen Schlüssel für Vorgänge. Ohne die App Vorgänge im
+  Mandanten fehlen die Knöpfe; ein `tenant_admin` sieht dann einen Satz.
+- `CHAT_DEFAULT_LIGHT` (Konfiguration) darf `yellow` vorgeben, etwa für
+  Demo oder Schulung. Rot ist nie die Vorgabe.
+- Gespräche von vor 0.8.0 haben keine Farbe, für sie gilt die Vorgabe.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 108 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 132 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

@@ -118,6 +118,9 @@ ADDED_COLUMNS = (
     # 0.6.1: temperature/top_p/top_k für diese Quelle nicht weitergeben —
     # neuere Claude-Modelle lehnen sie mit 400 ab, viele Clients schicken sie.
     ("suppliers", "drop_sampling", "INTEGER NOT NULL DEFAULT 0"),
+    # 0.9.0 (RFC-0101 §2.2): die Ampel, die die Anfrage als Decke verlangte
+    # (X-OAAP-Light), leer ohne. Ein Wort aus einer festen Liste, kein Inhalt.
+    ("usage", "light", "TEXT NOT NULL DEFAULT ''"),
 )
 
 # Sichtbares Präfix. Manche fertigen Clients und SDKs erwarten einen
@@ -214,7 +217,7 @@ def revoke_cohort(db, name, actor):
 
 
 def record(db, key, alias, supplier, model, in_tokens, out_tokens, ms, outcome,
-           bytes_up, bytes_down):
+           bytes_up, bytes_down, light=""):
     """Eine Messzeile. `key` ist die Schlüsselzeile **vom Beginn der Anfrage**.
 
     Ihr Kontext wird kopiert, nicht verwiesen: Wer die Kostenstelle
@@ -222,9 +225,10 @@ def record(db, key, alias, supplier, model, in_tokens, out_tokens, ms, outcome,
     Anfrage, nicht für diese.
     """
     cols = ["time", "key_id", "alias", "supplier", "model", "in_tokens", "out_tokens", "ms",
-            "outcome", "bytes_up", "bytes_down"] + context.snapshot_columns()
+            "outcome", "bytes_up", "bytes_down", "light"] + context.snapshot_columns()
     values = [now(), key["id"], alias, supplier, model, in_tokens, out_tokens, int(ms), outcome,
-              int(bytes_up), int(bytes_down)] + context.snapshot_values(key)
+              int(bytes_up), int(bytes_down),
+              light if light in ("green", "yellow", "red") else ""] + context.snapshot_values(key)
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()

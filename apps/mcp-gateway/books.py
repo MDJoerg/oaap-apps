@@ -187,6 +187,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 0.16 (RFC-0095 Stufe 2, Verfahren U): wie der persönliche Zugang einer
     # Person zum Server geht -- {send, prefix, hint, link}. Kein Wert darin.
     ("servers", "personal", "TEXT NOT NULL DEFAULT '{}'"),
+    # 0.21 (RFC-0101 §2.2): die Ampel, die die Anfrage als Decke verlangte
+    # (X-OAAP-Light), leer ohne. Ein Wort aus einer festen Liste, kein Inhalt (§10).
+    ("usage", "light", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -1263,7 +1266,7 @@ def remove_item(db, actor, view, kind, name):
 # ------------------------------------------------------------------ Messung
 
 def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down,
-           person=None, procedure="T", status=0, door=""):
+           person=None, procedure="T", status=0, door="", light=""):
     """Eine Messzeile je Aufruf. `key` ist die Schlüsselzeile vom Beginn der Anfrage.
 
     `name`/`source` sind Namen in der Sicht und beim Server — bei einer
@@ -1271,11 +1274,12 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
     """
     cols = ["time", "key_id", "view", "kind", "tool", "server", "server_tool", "procedure",
             "outcome", "reason", "ms", "bytes_up", "bytes_down", "user_sub",
-            "user_iss", "status", "door"] + context.snapshot_columns()
+            "user_iss", "status", "door", "light"] + context.snapshot_columns()
     values = [now(), key["id"], view, kind, name, server, source, procedure, outcome, reason,
               int(ms), int(bytes_up), int(bytes_down), (person or {}).get("sub", ""),
               (person or {}).get("iss", ""), int(status or 0),
-              door if door in DOORS else ""] + context.snapshot_values(key)
+              door if door in DOORS else "",
+              light if light in LIGHT_RANK else ""] + context.snapshot_values(key)
     if (person or {}).get("client"):
         cols += ["client", "assistant", "confirmed"]
         values += [person["client"], person.get("assistant", ""), person.get("confirmed", "")]
