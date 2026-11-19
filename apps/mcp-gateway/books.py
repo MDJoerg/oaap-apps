@@ -350,8 +350,8 @@ def clean_groups(groups):
         raise ValueError("Ein Zugangsprofil nennt mindestens eine Gruppe (/pfad) oder * für alle.")
     bad = [g for g in out if not GROUP.match(g)]
     if bad:
-        raise ValueError("Gruppen sind volle Pfade wie /sap-dev, * für alle Menschen des "
-                         "Issuers, @<chat-instanz> oder @* für Menschen aus einem Chat der "
+        raise ValueError("Gruppen sind volle Pfade wie /sap-dev, * für alle Personen des "
+                         "Issuers, @<chat-instanz> oder @* für Personen aus einem Chat der "
                          "Plattform: " + ", ".join(bad))
     return ",".join(sorted(set(out)))
 
@@ -545,7 +545,7 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
             "WHERE v.ways LIKE '%key%'")):
         raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren "
                          + {"platform": "I", "propagate": "P"}.get(auth_kind, "U")
-                         + " braucht einen Menschen — erst die Sicht auf „Anmeldung“ oder "
+                         + " braucht eine Person — erst die Sicht auf „Anmeldung“ oder "
                          "„Plattform“ stellen.")
     if auth_kind == "exchange":
         ex = dict(json.loads(old_row["exchange"] or "{}")) if old_row else {}
@@ -560,7 +560,7 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
                 "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
                 "WHERE v.ways LIKE '%key%'")):
             raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren X "
-                             "braucht einen Menschen — erst die Sicht auf „Anmeldung“ (oder für einen "
+                             "braucht eine Person — erst die Sicht auf „Anmeldung“ (oder für einen "
                              "Chat auf „Plattform“) stellen.")
     else:
         exchange_json = "{}"
@@ -870,7 +870,7 @@ def save_view(db, actor, name, max_effect, requests=None, ways=None):
                          "dieser Reihenfolge (z. B. signin,platform).")
     if "key" in ways and old and exchange_servers(db, name):
         raise ValueError("Die Sicht enthält Server mit Verfahren X, I, P oder U (" + ", ".join(exchange_servers(db, name))
-                         + "); die brauchen einen angemeldeten Menschen — Schlüssel gehen hier nicht.")
+                         + "); die brauchen eine angemeldete Person — Schlüssel gehen hier nicht.")
     current = view_requests(old) if old else dict(REQUESTS_NEW)
     if requests:
         for r, v in requests.items():
@@ -1091,8 +1091,8 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
     if server_row(db, server)["auth_kind"] in PERSON_KINDS and "key" in view_ways(view_row(db, view)):
-        raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht einen angemeldeten "
-                         f"Menschen; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
+        raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht eine angemeldete "
+                         f"Person; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
                          "„Anmeldung“ (oder für einen Chat auf „Plattform“) stellen.")
     cat = catalog_row(db, server, kind, source)
     if not cat or not cat["present"]:

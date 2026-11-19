@@ -36,7 +36,7 @@ import apps_source
 from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
@@ -534,7 +534,7 @@ class Handler(BaseHTTPRequestHandler):
         note = f"<p class=meta>Erledigt: {esc(msg)}</p>" if msg else ""
         rows = [
             f"<tr><td>{ARCHIVE_SOURCE}</td><td>archive über Destination <code>docs-origin</code> "
-            f"({'gebunden' if st['destination'] else '<span class=err>nicht gebunden</span>'}), Pfad <code>{esc(self.lib.archive_path)}</code></td>"
+            f"({'zugeordnet' if st['destination'] else '<span class=err>nicht zugeordnet</span>'}), Pfad <code>{esc(self.lib.archive_path)}</code></td>"
             f"<td>{esc(a.get('at'))} {'ok' if a.get('ok') else ('<span class=err>' + esc(a.get('error')) + '</span>' if a else '–')}"
             + (f"<br><span class=meta>antwortet: Stand {esc(good.get('at'))}, {good.get('files')} Dateien, {esc((good.get('sha256') or '')[:12])}</span>" if good else "")
             + "</td></tr>"]

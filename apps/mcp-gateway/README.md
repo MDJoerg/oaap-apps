@@ -8,10 +8,10 @@ oder wo.
 Umsetzung der Capability [`oaap.ai.mcp-gateway`
 0.5](../../../oaap-spec/spec/oaap.ai.mcp-gateway.md) = RFC-0065 Stufen 1
 bis 3 und RFC-0073 Stufen 1 und 2: Sichten bündeln Tools, Resources und
-Prompts mehrerer Server; hinein mit einem Schlüssel oder als Mensch,
+Prompts mehrerer Server; hinein mit einem Schlüssel oder als Person,
 angemeldet am Anmeldedienst des Mandanten; zum Server technisch
-(Verfahren T), als dieser Mensch über einen getauschten Token
-(Verfahren X) oder zu einer App der Plattform als dieser Mensch über die
+(Verfahren T), als diese Person über einen getauschten Token
+(Verfahren X) oder zu einer App der Plattform als diese Person über die
 Plattform (Verfahren I).
 
 ## Was diese App tut — und was ausdrücklich nicht
@@ -26,15 +26,15 @@ Plattform (Verfahren I).
 | Server schützen: Gleichzeitigkeit, Raten, Zeit, Größe, Pause | eine zu große Antwort kürzen |
 | je Tool-Aufruf, Resource-Lesen, Prompt zählen, mit Kontext-Kopie | Preise kennen — Volumen, nie Geld |
 | nur die eingetragene Adresse anfahren | einer Weiterleitung folgen, Loopback oder Link-Local anfahren |
-| Tokens eines Menschen selbst prüfen (RS256, Issuer, Audience, Ablauf) | ein Token an einen Server weiterreichen |
-| bei Verfahren X ein Token nur für das Backend eintauschen | auf den technischen Zugang ausweichen, wenn der Mensch fehlt |
+| Tokens einer Person selbst prüfen (RS256, Issuer, Audience, Ablauf) | ein Token an einen Server weiterreichen |
+| bei Verfahren X ein Token nur für das Backend eintauschen | auf den technischen Zugang ausweichen, wenn die Person fehlt |
 
 ## Zwei Wege, zwei Rollen
 
 - **`/mcp/...` ist `public`.** Die Plattform authentifiziert hier
   nichts, entfernt gefälschte Identitäts-Kopfzeilen und bremst je
   Client-Adresse (RFC-0010). Geprüft wird im Dienst: ein
-  **API-Schlüssel** oder das **Token eines angemeldeten Menschen**. Wer
+  **API-Schlüssel** oder das **Token einer angemeldeten Person**. Wer
   nicht darf, bekommt immer dieselbe `401` — ob ohne Schlüssel, mit
   falschem Token oder für eine Sicht, die es nicht gibt.
 - **`/.well-known/oauth-protected-resource` ist `public`.** Dort
@@ -71,7 +71,7 @@ claude mcp add --transport http <sicht> https://<gateway>/mcp/<sicht> \
   --header "Authorization: Bearer mcp-oaap-…"
 ```
 
-## Anmeldung von Menschen (0.3)
+## Anmeldung von Personen (0.3)
 
 Die Plattform zeigt einer App ihren Anmeldedienst bewusst nicht
 (RFC-0041). Das MCP-Gateway ist die Ausnahme, und der Betreiber richtet
@@ -81,7 +81,7 @@ sie ein (RFC-0065 §15, D14–D16):
    - ein **vertraulicher Client** des Gateways, z. B. `mcp-gw-<instanz>`,
      ohne Anmeldefluss; für Verfahren X mit eingeschaltetem
      *Standard token exchange*;
-   - ein **öffentlicher Client** für Menschen, z. B. `mcp-claude`:
+   - ein **öffentlicher Client** für Personen, z. B. `mcp-claude`:
      Anmeldung mit PKCE, Rücksprung nur
      `http://localhost:33418/callback`, ein **Audience-Mapper** auf den
      vertraulichen Client und ein Gruppen-Mapper (`groups`, volle Pfade).
@@ -92,8 +92,8 @@ sie ein (RFC-0065 §15, D14–D16):
 3. **Sicht auf „Anmeldung“** stellen und ein **Zugangsprofil** anlegen:
    Gruppen (`/sap-dev`, oder `*` für alle), Sichten, Kontext, Rate,
    Budget — wie ein Schlüssel, nur ohne Wert. Das Profil wird je Sicht
-   gewählt; die Rate gilt je Mensch, das Budget für alle zusammen.
-4. **Claude Code**, einmal je Mensch:
+   gewählt; die Rate gilt je Person, das Budget für alle zusammen.
+4. **Claude Code**, einmal je Person:
 
 ```bash
 claude mcp add --transport http <sicht> https://<gateway>/mcp/<sicht> \
@@ -122,14 +122,14 @@ Client-ID. Ohne sie versucht Claude Code, sich selbst im Realm zu
 registrieren (Dynamic Client Registration), und Keycloak lehnt das ab
 (Policy „Trusted Hosts“). Gemessen am 07.11. mit Claude Code 2.1.319.
 
-Claude Code öffnet den Browser, der Mensch meldet sich an, und das
+Claude Code öffnet den Browser, die Person meldet sich an, und das
 Gateway prüft das Token selbst: RS256, mindestens 2048 Bit, Issuer,
 Audience, Ablauf. Die Schlüssel des Issuers holt es nur von dessen
-eigener Adresse. In der Messzeile steht der Mensch als `sub` mit
+eigener Adresse. In der Messzeile steht die Person als `sub` mit
 Issuer — nie Name oder E-Mail.
 
 **Verfahren X (Token-Tausch):** Ein Server mit Zugang `exchange` wird
-als dieser Mensch gerufen. Das Gateway tauscht dessen Token beim
+als diese Person gerufen. Das Gateway tauscht dessen Token beim
 Token-Endpunkt gegen eines nur für das Backend (`audience`) und reicht
 das eigene Token nie weiter. Klappt der Tausch nicht, wird abgelehnt —
 nie der technische Zugang. Eine Sicht mit so einem Server nimmt nur
@@ -152,14 +152,14 @@ Sicht**, bis der Betreiber freigibt. Verschwindet sie, bleiben ihre
 Einträge stehen und sind als weg markiert.
 
 **Verfahren I (0.5):** Nennt die Liste eine Tür, wird die Quelle mit
-Zugang `platform` eingetragen. Ein angemeldeter Mensch erreicht die App
+Zugang `platform` eingetragen. Eine angemeldete Person erreicht die App
 dann **als er selbst**: Das Gateway tauscht sein Token mit dem eigenen
 Client (`MCPGW_AUDIENCE`, Geheimnis `MCPGW_CLIENT_SECRET`) gegen eines
 für den Plattform-Client des Realms (`MCPGW_PLATFORM_AUDIENCE`) und ruft
 die Tür auf der eigenen Seite mit dem Quellen-Schlüssel und diesem
 Act-Token. Die Plattform prüft beides, findet die Person über ihre
 Bindung und gibt der App die sechs Kopfzeilen der Person. Die App ändert
-nichts. Ohne Menschen kein Aufruf, kein Rückfall auf einen technischen
+nichts. Ohne Person kein Aufruf, kein Rückfall auf einen technischen
 Zugang. Eine Sicht mit so einem Server nimmt nur Anmeldungen an.
 
 **Agenten (Verfahren T):** Für eine Sicht mit Schlüsseln trägt der
@@ -182,7 +182,7 @@ Dann legt der Konnektor, der den Realm des Mandanten angelegt hat,
 `http://localhost:33418/callback`) an. Die Plattform reicht Issuer,
 Client-IDs, Geheimnis und Plattform-Client als `OAAP_MCP_IDP_*` herein.
 Sie gelten, wo `MCPGW_*` leer ist; was von Hand gesetzt ist, gewinnt. Die
-Karte „Anmeldung von Menschen“ zeigt je Einstellung, woher sie kommt.
+Karte „Anmeldung von Personen“ zeigt je Einstellung, woher sie kommt.
 `--off` (oder „abschalten“) deaktiviert beide Clients, gelöscht wird
 nichts.
 
@@ -192,16 +192,16 @@ docker exec <container> python3 /srv/app.py source sync
 echo "$TOKEN" | docker exec -i <container> python3 /srv/app.py server read <quelle> --token-stdin ja
 ```
 
-**Katalog ohne Menschen (0.10.0, RFC-0073 §16):** Eine Plattform ab 0.1.300
+**Katalog ohne Person (0.10.0, RFC-0073 §16):** Eine Plattform ab 0.1.300
 nennt je Quelle eine **Erkundungs-Tür** (`discover`). Dort liest das Gateway
-den Katalog ohne angemeldeten Menschen — gleich nachdem eine Quelle
+den Katalog ohne angemeldete Person — gleich nachdem eine Quelle
 auftaucht, alle `MCPGW_CATALOG_MINUTES` und auf Knopfdruck. Die Plattform
 lässt dort nur den Verbindungsaufbau, die vier Listen und das Lesen der
 Ansichten (`ui://`) durch, die Werkzeuge nennen — nie einen Aufruf. Die App sieht das Gateway als Maschinen-Benutzer `instance:<gateway>`
 und zeigt ihm dessen Liste; nach dem Lesen steht „Als Gateway gelesen“.
 Aufrufe laufen weiter nur als Person (Verfahren I oder A).
 
-## Verfahren A: ein Chat der Plattform trägt den Menschen (0.7)
+## Verfahren A: ein Chat der Plattform trägt die Person (0.7)
 
 Eine Chat-App desselben Mandanten (Manifest 0.12, `mcp_client: {use: true}`)
 erreicht das Gateway über eine Tür auf ihrer **eigenen** Seite,
@@ -472,7 +472,7 @@ angepasst ist.
 ## Rückfragen vom Server an den Client
 
 MCP erlaubt einem Server, während eines Aufrufs zurückzufragen:
-**Elicitation** (den Menschen fragen: „Welcher Transportauftrag?“),
+**Elicitation** (die Person fragen: „Welcher Transportauftrag?“),
 **Roots** (die Arbeitsverzeichnisse des Clients) und **Sampling** (das
 Modell des Clients für sich arbeiten lassen). Je Sicht einstellbar,
 jede für sich: durchreichen oder ablehnen.
@@ -483,7 +483,7 @@ jede für sich: durchreichen oder ablehnen.
 - Sichten aus 0.1 lehnen weiter alles ab, bis der Betreiber es ändert.
 - Durchgereicht wird nur, was die Sicht erlaubt **und** der Client
   kann; dem Server sagt das Gateway auch nur das zu.
-- Die Antwort des Menschen geht durch und wird nirgends gespeichert.
+- Die Antwort der Person geht durch und wird nirgends gespeichert.
 - Manche Server zeigen Tools nur Clients, die Rückfragen beantworten
   können (der offizielle Referenzserver: 16 statt 20). Der Katalog wird
   deshalb mit allen drei Fähigkeiten gelesen. Liegt so ein Tool in
@@ -503,7 +503,7 @@ Ergebnis sähe für das Modell vollständig aus.
 Der Grund steht in RFC-0065 §8: Ein Agent, der in einer Schleife
 zweihundertmal `read_class` ruft, ist realistisch, und einem
 SAP-System, dem die Dialog-Workprozesse ausgehen, geht es dann für
-alle Menschen aus.
+alle Personen aus.
 
 ## Kommandozeile (kopflose Knoten)
 

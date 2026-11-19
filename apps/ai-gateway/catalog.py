@@ -162,6 +162,11 @@ def set_supplier(db, actor, master, name, url, light, credential="", drop_creden
         sealed, what = vault.seal(master, credential), "neu gesetzt"
     now = store.now()
     drop = 1 if drop_sampling else 0
+    if relay.is_anthropic(url):
+        # L15 (0.8.1): bei Anthropic ist das Häkchen gesperrt (immer an), und ein
+        # gesperrtes Feld schickt der Browser nicht mit -- das Speichern kippte
+        # den Wert auf 0. Gespeichert wird, was die Seite zeigt: an.
+        drop = 1
     if row:
         db.execute("UPDATE suppliers SET url=?, light=?, credential=?, drop_sampling=?, updated=? "
                    "WHERE name=?", (url.rstrip("/"), light, sealed, drop, now, name))

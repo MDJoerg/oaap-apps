@@ -41,8 +41,9 @@ def fetch(base, path, max_bytes=MAX_BYTES, timeout=60):
     wird NICHT verfolgt: sie führte an der Destination vorbei, und ein
     geschlossener Abfluss (RFC-0068) ließe sie ohnehin nicht durch."""
     if not base:
-        raise Refused("Keine Destination docs-origin gebunden (Portal → Destinationen, "
-                      "oder: oaap destination bind <instanz> docs-origin <ziel>).")
+        raise Refused("Keine Destination docs-origin zugeordnet (Portal: Seite der Instanz, "
+                      "Reiter Netz & Adressen, Destinationen, „Zuordnen“; Kommandozeile: "
+                      "oaap destination bind <instanz> <destination> --as docs-origin).")
     url = base.rstrip("/") + "/" + path.lstrip("/")
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):

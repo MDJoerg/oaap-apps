@@ -58,7 +58,7 @@ from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 
-VERSION = "0.20.0"
+VERSION = "0.20.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -485,8 +485,8 @@ def platform_act(person):
     Gibt das Act-Token zurück; wirft NoPerson mit einem Satz. Kein Rückfall
     auf den eigenen Prinzipal (D8): ohne Menschen kein Aufruf."""
     if not person or not person.get("token"):
-        raise NoPerson("Diese Quelle der Plattform arbeitet mit Verfahren I und braucht einen "
-                       "angemeldeten Menschen; mit einem Schlüssel geht es nicht.")
+        raise NoPerson("Diese Quelle der Plattform arbeitet mit Verfahren I und braucht eine "
+                       "angemeldete Person; mit einem Schlüssel geht es nicht.")
     if not (ISSUER and AUDIENCE and CLIENT_SECRET and PLATFORM_AUDIENCE and SOURCES_KEY):
         raise NoPerson("Verfahren I ist nicht eingerichtet (MCPGW_ISSUER, MCPGW_AUDIENCE, "
                        "MCPGW_CLIENT_SECRET, MCPGW_PLATFORM_AUDIENCE und der Quellen-Schlüssel "
@@ -603,8 +603,8 @@ def server_access(srow, person=None):
                        "Anmeldediensts; über einen Chat der Plattform (Verfahren A) gibt es "
                        "keins. Dieses Tool ist hier nicht verfügbar.")
     if not person or not person.get("token"):
-        raise NoPerson("Dieser Server arbeitet mit Verfahren X und braucht einen angemeldeten "
-                       "Menschen; mit einem Schlüssel geht es nicht.")
+        raise NoPerson("Dieser Server arbeitet mit Verfahren X und braucht eine angemeldete "
+                       "Person; mit einem Schlüssel geht es nicht.")
     ex = json.loads(srow["exchange"] or "{}")
     cache = (person["iss"], person["sub"], srow["name"])
     with _EXCHANGED_LOCK:
@@ -645,8 +645,8 @@ def read_catalog(name, person=None):
     discover = (discover_door(srow["source"] or name) if srow["auth_kind"] == "platform"
                 and not person and SOURCES_KEY else "")
     if srow["auth_kind"] == "exchange" and not person:
-        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token eines "
-                       f"Menschen — app.py server read {name} --token-stdin ja.")
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token einer "
+                       f"Person — app.py server read {name} --token-stdin ja.")
     if srow["auth_kind"] == "propagate" and not (person and person.get("assertion")):
         # P3: kein technischer Katalog-Benutzer -- es liest eine Person als sie selbst.
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Als "
@@ -659,7 +659,7 @@ def read_catalog(name, person=None):
                        f"mit Zugang liest die erste Werkzeugliste auf ihrer Seite /me.")
     if srow["auth_kind"] == "platform" and not person and not discover:
         # Eine Plattform vor 0.1.300 nennt keine Erkundungs-Tür (L8a, 18.11.).
-        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht einen Menschen, "
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren I braucht eine Person, "
                        f"und die Plattform nennt für diese Quelle keine Erkundungs-Tür (ab Referenz "
                        f"0.1.300). Als Person des Mandanten auf „Katalog lesen“ klicken, oder "
                        f"app.py server read {name} --token-stdin ja.")
@@ -792,7 +792,7 @@ def entitled(key, vrow, way):
     return why_not(key, vrow, way) is None
 
 
-WAY_NAMES = {"platform": "„Plattform“ (Menschen aus einem Chat)", "signin": "„Anmeldung“",
+WAY_NAMES = {"platform": "„Plattform“ (Personen aus einem Chat)", "signin": "„Anmeldung“",
              "key": "„Schlüssel“"}
 LIGHT_DE = {"green": "grün", "yellow": "gelb", "red": "rot"}
 
@@ -822,12 +822,12 @@ def why_not(key, vrow, way):
         # (Zugang „Plattform“). Wer für einen Chat * schrieb, bekam „Anmeldung
         # einschalten“ geraten -- der Chat braucht aber @<chat>.
         if way == "signin" and "platform" in ways:
-            return (f"die Sicht {vrow['name']} nimmt Menschen aus einem Chat (Zugang „Plattform“), "
+            return (f"die Sicht {vrow['name']} nimmt Personen aus einem Chat (Zugang „Plattform“), "
                     "das Profil nennt aber Gruppen der Anmeldung am Gateway (* oder /pfad). Für einen "
                     "Chat im Profil @<chat-instanz> oder @* nennen; den Zugang „Anmeldung“ bei der Sicht "
-                    "nur einschalten, wenn sich Menschen selbst am Gateway anmelden (z. B. Claude Code).")
+                    "nur einschalten, wenn sich Personen selbst am Gateway anmelden (z. B. Claude Code).")
         if way == "platform":
-            return (f"die Sicht {vrow['name']} hat den Zugang „Plattform“ nicht, den Menschen aus einem "
+            return (f"die Sicht {vrow['name']} hat den Zugang „Plattform“ nicht, den Personen aus einem "
                     "Chat (@<chat-instanz>, @*) brauchen -- auf der Betreiberseite bei der Sicht "
                     "einschalten.")
         return (f"die Sicht {vrow['name']} hat den Zugang {WAY_NAMES.get(way, way)} nicht -- "
@@ -1114,7 +1114,7 @@ def start_tab(host):
     guide = """<div class="card"><h2>So hängt es zusammen</h2><ol class="steps">
 <li><b>Server</b> — ein MCP-Server, den das Gateway erreicht (URL, Destination oder Quelle der Plattform), mit Ampel.</li>
 <li><b>Sicht</b> — ein MCP-Endpunkt; du gibst darin einzelne Werkzeuge der Server frei. Neues erscheint nie von selbst.</li>
-<li><b>Schlüssel oder Zugangsprofil</b> — wer die Sicht benutzen darf: ein Agent mit Schlüssel, angemeldete Menschen
+<li><b>Schlüssel oder Zugangsprofil</b> — wer die Sicht benutzen darf: ein Agent mit Schlüssel, angemeldete Personen
 per Gruppe, oder ein Chat der Plattform (<code>@&lt;chat&gt;</code>).</li></ol></div>"""
     return tiles + todo_card + sources_card() + guide
 
@@ -1190,7 +1190,7 @@ def keys_tab(host):
                        f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select>'
                        f'<label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select>'
                        + (f'<label>Gruppen (Komma): * oder /pfad = Anmeldung am Gateway; '
-                          f'@&lt;chat&gt; oder @* = Menschen aus einem Chat</label>'
+                          f'@&lt;chat&gt; oder @* = Personen aus einem Chat</label>'
                           f'<input type="text" name="groups" value="{esc(", ".join(books.profile_groups(k)))}" required>'
                           if k["kind"] == "profile" else "")
                        + f'<button>Speichern</button></form></details>')
@@ -1203,7 +1203,7 @@ def keys_tab(host):
     vnames = [v["name"] for v in books.views(DB)]
     return f'''<div class="card"><div class="chead"><h2>Schlüssel und Zugangsprofile</h2></div>
 <p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert,
-es gilt für Menschen — und die kommen auf zwei Wegen:</p>
+es gilt für Personen — und die kommen auf zwei Wegen:</p>
 <ul class="hint">
 <li><b>Selbst am Gateway angemeldet</b> (z. B. Claude Code mit Anmeldung): Gruppen <code>*</code> für alle,
 die sich anmelden dürfen, oder volle Pfade wie <code>/sap-dev</code>. Die Sicht braucht den Zugang „Anmeldung“.</li>
@@ -1558,7 +1558,7 @@ CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code 
 def signin_card(host):
     """Wie sich Menschen anmelden (Spec §2.2) — oder warum es noch nicht geht."""
     if not ISSUER:
-        return ('<div class="card"><h2>Anmeldung von Menschen</h2><p class="muted">Aus. Einrichten: '
+        return ('<div class="card"><h2>Anmeldung von Personen</h2><p class="muted">Aus. Einrichten: '
                 + portal_mcp_link("im Portal auf der Seite dieser Instanz")
                 + ' auf <b>„Anmeldung einrichten“</b> klicken (das darf die Verwaltung des Mandanten, tenant_admin, ab Plattform 0.1.309; davor nur der Betreiber, server_admin) -- die Plattform legt die Clients im Realm '
                 'an und gibt dem Gateway die Werte. Die Felder MCPGW_* in der Konfiguration der Instanz '
@@ -1571,9 +1571,9 @@ def signin_card(host):
                     f"  --client-id {SIGNIN_CLIENT or '<client>'} --callback-port {CALLBACK_PORT}"
                     for v in views) or "Noch keine Sicht nimmt Anmeldungen an."
     mcp_json = mcp_json_text(host, views)
-    return f'''<div class="card"><h2>Anmeldung von Menschen</h2>
+    return f'''<div class="card"><h2>Anmeldung von Personen</h2>
 <p>Issuer <code>{esc(ISSUER)}</code> · Audience <code>{esc(AUDIENCE or "— fehlt")}</code> ·
-Client für Menschen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
+Client für Personen <code>{esc(SIGNIN_CLIENT or "— fehlt")}</code></p>
 <p class="hint">Eingerichtet und abgeschaltet wird die Anmeldung {portal_mcp_link("im Portal auf der Seite dieser Instanz")}.</p>
 {"<p class=err>Schlüssel des Issuers: " + esc(err) + "</p>" if err else ""}
 <p class="hint">Im Realm braucht es einen öffentlichen Client (Rücksprung nur
@@ -1763,7 +1763,7 @@ den alten Namen.</p>
     return page(f"Server {name}", "".join(parts), user, roles, "server")
 
 
-REQUEST_WORDS = {"elicitation": "Rückfrage an den Menschen (elicitation)",
+REQUEST_WORDS = {"elicitation": "Rückfrage an die Person (elicitation)",
                  "roots": "Arbeitsverzeichnisse des Clients (roots)",
                  "sampling": "Modell des Clients benutzen (sampling)"}
 

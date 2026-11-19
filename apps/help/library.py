@@ -338,7 +338,8 @@ class Library:
             return None
         how = (" Im Portal unter Destinationen eine Destination docs-origin (Adresse der "
                "oaap-docs, z. B. https://codeload.github.com/MDJoerg/oaap-docs) anlegen und "
-               "dieser Instanz zuordnen, danach auf /admin „Jetzt holen“."
+               "dieser Instanz zuordnen (Seite der Instanz, Reiter Netz & Adressen), danach auf "
+               "/admin „Jetzt holen“."
                if admin else " Die Verwaltung des Mandanten kann das einrichten.")
         if bound and last and not last.get("ok"):
             first = "Die OAAP-Plattform-Doku konnte noch nicht geholt werden"

@@ -474,6 +474,18 @@ und gelten für jeden hinzugefügten. Schlüssel einer Kohorte ändern sich nur
 gemeinsam (nicht hier). Auf der Kommandozeile:
 `app.py key aliases <etikett> a,b` (leer = alle).
 
+## Unerreichbare Modellnamen und das Anthropic-Häkchen (0.8.1)
+
+- **L14:** Nennt ein Schlüssel Modellnamen, deren Ziele alle über seiner
+  Obergrenze liegen (oder bei Freigabe für personenbezogene Daten nur rote),
+  wird er weiter ausgestellt, aber die Seite warnt: „erreicht diese
+  Modellnamen nie“, mit Grund. Dasselbe beim Ändern der Modellnamen, und
+  die Schlüsselliste markiert ihn („nie erreichbar“).
+- **L15:** Bei Anthropic ist „temperature/top_p nicht weitergeben“ gesperrt
+  und immer an. Ein gesperrtes Feld schickt der Browser nicht mit; das
+  Speichern setzte den gespeicherten Wert deshalb auf aus. Jetzt wird für
+  Anthropic immer „an“ gespeichert, wie die Seite es zeigt.
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

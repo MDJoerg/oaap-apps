@@ -54,7 +54,7 @@ import store
 import supply
 import vault
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -161,6 +161,35 @@ def pbd_of(row):
     Regel halten, die es halten kann: freigegeben heißt **nie rot**.
     """
     return bool(row["personal_data"])
+
+
+LIGHT_DE = {"green": "grün", "yellow": "gelb", "red": "rot"}
+
+
+def unreachable_aliases(names, ceiling, pbd):
+    """L14 (0.8.1): die ausdrücklich genannten Modellnamen, die ein Schlüssel
+    mit dieser Obergrenze nie erreicht -- je Name die Gründe. Vorher wurde so
+    ein Schlüssel stumm ausgestellt; /v1/models bot die Namen nur nicht an."""
+    out = {}
+    for n in names:
+        alias = ALIASES.get(n)
+        if alias and not supply.alias_light(alias, SUPPLIERS, ceiling, pbd):
+            out[n] = supply.blocked_reasons(alias, SUPPLIERS, ceiling, pbd) or ["kein Ziel erreichbar"]
+    return out
+
+
+def unreachable_note(label, unreachable):
+    """Ein Satz für die Seite, oder ''."""
+    if not unreachable:
+        return ""
+    parts = []
+    for n, reasons in unreachable.items():
+        words = "; ".join(re.sub(r"\b(green|yellow|red)\b", lambda m: LIGHT_DE[m.group(1)], r)
+                          for r in reasons)
+        parts.append(f"{n} ({words})")
+    return (f"Achtung: „{label}“ erreicht diese Modellnamen nie: " + ", ".join(parts)
+            + ". Die Obergrenze des Schlüssels heben oder die Modellnamen weglassen -- "
+            "/v1/models bietet sie ihm nicht an, eine Anfrage darauf wird abgelehnt.")
 
 
 def allowed_aliases(row):
@@ -1052,8 +1081,10 @@ def change_key_aliases(label, names, user):
         return str(exc)
     if old == new:
         return f"Modellnamen von „{label}“ unverändert."
+    row = next((r for r in store.keys(DB) if r["label"] == label), None)
+    warn = unreachable_note(label, unreachable_aliases(names, ceiling_of(row), pbd_of(row))) if row else ""
     return (f"Modellnamen von „{label}“ geändert: {old or 'alle'} → {new or 'alle'} "
-            "-- gilt ab der nächsten Anfrage, das Geheimnis bleibt.")
+            "-- gilt ab der nächsten Anfrage, das Geheimnis bleibt." + (" " + warn if warn else ""))
 
 
 def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from=""):
@@ -1074,6 +1105,12 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
         budget = (f'{fmt_tokens(used)} / {fmt_tokens(row["budget_tokens"])}'
                   if row["budget_tokens"] else f'{fmt_tokens(used)} <span class="muted">/ frei</span>')
         aliases = esc(row["aliases"]) if row["aliases"] else "alle"
+        never = unreachable_aliases([a for a in (row["aliases"] or "").split(",") if a],
+                                    ceiling_of(row), pbd_of(row))
+        if never:
+            aliases += (' <span class="badge yellow" title="die Obergrenze des Schlüssels lässt '
+                        'kein Ziel dieser Modellnamen zu">nie erreichbar: '
+                        + esc(", ".join(never)) + '</span>')
         light = light_badge(ceiling_of(row), short=True) + " und besser"
         if pbd_of(row):
             light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
@@ -2209,6 +2246,8 @@ class Handler(BaseHTTPRequestHandler):
                         expires=end_of_day(form.get("bis", "")),
                         **{name: form.get(name, "") for name in store.CONTEXT_FIELDS})
                     secret = {"label": form.get("label", ""), "value": value}
+                    notice = unreachable_note(form.get("label", "").strip(),
+                                              unreachable_aliases(aliases, ceiling, personal_data))
                 except ValueError as exc:
                     notice = str(exc)
         elif path in ("/supplier", "/supplier-delete", "/alias", "/alias-delete"):

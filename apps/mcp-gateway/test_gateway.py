@@ -1157,7 +1157,7 @@ doc = json.loads(urllib.request.urlopen(req).read())
 check("Report nach Art", doc["totals"]["calls"] == len(rows)
       and {g["kind"] for g in doc["groups"]} == kinds, doc)
 _, vp = admin_get("/view?name=buendel")
-check("Seite der Sicht rendert mit Bündel", "zwei: echo → echo2" in vp and "Rückfrage an den Menschen" in vp)
+check("Seite der Sicht rendert mit Bündel", "zwei: echo → echo2" in vp and "Rückfrage an die Person" in vp)
 
 print("\n-- Stufe 3: Metadaten für die Anmeldung (RFC 9728)")
 
@@ -1719,11 +1719,14 @@ check("0.9.0: Übersicht hat Kacheln und den Zusammenhang Server → Sicht → Z
 check("0.9.0: Übersicht zeigt keine Tabellen der Reiter",
       "Schlüssel ausstellen" not in main_page and "Prüfspur" not in main_page.split("</nav>", 1)[1], None)
 for tab, word in (("server", "+ Server anlegen"), ("sichten", "+ Sicht anlegen"),
-                  ("zugaenge", "+ Schlüssel ausstellen"), ("anmeldung", "Anmeldung von Menschen"),
+                  ("zugaenge", "+ Schlüssel ausstellen"), ("anmeldung", "Anmeldung von Personen"),
                   ("aufrufe", "Prüfspur")):
     st_t, pg_t = admin_get("/?tab=" + tab)
     check(f"0.9.0: Reiter {tab} zeigt „{word}“ und ist markiert",
           st_t == 200 and word in pg_t and f'?tab={tab}" class=on' in pg_t, st_t)
+check("L3 (0.20.1): kein Reiter sagt „Menschen“ -- das Portal sagt „Personen“",
+      all("Mensch" not in admin_get("/?tab=" + t)[1]
+          for t in ("", "server", "sichten", "zugaenge", "anmeldung", "aufrufe")), None)
 _, sv = admin_get("/?tab=sichten")
 check("0.9.0: der Server papier steht im Reiter Server", "papier" in admin_get("/?tab=server")[1], None)
 st_x, px = admin_get("/?tab=gibtsnicht")
@@ -2726,7 +2729,7 @@ admin("/issue", label="stern-prof", kind="profile", groups="*", views="nur-chat"
       max_effect="read", ceiling="red")
 st, page = admin_get("/?tab=zugaenge")
 check("L12: ein Profil mit * an einer Chat-Sicht rät zu @<chat>, nicht zu „Anmeldung einschalten“",
-      "nur-chat: die Sicht nur-chat nimmt Menschen aus einem Chat" in page
+      "nur-chat: die Sicht nur-chat nimmt Personen aus einem Chat" in page
       and "@&lt;chat-instanz&gt; oder @*" in page, page[-1500:])
 check("L12: die Seite erklärt beide Wege und dass * für einen Chat nicht gilt",
       "Selbst am Gateway angemeldet" in page and "Von einem Chat der Plattform hergetragen" in page
