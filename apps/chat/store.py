@@ -24,57 +24,12 @@ import os
 import threading
 
 import assistants
-from authz_client import may_in
 
-CONTEXT_FIELD = "team"
+# Seit 0.9.0 (RFC-0097 Stufe 1) im gemeinsamen Modul lib/assistants: dieselbe Regel
+# prüft das MCP-Gateway für die Assistenten, die bei ihm liegen.
+from assistants import CONTEXT_FIELD, Who, can_manage, can_see, problems  # noqa: E402,F401
+
 _LOCK = threading.Lock()
-
-
-class Who:
-    """Wer fragt: Kennung, Plattformrollen, fachliche Berechtigungen (oder None)."""
-
-    def __init__(self, uid, roles, grants):
-        self.uid, self.roles, self.grants = uid, set(roles), grants
-
-
-def _team(a):
-    ctx = (a.get("visibility") or {}).get("context") or {}
-    return ctx.get(CONTEXT_FIELD)
-
-
-def can_see(a, who):
-    scope = (a.get("visibility") or {}).get("scope")
-    if scope == "tenant":
-        return True
-    if scope == "private":
-        return bool(who.uid) and a.get("owner") == who.uid
-    if scope == "context":
-        team = _team(a)
-        return bool(team) and (may_in(who.grants, "assistant.use", team=team)
-                               or may_in(who.grants, "assistant.manage", team=team))
-    return False
-
-
-def can_manage(a, who):
-    scope = (a.get("visibility") or {}).get("scope")
-    if scope == "tenant":
-        return "tenant_admin" in who.roles
-    if scope == "private":
-        return bool(who.uid) and a.get("owner") == who.uid
-    if scope == "context":
-        team = _team(a)
-        return bool(team) and may_in(who.grants, "assistant.manage", team=team)
-    return False
-
-
-def problems(a):
-    """Die Sätze von oaap.ai.assistants, dazu was nur dieser Chat verlangt."""
-    errs = assistants.check(a)
-    v = a.get("visibility") if isinstance(a, dict) else None
-    if not errs and v.get("scope") == "context" and set(v["context"]) != {CONTEXT_FIELD}:
-        errs.append(f"visibility: dieser Chat kennt als Kontext nur {CONTEXT_FIELD} "
-                    f"(z. B. {{\"{CONTEXT_FIELD}\": \"service\"}}).")
-    return errs
 
 
 class Store:

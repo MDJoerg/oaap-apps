@@ -1566,6 +1566,160 @@ app.DB.execute("UPDATE servers SET light=? WHERE name='kp'", (_kp_light,))
 app.DB.execute("UPDATE keys SET ceiling=? WHERE label='a-chat'", (_chat_ceiling,))
 app.DB.commit()
 
+print("\n-- 0.22.0 RFC-0097 Stufe 1: Assistenten mit Revisionen im Gateway")
+
+
+def ax(method, path, body=None, uid="u-anna", roles="user", client="chat", asrt=ASRT):
+    """Wie hinter der via-Tür: Person, Zusicherung und Name des Chats."""
+    headers = {"Content-Type": "application/json"}
+    for h, v in (("X-OAAP-MCP-Client", client), ("X-OAAP-User-Id", uid),
+                 ("X-OAAP-User-Assertion", asrt), ("X-OAAP-Roles", roles)):
+        if v:
+            headers[h] = v
+    req = urllib.request.Request(f"{GW}/mcp/_assistants{path}", method=method, headers=headers,
+                                 data=None if body is None else json.dumps(body).encode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            return exc.code, json.loads(raw or b"{}")
+        except ValueError:
+            return exc.code, {"raw": raw.decode("utf-8", "replace")}
+
+
+def adoc(aid, scope="private", team=None, **kw):
+    v = {"scope": scope}
+    if team:
+        v["context"] = {"team": team}
+    return dict({"id": aid, "title": aid, "system": "Du hilfst.", "model": "standard",
+                 "view": "a-sicht", "visibility": v, "owner": "-"}, **kw)
+
+
+ids_of = lambda d: sorted(a["id"] for a in d.get("assistants", []))  # noqa: E731
+st, d = ax("GET", "", client="")
+check("ohne via-Tür (kein Chat, keine Person): dieselbe Ablehnung wie überall (401)", st == 401, st)
+st, d = ax("POST", "", adoc("a-priv"))
+check("Anna speichert einen privaten Assistenten: Revision 1", st == 200 and d == {"saved": "a-priv", "rev": 1}, (st, d))
+st, d = ax("GET", "")
+mine = [a for a in d["assistants"] if a["id"] == "a-priv"]
+check("Anna sieht ihn, mit rev 1, state active, manage, Besitzerin sie selbst",
+      mine and mine[0]["rev"] == 1 and mine[0]["state"] == "active" and mine[0]["manage"] is True
+      and mine[0]["owner"] == "u-anna", d)
+st, d = ax("GET", "", uid="u-bert")
+check("KÖDER: Bert sieht Annas privaten Assistenten nicht", "a-priv" not in ids_of(d), d)
+st, d = ax("GET", "/a-priv", uid="u-bert")
+check("... auch nicht gezielt (404 wie unbekannt)", st == 404, (st, d))
+st, d = ax("POST", "", adoc("a-priv", system="Bert war hier."), uid="u-bert")
+check("... und ändern kann er ihn nicht", st == 400 and "nicht ändern" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "", adoc("a-priv", system="Du hilfst besser."))
+check("erneut speichern: Revision 2", st == 200 and d["rev"] == 2, (st, d))
+st, d = ax("GET", "/a-priv?rev=1")
+check("Revision 1 bleibt lesbar, mit dem alten Text", st == 200 and d["system"] == "Du hilfst." and d["current"] == 2, (st, d))
+st, d = ax("GET", "/a-priv")
+check("die geltende ist Revision 2", st == 200 and d["rev"] == 2 and d["system"] == "Du hilfst besser.", (st, d))
+st, d = ax("GET", "/a-priv/revisions")
+check("die Revisionen: 2, 1 -- mit Zeit und wer", st == 200 and [r["rev"] for r in d["revisions"]] == [2, 1]
+      and d["revisions"][0]["changed_by"] == "u-anna", (st, d))
+st, d = ax("POST", "", adoc("a-recht", token="geheim"))
+check("KÖDER: ein Feld wie token wird abgelehnt (ein Assistent hat keine Rechte)",
+      st == 400 and "keine Rechte" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "", adoc("a-rev", rev=7))
+check("rev vom Schreibenden: abgelehnt (die Nummer vergibt das Gateway)",
+      st == 400 and "führt das Gateway" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "", adoc("a-sicht-fehlt", view="gibt-es-nicht"))
+check("eine Sicht, die es hier nicht gibt: abgelehnt mit ihrem Namen",
+      st == 400 and "gibt-es-nicht gibt es in diesem Gateway nicht" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "", adoc("a-alle", scope="tenant"))
+check("für den ganzen Mandanten als user: abgelehnt", st == 400 and "tenant_admin" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "", adoc("a-alle", scope="tenant"), roles="user,tenant_admin")
+check("... als tenant_admin: gespeichert", st == 200 and d["rev"] == 1, (st, d))
+st, d = ax("GET", "", uid="u-bert")
+b = [a for a in d["assistants"] if a["id"] == "a-alle"]
+check("Bert sieht den Mandanten-Assistenten, darf ihn aber nicht pflegen", b and b[0]["manage"] is False, d)
+st, d = ax("POST", "/a-alle/state", {"state": "inactive"}, uid="u-bert")
+check("Bert kann ihn nicht deaktivieren (403)", st == 403, (st, d))
+st, d = ax("POST", "/a-alle/state", {"state": "inactive"}, roles="user,tenant_admin")
+check("tenant_admin deaktiviert ihn", st == 200 and d["state"] == "inactive", (st, d))
+st, d = ax("GET", "", uid="u-bert")
+check("inaktiv: Bert bekommt ihn nicht mehr angeboten", "a-alle" not in ids_of(d), d)
+st, d = ax("GET", "", roles="user,tenant_admin")
+check("... wer ihn pflegt, sieht ihn als inaktiv",
+      [a["state"] for a in d["assistants"] if a["id"] == "a-alle"] == ["inactive"], d)
+st, d = ax("POST", "/a-alle/state", {"state": "deleted"}, roles="user,tenant_admin")
+st, d = ax("GET", "/a-alle", roles="user,tenant_admin")
+check("gelöscht: auch für die Verwaltung weg (404)", st == 404, (st, d))
+st, d = ax("POST", "", adoc("a-alle", scope="tenant", system="Neu."), roles="user,tenant_admin")
+check("dieselbe Kennung neu anlegen: Revision 2 (die Geschichte bleibt)", st == 200 and d["rev"] == 2, (st, d))
+
+_grants = app.AUTHZ.grants
+app.AUTHZ.grants = lambda uid: {
+    "u-anna": [{"object": "assistant", "activities": ["use", "manage"], "fields": {"team": ["service"]}}],
+    "u-bert": [{"object": "assistant", "activities": ["use"], "fields": {"team": ["service"]}}],
+}.get(uid, [])
+try:
+    st, d = ax("POST", "", adoc("a-team", scope="context", team="service"))
+    check("Team: Anna pflegt Assistenten im Team service -- gespeichert", st == 200, (st, d))
+    st, d = ax("GET", "", uid="u-bert")
+    check("Bert (benutzen im Team) sieht ihn", "a-team" in ids_of(d), d)
+    st, d = ax("POST", "", adoc("a-team", scope="context", team="service", system="x"), uid="u-bert")
+    check("... ändern darf er ihn nicht", st == 400, (st, d))
+    st, d = ax("GET", "", uid="u-carl")
+    check("KÖDER: Carl (kein Recht im Team) sieht ihn nicht", "a-team" not in ids_of(d), d)
+finally:
+    app.AUTHZ.grants = _grants
+st, d = ax("GET", "", uid="u-bert")
+check("ohne lesbare Berechtigungen sieht niemand einen Team-Assistenten (geschlossen)",
+      "a-team" not in ids_of(d) and d.get("grants_known") is False, d)
+
+mig = {"v": 1, "assistants": [adoc("m-carl", owner="u-carl"), adoc("m-alle", scope="tenant", owner="u-x")]}
+st, d = ax("POST", "/_migrate", mig)
+check("Übernahme aus dem Chat nur durch tenant_admin (403)", st == 403, (st, d))
+st, d = ax("POST", "/_migrate", mig, roles="user,tenant_admin")
+check("... als tenant_admin: übernommen", st == 200 and d == {"migrated": 2}, (st, d))
+st, d = ax("GET", "", uid="u-carl")
+check("Besitzer bleiben: Carl sieht seinen privaten, Revision 1", [a["rev"] for a in d["assistants"]
+      if a["id"] == "m-carl"] == [1], d)
+st, d = ax("GET", "")
+check("... und Anna nicht", "m-carl" not in ids_of(d), d)
+st, d = ax("POST", "/_migrate", mig, roles="user,tenant_admin")
+check("ein zweites Mal: nichts überschrieben (400 mit den Kennungen)", st == 400
+      and "gibt es im Gateway schon" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = ax("POST", "/_import", {"v": 1, "assistants": [adoc("i-neu", owner="u-jemand")]})
+st2, d2 = ax("GET", "/i-neu")
+check("Import: wer importiert, wird Besitzer", st == 200 and st2 == 200 and d2["owner"] == "u-anna", (st, d, d2))
+
+sid_ar = session_a("a-sicht", assistant="a-priv@2")[1]
+rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                  "params": {"name": "whoami", "arguments": {}}}, sid_ar, assistant="a-priv@2")
+row = app.DB.execute("SELECT assistant, assistant_rev FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+check("die Messzeile trägt Assistent und Revision getrennt (a-priv, 2)", row and tuple(row) == ("a-priv", 2),
+      row and tuple(row))
+sid_ar = session_a("a-sicht", assistant="a-priv")[1]
+rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                  "params": {"name": "whoami", "arguments": {}}}, sid_ar, assistant="a-priv")
+row = app.DB.execute("SELECT assistant, assistant_rev FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+check("ohne @: wie bisher, Revision 0", row and tuple(row) == ("a-priv", 0), row and tuple(row))
+
+for n in range(25):
+    ax("POST", "", adoc("a-viel", system=f"Fassung {n}"))
+    if n == 2:
+        # eine Messzeile zeigt auf Revision 2 (wie nach einem Gespräch mit ihr)
+        app.DB.execute("UPDATE usage SET assistant='a-viel', assistant_rev=2 WHERE id=(SELECT MAX(id) FROM usage)")
+        app.DB.commit()
+check("25 Mal gespeichert: Revision 25", ax("GET", "/a-viel")[1].get("rev") == 25)
+ax("POST", "", adoc("a-viel", system="Fassung 26"))
+st2, d2 = ax("GET", "/a-viel?rev=2")
+st3, d3 = ax("GET", "/a-viel?rev=3")
+st7, d7 = ax("GET", "/a-viel?rev=7")
+check("D6: Revision 2 bleibt, weil eine Messzeile auf sie zeigt", st2 == 200 and d2["system"] == "Fassung 1", (st2, d2))
+check("D6: Revision 3 ist verdichtet (410), Revision 7 (unter den letzten 20) bleibt",
+      st3 == 410 and st7 == 200, (st3, st7))
+revs = {r["rev"]: r for r in ax("GET", "/a-viel/revisions")[1]["revisions"]}
+check("D6: die verdichtete Zeile behält Nummer, Zeit und wer", revs[3]["compacted"] is True
+      and revs[3]["changed_by"] == "u-anna" and len(revs) == 26, revs.get(3))
+
 # ---- 0.7.3: Grenzen ändern, Gründe nennen, Quellen einlesen
 admin("/view-save", name="a-zwei", max_effect="read", ways="key")
 

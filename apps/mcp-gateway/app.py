@@ -49,6 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, quote, unquote_plus
 
 import argcheck
+import assistants as arules
 import books
 import compose
 import guard
@@ -57,8 +58,9 @@ import upstream
 from gwcore import charts as gcharts
 from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
+from authz_client import Authz
 
-VERSION = "0.21.0"
+VERSION = "0.22.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -110,6 +112,8 @@ ACT_ASSERTION = "X-OAAP-Act-Assertion"
 CLIENT_HEADER = "X-OAAP-MCP-Client"
 ASSISTANT_HEADER = "X-OAAP-Assistant"
 ASSISTANT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+# 0.22 (RFC-0097): der Chat sagt `<assistent>@<revision>`; ohne @ wie bisher.
+ASSISTANT_REV_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,47})(?:@([1-9][0-9]{0,8}))?$")
 # 0.7.2 (RFC-0074 §5.6): der Chat sagt, dass die Person DIESEN Aufruf bestätigt hat.
 # Nur zur Auskunft in der Messzeile, nur bei Verfahren A; nie eine Erlaubnis.
 CONFIRMED_HEADER = "X-OAAP-Confirmed"
@@ -514,6 +518,12 @@ def platform_act(person):
 USER_ASSERTION = "X-OAAP-User-Assertion"
 VIEWS_PATH = "/mcp/_views"            # 0.14.0: Suchhilfe des Chats
 READINESS_PATH = "/mcp/_readiness"    # 0.17.0: Bereitschaft je Sicht für den Chat (RFC-0095 §5)
+ASSISTANTS_PATH = "/mcp/_assistants"  # 0.22.0: Assistenten mit Revisionen (RFC-0097 Stufe 1)
+# Fachliche Berechtigungen (RFC-0045) für Team-Assistenten: das Gateway erklärt das
+# Objekt `assistant` selbst (Manifest), die Plattform gibt ihm dafür OAAP_AUTHZ_*.
+AUTHZ = Authz(app=None)
+# Felder, die das Gateway führt und die beim Speichern nie vom Schreibenden kommen.
+ASSISTANT_RECORD_FIELDS = ("rev", "state", "manage", "changed_at", "changed_by", "created")
 # D2 (0.17): die Kennung der Person im Realm, von der Plattform auf /me gesetzt. Geglaubt
 # NUR, wenn die Plattform sagt, dass sie diese Kopfzeile setzt und auf jeder anderen Route
 # entfernt (OAAP_IDENTITY_HEADERS, ab Plattform 0.1.307) -- eine ältere ließe einen Client
@@ -2339,6 +2349,180 @@ class Handler(BaseHTTPRequestHandler):
         doc["view"] = query.get("view", "")[:100]
         self.send_json(200, doc)
 
+    # ---- Assistenten (0.22.0, RFC-0097 Stufe 1) -- nur über die via-Tür, als die Person
+
+    def assistant_who(self):
+        """(Person, Who) oder (None, None) -- dann ist schon abgelehnt."""
+        carried = self.platform_person()
+        if carried is None:
+            self.deny()
+            return None, None
+        roles = {r.strip() for r in (self.headers.get("X-OAAP-Roles") or "").split(",") if r.strip()}
+        return carried, arules.Who(carried["sub"], roles, AUTHZ.grants(carried["sub"]))
+
+    def assistants_get(self, path):
+        """GET /mcp/_assistants: die Assistenten, die diese Person benutzen darf (geltende
+        Revision; inaktive nur für die, die sie pflegen). GET …/<id>[?rev=n]: eine Revision.
+        GET …/<id>/revisions: die Revisionen (nur wer pflegt)."""
+        carried, who = self.assistant_who()
+        if who is None:
+            return
+        rest = path[len(ASSISTANTS_PATH):].strip("/")
+        if not rest:
+            out = []
+            for r in books.assistant_rows(DB):
+                d, manage = r["doc"], arules.can_manage(r["doc"], who)
+                if r["state"] == "deleted" or not arules.can_see(d, who):
+                    continue
+                if r["state"] == "inactive" and not manage:
+                    continue
+                out.append(dict(d, rev=r["rev"], state=r["state"], changed_at=r["changed_at"],
+                                manage=manage))
+            self.send_json(200, {"v": 1, "assistants": out, "grants_known": who.grants is not None})
+            return
+        aid, _, sub = rest.partition("/")
+        row = books.assistant_row(DB, aid) if ASSISTANT_RE.match(aid) else None
+        if not row or row["state"] == "deleted" or not arules.can_see(row["doc"], who):
+            # Wie unbekannt: ob es einen fremden privaten Assistenten gibt, verrät nichts.
+            self.send_json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+            return
+        manage = arules.can_manage(row["doc"], who)
+        if sub == "revisions":
+            if not manage:
+                self.send_json(403, {"error": "Die Revisionen sieht, wer den Assistenten pflegt."})
+                return
+            self.send_json(200, {"id": aid, "rev": row["rev"],
+                                 "revisions": books.assistant_revisions(DB, aid)})
+            return
+        if sub:
+            self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
+            return
+        query = dict(parse_qsl(self.path.partition("?")[2]))
+        want = query.get("rev", "")
+        if want and not want.isdigit():
+            self.send_json(400, {"error": "rev ist eine Zahl."})
+            return
+        if not want or int(want) == row["rev"]:
+            self.send_json(200, dict(row["doc"], rev=row["rev"], state=row["state"],
+                                     changed_at=row["changed_at"], manage=manage))
+            return
+        old = books.assistant_revision(DB, aid, int(want))
+        if old is None:
+            self.send_json(404, {"error": f"Revision {want} gibt es nicht."})
+        elif old["doc"] is None:
+            self.send_json(410, {"error": f"Revision {want} ist verdichtet (D6): Nummer, Zeit und "
+                                          "wer sind geblieben, der Text nicht."})
+        else:
+            self.send_json(200, dict(old["doc"], rev=old["rev"], changed_at=old["changed_at"],
+                                     manage=manage, current=row["rev"]))
+
+    def assistants_post(self, path):
+        """POST /mcp/_assistants: speichern (jedes Speichern = neue Revision).
+        POST …/_import: eine Austauschdatei, alles oder nichts, wer importiert, wird Besitzer.
+        POST …/_migrate: die alte Datei eines Chats, Besitzer bleiben (nur tenant_admin).
+        POST …/<id>/state: active | inactive | deleted (wer pflegt)."""
+        carried, who = self.assistant_who()
+        if who is None:
+            return
+        raw = self.read_body()
+        try:
+            body = json.loads(raw or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
+        except ValueError:
+            self.send_json(400, {"error": "Kein JSON-Objekt."})
+            return
+        rest = path[len(ASSISTANTS_PATH):].strip("/")
+        by = carried["sub"]
+        if not rest:
+            errs = self.assistant_problems(body, who)
+            if errs:
+                self.send_json(400, {"errors": errs})
+                return
+            rev = books.assistant_write(DB, self.assistant_owned(body, who), by)
+            books.log(DB, by, "assistant.save", body["id"], f"rev={rev}")
+            self.send_json(200, {"saved": body["id"], "rev": rev})
+            return
+        if rest in ("_import", "_migrate"):
+            migrate = rest == "_migrate"
+            if migrate and "tenant_admin" not in who.roles:
+                self.send_json(403, {"error": "Die Assistenten eines Chats übernimmt der tenant_admin."})
+                return
+            errs = arules.check_document(body)
+            if not errs:
+                for i, a in enumerate(body["assistants"]):
+                    if migrate:
+                        errs += [f"[{i}] {e}" for e in arules.problems(a)]
+                        errs += [f"[{i}] {e}" for e in self.assistant_view_problem(a)]
+                        if books.assistant_row(DB, a["id"]):
+                            errs.append(f"[{i}] {a['id']}: gibt es im Gateway schon -- nicht überschrieben.")
+                    else:
+                        errs += [f"[{i}] {e}" for e in self.assistant_problems(a, who)]
+            if errs:
+                self.send_json(400, {"errors": errs})
+                return
+            for a in body["assistants"]:
+                doc = a if migrate else self.assistant_owned(a, who, importer=True)
+                rev = books.assistant_write(DB, doc, ("migration:" if migrate else "import:") + by)
+                books.log(DB, by, "assistant.migrate" if migrate else "assistant.import", a["id"],
+                          f"rev={rev}")
+            self.send_json(200, {"migrated" if migrate else "imported": len(body["assistants"])})
+            return
+        aid, _, sub = rest.partition("/")
+        row = books.assistant_row(DB, aid) if ASSISTANT_RE.match(aid) else None
+        if not row or row["state"] == "deleted" or not arules.can_see(row["doc"], who):
+            self.send_json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+            return
+        if sub != "state":
+            self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
+            return
+        if not arules.can_manage(row["doc"], who):
+            self.send_json(403, {"error": f"Den Assistenten {aid} darfst du nicht ändern."})
+            return
+        state = body.get("state")
+        if state not in books.ASSISTANT_STATES:
+            self.send_json(400, {"error": "state ist active, inactive oder deleted."})
+            return
+        books.assistant_set_state(DB, aid, state, by)
+        books.log(DB, by, "assistant.state", aid, state)
+        self.send_json(200, {"id": aid, "state": state})
+
+    def assistant_view_problem(self, a):
+        view = a.get("view") if isinstance(a, dict) else None
+        if isinstance(view, str) and not books.view_row(DB, view):
+            return [f"view: die Sicht {view} gibt es in diesem Gateway nicht."]
+        return []
+
+    def assistant_owned(self, a, who, importer=False):
+        """Wem er gehört: bei einem bestehenden der bisherige Besitzer, sonst wer speichert.
+        Wer importiert, wird Besitzer (RFC-0097 §2.3)."""
+        old = None if importer else books.assistant_row(DB, a["id"])
+        owner = old["doc"].get("owner") if old and old["state"] != "deleted" else who.uid
+        if (a.get("visibility") or {}).get("scope") == "private":
+            owner = who.uid
+        return dict(a, owner=owner or who.uid)
+
+    def assistant_problems(self, a, who):
+        """Sätze, warum diese Person diesen Assistenten so nicht speichern darf -- oder []."""
+        if isinstance(a, dict):
+            extra = sorted(set(a) & set(ASSISTANT_RECORD_FIELDS))
+            if extra:
+                return [f"{', '.join(extra)}: führt das Gateway, nicht wer speichert."]
+            a = dict(a, owner=a.get("owner") or who.uid or "-")
+        errs = arules.problems(a)
+        if errs:
+            return errs
+        errs = self.assistant_view_problem(a)
+        old = books.assistant_row(DB, a["id"])
+        if old and old["state"] != "deleted" and not arules.can_manage(old["doc"], who):
+            errs.append(f"Den Assistenten {a['id']} darfst du nicht ändern.")
+        elif not arules.can_manage(self.assistant_owned(a, who), who):
+            errs.append("So darfst du keinen Assistenten anlegen: "
+                        + {"tenant": "für den ganzen Mandanten nur als tenant_admin.",
+                           "context": "für ein Team nur, wer dort Assistenten verwalten darf.",
+                           }.get(a["visibility"]["scope"], "nur für dich selbst."))
+        return errs
+
     def views_for_carried(self):
         """GET /mcp/_views (0.14.0): die Sichten, die die Person aus diesem Chat
         öffnen kann -- für die Suchhilfe im Formular „Assistent“. Nur über die
@@ -2370,9 +2554,10 @@ class Handler(BaseHTTPRequestHandler):
         assertion = (self.headers.get("X-OAAP-User-Assertion") or "").strip()
         if not (client and uid and assertion):
             return None
-        assistant = (self.headers.get(ASSISTANT_HEADER) or "").strip()
+        m = ASSISTANT_REV_RE.match((self.headers.get(ASSISTANT_HEADER) or "").strip())
         return {"iss": "platform", "sub": uid, "assertion": assertion, "client": client,
-                "assistant": assistant if ASSISTANT_RE.match(assistant) else "",
+                "assistant": m.group(1) if m else "",
+                "assistant_rev": int(m.group(2)) if m and m.group(2) else 0,
                 "confirmed": "yes" if (self.headers.get(CONFIRMED_HEADER) or "").strip().lower()
                 == "yes" else "",
                 "groups": ["@" + client], "procedure": "A"}
@@ -2396,6 +2581,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.route()
+        if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
+            self.assistants_post(path)
+            return
         if path.startswith("/mcp/"):
             self.handle_mcp_post()
             return
@@ -2902,6 +3090,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == READINESS_PATH:
             self.readiness_for_carried()
+            return
+        if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
+            self.assistants_get(path)
             return
         if path.startswith("/mcp"):
             # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede

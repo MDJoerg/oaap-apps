@@ -21,6 +21,12 @@ RESULTS = []
 
 SEEN_VIEWS = {"assertion": ""}
 MODEL_LIGHT, DOOR_LIGHT = [], []   # X-OAAP-Light am Modell und an der Tür (0.8.0)
+# 0.9.0 (RFC-0097): ein Gateway mit /_assistants -- aus, bis der Test es einschaltet
+GWA = {"on": False, "down": False, "items": {}, "posts": [], "assistant_hdr": []}
+
+
+def gwa_list():
+    return [dict(d, rev=r, state=st, manage=True) for d, r, st in GWA["items"].values() if st != "deleted"]
 
 
 def check(name, ok, info=None):
@@ -109,6 +115,15 @@ class Fake(BaseHTTPRequestHandler):
             return self.reply(200, {"v": 1, "client": "vuebung-chat", "all": False, "views": [
                 {"name": "vg", "ok": True, "reason": "", "light": "green", "max_effect": "read",
                  "tools": 3, "prompts": 1, "resources": 0}]})
+        if self.path.startswith("/via/gw1/_assistants"):
+            if not GWA["on"]:
+                return self.reply(405, {})
+            if GWA["down"]:
+                return self.reply(503, {})
+            if self.headers.get("Authorization") != "Bearer " + CK or \
+                    not self.headers.get("X-OAAP-Act-Assertion", "").startswith("ZS-"):
+                return self.reply(401, {})
+            return self.reply(200, {"v": 1, "assistants": gwa_list(), "grants_known": True})
         if self.path.startswith("/via/gw1/_readiness?view="):
             # 0.7.0 (RFC-0095 §5): das Gateway sagt je Sicht, was der Person noch fehlt.
             if self.headers.get("Authorization") != "Bearer " + CK or                     not self.headers.get("X-OAAP-Act-Assertion", "").startswith("ZS-"):
@@ -129,8 +144,31 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if self.path.startswith("/via/gw1/_assistants"):
+            if not GWA["on"] or GWA["down"]:
+                return self.reply(503 if GWA["down"] else 405, {})
+            rest = self.path[len("/via/gw1/_assistants"):]
+            GWA["posts"].append((rest, body))
+            if rest == "":
+                if any(k in body for k in ("rev", "state", "manage")):
+                    return self.reply(400, {"errors": ["rev: führt das Gateway"]})
+                old = GWA["items"].get(body["id"])
+                rev = (old[1] if old else 0) + 1
+                GWA["items"][body["id"]] = (dict(body, owner=old[0]["owner"] if old else "id-anna"), rev, "active")
+                return self.reply(200, {"saved": body["id"], "rev": rev})
+            if rest == "/_migrate":
+                for a in body["assistants"]:
+                    GWA["items"][a["id"]] = (a, 1, "active")
+                return self.reply(200, {"migrated": len(body["assistants"])})
+            if rest.endswith("/state"):
+                aid = rest.split("/")[1]
+                d, r, _ = GWA["items"][aid]
+                GWA["items"][aid] = (d, r, body["state"])
+                return self.reply(200, {"id": aid, "state": body["state"]})
+            return self.reply(404, {})
         if self.path.startswith("/via/gw1/"):
             DOOR_LIGHT.append(self.headers.get("X-OAAP-Light", ""))
+            GWA["assistant_hdr"].append(self.headers.get("X-OAAP-Assistant", ""))
             a = self.headers.get("X-OAAP-Act-Assertion", "")
             if self.headers.get("Authorization") != "Bearer " + CK or not a.startswith("ZS-") \
                     or BAD_ASSERTION["on"]:
@@ -759,6 +797,78 @@ check("0.8.0: die Seite hat die Ampel, den Hinweis ohne grünen Weg und die beid
 check("0.8.0: die Anfragen gehen über die bezeugte Route, nicht über ein Backend",
       'fetch("/platform/feedback"' in html and "cases/submit" not in html)
 check("0.8.0: Senden ist gesperrt, solange kein Weg passt", "if (!lightOk()) { render(); return; }" in html)
+
+# ------------------------------------------------ 0.9.0: Assistenten im MCP-Gateway (RFC-0097 Stufe 1)
+req("POST", "/api/assistants", asst("alt-privat", "private"))
+req("POST", "/api/assistants", asst("alt-alle", "tenant"), roles="user,tenant_admin")
+local_n = len(app.STORE._read())
+st, s9 = req("GET", "/api/state", roles="user,tenant_admin")
+check("0.9.0: Gateway ohne /_assistants (vor 0.22): alles bleibt im Chat, nichts zu übernehmen",
+      s9["home"] == "chat" and s9["migration"] == 0 and local_n >= 2, (s9["home"], s9["migration"], local_n))
+GWA["on"] = True
+st, s9 = req("GET", "/api/state", roles="user,tenant_admin")
+check("0.9.0: das Gateway kennt Assistenten, die Datei hat noch welche: der tenant_admin sieht „übernehmen“",
+      s9["home"] == "chat" and s9["migration"] == local_n, (s9["home"], s9["migration"]))
+st, s9u = req("GET", "/api/state")
+check("0.9.0: ... eine Person ohne tenant_admin sieht den Knopf nicht, die Assistenten aber wie bisher",
+      s9u["migration"] == 0 and "alt-privat" in [a["id"] for a in s9u["assistants"]], s9u["migration"])
+st, r = req("POST", "/api/assistants/migrate", {})
+check("0.9.0: übernehmen nur als tenant_admin (403)", st == 403, (st, r))
+st, r = req("POST", "/api/assistants/migrate", {}, roles="user,tenant_admin")
+moved = [f for f in os.listdir(DATA) if f.startswith("assistants.json.migrated-")]
+check("0.9.0: übernommen; die Datei ist umbenannt, nicht gelöscht", st == 200 and r["migrated"] == local_n
+      and moved and not os.path.exists(os.path.join(DATA, "assistants.json")), (st, r, moved))
+sent = [b for rest, b in GWA["posts"] if rest == "/_migrate"][-1]
+check("0.9.0: ans Gateway gingen die Assistenten mit ihren Besitzern",
+      {a["id"]: a["owner"] for a in sent["assistants"]}.get("alt-privat") == "id-anna", sent)
+st, s9 = req("GET", "/api/state")
+ga = {a["id"]: a for a in s9["assistants"]}
+check("0.9.0: jetzt liegen sie im Gateway: Herkunft gateway, Fassung 1; der aus der Konfiguration bleibt",
+      s9["home"] == "gateway" and ga["alt-privat"]["origin"] == "gateway" and ga["alt-privat"]["rev"] == 1
+      and ga["projekte"]["origin"] == "config", s9)
+st, r = req("POST", "/api/assistants", dict(asst("alt-privat", "private", system="Neu."), rev=1, manage=True))
+last = GWA["posts"][-1][1]
+check("0.9.0: speichern geht ans Gateway, ohne die Felder, die das Gateway führt -- Fassung 2",
+      st == 200 and r["rev"] == 2 and "rev" not in last and "manage" not in last, (st, r, last))
+st, r = req("POST", "/api/assistants", asst("projekte", "tenant"), roles="user,tenant_admin")
+check("0.9.0: den aus der Konfiguration ändert niemand im Chat", st == 400
+      and "Konfiguration" in json.dumps(r, ensure_ascii=False), (st, r))
+_, c9 = req("POST", "/api/conv", {"assistant": "alt-privat", "light": "yellow", "sure": True})
+GWA["assistant_hdr"].clear()
+req("POST", f"/api/conv/{c9['id']}/send", {"text": "Projekte?"})
+req("POST", f"/api/conv/{c9['id']}/step", {})
+check("0.9.0: an der Tür steht alt-privat@2 -- die Revision, die spricht",
+      GWA["assistant_hdr"] and set(GWA["assistant_hdr"]) == {"alt-privat@2"}, GWA["assistant_hdr"])
+with open(app.conv_path("id-anna", c9["id"]), encoding="utf-8") as f:
+    replies = [m for m in json.load(f)["messages"] if m["role"] == "assistant"]
+check("0.9.0: die Antwort im Verlauf trägt die Revision (für spätere Bewertungen)",
+      replies and all(m.get("rev") == 2 for m in replies), replies)
+st, r = req("POST", "/api/assistants/alt-privat/state", {"state": "inactive"})
+st2, r2 = req("POST", "/api/conv", {"assistant": "alt-privat"})
+check("0.9.0: deaktiviert: kein neues Gespräch (409)", st == 200 and st2 == 409, (st, r, st2, r2))
+st, r = req("POST", f"/api/conv/{c9['id']}/send", {"text": "Noch da?"})
+check("0.9.0: ... und ein laufendes sagt es", st == 403 and "deaktiviert" in r.get("error", ""), (st, r))
+app.ASSISTANTS_ONLY = ["alt-alle"]
+try:
+    st, s9 = req("GET", "/api/state")
+finally:
+    app.ASSISTANTS_ONLY = []
+check("0.9.0 D9: CHAT_ASSISTANTS_ONLY beschränkt diesen Chat", [a["id"] for a in s9["assistants"]] == ["alt-alle"], s9["assistants"])
+GWA["down"] = True
+try:
+    st, s9 = req("GET", "/api/state")
+    st2, r2 = req("POST", "/api/assistants", asst("waehrend-ausfall", "private"))
+finally:
+    GWA["down"] = False
+check("0.9.0: Gateway antwortet nicht: nur der aus der Konfiguration, mit einem Satz",
+      [a["id"] for a in s9["assistants"]] == ["projekte"] and any("nicht antwortet" in e for e in s9["errors"]), s9)
+check("0.9.0: KÖDER: Speichern während des Ausfalls landet NICHT in der Datei des Chats",
+      st2 == 400 and not os.path.exists(os.path.join(DATA, "assistants.json")), (st2, r2))
+st, _ct, html = raw_get("/")
+html = html.decode("utf-8")
+check("0.9.0: die Seite zeigt Fassung, deaktiviert, Übernehmen und Deaktivieren",
+      '"Fassung " + a.rev' in html and "Ins MCP-Gateway übernehmen" in html and '"Deaktivieren"' in html)
+GWA["on"] = False
 
 srv.shutdown()
 fake.shutdown()

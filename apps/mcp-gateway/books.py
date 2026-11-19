@@ -67,6 +67,27 @@ CREATE TABLE IF NOT EXISTS usage (
   bytes_down  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS usage_key ON usage(key_id, id DESC);
+-- 0.22 (RFC-0097 Stufe 1): Assistenten liegen im Gateway, neben den Sichten, die
+-- sie nennen. `assistants` hält die geltende Revision, `assistant_revisions` jede
+-- (nur anhängen; verdichtet wird nach D6, die Zeile bleibt, ihr Text geht).
+CREATE TABLE IF NOT EXISTS assistants (
+  id          TEXT PRIMARY KEY,
+  rev         INTEGER NOT NULL,
+  doc         TEXT NOT NULL,
+  state       TEXT NOT NULL DEFAULT 'active',
+  created     TEXT NOT NULL,
+  changed_at  TEXT NOT NULL,
+  changed_by  TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS assistant_revisions (
+  id          TEXT NOT NULL,
+  rev         INTEGER NOT NULL,
+  doc         TEXT NOT NULL,
+  changed_at  TEXT NOT NULL,
+  changed_by  TEXT NOT NULL DEFAULT '',
+  compacted   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (id, rev)
+);
 CREATE TABLE IF NOT EXISTS protocol (
   day     TEXT NOT NULL,
   key_id  TEXT NOT NULL,
@@ -190,6 +211,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 0.21 (RFC-0101 §2.2): die Ampel, die die Anfrage als Decke verlangte
     # (X-OAAP-Light), leer ohne. Ein Wort aus einer festen Liste, kein Inhalt (§10).
     ("usage", "light", "TEXT NOT NULL DEFAULT ''"),
+    # 0.22 (RFC-0097 Stufe 1): die Revision des Assistenten, die sprach
+    # (X-OAAP-Assistant: <id>@<rev>), 0 = ohne Angabe.
+    ("usage", "assistant_rev", "INTEGER NOT NULL DEFAULT 0"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -1281,8 +1305,9 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
               door if door in DOORS else "",
               light if light in LIGHT_RANK else ""] + context.snapshot_values(key)
     if (person or {}).get("client"):
-        cols += ["client", "assistant", "confirmed"]
-        values += [person["client"], person.get("assistant", ""), person.get("confirmed", "")]
+        cols += ["client", "assistant", "confirmed", "assistant_rev"]
+        values += [person["client"], person.get("assistant", ""), person.get("confirmed", ""),
+                   int(person.get("assistant_rev") or 0)]
     db.execute(f"INSERT INTO usage ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
                values)
     db.commit()
@@ -1341,3 +1366,91 @@ def totals(db):
 def protocol_totals(db, days=30):
     return list(db.execute("SELECT method, SUM(count) AS n FROM protocol WHERE day >= "
                            "date('now', ?) GROUP BY method ORDER BY n DESC", (f"-{days} days",)))
+
+
+# ------------------------------------------------------------------ Assistenten
+# RFC-0097 Stufe 1. Wer was sehen und ändern darf, entscheidet app.py mit dem
+# gemeinsamen Modul `assistants`; hier liegen nur die Bücher.
+
+ASSISTANT_STATES = ("active", "inactive", "deleted")
+KEEP_LAST = 20                      # D6: dazu jede Revision, auf die eine Messzeile zeigt
+import threading as _threading      # noqa: E402
+_ASSIST_LOCK = _threading.Lock()
+
+
+def _assistant(r):
+    return {"doc": json.loads(r["doc"]), "rev": r["rev"], "state": r["state"],
+            "created": r["created"], "changed_at": r["changed_at"], "changed_by": r["changed_by"]}
+
+
+def assistant_rows(db):
+    return [_assistant(r) for r in db.execute("SELECT * FROM assistants ORDER BY id")]
+
+
+def assistant_row(db, aid):
+    r = db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone()
+    return _assistant(r) if r else None
+
+
+def assistant_revision(db, aid, rev):
+    """{doc|None, rev, changed_at, changed_by, compacted} oder None."""
+    r = db.execute("SELECT * FROM assistant_revisions WHERE id=? AND rev=?", (aid, int(rev))).fetchone()
+    if not r:
+        return None
+    return {"doc": None if r["compacted"] else json.loads(r["doc"]), "rev": r["rev"],
+            "changed_at": r["changed_at"], "changed_by": r["changed_by"],
+            "compacted": bool(r["compacted"])}
+
+
+def assistant_revisions(db, aid):
+    return [{"rev": r["rev"], "changed_at": r["changed_at"], "changed_by": r["changed_by"],
+             "compacted": bool(r["compacted"])}
+            for r in db.execute("SELECT rev, changed_at, changed_by, compacted FROM assistant_revisions "
+                                "WHERE id=? ORDER BY rev DESC", (aid,))]
+
+
+def assistant_write(db, doc, by, state="active"):
+    """Eine neue Revision (n+1) und die geltende Zeile. Gibt die neue Nummer zurück.
+
+    Die Nummer vergibt das Gateway, nie der Schreibende."""
+    aid, at = doc["id"], now()
+    text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
+    with _ASSIST_LOCK:
+        last = db.execute("SELECT MAX(rev) AS m FROM assistant_revisions WHERE id=?", (aid,)).fetchone()
+        rev = int((last["m"] if last else 0) or 0) + 1
+        db.execute("INSERT INTO assistant_revisions (id, rev, doc, changed_at, changed_by) "
+                   "VALUES (?,?,?,?,?)", (aid, rev, text, at, by))
+        db.execute("INSERT INTO assistants (id, rev, doc, state, created, changed_at, changed_by) "
+                   "VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET rev=excluded.rev, "
+                   "doc=excluded.doc, state=excluded.state, changed_at=excluded.changed_at, "
+                   "changed_by=excluded.changed_by", (aid, rev, text, state, at, at, by))
+        db.commit()
+        compact_assistant(db, aid)
+    return rev
+
+
+def assistant_set_state(db, aid, state, by):
+    if state not in ASSISTANT_STATES:
+        raise ValueError(state)
+    db.execute("UPDATE assistants SET state=?, changed_at=?, changed_by=? WHERE id=?",
+               (state, now(), by, aid))
+    db.commit()
+
+
+def compact_assistant(db, aid, keep_last=KEEP_LAST):
+    """D6: behalten werden die letzten `keep_last`, die geltende und jede Revision, auf
+    die eine Messzeile zeigt (so lange wie die Messzeile lebt). Bei den übrigen geht der
+    Text; Nummer, Zeit und wer bleiben. Gibt die Zahl der verdichteten zurück."""
+    revs = [r["rev"] for r in db.execute(
+        "SELECT rev FROM assistant_revisions WHERE id=? AND compacted=0 ORDER BY rev DESC", (aid,))]
+    if len(revs) <= keep_last:
+        return 0
+    used = {r["assistant_rev"] for r in db.execute(
+        "SELECT DISTINCT assistant_rev FROM usage WHERE assistant=? AND assistant_rev>0", (aid,))}
+    cur = db.execute("SELECT rev FROM assistants WHERE id=?", (aid,)).fetchone()
+    keep = set(revs[:keep_last]) | used | ({cur["rev"]} if cur else set())
+    drop = [r for r in revs if r not in keep]
+    for r in drop:
+        db.execute("UPDATE assistant_revisions SET doc='', compacted=1 WHERE id=? AND rev=?", (aid, r))
+    db.commit()
+    return len(drop)

@@ -27,6 +27,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # Modul in lib/ → Apps, die es tragen.
 SHARED = {
     "gwcore": ["ai-gateway", "mcp-gateway"],
+    # RFC-0097 Stufe 1: Prüfung und Sichtbarkeit von Assistenten -- der Chat
+    # (Konfiguration, alte Datei) und das MCP-Gateway (wo sie jetzt liegen).
+    "assistants": ["chat", "mcp-gateway"],
 }
 
 

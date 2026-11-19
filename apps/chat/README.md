@@ -229,10 +229,39 @@ Destination `ki`.
   Demo oder Schulung. Rot ist nie die Vorgabe.
 - Gespräche von vor 0.8.0 haben keine Farbe, für sie gilt die Vorgabe.
 
+## Assistenten im MCP-Gateway (0.9.0)
+
+RFC-0097 Stufe 1. Die Assistenten liegen im MCP-Gateway des Mandanten
+(Standard-Gateway, ab 0.22.0), mit Revisionen. Der Chat bleibt die
+Laufzeit und hält die Verläufe.
+
+- **Übernahme:** Solange die alte Datei `/data/assistants.json` noch
+  Assistenten hat, bleibt alles wie bisher. Ein `tenant_admin` sieht auf
+  der Seite „Assistenten“ den Knopf „Ins MCP-Gateway übernehmen“.
+  Besitzer und Sichtbarkeit bleiben, die Datei wird umbenannt
+  (`assistants.json.migrated-<zeit>`), nicht gelöscht. Ein Gateway vor
+  0.22 kennt keine Assistenten, dann bleibt alles im Chat.
+- **Kein stiller Rückfall:** Danach merkt sich der Chat
+  (`/data/assistants.home`), dass seine Assistenten im Gateway liegen.
+  Antwortet das Gateway nicht, bleibt nur der Assistent aus der
+  Konfiguration, und die Seite sagt das. Gespeichert wird dann nichts,
+  auch nicht in der Datei.
+- **Revision an der Tür:** Jeder Aufruf trägt
+  `X-OAAP-Assistant: <id>@<rev>`. Die Antwort des Modells im Verlauf
+  trägt `rev`, für spätere Bewertungen (RFC-0101 Stufe 2).
+- **Deaktivieren:** Ein deaktivierter Assistent wird nicht angeboten,
+  ein laufendes Gespräch sagt es. Die Revisionen bleiben.
+- `CHAT_ASSISTANT` bleibt als Rückfall, „verwaltet über die
+  Konfiguration“, ohne Revisionen.
+- `CHAT_ASSISTANTS_ONLY` beschränkt diesen Chat auf eine Liste von
+  Assistenten, etwa einen Schulungs-Chat.
+- Die Ampel aus 0.8.0 stand auch auf der Seite „Assistenten“. Das ist
+  behoben.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 132 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 149 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -262,7 +262,8 @@ class McpWay:
         # sonst erbte ein Assistent mit Ansichten die Sitzung eines ohne auf derselben Sicht.
         self.key = (person, gw["name"], assistant["view"], self.views)
         self.assertion = assertion
-        self.aid = assistant["id"]
+        # 0.9.0 (RFC-0097): die Revision, die spricht, steht in der Messzeile des Gateways.
+        self.aid = assistant["id"] + (f'@{assistant["rev"]}' if assistant.get("rev") else "")
 
     def _open(self):
         status, sess, msgs = mcp_post(self.url, {
@@ -487,6 +488,8 @@ def step(person, person_name, assertion, assistant, conv, decision):
     conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
     reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv))
     reply["at"] = now()
+    if assistant.get("rev"):
+        reply["rev"] = assistant["rev"]       # für spätere Bewertungen (RFC-0101 Stufe 2)
     msgs.append(reply)
     return "more" if reply.get("tool_calls") else "done"
 
@@ -742,8 +745,120 @@ PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "
 
 
 def public(a, origin, who):
-    return dict({k: a.get(k) for k in PUBLIC + ("views",)}, origin=origin,
-                manage=origin == "chat" and store.can_manage(a, who))
+    manage = (origin == "chat" and store.can_manage(a, who)) or (origin == "gateway" and a.get("manage") is True)
+    return dict({k: a.get(k) for k in PUBLIC + ("views",)}, origin=origin, manage=manage,
+                rev=a.get("rev"), state=a.get("state") or "active")
+
+
+# ---------------------------------------------- Assistenten im MCP-Gateway (0.9.0)
+# RFC-0097 Stufe 1: Die Beschreibung eines Assistenten liegt im MCP-Gateway, neben
+# der Sicht, die er nennt -- mit Revisionen. Der Chat bleibt die Laufzeit. Heimat
+# ist das Standard-Gateway des Mandanten (gateway_for("")). Solange die alte Datei
+# des Chats noch Assistenten hat, bleiben sie hier, bis ein tenant_admin sie
+# übernimmt ("Übernehmen"); ein Gateway vor 0.22 kennt keine Assistenten, dann
+# bleibt alles wie bisher. Ein Assistent aus CHAT_ASSISTANT bleibt immer (D7).
+ASSISTANTS_ONLY = [x.strip() for x in (os.environ.get("CHAT_ASSISTANTS_ONLY") or "").split(",") if x.strip()]
+# Hat der Chat einmal gesehen, dass seine Assistenten im Gateway liegen, merkt er es
+# sich -- danach fällt er nie mehr still auf die Datei zurück (ein kurz nicht
+# erreichbares Gateway darf nicht dazu führen, dass Speichern in der Datei landet).
+HOME_MARK = os.path.join(DATA, "assistants.home")
+RECORD_FIELDS = ("rev", "state", "manage", "changed_at", "current", "created", "changed_by",
+                 "origin")
+
+
+def clean(a):
+    """Ein Assistent im Austauschformat -- ohne die Felder, die das Gateway führt."""
+    return {k: v for k, v in a.items() if k not in RECORD_FIELDS}
+
+
+def gw_assist(method, path, assertion, body=None):
+    """(Status, Dokument) von …/_assistants<path> des Standard-Gateways, als die Person.
+    Status 0: kein Gateway, keine Zusicherung oder nicht erreichbar."""
+    try:
+        gw = gateway_for("")
+    except Stop:
+        return 0, {}
+    if not assertion:
+        return 0, {}
+    req = urllib.request.Request(gw["via"] + "/_assistants" + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Accept": "application/json", "Content-Type": "application/json",
+                                          "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, json.loads(r.read(4_000_000) or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read(200_000) or b"{}")
+        except ValueError:
+            return exc.code, {}
+    except (OSError, ValueError):
+        return 0, {}
+
+
+def gw_errors(st, doc):
+    if st == 200:
+        return []
+    errs = doc.get("errors") if isinstance(doc.get("errors"), list) else []
+    if not errs and doc.get("error"):
+        errs = [str(doc["error"])]
+    return errs or [f"Das MCP-Gateway antwortete {st or 'nicht'}."]
+
+
+def mark_home():
+    try:
+        os.makedirs(DATA, exist_ok=True)
+        with open(HOME_MARK, "w", encoding="utf-8") as f:
+            f.write("gateway\n")
+    except OSError:
+        pass
+
+
+class Home:
+    """Wo die Assistenten dieser Anfrage liegen: im Gateway oder (noch) im Chat."""
+
+    def __init__(self, assertion):
+        self.assertion = assertion
+        self.local = STORE._read()
+        self.mode, self.items, self.grants_known, self.error = "chat", [], None, ""
+        marked = os.path.exists(HOME_MARK)
+        if marked or (CLIENT_KEY and CLIENT_URL and assertion and not self.local):
+            st, doc = gw_assist("GET", "", assertion)
+            if st == 200 and isinstance(doc.get("assistants"), list):
+                self.mode = "gateway"
+                self.items = [a for a in doc["assistants"] if isinstance(a, dict) and a.get("id")]
+                self.grants_known = doc.get("grants_known")
+                if not marked:
+                    mark_home()
+            elif marked:
+                self.mode = "gateway"
+                self.error = ("Die Assistenten liegen im MCP-Gateway, das gerade nicht antwortet"
+                              f" ({st or 'nicht erreichbar'}). Es bleibt nur der aus der Konfiguration.")
+
+    def all(self, who):
+        """(Assistent, Herkunft config|chat|gateway), die diese Person sieht."""
+        out = []
+        if CONFIGURED and not CONFIGURED[1]:
+            out.append((CONFIGURED[0], "config"))
+        ids = {a["id"] for a, _ in out}
+        if self.mode == "gateway":
+            out += [(a, "gateway") for a in self.items if a["id"] not in ids]
+        else:
+            out += [(a, o) for a, o in STORE.all() if o == "chat" and a["id"] not in ids
+                    and store.can_see(a, who)]
+        if ASSISTANTS_ONLY:
+            out = [(a, o) for a, o in out if a["id"] in ASSISTANTS_ONLY]
+        return out
+
+    def find(self, aid, who):
+        return next(((a, o) for a, o in self.all(who) if a["id"] == aid), (None, None))
+
+    def migration_pending(self):
+        """Wie viele Assistenten noch in der Datei liegen, wenn das Gateway sie nehmen kann."""
+        if not self.local or not (CLIENT_KEY and CLIENT_URL):
+            return 0
+        st, doc = gw_assist("GET", "", self.assertion)
+        return len(self.local) if st == 200 and isinstance(doc.get("assistants"), list) else 0
 
 
 def view_of(conv):
@@ -824,12 +939,17 @@ class Handler(BaseHTTPRequestHandler):
         if not person:
             return self.json(401, {"error": "Keine angemeldete Person."})
         who = self.who()
+        home = Home(self.headers.get(ASSERTION, "").strip())
         if path == "/api/state":
             return self.json(200, {
                 "user": self.headers.get("X-OAAP-User", ""), "version": VERSION,
-                "assistants": [public(a, o, who) for a, o in STORE.visible(who)],
-                "errors": SETUP_ERRORS, "tenant_admin": "tenant_admin" in who.roles,
-                "teams_known": who.grants is not None,
+                "assistants": [public(a, o, who) for a, o in home.all(who)],
+                "home": home.mode,
+                "migration": home.migration_pending() if "tenant_admin" in who.roles else 0,
+                "errors": SETUP_ERRORS + ([home.error] if home.error else []),
+                "tenant_admin": "tenant_admin" in who.roles,
+                "teams_known": (home.grants_known is not False) if home.mode == "gateway"
+                else who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": bool(KI_URL),
                 "sandbox_origins": SANDBOX_ORIGINS, "default_light": DEFAULT_LIGHT,
                 "conversations": list_convs(person)})
@@ -853,8 +973,8 @@ class Handler(BaseHTTPRequestHandler):
                 if conv is None:
                     return self.json(404, {"error": "Kein solches Gespräch."})
             aid = conv["assistant"] if conv else (q.get("assistant") or [""])[0]
-            a, _ = STORE.get(aid)
-            if a is None or not store.can_see(a, who):
+            a, _ = home.find(aid, who)
+            if a is None:
                 return self.json(404, {"error": "Kein solcher Assistent."})
             rep_ = light_report(a, self.headers.get(ASSERTION, "").strip())
             light = conv_light(conv) if conv else DEFAULT_LIGHT
@@ -865,7 +985,7 @@ class Handler(BaseHTTPRequestHandler):
             # 0.7.0: je sichtbarem Assistenten, ob seine Werkzeuge für dich eingerichtet sind.
             assertion = self.headers.get(ASSERTION, "").strip()
             seen, out = {}, {}
-            for a, _o in STORE.visible(who):
+            for a, _o in home.all(who):
                 k = (a.get("gateway") or "", a.get("view") or "")
                 if k not in seen:
                     seen[k] = gateway_readiness(k[0], assertion, k[1])
@@ -876,10 +996,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, {"assistants": out})
         if path == "/api/setup":
             aid = (self.path.split("assistant=", 1)[1].split("&")[0] if "assistant=" in self.path else "")
-            a, _ = STORE.get(aid)
-            if a is None or not store.can_see(a, who):
+            a, _ = home.find(aid, who)
+            if a is None:
                 return self.json(404, {"error": "Kein solcher Assistent."})
-            errs = store.problems(a)
+            errs = store.problems(clean(a))
             if errs:
                 return self.json(200, {"assistant": aid, "items": [
                     {"key": "assistant", "ok": False, "title": "Der Assistent ist gültig",
@@ -887,15 +1007,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, {"assistant": aid, "items": setup_report(
                 person, self.headers.get(ASSERTION, "").strip(), a)})
         if path == "/api/assistants/export":
-            return self.json(200, STORE.export(who),
-                             [("Content-Disposition", 'attachment; filename="assistenten.json"')])
+            doc = (STORE.export(who) if home.mode == "chat" else
+                   {"v": 1, "assistants": [clean(a) for a, o in home.all(who) if o == "gateway" and a.get("manage")]})
+            return self.json(200, doc, [("Content-Disposition", 'attachment; filename="assistenten.json"')])
         m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})$", path)
         if m:
-            a, origin = STORE.get(m.group(1))
-            if a is None or not store.can_see(a, who):
+            a, origin = home.find(m.group(1), who)
+            if a is None:
                 return self.json(404, {"error": "Kein solcher Assistent."})
-            return self.json(200, dict(a, origin=origin, manage=origin == "chat"
-                                       and store.can_manage(a, who)))
+            return self.json(200, dict(a, origin=origin, manage=public(a, origin, who)["manage"]))
         m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands|/view)?$", path)
         if m:
             conv = load_conv(person, m.group(1))
@@ -993,14 +1113,63 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(exc.status if exc.status in (400, 401, 403) else 502, {"error": exc.text})
 
     def assistant_for(self, conv, who):
-        """Der Assistent des Gesprächs -- oder ein Satz, warum nicht (mehr)."""
-        a, _ = STORE.get(conv.get("assistant") or "")
+        """Der Assistent des Gesprächs (geltende Revision) -- oder ein Satz, warum nicht (mehr)."""
+        a, _ = Home(self.headers.get(ASSERTION, "").strip()).find(conv.get("assistant") or "", who)
         if a is None:
-            return "Den Assistenten dieses Gesprächs gibt es nicht mehr."
-        if not store.can_see(a, who):
-            return "Diesen Assistenten darfst du nicht (mehr) benutzen."
-        errs = store.problems(a)
+            return "Den Assistenten dieses Gesprächs gibt es für dich nicht (mehr)."
+        if a.get("state") == "inactive":
+            return "Dieser Assistent ist gerade deaktiviert."
+        errs = store.problems(clean(a))
         return ("Der Assistent ist ungültig: " + " ".join(errs)) if errs else a
+
+    def assistants_post(self, path, body, who, home):
+        """Speichern, Importieren, Löschen, (de)aktivieren, Übernehmen -- im Gateway oder hier."""
+        def out(errs, ok):
+            return self.json(400 if errs else 200, {"errors": errs} if errs else ok)
+        conf = CONFIGURED[0]["id"] if CONFIGURED and not CONFIGURED[1] else None
+        if path == "/api/assistants/migrate":
+            # RFC-0097 §2.2: die alte Datei ins Gateway, Besitzer bleiben; die Datei wird
+            # umbenannt, nicht gelöscht.
+            if "tenant_admin" not in who.roles:
+                return self.json(403, {"error": "Die Assistenten dieses Chats übernimmt der tenant_admin."})
+            if not home.local:
+                return self.json(400, {"error": "In diesem Chat liegen keine Assistenten mehr."})
+            st, doc = gw_assist("POST", "/_migrate", home.assertion,
+                                {"v": 1, "assistants": home.local})
+            errs = gw_errors(st, doc)
+            if not errs:
+                mark_home()
+                os.replace(STORE.path, STORE.path + ".migrated-" + datetime.now(timezone.utc)
+                           .strftime("%Y%m%dT%H%M%SZ"))
+            return out(errs, {"migrated": len(home.local)})
+        if home.mode == "chat":
+            if path == "/api/assistants":
+                errs = STORE.save(body, who)
+                return out(errs, {"saved": body.get("id")})
+            if path == "/api/assistants/import":
+                errs = STORE.import_document(body, who)
+                return out(errs, {"imported": len(body.get("assistants") or [])})
+            m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})/delete$", path)
+            if m:
+                errs = STORE.delete(m.group(1), who)
+                return out(errs, {"deleted": m.group(1)})
+            return self.json(404, {"error": "Das geht erst, wenn die Assistenten im MCP-Gateway liegen."})
+        if path == "/api/assistants":
+            if body.get("id") == conf:
+                return out(["Diesen Assistenten pflegt der Betreiber in der Konfiguration (CHAT_ASSISTANT)."], {})
+            st, doc = gw_assist("POST", "", home.assertion, clean(body))
+            return out(gw_errors(st, doc), {"saved": body.get("id"), "rev": doc.get("rev")})
+        if path == "/api/assistants/import":
+            st, doc = gw_assist("POST", "/_import", home.assertion, body)
+            return out(gw_errors(st, doc), {"imported": doc.get("imported")})
+        m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})/(delete|state)$", path)
+        if m:
+            if m.group(1) == conf:
+                return out(["Diesen Assistenten pflegt der Betreiber in der Konfiguration."], {})
+            state = "deleted" if m.group(2) == "delete" else str(body.get("state") or "")
+            st, doc = gw_assist("POST", f"/{m.group(1)}/state", home.assertion, {"state": state})
+            return out(gw_errors(st, doc), {"id": m.group(1), "state": state})
+        return self.json(404, {"error": "nicht hier"})
 
     def do_POST(self):
         path = self.path.split("?")[0]
@@ -1012,21 +1181,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.json(400, {"error": "Kein JSON-Objekt."})
         who = self.who()
-        if path == "/api/assistants":
-            errs = STORE.save(body, who)
-            return self.json(400 if errs else 200, {"errors": errs} if errs else {"saved": body.get("id")})
-        if path == "/api/assistants/import":
-            errs = STORE.import_document(body, who)
-            return self.json(400 if errs else 200, {"errors": errs} if errs else
-                             {"imported": len(body.get("assistants") or [])})
-        m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})/delete$", path)
-        if m:
-            errs = STORE.delete(m.group(1), who)
-            return self.json(400 if errs else 200, {"errors": errs} if errs else {"deleted": m.group(1)})
+        assertion = self.headers.get(ASSERTION, "").strip()
+        if path.startswith("/api/assistants"):
+            return self.assistants_post(path, body, who, Home(assertion))
         if path == "/api/conv":
-            a, _ = STORE.get(str(body.get("assistant") or ""))
-            if a is None or not store.can_see(a, who):
+            a, _ = Home(assertion).find(str(body.get("assistant") or ""), who)
+            if a is None:
                 return self.json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+            if a.get("state") == "inactive":
+                return self.json(409, {"error": "Dieser Assistent ist gerade deaktiviert."})
             light = body.get("light") or DEFAULT_LIGHT
             refused = light_change_refused(DEFAULT_LIGHT, light, body.get("sure"))
             if refused:
@@ -1120,7 +1283,7 @@ def main():
     print(f"oaap-chat {VERSION} auf {PORT}; MCP-Client: {'ja' if CLIENT_KEY and CLIENT_URL else 'nein'}; "
           f"Modell: {'ja' if KI_URL else 'nein'}; Berechtigungen: "
           f"{'ja' if AUTHZ.url else 'nein (Team-Assistenten unsichtbar)'}; Assistenten "
-          f"{len(STORE.all())}" + (f"; FEHLER: {' '.join(SETUP_ERRORS)}" if SETUP_ERRORS else ""),
+          f"in der Datei {len(STORE.all())}" + (f"; FEHLER: {' '.join(SETUP_ERRORS)}" if SETUP_ERRORS else ""),
           flush=True)
     srv.serve_forever()
 

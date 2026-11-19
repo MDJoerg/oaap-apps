@@ -111,6 +111,7 @@ border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--green:#4ade80;--yellow:#facc15;--red:#f87171}}
 :root[data-theme=dark]{--green:#4ade80;--yellow:#facc15;--red:#f87171}
 .lightchip{font-size:.82rem;padding:.25rem .6rem;border-radius:1rem;white-space:nowrap;display:inline-flex;align-items:center;gap:.35rem}
+.lightchip[hidden]{display:none}
 .lightchip i,.lopt i{width:.7rem;height:.7rem;border-radius:50%;display:inline-block;flex:none}
 .l-green i{background:var(--green)} .l-yellow i{background:var(--yellow)} .l-red i{background:var(--red)}
 .lightwarn{align-self:stretch;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem}
@@ -1041,7 +1042,9 @@ function renderAssistants(){
     const card = el("div", "acard");
     card.appendChild(el("h3", "", a.title));
     const tags = el("div");
-    for (const t of [scopeWord(a), a.origin === "config" ? "aus der Konfiguration" : "", a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
+    for (const t of [scopeWord(a), a.origin === "config" ? "verwaltet über die Konfiguration" : "",
+                     a.rev ? "Fassung " + a.rev : "", a.state === "inactive" ? "deaktiviert" : "",
+                     a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
       if (t) tags.appendChild(el("span", "badge", t));
     card.appendChild(tags);
     const g = (a.greeting || "").replace(/[*_`#>\[\]]/g, "");
@@ -1049,7 +1052,7 @@ function renderAssistants(){
     card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · Sicht " + a.view));
     const acts = el("div", "acts");
     const go = el("button", "primary", "Gespräch beginnen"); go.type = "button";
-    go.onclick = () => startDraft(a.id); acts.appendChild(go);
+    go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive"; acts.appendChild(go);
     // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
     const r = READY[a.id];
     if (r && r.missing_tools) {
@@ -1067,11 +1070,29 @@ function renderAssistants(){
         const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
         $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
       acts.append(e, d);
+      if (a.origin === "gateway") {
+        // 0.9.0: deaktivieren heißt -- nicht mehr angeboten, die Revisionen bleiben.
+        const t = el("button", "", a.state === "inactive" ? "Aktivieren" : "Deaktivieren"); t.type = "button";
+        t.onclick = async () => {
+          const r = await api("POST", "api/assistants/" + a.id + "/state", {state: a.state === "inactive" ? "active" : "inactive"});
+          $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
+        acts.append(t);
+      }
     }
     card.appendChild(acts); box.appendChild(card);
   }
   if (!list.length) box.appendChild(el("p", "muted", S.assistants.length ? "Kein Assistent passt." : "Noch kein Assistent. Lege mit „Neuer Assistent“ einen an."));
   if (!S.teams_known) box.appendChild(el("p", "muted", "Deine Team-Berechtigungen sind gerade nicht lesbar — Team-Assistenten fehlen in der Liste."));
+  // 0.9.0 (RFC-0097 §2.2): die alte Datei des Chats ins MCP-Gateway übernehmen.
+  if (S.migration) {
+    const m = el("div", "acard");
+    m.appendChild(el("h3", "", S.migration + (S.migration === 1 ? " Assistent liegt" : " Assistenten liegen") + " noch in diesem Chat"));
+    m.appendChild(el("p", "", "Das MCP-Gateway kann sie mit Revisionen führen. Übernehmen behält Besitzer und Sichtbarkeit; die Datei des Chats wird umbenannt, nicht gelöscht. Bis dahin bleibt alles wie bisher."));
+    const b = el("button", "primary", "Ins MCP-Gateway übernehmen"); b.type = "button";
+    b.onclick = async () => { const r = await api("POST", "api/assistants/migrate", {});
+      $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ("Übernommen: " + r.migrated + "."); await refreshState(); };
+    const acts = el("div", "acts"); acts.appendChild(b); m.appendChild(acts); box.insertBefore(m, box.firstChild);
+  }
 }
 $("manage").onclick = async () => { closeDrawer(); showView("asst"); await refreshState(); };
 $("aq").addEventListener("input", renderAssistants);

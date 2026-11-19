@@ -568,6 +568,41 @@ Aufruf abgelehnt. Ein unbekannter Wert wird mit 400 abgelehnt. Die
 Messzeile trägt die verlangte Farbe in der neuen Spalte `light` (§10
 bleibt wahr: ein Wort, kein Inhalt).
 
+## Assistenten mit Revisionen (0.22)
+
+RFC-0097 Stufe 1. Die Assistenten der Chats liegen hier, neben den Sichten,
+die sie nennen. Ein Chat liest und schreibt sie über die via-Tür als die
+Person:
+
+| Weg | was |
+|---|---|
+| `GET /mcp/_assistants` | die Assistenten, die diese Person benutzen darf (geltende Revision, `rev`, `state`, `manage`) |
+| `GET /mcp/_assistants/<id>[?rev=n]` | eine Revision; `410`, wenn verdichtet |
+| `GET /mcp/_assistants/<id>/revisions` | Nummer, Zeit, wer -- nur wer ihn pflegt |
+| `POST /mcp/_assistants` | speichern = neue Revision; die Nummer vergibt das Gateway |
+| `POST /mcp/_assistants/_import` | Austauschdatei, alles oder nichts; wer importiert, wird Besitzer |
+| `POST /mcp/_assistants/_migrate` | die alte Datei eines Chats, Besitzer bleiben -- nur `tenant_admin` |
+| `POST /mcp/_assistants/<id>/state` | `active`, `inactive`, `deleted` |
+
+- **Sichtbarkeit** wie bisher im Chat. Die Regel steht in
+  `lib/assistants` und ist in Chat und Gateway dieselbe Kopie
+  (`check-shared.py`). Privat sieht nur der Besitzer; einen fremden
+  privaten Assistenten findet man auch gezielt nicht (404 wie unbekannt).
+  Für den ganzen Mandanten pflegt ihn nur `tenant_admin`.
+- **Team-Assistenten:** Das Gateway erklärt das Rechteobjekt `assistant`
+  selbst, mit denselben Vorlagen wie der Chat. Die Plattform nennt
+  Rechte nur der App, die fragt. Sind die Rechte nicht lesbar, sieht
+  niemand einen Team-Assistenten.
+- **Aufbewahrung (D6):** Jede Revision, auf die eine Messzeile zeigt,
+  bleibt, dazu immer die letzten 20. Ältere werden verdichtet: Nummer,
+  Zeit und wer bleiben, der Text geht.
+- **Messzeile:** `X-OAAP-Assistant: <id>@<rev>` landet getrennt in
+  `assistant` und der neuen Spalte `assistant_rev`.
+- Jedes Speichern steht in der Prüfspur (`assistant.save`, `.import`,
+  `.migrate`, `.state`).
+- Die Betreiberseite listet Assistenten noch nicht. Das kommt mit
+  Stufe 2 (Auswertung je Revision).
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

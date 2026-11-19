@@ -84,3 +84,84 @@ def check_document(doc):
             errs.append(f"[{i}] id: {aid} kommt zweimal vor.")
         seen.add(aid)
     return errs
+
+
+# ------------------------------------------------------------- Sichtbarkeit (D4)
+# Seit RFC-0097 Stufe 1 ein gemeinsames Modul (lib/assistants, Kopien in chat und
+# mcp-gateway, geprüft von check-shared.py): Der Chat prüft damit Assistenten aus
+# seiner Konfiguration und seiner alten Datei, das MCP-Gateway die, die bei ihm
+# liegen. Eine Regel, zwei Leser -- nicht zwei Regeln, die sich eines Tages
+# widersprechen.
+#
+# | scope   | sieht                                   | verwaltet                          |
+# |---------|-----------------------------------------|------------------------------------|
+# | private | nur `owner`                             | nur `owner`                        |
+# | context | wer `assistant.use` im Team hat         | wer `assistant.manage` im Team hat |
+# | tenant  | jede Person, die die App öffnen darf    | `tenant_admin`                     |
+#
+# Sind die fachlichen Berechtigungen nicht lesbar (grants None), sieht niemand
+# einen Team-Assistenten (geschlossen scheitern, wie authz_client).
+
+CONTEXT_FIELD = "team"
+
+
+class Who:
+    """Wer fragt: Kennung, Plattformrollen, fachliche Berechtigungen (oder None)."""
+
+    def __init__(self, uid, roles, grants):
+        self.uid, self.roles, self.grants = uid, set(roles), grants
+
+
+def may_in(grants, permission, **fields):
+    """Rein: erlauben schon aufgelöste Berechtigungen `objekt.tätigkeit`? (wie authz_client)"""
+    ob, _, act = (permission or "").partition(".")
+    for g in grants or ():
+        if not isinstance(g, dict) or g.get("object") != ob \
+                or act not in (g.get("activities") or ()):
+            continue
+        fl = g.get("fields") or {}
+        if all(fk in fields and fields[fk] in have for fk, have in fl.items()) \
+                and all(fl[fk] is None or fields[fk] in fl[fk]
+                        for fk in fields if fk in fl):
+            return True
+    return False
+
+
+def _team(a):
+    ctx = (a.get("visibility") or {}).get("context") or {}
+    return ctx.get(CONTEXT_FIELD)
+
+
+def can_see(a, who):
+    scope = (a.get("visibility") or {}).get("scope")
+    if scope == "tenant":
+        return True
+    if scope == "private":
+        return bool(who.uid) and a.get("owner") == who.uid
+    if scope == "context":
+        team = _team(a)
+        return bool(team) and (may_in(who.grants, "assistant.use", team=team)
+                               or may_in(who.grants, "assistant.manage", team=team))
+    return False
+
+
+def can_manage(a, who):
+    scope = (a.get("visibility") or {}).get("scope")
+    if scope == "tenant":
+        return "tenant_admin" in who.roles
+    if scope == "private":
+        return bool(who.uid) and a.get("owner") == who.uid
+    if scope == "context":
+        team = _team(a)
+        return bool(team) and may_in(who.grants, "assistant.manage", team=team)
+    return False
+
+
+def problems(a):
+    """Die Sätze von oaap.ai.assistants, dazu: als Kontext nur ein Team."""
+    errs = check(a)
+    v = a.get("visibility") if isinstance(a, dict) else None
+    if not errs and v.get("scope") == "context" and set(v["context"]) != {CONTEXT_FIELD}:
+        errs.append(f"visibility: als Kontext gibt es nur {CONTEXT_FIELD} "
+                    f"(z. B. {{\"{CONTEXT_FIELD}\": \"service\"}}).")
+    return errs
