@@ -22,7 +22,7 @@ RESULTS = []
 SEEN_VIEWS = {"assertion": ""}
 MODEL_LIGHT, DOOR_LIGHT = [], []   # X-OAAP-Light am Modell und an der Tür (0.8.0)
 # 0.9.0 (RFC-0097): ein Gateway mit /_assistants -- aus, bis der Test es einschaltet
-GWA = {"on": False, "down": False, "items": {}, "posts": [], "assistant_hdr": []}
+GWA = {"on": False, "down": False, "items": {}, "posts": [], "assistant_hdr": [], "gets": []}
 
 
 def gwa_list():
@@ -123,6 +123,17 @@ class Fake(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != "Bearer " + CK or \
                     not self.headers.get("X-OAAP-Act-Assertion", "").startswith("ZS-"):
                 return self.reply(401, {})
+            GWA["gets"].append(self.path[len("/via/gw1/_assistants"):])
+            if "/evaluation" in self.path:
+                return self.reply(200, {"id": "alt-privat", "rev": 2, "usage_since": "2026-11-01T00:00:00Z",
+                                        "revisions": [{"rev": 2, "calls": 3, "refused": 1, "errors": 0, "persons": 1,
+                                                       "cases": 1, "compacted": False, "changed_at": "2026-11-19T10:00:00Z",
+                                                       "ratings": {"count": 2, "stars": [0, 1, 0, 0, 1, 0], "low": 0.5, "persons": 1}},
+                                                      {"rev": 1, "calls": 0, "refused": 0, "errors": 0, "persons": 0,
+                                                       "cases": 0, "compacted": False, "changed_at": "2026-11-18T10:00:00Z",
+                                                       "ratings": {"count": 0, "stars": [0] * 6, "low": 0, "persons": 0}}]})
+            if "/diff?" in self.path:
+                return self.reply(200, {"diff": ["--- Revision 1", "+++ Revision 2", "-Du hilfst.", "+Neu."]})
             return self.reply(200, {"v": 1, "assistants": gwa_list(), "grants_known": True})
         if self.path.startswith("/via/gw1/_readiness?view="):
             # 0.7.0 (RFC-0095 §5): das Gateway sagt je Sicht, was der Person noch fehlt.
@@ -160,6 +171,8 @@ class Fake(BaseHTTPRequestHandler):
                 for a in body["assistants"]:
                     GWA["items"][a["id"]] = (a, 1, "active")
                 return self.reply(200, {"migrated": len(body["assistants"])})
+            if rest.endswith("/cases"):
+                return self.reply(200, {"counted": True, "rev": body.get("rev")})
             if rest.endswith("/ratings"):
                 if GWA.get("rate_refuse"):
                     return self.reply(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
@@ -942,13 +955,27 @@ check("0.11.0: D6: support_queue des Assistenten wird der Bereich des Vorgangs",
 _bad = app.store.problems(dict(asst("x", "private"), support_queue="Kein Bereich"))
 check("0.11.0: support_queue, die keine Bereichskennung ist: abgelehnt (dieselbe Regel wie im Gateway)",
       any("support_queue" in e for e in _bad), _bad)
+GWA["posts"].clear()
 st, r = req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "V-2026-0042"})
 req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "V-2026-0042"})
+_cp = [b for rest, b in GWA["posts"] if rest == "/alt-privat/cases"]
+check("0.12.0: der Vorgang wird beim Gateway gezählt -- assistant@rev und Nummer, einmal",
+      r.get("counted") is True and _cp == [{"rev": 2, "number": "V-2026-0042"}], (r.get("counted"), GWA["posts"]))
 check("0.11.0: die Vorgangsnummer bleibt im eigenen Verlauf, an der Antwort, einmal",
       st == 200 and [(c["number"], c["index"]) for c in r["cases"]] == [("V-2026-0042", ix[0])]
       and req("GET", f"/api/conv/{c9['id']}")[1]["cases"][0]["number"] == "V-2026-0042", (st, r))
 st, r = req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "<script>"})
 check("0.11.0: keine Vorgangsnummer: 400", st == 400, (st, r))
+GWA["gets"].clear()
+st, r = req("GET", "/api/assistants/alt-privat/evaluation")
+check("0.12.0: die Auswertung je Revision kommt vom Gateway, als die Person",
+      st == 200 and [x["rev"] for x in r["revisions"]] == [2, 1] and [g for g in GWA["gets"] if g] == ["/alt-privat/evaluation"], (st, r, GWA["gets"]))
+st, r = req("GET", "/api/assistants/alt-privat/diff?a=1&b=x")
+check("0.12.0: Vergleich mit einer Nummer, die keine ist: 400, nichts ans Gateway",
+      st == 400 and [g for g in GWA["gets"] if g] == ["/alt-privat/evaluation"], (st, r))
+st, r = req("GET", "/api/assistants/alt-privat/diff?a=1&b=2")
+check("0.12.0: der Vergleich zweier Revisionen", st == 200 and "+Neu." in r["diff"]
+      and GWA["gets"][-1] == "/alt-privat/diff?a=1&b=2", (st, r, GWA["gets"]))
 _msgs = [{"role": "user", "content": "Wie?"},
          {"role": "tool", "name": "help_search", "content": '{"link": "https://hilfe.example/read/a#s2"}'},
          {"role": "assistant", "content": "Siehe [Anleitung A](https://hilfe.example/read/a#s2) und "
@@ -987,6 +1014,8 @@ check("0.11.0: die Seite hat den Dialog, den Haken je Karte, die Statusabfrage u
       "function openSad(" in html and 'id="saddlg"' in html and "Argumente und Ergebnis mitgeben" in html
       and "/platform/feedback/mine" in html and 'name="support_queue"' in html
       and "Nicht zufrieden? An den Support geben" in html)
+check("0.12.0: die Seite hat die Auswertung mit Sternverteilung und den Vergleich",
+      "function openEval(" in html and 'id="evdlg"' in html and "Revisionen vergleichen" in html)
 GWA["on"] = False
 
 srv.shutdown()

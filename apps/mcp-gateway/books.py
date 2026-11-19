@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS ratings (
   text        TEXT NOT NULL DEFAULT '',
   UNIQUE (assistant, who, slot)
 );
+-- 0.25 (RFC-0101 Stufe 4): dass zu einer Revision ein Vorgang „Nicht zufrieden“ ging --
+-- gezählt, nicht beschrieben. `slot` ist ein HMAC von Person und Vorgangsnummer: derselbe
+-- Vorgang zählt einmal, die Nummer selbst steht hier nicht.
+CREATE TABLE IF NOT EXISTS assistant_cases (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  assistant   TEXT NOT NULL,
+  rev         INTEGER NOT NULL,
+  who         TEXT NOT NULL,
+  slot        TEXT NOT NULL,
+  at          TEXT NOT NULL,
+  UNIQUE (assistant, slot)
+);
 CREATE TABLE IF NOT EXISTS protocol (
   day     TEXT NOT NULL,
   key_id  TEXT NOT NULL,
@@ -1474,6 +1486,8 @@ def compact_assistant(db, aid, keep_last=KEEP_LAST):
     # 0.23: ebenso jede Revision, die eine Bewertung nennt (RFC-0101 D8: ein Stern, der
     # einen Prompt nennt, den niemand mehr lesen kann, misst nichts).
     used |= {r["rev"] for r in db.execute("SELECT DISTINCT rev FROM ratings WHERE assistant=?", (aid,))}
+    # 0.25: und jede, zu der ein Vorgang ging
+    used |= {r["rev"] for r in db.execute("SELECT DISTINCT rev FROM assistant_cases WHERE assistant=?", (aid,))}
     cur = db.execute("SELECT rev FROM assistants WHERE id=?", (aid,)).fetchone()
     keep = set(revs[:keep_last]) | used | ({cur["rev"]} if cur else set())
     drop = [r for r in revs if r not in keep]
@@ -1547,6 +1561,76 @@ def ratings_of(db, aid, limit=500):
     rows = [_rating(r) for r in db.execute(
         "SELECT * FROM ratings WHERE assistant=? ORDER BY id DESC LIMIT ?", (aid, int(limit)))]
     return {"revisions": sorted(revs.values(), key=lambda d: -d["rev"]), "ratings": rows}
+
+
+# ---- Auswertung je Revision (0.25, RFC-0097 Stufe 2 / RFC-0101 Stufe 4)
+
+def case_note(db, aid, rev, who, slot):
+    """Ein Vorgang zu `aid@rev`; derselbe (slot) zählt einmal. True, wenn neu gezählt."""
+    cur = db.execute("INSERT OR IGNORE INTO assistant_cases (assistant, rev, who, slot, at) "
+                     "VALUES (?,?,?,?,?)", (aid, int(rev), who, slot, now()))
+    db.commit()
+    return cur.rowcount == 1
+
+
+def assistant_evaluation(db, aid):
+    """Je Revision: wann und von wem, aus den Messzeilen Aufrufe, Ablehnungen, Fehler und
+    Personen (nur gezählt), dazu Sterne und Vorgänge. Die Messzeilen leben nur so lange wie
+    ihre Aufbewahrung -- das steht dabei, wo sie gezeigt werden."""
+    out = {r["rev"]: dict(r, calls=0, refused=0, errors=0, persons=0, cases=0,
+                          ratings={"count": 0, "stars": [0] * 6, "low": 0, "persons": 0})
+           for r in assistant_revisions(db, aid)}
+    for r in db.execute(
+            "SELECT assistant_rev AS rev, COUNT(*) AS calls, "
+            "SUM(outcome IN ('refused','limited')) AS refused, "
+            "SUM(outcome IN ('upstream_error','tool_error')) AS errors, "
+            "COUNT(DISTINCT NULLIF(user_sub,'')) AS persons "
+            "FROM usage WHERE assistant=? AND assistant_rev>0 GROUP BY assistant_rev", (aid,)):
+        if r["rev"] in out:
+            out[r["rev"]].update(calls=r["calls"], refused=r["refused"] or 0,
+                                 errors=r["errors"] or 0, persons=r["persons"])
+    for d in ratings_of(db, aid, limit=0)["revisions"]:
+        if d["rev"] in out:
+            out[d["rev"]]["ratings"] = {"count": d["count"], "stars": d["stars"], "low": d["low"],
+                                        "persons": d.get("persons", 0)}
+    for r in db.execute("SELECT rev, COUNT(*) AS n FROM assistant_cases WHERE assistant=? "
+                        "GROUP BY rev", (aid,)):
+        if r["rev"] in out:
+            out[r["rev"]]["cases"] = r["n"]
+    oldest = db.execute("SELECT MIN(time) AS t FROM usage").fetchone()
+    return {"revisions": sorted(out.values(), key=lambda d: -d["rev"]),
+            "usage_since": (oldest["t"] if oldest else "") or ""}
+
+
+def assistant_diff(db, aid, a, b):
+    """(Zeilen eines Vergleichs von Revision a nach b, None) oder (None, Satz)."""
+    import difflib
+    docs = []
+    for rev in (a, b):
+        r = assistant_revision(db, aid, rev)
+        if r is None:
+            return None, f"Revision {rev} gibt es nicht."
+        if r["doc"] is None:
+            return None, f"Revision {rev} ist verdichtet (D6): ihr Text ist nicht mehr da."
+        d = {k: v for k, v in r["doc"].items() if k != "system"}
+        text = json.dumps(d, ensure_ascii=False, indent=1, sort_keys=True).splitlines()
+        text += ["", "--- system ---"] + str(r["doc"].get("system") or "").splitlines()
+        docs.append(text)
+    return list(difflib.unified_diff(docs[0], docs[1], f"Revision {a}", f"Revision {b}",
+                                     lineterm="", n=2)), None
+
+
+def assistant_export(db, aid, rev=None):
+    """Austauschdatei {v: 1, assistants: [doc]} einer Revision, ohne Besitzer und Nummer
+    (RFC-0097 §2.3): `owner` ist "-" (das Format verlangt das Feld; wer importiert, wird
+    Besitzer) -- oder None (unbekannt oder verdichtet)."""
+    row = assistant_row(db, aid)
+    if not row:
+        return None
+    doc = row["doc"] if rev in (None, row["rev"]) else (assistant_revision(db, aid, rev) or {}).get("doc")
+    if not doc:
+        return None
+    return {"v": 1, "assistants": [dict({k: v for k, v in doc.items() if k not in ("owner", "rev")}, owner="-")]}
 
 
 def ratings_mine(db, who, limit=500):

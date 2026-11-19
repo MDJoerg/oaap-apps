@@ -306,10 +306,24 @@ Mandanten antwortet (`/platform/feedback/session`).
   nicht ab, sie übergeht sie still. Der Vorgang landet dann im Eingang,
   ohne die Felder.
 
+## Auswertung je Revision (0.12.0)
+
+RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
+- **Wer sie sieht:** wer einen Assistenten pflegt, und der tenant_admin.
+  Sie öffnen „Auswertung“ auf der Karte des Assistenten.
+- **Was sie zeigt:** je Revision Aufrufe, abgewiesen, Fehler und Personen,
+  die Verteilung der Sterne mit Durchschnitt, den Anteil 0–2 und die
+  Vorgänge „Nicht zufrieden“. Dazu kommt „Revisionen vergleichen“.
+- **Woher:** Die Zahlen kommen vom MCP-Gateway, als die Person. Der Chat
+  rechnet nichts selbst.
+- **Vorgänge zählen:** Nach „Nicht zufrieden“ meldet der Chat dem Gateway
+  `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
+  zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 180 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 185 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 

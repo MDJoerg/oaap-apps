@@ -50,6 +50,7 @@ from urllib.parse import parse_qsl, quote, unquote_plus
 
 import argcheck
 import assistants as arules
+CASE_NUMBER_RE = __import__("re").compile(r"^V-\d{4}-\d{4,6}$")
 import books
 import compose
 import guard
@@ -60,7 +61,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.24.0"
+VERSION = "0.25.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -1112,6 +1113,7 @@ TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
         ("sichten", "./?tab=sichten", "Sichten"), ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
         ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
         ("auswertung", "auswertung", "Auswertung"),
+        ("assistenten", "assistenten", "Assistenten"),
         # 0.15.2: die eigene Seite auch für die Verwaltung erreichbar -- die
         # Kachel führt eine Admin-Person auf die Verwaltung, nicht auf /me.
         ("me", "me", "Meine Aufrufe"))
@@ -2215,6 +2217,74 @@ CHART_DIMS = {"view": "Sicht", "tool": "Eintrag", "kind": "Art", "key": "Schlüs
               "owner": "Verantwortlich", "application": "Anwendung"}
 
 
+def assistants_page(user, roles, who, params):
+    """0.25 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): je Assistent und Revision Aufrufe,
+    Ablehnungen, Fehler, Personen, Sterne und Vorgänge; Vergleich zweier Revisionen;
+    Export einer Revision. Gezeigt wird, was die gemeinsame Regel diese Person sehen lässt;
+    Sterne und Vorgänge nur für die, die den Assistenten pflegen, und den tenant_admin."""
+    rows = [r for r in books.assistant_rows(DB)
+            if r["state"] != "deleted" and arules.can_see(r["doc"], who)]
+    pick = params.get("id", "")
+    cards = []
+    for r in rows:
+        d, aid = r["doc"], r["doc"]["id"]
+        manage = arules.can_manage(d, who)
+        reader = manage or "tenant_admin" in who.roles
+        ev = books.assistant_evaluation(DB, aid)
+        trs = []
+        for x in ev["revisions"]:
+            rt = x["ratings"]
+            dist = " ".join(f"{i}★{n}" for i, n in enumerate(rt["stars"]) if n) or "—"
+            stars = (f'{rt["count"]} ({rt["persons"]} Pers.) · {esc(dist)} · 0–2: {round(rt["low"] * 100)} %'
+                     if rt["count"] else "—")
+            exp = ("" if x["compacted"] else
+                   f' <a href="assistenten/export?id={quote(aid)}&amp;rev={x["rev"]}">Export</a>')
+            trs.append(f'<tr><td>{x["rev"]}{" (geltend)" if x["rev"] == r["rev"] else ""}'
+                       f'{" · verdichtet" if x["compacted"] else ""}{exp}</td>'
+                       f'<td>{esc(x["changed_at"][:16].replace("T", " "))}</td>'
+                       f'<td>{x["calls"]}</td><td>{x["refused"]}</td><td>{x["errors"]}</td><td>{x["persons"]}</td>'
+                       + (f'<td>{stars}</td><td>{x["cases"]}</td>' if reader else "") + '</tr>')
+        head = ('<tr><th>Revision</th><th>seit</th><th>Aufrufe</th><th>abgewiesen</th><th>Fehler</th>'
+                '<th>Personen</th>' + ('<th>Sterne</th><th>Vorgänge</th>' if reader else "") + '</tr>')
+        revs = [x["rev"] for x in ev["revisions"] if not x["compacted"]]
+        diff = ""
+        if pick == aid and params.get("a", "").isdigit() and params.get("b", "").isdigit():
+            lines, err = books.assistant_diff(DB, aid, int(params["a"]), int(params["b"]))
+            if err:
+                diff = f'<p class="muted">{esc(err)}</p>'
+            else:
+                body = "\n".join(lines[2:]) or "(gleich)"
+                diff = f'<pre class="diff">{esc(body)}</pre>'
+        form = ""
+        if len(revs) >= 2:
+            opts_a = "".join(f'<option{" selected" if i == 1 else ""}>{v}</option>' for i, v in enumerate(revs))
+            opts_b = "".join(f'<option{" selected" if i == 0 else ""}>{v}</option>' for i, v in enumerate(revs))
+            form = (f'<form method="get" action="assistenten" class="grid"><input type="hidden" name="id" value="{esc(aid)}">'
+                    f'<div><label>von</label><select name="a">{opts_a}</select></div>'
+                    f'<div><label>nach</label><select name="b">{opts_b}</select></div>'
+                    f'<div><button>Revisionen vergleichen</button></div></form>')
+        vis = d["visibility"]["scope"]
+        vis_word = {"private": "privat", "context": "Team " + str(list((d["visibility"].get("context") or {}).values())[:1]),
+                    "tenant": "ganzer Mandant"}.get(vis, vis)
+        cards.append(
+            f'<div class="card" id="a-{esc(aid)}"><h2>{esc(d.get("title") or aid)} <small class="muted">'
+            f'{esc(aid)} · Revision {r["rev"]} · {esc(vis_word)}{" · deaktiviert" if r["state"] == "inactive" else ""}</small></h2>'
+            f'<p class="hint">Modell <code>{esc(d.get("model", ""))}</code> · Sicht <code>{esc(d.get("view", ""))}</code>'
+            + (f' · Bereich für „Nicht zufrieden“ <code>{esc(d["support_queue"])}</code>' if d.get("support_queue") else "")
+            + '</p>'
+            f'<div class="scroll"><table>{head}{"".join(trs)}</table></div>'
+            + ("" if reader else '<p class="hint">Sterne und Vorgänge liest, wer den Assistenten pflegt, und der tenant_admin.</p>')
+            + form + diff + '</div>')
+    since = books.assistant_evaluation(DB, rows[0]["doc"]["id"])["usage_since"] if rows else ""
+    intro = (f'<div class="card"><h1>Assistenten</h1><p class="hint">Je Revision: Aufrufe, Ablehnungen und Fehler '
+             f'aus den Messzeilen (vorhanden seit {esc(since[:10]) or "—"}; ältere sind nach der Aufbewahrung '
+             f'gelöscht), Personen nur gezählt. Sterne und Vorgänge „Nicht zufrieden“ aus dem Chat (RFC-0101). '
+             f'Export: eine Revision als Austauschdatei ohne Besitzer und Nummer.</p>'
+             + '</div>')
+    return page("Assistenten", intro + ("".join(cards) or '<div class="card"><p class="muted">Noch keine Assistenten.</p></div>'),
+                user, roles, "assistenten")
+
+
 def charts_page(user, roles, params):
     today = datetime.now(timezone.utc).date()
     try:
@@ -2343,6 +2413,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def identity(self):
         return self.headers.get("X-OAAP-User", ""), self.headers.get("X-OAAP-Roles", "")
+
+    def page_who(self):
+        """Wer die Betreiberseite ansieht, für die gemeinsame Regel der Assistenten: ein
+        privater Assistent einer anderen Person bleibt auch hier unsichtbar (RFC-0101 §6.2)."""
+        uid = (self.headers.get("X-OAAP-User-Id") or "").strip()
+        roles = {r.strip() for r in self.identity()[1].split(",") if r.strip()}
+        return arules.Who(uid, roles, AUTHZ.grants(uid) if uid else None)
+
+    def assistant_export_download(self, query):
+        aid, rev = query.get("id", ""), query.get("rev", "")
+        row = books.assistant_row(DB, aid) if ASSISTANT_RE.match(aid) else None
+        doc = None
+        if row and row["state"] != "deleted" and arules.can_see(row["doc"], self.page_who()) \
+                and (not rev or rev.isdigit()):
+            doc = books.assistant_export(DB, aid, int(rev) if rev else None)
+        if doc is None:
+            self.send_html(404, page("Nicht gefunden", '<div class="card"><p>Diesen Assistenten oder diese '
+                                     'Revision gibt es hier nicht (oder ihr Text ist verdichtet).</p></div>', "", ""))
+            return
+        name = f"assistent-{aid}" + (f"-rev{rev}" if rev else "") + ".json"
+        self.send_bytes(200, "application/json; charset=utf-8",
+                        json.dumps(doc, ensure_ascii=False, indent=1).encode(),
+                        [("Content-Disposition", f'attachment; filename="{name}"')])
 
     def is_admin(self):
         return "admin" in [r.strip() for r in self.identity()[1].split(",")]
@@ -2506,6 +2599,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, dict(books.ratings_of(DB, aid), id=aid, rev=row["rev"]))
             return
+        if sub == "evaluation":
+            # 0.25 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): dieselben Leser wie die Bewertungen
+            if not (manage or "tenant_admin" in who.roles):
+                self.send_json(403, {"error": "Die Auswertung liest, wer den Assistenten pflegt."})
+                return
+            self.send_json(200, dict(books.assistant_evaluation(DB, aid), id=aid, rev=row["rev"]))
+            return
+        if sub == "diff":
+            # Jede Revision liest, wer den Assistenten sieht (?rev=n) -- also auch den Vergleich.
+            q = dict(parse_qsl(self.path.partition("?")[2]))
+            if not (q.get("a", "").isdigit() and q.get("b", "").isdigit()):
+                self.send_json(400, {"error": "a und b sind Revisionsnummern."})
+                return
+            lines, err = books.assistant_diff(DB, aid, int(q["a"]), int(q["b"]))
+            if err:
+                self.send_json(404, {"error": err})
+                return
+            self.send_json(200, {"id": aid, "a": int(q["a"]), "b": int(q["b"]), "diff": lines})
+            return
         if sub == "revisions":
             if not manage:
                 self.send_json(403, {"error": "Die Revisionen sieht, wer den Assistenten pflegt."})
@@ -2596,6 +2708,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if sub == "ratings":
             self.rating_post(aid, carried, body)
+            return
+        if sub == "cases":
+            # 0.25 (RFC-0101 Stufe 4): ein Vorgang „Nicht zufrieden“ zu aid@rev, gezählt
+            rev, number = body.get("rev"), body.get("number")
+            if not (isinstance(rev, int) and not isinstance(rev, bool) and rev > 0
+                    and isinstance(number, str) and CASE_NUMBER_RE.match(number)):
+                self.send_json(400, {"error": "rev (Zahl) und number (V-JJJJ-NNNN) erwartet."})
+                return
+            if books.assistant_revision(DB, aid, rev) is None:
+                self.send_json(400, {"error": f"rev: die Revision {rev} gibt es nicht."})
+                return
+            new = books.case_note(DB, aid, rev, rating_who(carried["sub"]),
+                                  rating_mac("case", carried["sub"], number))
+            self.send_json(200, {"counted": new, "rev": rev})
             return
         if sub != "state":
             self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -3264,6 +3390,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, view_page(user, roles, host, query.get("name", "")))
         elif path == "/auswertung":
             self.send_html(200, charts_page(user, roles, query))
+        elif path == "/assistenten":
+            self.send_html(200, assistants_page(user, roles, self.page_who(), query))
+        elif path == "/assistenten/export":
+            self.assistant_export_download(query)
         else:
             self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start")))
 

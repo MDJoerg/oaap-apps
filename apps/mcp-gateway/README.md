@@ -633,6 +633,24 @@ der App Vorgänge, in den „Nicht zufrieden“ zu diesem Assistenten geht
 aus `lib/`). Das Feld wird mit der Revision festgehalten. Der Vorgang
 selbst geht nicht durch das Gateway, sondern über die Feedback-Route.
 
+## Auswertung je Revision (0.25)
+
+RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
+- **Reiter „Assistenten“** auf der Betreiberseite: je Assistent und
+  Revision Aufrufe, abgewiesen, Fehler und Personen (aus den Messzeilen,
+  nur gezählt), dazu Sterne und Vorgänge „Nicht zufrieden“. Außerdem ein
+  Vergleich zweier Revisionen und Export je Revision.
+- **Wer was sieht:** Gezeigt wird nach derselben Regel wie im Chat, mit
+  der eigenen Person. Ein fremder privater Assistent fehlt ganz. Sterne
+  und Vorgänge sieht, wer pflegt, und der tenant_admin.
+- **Über die via-Tür:**
+  - `GET /mcp/_assistants/<id>/evaluation`
+  - `GET …/<id>/diff?a=&b=`
+  - `POST …/<id>/cases {rev, number}` (der Chat zählt einen Vorgang;
+    gespeichert nur HMACs, nie die Nummer).
+- **Zeitraum:** Messzeilen reichen nur so weit zurück wie ihre
+  Aufbewahrung. Die Seite sagt, seit wann.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

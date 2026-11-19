@@ -1870,6 +1870,92 @@ check("D6 mit Sternen: eine bewertete Revision wird nicht verdichtet, die unbewe
 check("der Schlüssel für die HMACs liegt in /data (ratings.key, 32 Byte)",
       os.path.getsize(app.RATING_KEY_FILE) == 32, app.RATING_KEY_FILE)
 
+import assistants as _arules  # noqa: E402
+arules_check = _arules.check_document
+print("\n-- 0.25.0 RFC-0097 Stufe 2 / RFC-0101 Stufe 4: Auswertung je Revision, Vergleich, Export")
+st, d = ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001"})
+st2, d2 = ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001"})
+check("ein Vorgang zu a-priv@2 wird gezählt, derselbe ein zweites Mal nicht",
+      st == 200 and d["counted"] is True and st2 == 200 and d2["counted"] is False, (st, d, st2, d2))
+check("... gespeichert ohne Vorgangsnummer und ohne Kennung der Person",
+      "V-2026-0001" not in json.dumps([dict(r) for r in app.DB.execute("SELECT * FROM assistant_cases")])
+      and "u-anna" not in json.dumps([dict(r) for r in app.DB.execute("SELECT * FROM assistant_cases")]), None)
+st, d = ax("POST", "/a-priv/cases", {"rev": 2, "number": "42"})
+st2, d2 = ax("POST", "/a-priv/cases", {"rev": 99, "number": "V-2026-0002"})
+check("keine Vorgangsnummer oder eine Revision, die es nicht gibt: 400", st == 400 and st2 == 400, (st, d, st2, d2))
+st, d = ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0003"}, uid="u-bert")
+check("KÖDER: Bert zählt keinen Vorgang zu Annas privatem Assistenten (404 wie unbekannt)", st == 404, (st, d))
+_base = {r["rev"]: r["calls"] for r in books.assistant_evaluation(app.DB, "a-priv")["revisions"]}
+for rev, outcome, sub in ((2, "ok", "u-anna"), (2, "refused", "u-bert"), (2, "tool_error", "u-anna"), (1, "ok", "u-anna")):
+    app.DB.execute("INSERT INTO usage (time, key_id, view, tool, outcome, user_sub, client, assistant, assistant_rev) "
+                   "VALUES (?,?,?,?,?,?,?,?,?)", ("2026-11-19T10:00:00Z", "k", "a-sicht", "whoami", outcome, sub,
+                                                  "chat", "a-priv", rev))
+app.DB.commit()
+st, ev = ax("GET", "/a-priv/evaluation")
+r2 = next((x for x in ev.get("revisions", []) if x["rev"] == 2), {})
+r1 = next((x for x in ev.get("revisions", []) if x["rev"] == 1), {})
+check("Auswertung je Revision: Aufrufe, abgewiesen, Fehler, Personen aus den Messzeilen",
+      st == 200 and r2.get("calls") == _base.get(2, 0) + 3 and r2.get("refused") >= 1 and r2.get("errors") >= 1
+      and r2.get("persons") == 2 and r1.get("calls") == _base.get(1, 0) + 1, (st, ev, _base))
+check("... dazu Sterne (Verteilung, Anteil 0–2) und Vorgänge, getrennt je Revision",
+      r2.get("ratings", {}).get("count", 0) >= 1 and sum(r2["ratings"]["stars"]) == r2["ratings"]["count"]
+      and r2.get("cases") == 1 and r1.get("cases") == 0 and r1["ratings"]["count"] == 0, (r1, r2))
+st, d = ax("GET", "/a-priv/evaluation", uid="u-bert", roles="user,tenant_admin")
+check("KÖDER: tenant_admin liest die Auswertung eines fremden privaten Assistenten nicht (404)", st == 404, (st, d))
+st, d = ax("GET", "/a-alle/evaluation", uid="u-bert")
+st2, d2 = ax("GET", "/a-alle/evaluation", uid="u-bert", roles="user,tenant_admin")
+check("Mandanten-Assistent: wer ihn nur benutzt, 403; der tenant_admin liest", st == 403 and st2 == 200, (st, st2))
+st, d = ax("GET", "/a-priv/diff?a=1&b=2")
+check("Vergleich zweier Revisionen: die geänderte Anweisung als -/+ Zeilen",
+      st == 200 and "-Du hilfst." in d["diff"] and "+Du hilfst besser." in d["diff"], (st, d))
+st, d = ax("GET", "/a-stern/diff?a=2&b=3")
+check("Vergleich mit einer verdichteten Revision: 404 mit Satz", st == 404 and "verdichtet" in d.get("error", ""), (st, d))
+st, d = ax("GET", "/a-priv/diff?a=1&b=2", uid="u-bert")
+check("KÖDER: Bert vergleicht Annas privaten Assistenten nicht (404)", st == 404, (st, d))
+exp1 = books.assistant_export(app.DB, "a-priv", 1)
+check("Export einer gewählten Revision: Austauschformat, ohne Besitzer und Nummer, alter Text",
+      exp1 and not arules_check(exp1) and exp1["assistants"][0]["owner"] == "-"
+      and exp1["assistants"][0]["system"] == "Du hilfst.", exp1)
+exp = books.assistant_export(app.DB, "a-alle")
+bad = {"v": 1, "assistants": [dict(exp["assistants"][0], id="a-import", view="gibt-es-nicht")]}
+st, d = ax("POST", "/_import", bad, roles="user,tenant_admin")
+check("Import einer exportierten Datei mit fehlender Sicht: abgelehnt mit ihrem Namen",
+      st == 400 and "gibt-es-nicht" in json.dumps(d, ensure_ascii=False), (st, d))
+good = {"v": 1, "assistants": [dict(exp["assistants"][0], id="a-import")]}
+st, d = ax("POST", "/_import", good, roles="user,tenant_admin")
+st2, d2 = ax("GET", "/a-import", roles="user,tenant_admin")
+check("... mit vorhandener Sicht: importiert, Revision 1, wer importiert, ist Besitzer",
+      st == 200 and st2 == 200 and d2["rev"] == 1 and d2["owner"] == "u-anna", (st, d, st2, d2))
+
+
+def page_as(path, uid, roles):
+    req = urllib.request.Request(GW + path, headers={"X-OAAP-User": uid, "X-OAAP-User-Id": uid,
+                                                     "X-OAAP-Roles": roles})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode()
+
+
+st, pg = page_as("/assistenten", "u-anna", "admin,user")
+check("Betreiberseite „Assistenten“: Annas Assistent mit Revisionen, Sternen, Vorgängen, Vergleich, Export",
+      st == 200 and 'id="a-a-priv"' in pg and "Revisionen vergleichen" in pg and "<th>Sterne</th>" in pg
+      and "assistenten/export?id=a-priv" in pg, pg[-800:])
+st, pg = page_as("/assistenten", "u-bert", "admin,user")
+check("KÖDER: auf der Betreiberseite sieht Bert Annas privaten Assistenten nicht",
+      st == 200 and 'id="a-a-priv"' not in pg and "a-priv" not in pg, None)
+check("... den Mandanten-Assistenten schon, ohne Sterne (er pflegt ihn nicht)",
+      'id="a-a-alle"' in pg and "liest, wer den Assistenten pflegt" in pg, None)
+st, pg = page_as("/assistenten?id=a-priv&a=1&b=2", "u-anna", "admin,user")
+check("Vergleich auf der Seite", st == 200 and "+Du hilfst besser." in pg, pg[-600:])
+st, pg = page_as("/assistenten/export?id=a-priv&rev=1", "u-anna", "admin,user")
+check("Export-Link liefert die Austauschdatei", st == 200 and json.loads(pg)["assistants"][0]["system"] == "Du hilfst.", pg[:200])
+st, pg = page_as("/assistenten/export?id=a-priv", "u-bert", "admin,user")
+check("KÖDER: Bert exportiert Annas privaten Assistenten nicht (404)", st == 404, st)
+st, pg = page_as("/assistenten", "u-anna", "user")
+check("die Seite ist der Verwaltung vorbehalten (ohne admin: 403)", st == 403, st)
+
 # ---- 0.7.3: Grenzen ändern, Gründe nennen, Quellen einlesen
 admin("/view-save", name="a-zwei", max_effect="read", ways="key")
 

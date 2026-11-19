@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -1217,6 +1217,24 @@ class Handler(BaseHTTPRequestHandler):
             doc = (STORE.export(who) if home.mode == "chat" else
                    {"v": 1, "assistants": [clean(a) for a, o in home.all(who) if o == "gateway" and a.get("manage")]})
             return self.json(200, doc, [("Content-Disposition", 'attachment; filename="assistenten.json"')])
+        m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})/(evaluation|diff)$", path)
+        if m:
+            # 0.12.0 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): die Auswertung je Revision und der
+            # Vergleich zweier Revisionen -- vom MCP-Gateway, als die Person; es entscheidet.
+            if home.mode != "gateway":
+                return self.json(404, {"error": "Auswertungen gibt es für Assistenten im MCP-Gateway."})
+            q = ""
+            if m.group(2) == "diff":
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                a_, b_ = (qs.get("a") or [""])[0], (qs.get("b") or [""])[0]
+                if not (a_.isdigit() and b_.isdigit()):
+                    return self.json(400, {"error": "a und b sind Revisionsnummern."})
+                q = f"?a={a_}&b={b_}"
+            st, doc = gw_assist("GET", f"/{m.group(1)}/{m.group(2)}{q}", home.assertion)
+            if st == 200:
+                return self.json(200, doc)
+            return self.json(st if st in (400, 403, 404) else 502, {"error": " ".join(gw_errors(st, doc))})
         m = re.match(r"^/api/assistants/([a-z0-9-]{1,48})$", path)
         if m:
             a, origin = home.find(m.group(1), who)
@@ -1476,11 +1494,19 @@ class Handler(BaseHTTPRequestHandler):
                 if not CASE_NUMBER.match(number) or unhappy_round(conv, index)[0] is None:
                     return self.json(400, {"error": "Vorgangsnummer und Antwort passen nicht."})
                 cases = conv.setdefault("cases", [])
+                counted = False
                 if not any(c["number"] == number for c in cases):
                     cases.append({"number": number, "index": index, "at": now()})
                     del cases[:-50]
+                    # 0.12.0 (RFC-0101 Stufe 4): dem Gateway sagen, dass zu assistant@rev ein
+                    # Vorgang ging -- gezählt, ohne Inhalt. Scheitert das, bleibt der Vorgang.
+                    rev = conv["messages"][unhappy_round(conv, index)[0]].get("rev")
+                    if rev:
+                        st, said = gw_assist("POST", f"/{conv.get('assistant')}/cases", assertion,
+                                             {"rev": rev, "number": number})
+                        counted = st == 200
                 save_conv(person, conv)
-                return self.json(200, view_of(conv))
+                return self.json(200, dict(view_of(conv), counted=counted))
             return self.round(person, who, conv, action, body)
         finally:
             lock.release()

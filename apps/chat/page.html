@@ -175,6 +175,13 @@ dialog .rate{margin:.6rem 0 0}
 dialog label.inl{display:flex;align-items:center;gap:.4rem;color:var(--ink)}
 dialog label.inl input{width:auto;margin:0}
 #sadpages{font-size:.82rem;margin:.2rem 0 0 1.4rem;padding:0}
+/* ---- 0.12.0 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): Auswertung je Revision */
+#evbox table{border-collapse:collapse;font-size:.82rem;width:100%}
+#evbox th,#evbox td{border-bottom:1px solid var(--line);padding:.3rem .4rem;text-align:left;vertical-align:top}
+#evbox .bars{display:inline-flex;gap:1px;align-items:flex-end;height:1.2rem;margin-right:.3rem;vertical-align:middle}
+#evbox .bars i{display:block;width:.4rem;background:var(--accent);min-height:1px}
+#evdiff{font-size:.75rem;max-height:20rem;overflow:auto;white-space:pre-wrap;background:var(--tool);padding:.5rem;border-radius:.4rem}
+#evdiff .add{color:#15803d} #evdiff .del{color:var(--err)}
 
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
@@ -299,6 +306,15 @@ dialog input,dialog textarea,dialog select{width:100%}
   Dazu gehen Assistent, Revision, Modell, Ampel, Sicht und die Namen und Ausgänge der Werkzeuge mit.</p>
   <p class="err" id="saderr"></p>
   <div class="row"><button class="primary" type="button" id="sadsend">An den Support geben</button></div>
+</dialog>
+<dialog id="evdlg">
+  <div class="dhead"><b id="evtitle">Auswertung</b><button type="button" class="hbtn" id="evclose">Schließen</button></div>
+  <p class="muted" style="font-size:.82rem">Je Revision: Aufrufe, abgewiesen und Fehler aus den Messzeilen des MCP-Gateways
+  (nur so weit zurück, wie es sie aufbewahrt), Personen nur gezählt; Sterne und „Nicht zufrieden“ aus dem Chat.</p>
+  <div id="evbox"></div>
+  <div class="row" id="evcmp" style="align-items:flex-end"></div>
+  <pre id="evdiff" hidden></pre>
+  <p class="err" id="everr"></p>
 </dialog>
 <dialog id="reqdlg">
   <div class="dhead"><b id="reqtitle">Anfrage an die Verwaltung</b><button type="button" class="hbtn" id="reqclose">Schließen</button></div>
@@ -626,6 +642,52 @@ async function openSad(index){
   $("saddlg").showModal();
 }
 $("sadclose").onclick = () => $("saddlg").close();
+
+// ---- 0.12.0 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): was hat eine neue Revision gebracht?
+async function openEval(a){
+  $("evtitle").textContent = "Auswertung: " + a.title; $("everr").textContent = "";
+  const box = $("evbox"), cmp = $("evcmp"), out = $("evdiff");
+  box.textContent = "lädt …"; cmp.textContent = ""; out.hidden = true; $("evdlg").showModal();
+  const r = await api("GET", "api/assistants/" + a.id + "/evaluation");
+  box.textContent = "";
+  if (r.error) { $("everr").textContent = r.error; return; }
+  const t = el("table"), h = el("tr");
+  for (const x of ["Revision", "seit", "Aufrufe", "abgewiesen", "Fehler", "Personen", "Sterne", "0–2", "Nicht zufrieden"]) h.appendChild(el("th", "", x));
+  t.appendChild(h);
+  for (const x of r.revisions) {
+    const tr = el("tr"), rt = x.ratings;
+    tr.appendChild(el("td", "", x.rev + (x.rev === r.rev ? " (geltend)" : "") + (x.compacted ? " · verdichtet" : "")));
+    tr.appendChild(el("td", "", (x.changed_at || "").slice(0, 16).replace("T", " ")));
+    for (const k of ["calls", "refused", "errors", "persons"]) tr.appendChild(el("td", "", String(x[k])));
+    const st = el("td");
+    if (rt.count) {
+      const bars = el("span", "bars"), max = Math.max(...rt.stars, 1);
+      rt.stars.forEach((n, i) => { const b = el("i"); b.style.height = Math.round(n / max * 100) + "%"; b.title = i + " Sterne: " + n; bars.appendChild(b); });
+      const avg = rt.stars.reduce((s, n, i) => s + n * i, 0) / rt.count;
+      st.append(bars, rt.count + " · Ø " + avg.toFixed(1));
+    } else st.textContent = "—";
+    tr.appendChild(st);
+    tr.appendChild(el("td", "", rt.count ? Math.round(rt.low * 100) + " %" : "—"));
+    tr.appendChild(el("td", "", String(x.cases)));
+    t.appendChild(tr);
+  }
+  box.appendChild(t);
+  const revs = r.revisions.filter(x => !x.compacted).map(x => x.rev);
+  if (revs.length < 2) return;
+  const sel = (pick) => { const s = el("select"); for (const v of revs) { const o = el("option", "", String(v)); o.value = v; if (v === pick) o.selected = true; s.appendChild(o); } s.style.width = "auto"; return s; };
+  const sa = sel(revs[1]), sb = sel(revs[0]), go = el("button", "", "Revisionen vergleichen"); go.type = "button";
+  go.onclick = async () => {
+    const d = await api("GET", "api/assistants/" + a.id + "/diff?a=" + sa.value + "&b=" + sb.value);
+    if (d.error) { $("everr").textContent = d.error; return; }
+    $("everr").textContent = ""; out.textContent = "";
+    const lines = d.diff.slice(2);
+    if (!lines.length) out.textContent = "(gleich)";
+    for (const l of lines) out.appendChild(el("span", l[0] === "+" ? "add" : l[0] === "-" ? "del" : "", l + "\n"));
+    out.hidden = false;
+  };
+  cmp.append(el("span", "muted", "von "), sa, el("span", "muted", " nach "), sb, go);
+}
+$("evclose").onclick = () => $("evdlg").close();
 $("sadsend").onclick = async () => {
   if (!SAD || !C) return;
   const cid = C.id, index = SAD.index;
@@ -1254,6 +1316,7 @@ function renderAssistants(){
         $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
       acts.append(e, d);
       if (a.origin === "gateway") {
+        const ev = el("button", "", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
         // 0.9.0: deaktivieren heißt -- nicht mehr angeboten, die Revisionen bleiben.
         const t = el("button", "", a.state === "inactive" ? "Aktivieren" : "Deaktivieren"); t.type = "button";
         t.onclick = async () => {
@@ -1261,6 +1324,9 @@ function renderAssistants(){
           $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
         acts.append(t);
       }
+    }
+    if (!a.manage && S.tenant_admin && a.origin === "gateway") {
+      const ev = el("button", "", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
     }
     card.appendChild(acts); box.appendChild(card);
   }
