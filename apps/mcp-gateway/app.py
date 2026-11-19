@@ -61,7 +61,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.25.0"
+VERSION = "0.26.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -2243,9 +2243,10 @@ def assistants_page(user, roles, who, params):
                        f'{" · verdichtet" if x["compacted"] else ""}{exp}</td>'
                        f'<td>{esc(x["changed_at"][:16].replace("T", " "))}</td>'
                        f'<td>{x["calls"]}</td><td>{x["refused"]}</td><td>{x["errors"]}</td><td>{x["persons"]}</td>'
-                       + (f'<td>{stars}</td><td>{x["cases"]}</td>' if reader else "") + '</tr>')
+                       + (f'<td>{stars}</td><td>{x["cases"]}</td><td>{x["accepted"]}</td>' if reader else "") + '</tr>')
         head = ('<tr><th>Revision</th><th>seit</th><th>Aufrufe</th><th>abgewiesen</th><th>Fehler</th>'
-                '<th>Personen</th>' + ('<th>Sterne</th><th>Vorgänge</th>' if reader else "") + '</tr>')
+                '<th>Personen</th>' + ('<th>Sterne</th><th>Vorgänge</th><th>davon „Lösung passt“</th>'
+                                       if reader else "") + '</tr>')
         revs = [x["rev"] for x in ev["revisions"] if not x["compacted"]]
         diff = ""
         if pick == aid and params.get("a", "").isdigit() and params.get("b", "").isdigit():
@@ -2712,15 +2713,20 @@ class Handler(BaseHTTPRequestHandler):
         if sub == "cases":
             # 0.25 (RFC-0101 Stufe 4): ein Vorgang „Nicht zufrieden“ zu aid@rev, gezählt
             rev, number = body.get("rev"), body.get("number")
+            outcome = body.get("outcome") or ""
             if not (isinstance(rev, int) and not isinstance(rev, bool) and rev > 0
                     and isinstance(number, str) and CASE_NUMBER_RE.match(number)):
                 self.send_json(400, {"error": "rev (Zahl) und number (V-JJJJ-NNNN) erwartet."})
+                return
+            # 0.26 (RFC-0103 D10): wie er ausging -- nur dieses Wort reist
+            if outcome and outcome not in books.CASE_OUTCOMES:
+                self.send_json(400, {"error": "outcome ist accepted, reopened oder no_response."})
                 return
             if books.assistant_revision(DB, aid, rev) is None:
                 self.send_json(400, {"error": f"rev: die Revision {rev} gibt es nicht."})
                 return
             new = books.case_note(DB, aid, rev, rating_who(carried["sub"]),
-                                  rating_mac("case", carried["sub"], number))
+                                  rating_mac("case", carried["sub"], number), outcome)
             self.send_json(200, {"counted": new, "rev": rev})
             return
         if sub != "state":

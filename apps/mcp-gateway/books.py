@@ -209,6 +209,8 @@ REQUEST_METHODS = {"elicitation/create": "elicitation", "roots/list": "roots",
                    "sampling/createMessage": "sampling"}
 
 ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMNS) + (
+    # 0.26 (RFC-0103 D10): wie der Vorgang ausging -- accepted | reopened | no_response | ''
+    ("assistant_cases", "outcome", "TEXT NOT NULL DEFAULT ''"),
     ("usage", "kind", "TEXT NOT NULL DEFAULT 'tool'"),
     ("views", "requests", f"TEXT NOT NULL DEFAULT '{REQUESTS_OLD}'"),
     # 0.3 (RFC-0065 Stufe 3): Zugangsprofile stehen neben den Schlüsseln —
@@ -1565,19 +1567,26 @@ def ratings_of(db, aid, limit=500):
 
 # ---- Auswertung je Revision (0.25, RFC-0097 Stufe 2 / RFC-0101 Stufe 4)
 
-def case_note(db, aid, rev, who, slot):
-    """Ein Vorgang zu `aid@rev`; derselbe (slot) zählt einmal. True, wenn neu gezählt."""
-    cur = db.execute("INSERT OR IGNORE INTO assistant_cases (assistant, rev, who, slot, at) "
-                     "VALUES (?,?,?,?,?)", (aid, int(rev), who, slot, now()))
+CASE_OUTCOMES = ("accepted", "reopened", "no_response")
+
+
+def case_note(db, aid, rev, who, slot, outcome=""):
+    """Ein Vorgang zu `aid@rev`; derselbe (slot) zählt einmal. True, wenn neu gezählt.
+    0.26 (RFC-0103 D10): `outcome` hält fest, wie er ausging (nur das Wort, der letzte gilt)."""
+    cur = db.execute("INSERT OR IGNORE INTO assistant_cases (assistant, rev, who, slot, at, outcome) "
+                     "VALUES (?,?,?,?,?,?)", (aid, int(rev), who, slot, now(), outcome or ""))
+    new = cur.rowcount == 1
+    if outcome and not new:
+        db.execute("UPDATE assistant_cases SET outcome=? WHERE assistant=? AND slot=?", (outcome, aid, slot))
     db.commit()
-    return cur.rowcount == 1
+    return new
 
 
 def assistant_evaluation(db, aid):
     """Je Revision: wann und von wem, aus den Messzeilen Aufrufe, Ablehnungen, Fehler und
     Personen (nur gezählt), dazu Sterne und Vorgänge. Die Messzeilen leben nur so lange wie
     ihre Aufbewahrung -- das steht dabei, wo sie gezeigt werden."""
-    out = {r["rev"]: dict(r, calls=0, refused=0, errors=0, persons=0, cases=0,
+    out = {r["rev"]: dict(r, calls=0, refused=0, errors=0, persons=0, cases=0, accepted=0,
                           ratings={"count": 0, "stars": [0] * 6, "low": 0, "persons": 0})
            for r in assistant_revisions(db, aid)}
     for r in db.execute(
@@ -1593,10 +1602,11 @@ def assistant_evaluation(db, aid):
         if d["rev"] in out:
             out[d["rev"]]["ratings"] = {"count": d["count"], "stars": d["stars"], "low": d["low"],
                                         "persons": d.get("persons", 0)}
-    for r in db.execute("SELECT rev, COUNT(*) AS n FROM assistant_cases WHERE assistant=? "
-                        "GROUP BY rev", (aid,)):
+    for r in db.execute("SELECT rev, COUNT(*) AS n, SUM(outcome='accepted') AS acc FROM assistant_cases "
+                        "WHERE assistant=? GROUP BY rev", (aid,)):
         if r["rev"] in out:
             out[r["rev"]]["cases"] = r["n"]
+            out[r["rev"]]["accepted"] = r["acc"] or 0
     oldest = db.execute("SELECT MIN(time) AS t FROM usage").fetchone()
     return {"revisions": sorted(out.values(), key=lambda d: -d["rev"]),
             "usage_since": (oldest["t"] if oldest else "") or ""}

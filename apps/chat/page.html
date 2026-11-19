@@ -168,7 +168,13 @@ dialog .rate{margin:.6rem 0 0}
 .rate button.sad{font-size:.75rem;text-decoration:underline;margin-left:.4rem}
 .rate button.sad.ask{color:var(--ink);text-decoration:none;border:1px solid var(--line);padding:.1rem .45rem}
 .casemark{align-self:flex-start;font-size:.78rem;color:var(--muted);margin-top:calc(var(--gap) * -.5)}
-.casemark.done{color:var(--ink)}
+.casemark.done{color:var(--ink)} .casemark a{color:inherit}
+.casemark .acc{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.3rem}
+.casemark .acc button{font-size:.78rem;padding:.2rem .6rem}
+.casemark textarea{width:min(32rem,80vw);min-height:3.5rem;font:inherit;font-size:.82rem}
+/* 0.14.0 (RFC-0103 D8): ein Punkt je Gespräch mit Vorgang -- rot = du bist dran */
+.dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.35rem;vertical-align:middle}
+.dot.red{background:#dc2626} .dot.green{background:#16a34a} .dot.yellow{background:#eab308} .dot.grey{background:#9ca3af}
 .tcard{border:1px solid var(--line);border-radius:.4rem;padding:.35rem .55rem;margin:.3rem 0;font-size:.85rem}
 .tcard label,dialog .tcard label{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem 0 0;font-size:.78rem}
 .tcard input,dialog .tcard input{width:auto;margin:0}
@@ -587,22 +593,97 @@ async function loadFeedback(){
   try { const r = await fetch("/platform/feedback/session", {credentials: "same-origin"}); FEEDBACK = r.ok; }
   catch (e) { FEEDBACK = false; }
   if (FEEDBACK && C) { SHOWN = {id: null, n: 0}; render(); loadCaseStatus(); }
+  if (FEEDBACK) loadAllCases();
 }
 
 // ---- 0.11.0 (RFC-0101 Stufe 3): „Nicht zufrieden“ wird ein Vorgang. Der Chat baut ihn
 // (api/conv/…/unhappy), der Browser schickt ihn an /platform/feedback dieser Seite --
 // die Plattform bezeugt dich. Die Nummer bleibt in deinem Verlauf; ob der Vorgang beantwortet
 // ist, fragt die Seite als du bei den Vorgängen nach (D11).
-let SAD = null, CASESTAT = {};
+let SAD = null, CASESTAT = {}, CONVDOT = {};
+// 0.14.0 (RFC-0103 D8): Farbe eines Vorgangs für die meldende Person; der dringendste gewinnt
+const DOTRANK = {red: 4, green: 3, yellow: 2, grey: 1};
+const DOTWORD = {red: "du bist dran", green: "beantwortet — passt die Lösung?", yellow: "offen", grey: "geschlossen"};
+function dotOf(st){
+  if (!st) return "";
+  if (st.status === "waiting_reporter" || st.status === "rejected") return "red";
+  if (st.status === "answered") return "green";
+  if (st.status === "closed") return "grey";
+  return "yellow";
+}
+function buildDots(){
+  CONVDOT = {};
+  for (const [n, st] of Object.entries(CASESTAT)) {
+    if (!st.object || st.object.kind !== "conversation") continue;
+    const c = dotOf(st), was = CONVDOT[st.object.id];
+    if (c && (!was || DOTRANK[c] > DOTRANK[was.color])) CONVDOT[st.object.id] = {color: c, number: n, label: st.label};
+  }
+}
+async function loadAllCases(){
+  // ein Aufruf beim Laden: alle eigenen Vorgänge (höchstens 200), daraus die Punkte im Baum
+  try {
+    const r = await fetch("/platform/feedback/mine", {credentials: "same-origin"});
+    if (!r.ok) return;
+    const d = await r.json();
+    Object.assign(CASESTAT, d.cases || {});
+  } catch (e) { return; }
+  buildDots(); if (S) renderSide();
+}
 function sadOnly(index){
   const box = el("div", "rate"), b = el("button", "sad", "Nicht zufrieden");
   b.type = "button"; b.onclick = () => openSad(index); box.appendChild(b); return box;
 }
 function caseMark(k){
   const st = CASESTAT[k.number];
-  const d = el("div", "casemark" + (st && st.answered ? " done" : ""),
-               "Vorgang " + k.number + (st ? " · " + st.label + (st.answered ? " — die Antwort steht in der App Vorgänge" : "") : " · an den Support gegeben"));
+  const d = el("div", "casemark" + (st && st.answered ? " done" : ""));
+  const c = dotOf(st);
+  if (c) { const s = el("span", "dot " + c); s.title = DOTWORD[c]; d.appendChild(s); }
+  // 0.14.0 (RFC-0103 D7): die Nummer ist ein Link auf den Vorgang (neuer Reiter), wenn die
+  // Vorgänge ihre Adresse nennen
+  if (st && st.url) {
+    const a = el("a", "", "Vorgang " + k.number); a.href = st.url; a.target = "_blank"; a.rel = "noopener";
+    d.appendChild(a);
+  } else d.appendChild(document.createTextNode("Vorgang " + k.number));
+  d.appendChild(document.createTextNode(
+    !st ? " · an den Support gegeben" :
+    " · " + st.label + (st.mark_label ? " (" + st.mark_label + ")" : "") +
+    (st.status === "answered" ? " — die Antwort steht in der App Vorgänge" : "")));
+  if (st && st.status === "answered") d.appendChild(acceptRow(k.number));
   return d;
+}
+// 0.14.0 (RFC-0103 D10): „Lösung passt“ / „Passt nicht“ -- an /platform/feedback/mine/… dieser
+// Seite: die Plattform bezeugt dich, die Vorgänge nehmen es nur von der meldenden Person an.
+function acceptRow(number){
+  const box = el("div", "acc"), ok = el("button", "", "Lösung passt"), no = el("button", "", "Passt nicht"),
+        msg = el("span", "err", "");
+  ok.type = no.type = "button";
+  ok.onclick = () => sendOutcome(number, "accept", {}, msg);
+  no.onclick = () => {
+    no.disabled = true;
+    const t = el("textarea"); t.maxLength = 10000; t.placeholder = "Was fehlt noch oder passt nicht?";
+    const send = el("button", "", "Wieder öffnen"); send.type = "button";
+    send.onclick = () => { if (!t.value.trim()) { msg.textContent = "Bitte schreib dazu, was nicht passt."; return; }
+                           sendOutcome(number, "reopen", {text: t.value.trim()}, msg); };
+    box.append(t, send);
+  };
+  box.append(ok, no, msg);
+  return box;
+}
+async function sendOutcome(number, action, body, msg){
+  let r, d = {};
+  try {
+    r = await fetch("/platform/feedback/mine/" + encodeURIComponent(number) + "/" + action,
+                    {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+                     credentials: "same-origin"});
+    try { d = await r.json(); } catch (e) {}
+  } catch (e) { msg.textContent = "Die Vorgänge sind nicht erreichbar."; return; }
+  if (!r.ok) { msg.textContent = d.error || ("Antwort " + r.status); return; }
+  if (d.case) CASESTAT[number] = d.case;
+  buildDots(); renderSide();
+  // dem Chat sagen, wie es ausging -- für die Auswertung der Revision (nur das Wort)
+  if (C && (C.cases || []).some(x => x.number === number))
+    await api("POST", "api/conv/" + C.id + "/case", {number, outcome: action === "accept" ? "accepted" : "reopened"});
+  SHOWN = {id: null, n: 0}; render();
 }
 async function loadCaseStatus(){
   if (!FEEDBACK || !C || !(C.cases || []).length) return;
@@ -757,9 +838,12 @@ function renderSide(){
     }
     if (folded) continue;
     for (const c of cs) {
-      const b = el("button", "conv" + (C && C.id === c.id ? " on" : ""), c.title + " "); b.type = "button";
+      const b = el("button", "conv" + (C && C.id === c.id ? " on" : "")); b.type = "button";
+      const dot = CONVDOT[c.id];
+      if (dot) b.appendChild(el("span", "dot " + dot.color));
+      b.appendChild(document.createTextNode(c.title + " "));
       b.appendChild(el("small", "", SET.group === "assistant" ? when(c.updated) : titleOf(c)));
-      b.title = c.title + " — " + titleOf(c);
+      b.title = c.title + " — " + titleOf(c) + (dot ? " · Vorgang " + dot.number + ": " + dot.label + " (" + DOTWORD[dot.color] + ")" : "");
       b.onclick = () => { closeDrawer(); openConv(c.id); }; box.appendChild(b);
     }
   }

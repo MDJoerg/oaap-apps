@@ -3,7 +3,7 @@ oaap_manifest: "0.11"
 app:
   id: vorgaenge
   name: Vorgänge
-  version: 0.8.0
+  version: 0.9.0
   type: native
   class: frontend
   description: "Melden und Klären im Mandanten (RFC-0061 Stufe 1): nimmt die Meldungen des Feedback-Knopfs der Plattform an (/platform/feedback.js in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Eine Instanz je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier als Vorgang an (RFC-0069); Plattform ab 0.1.199"
@@ -73,6 +73,10 @@ config:
   - key: VORGAENGE_RETENTION_MONTHS
     label: "Löschfrist: Monate nach Schließen/Ablehnen, bis die meldende Person aus dem Vorgang entfernt wird"
     default: "12"
+  # RFC-0103 D11
+  - key: VORGAENGE_ACCEPT_DAYS
+    label: "Tage ohne Rückmeldung, nach denen sich ein beantworteter Vorgang von selbst schließt"
+    default: "14"
 
 health:
   path: /healthz

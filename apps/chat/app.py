@@ -45,7 +45,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -935,6 +935,7 @@ def rating_body(conv, index, stars, share):
 # Herkunft -- dort bezeugt die Plattform die Person (§4.3). Der Chat hält keinen Schlüssel
 # für Vorgänge und legt nie selbst einen an.
 CASE_NUMBER = re.compile(r"^V-\d{4}-\d{4,6}$")
+CASE_OUTCOMES = ("accepted", "reopened")      # 0.14.0: was die Person zur Antwort sagt
 LINK = re.compile(r"\[([^\]\n]{1,200})\]\((https?://[^)\s]{1,500})\)")
 UNHAPPY_Q, UNHAPPY_A, UNHAPPY_E = 4000, 4000, 1500
 NO_CALL_IDS = ("Aufruf-Kennungen gehen nicht mit: dieser Mandant führt sie noch nicht (RFC-0098 "
@@ -1497,6 +1498,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Zeiger im eigenen Verlauf; den Status liest die Seite als die Person (D11).
                 number = str(body.get("number") or "")
                 index = body.get("index")
+                if body.get("outcome") is not None:
+                    return self.case_outcome(person, conv, assertion, number, body.get("outcome"))
                 if not CASE_NUMBER.match(number) or unhappy_round(conv, index)[0] is None:
                     return self.json(400, {"error": "Vorgangsnummer und Antwort passen nicht."})
                 cases = conv.setdefault("cases", [])
@@ -1516,6 +1519,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.round(person, who, conv, action, body)
         finally:
             lock.release()
+
+    def case_outcome(self, person, conv, assertion, number, outcome):
+        """0.14.0 (RFC-0103 D10): die Person hat bei den Vorgängen „Lösung passt“ oder „Passt
+        nicht“ gesagt (als sie, über /platform/feedback/mine/…). Hier nur: im eigenen Verlauf
+        vermerken und dem Gateway das Wort sagen, damit die Auswertung der Revision es zählt.
+        Entschieden hat der Chat damit nichts -- er hält keinen Schlüssel der Vorgänge."""
+        if outcome not in CASE_OUTCOMES:
+            return self.json(400, {"error": "outcome ist accepted oder reopened."})
+        k = next((c for c in conv.get("cases") or [] if c.get("number") == number), None)
+        if k is None:
+            return self.json(400, {"error": "Diesen Vorgang kennt dieses Gespräch nicht."})
+        k["outcome"], k["outcome_at"] = outcome, now()
+        counted = False
+        i = unhappy_round(conv, k.get("index"))[0]
+        rev = conv["messages"][i].get("rev") if i is not None else None
+        if rev:
+            st, _said = gw_assist("POST", f"/{conv.get('assistant')}/cases", assertion,
+                                  {"rev": rev, "number": number, "outcome": outcome})
+            counted = st == 200
+        save_conv(person, conv)
+        return self.json(200, dict(view_of(conv), counted=counted))
 
     def rate(self, person, who, conv, body):
         """0.10.0 (RFC-0101 Stufe 2): Sterne an eine Antwort (`index`) oder das Gespräch.

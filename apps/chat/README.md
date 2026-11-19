@@ -320,6 +320,21 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
   zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
 
+## Punkte, Link, „Lösung passt“ (0.14.0, RFC-0103 Stufe 2)
+
+- **Punkte im Baum:** Beim Laden fragt die Seite einmal
+  `/platform/feedback/mine` (alle eigenen Vorgänge) und ordnet sie über
+  den Bezug `{kind: conversation, id}` den Gesprächen zu. Rot = du bist
+  dran (Rückfrage oder abgelehnt), grün = beantwortet, gelb = offen, grau
+  = geschlossen. Bei mehreren gewinnt der dringendste.
+- **Link:** „Vorgang V-…“ öffnet den Vorgang in einem neuen Reiter, wenn
+  die Vorgänge ihre Adresse nennen.
+- **Lösung passt / Passt nicht:** Bei einem beantworteten Vorgang zwei
+  Knöpfe. Der Browser schickt sie an `/platform/feedback/mine/…` dieser
+  Seite, als die Person; der Chat hält keinen Schlüssel der Vorgänge.
+  Danach sagt der Chat dem MCP-Gateway nur das Wort (`outcome`), damit die
+  Auswertung der Revision „Lösung passt“ zählt.
+
 ## Anzeigename, SVG, gemeinsame Darstellung (0.13.0)
 
 - **Anzeigename:** Der Chat dekodiert ihn jetzt. Die Plattform schickt ihn

@@ -973,6 +973,21 @@ check("0.11.0: die Vorgangsnummer bleibt im eigenen Verlauf, an der Antwort, ein
       and req("GET", f"/api/conv/{c9['id']}")[1]["cases"][0]["number"] == "V-2026-0042", (st, r))
 st, r = req("POST", f"/api/conv/{c9['id']}/case", {"index": ix[0], "number": "<script>"})
 check("0.11.0: keine Vorgangsnummer: 400", st == 400, (st, r))
+GWA["posts"].clear()
+st, r = req("POST", f"/api/conv/{c9['id']}/case", {"number": "V-2026-0042", "outcome": "accepted"})
+_cp = [b for rest, b in GWA["posts"] if rest == "/alt-privat/cases"]
+check("0.14.0 (RFC-0103 D10): „Lösung passt“ geht als Wort ans Gateway (rev, Nummer, outcome) und steht im Verlauf",
+      st == 200 and _cp == [{"rev": 2, "number": "V-2026-0042", "outcome": "accepted"}]
+      and r["cases"][0].get("outcome") == "accepted", (st, r.get("cases"), GWA["posts"]))
+st, r = req("POST", f"/api/conv/{c9['id']}/case", {"number": "V-2026-0099", "outcome": "accepted"})
+st2, r2 = req("POST", f"/api/conv/{c9['id']}/case", {"number": "V-2026-0042", "outcome": "closed"})
+check("0.14.0: ein Vorgang, den das Gespräch nicht kennt, oder ein fremdes Wort: 400",
+      st == 400 and st2 == 400 and len([1 for rest, _ in GWA["posts"] if rest == "/alt-privat/cases"]) == 1,
+      (st, r, st2, r2))
+_pg = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html"), encoding="utf-8").read()
+check("0.14.0: die Seite fragt einmal alle eigenen Vorgänge (Punkte), nimmt über /platform/feedback/mine/…/accept ab",
+      'fetch("/platform/feedback/mine", ' in _pg and '"/platform/feedback/mine/" + encodeURIComponent(number)' in _pg
+      and "a.target = \"_blank\"" in _pg and "waiting_reporter" in _pg, None)
 GWA["gets"].clear()
 st, r = req("GET", "/api/assistants/alt-privat/evaluation")
 check("0.12.0: die Auswertung je Revision kommt vom Gateway, als die Person",

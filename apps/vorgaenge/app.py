@@ -51,10 +51,11 @@ import urllib.request
 
 import authz_client
 import mcp_door
-from store import (BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store, canonical)
+from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
+                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store,
+                   canonical)
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -143,7 +144,23 @@ def outbox_loop(store, kick):
         kick.clear()
 
 
-def retention_loop(months):
+def accept_days(raw=None):
+    """0.9.0 (RFC-0103 D11): nach so vielen Tagen ohne Rückmeldung schließt sich ein
+    beantworteter Vorgang (Einstellung des Mandanten); ganze Tage ab 1, sonst 14."""
+    raw = os.environ.get("VORGAENGE_ACCEPT_DAYS", "") if raw is None else raw
+    try:
+        n = int(str(raw).strip())
+        if n >= 1:
+            return n
+    except ValueError:
+        pass
+    if str(raw).strip():
+        print(f"VORGAENGE_ACCEPT_DAYS={raw!r} ist keine ganze Zahl ab 1 -- "
+              f"es gelten {ACCEPT_DAYS} Tage.", flush=True)
+    return ACCEPT_DAYS
+
+
+def retention_loop(months, days=ACCEPT_DAYS):
     while True:
         try:
             done = STORE.remove_person_data(months)
@@ -152,9 +169,17 @@ def retention_loop(months):
                       f"entfernt ({', '.join(done)})", flush=True)
         except Exception as e:      # der Lauf darf die App nie anhalten
             print(f"Löschfrist: Lauf fehlgeschlagen: {e}", flush=True)
+        try:
+            # 0.9.0 (D11): im selben Takt -- sechs Stunden später ist bei 14 Tagen kein Verzug
+            done = STORE.close_unanswered(days)
+            if done:
+                print(f"Ohne Rückmeldung geschlossen: {', '.join(done)}", flush=True)
+        except Exception as e:      # noqa: BLE001
+            print(f"Schließen ohne Rückmeldung: Lauf fehlgeschlagen: {e}", flush=True)
         time.sleep(RETENTION_CHECK_SECONDS)
 
 esc = html.escape
+ACCEPT_DAYS_NOW = [ACCEPT_DAYS]      # die eingestellte Frist (main); eine Liste, damit Tests sie setzen
 STORE = None
 AUTHZ = None
 RETENTION = RETENTION_MONTHS
@@ -220,7 +245,9 @@ def next_statuses(who, c):
         if s in MANUAL_EXCLUDED:
             continue
         if s == "closed":
-            ok = who.may("close", c["queue"]) or c["reporter"] == who.id
+            # 0.9.0 (D10): die meldende Person schließt mit „Lösung passt“, nicht hier --
+            # sonst fehlte die Markierung accepted
+            ok = who.may("close", c["queue"])
         elif s == "reopened":
             ok = who.may("triage", c["queue"]) or c["reporter"] == who.id
         else:
@@ -369,8 +396,33 @@ addEventListener("DOMContentLoaded", function () {
 </script></body></html>""")
 
 
-def pill(status):
-    return f'<span class=pill>{esc(STATUS_LABEL.get(status, status))}</span>'
+def pill(status, mark=""):
+    word = STATUS_LABEL.get(status, status)
+    if status == "closed" and mark in MARK_LABEL:
+        word += f" ({MARK_LABEL[mark]})"
+    return f'<span class=pill>{esc(word)}</span>'
+
+
+def case_url(number):
+    """0.9.0 (RFC-0103 D7): die Adresse des Vorgangs, aus dem ersten öffentlichen Namen
+    dieser Instanz -- ohne Schema (`//host/v/N`): der Browser nimmt das der Seite, auf
+    der der Link steht (hinter einem Edge nennt OAAP_INSTANCE_NAMES `http`, der Browser
+    sieht `https`). Ohne öffentlichen Namen: leer, der Chat zeigt dann keinen Link."""
+    first = (os.environ.get("OAAP_INSTANCE_NAMES", "").split(",")[0] or "").strip()
+    host = urlparse(first).netloc if "://" in first else first
+    if not host or "/" in host:
+        return ""
+    return f"//{host}/v/{quote(number)}"
+
+
+def mine_row(r):
+    """Was /platform/feedback/mine je eigenem Vorgang sagt -- nur Eigenes, nichts Internes."""
+    st, mark = r["status"], r.get("mark") or ""
+    return {"status": st, "label": STATUS_LABEL.get(st, st), "mark": mark if st == "closed" else "",
+            "mark_label": MARK_LABEL.get(mark, "") if st == "closed" else "",
+            "answered": st in ("answered", "closed"), "title": r.get("title", ""),
+            "updated": r.get("updated", ""), "url": case_url(r["number"]),
+            "object": ({"kind": r["object_kind"], "id": r["object_id"]} if r.get("object_id") else None)}
 
 
 def case_table(rows, queues):
@@ -380,7 +432,7 @@ def case_table(rows, queues):
     tr = "".join(
         f"<tr><td><a href='/v/{quote(r['number'])}'>{esc(r['number'])}</a></td>"
         f"<td>{esc(KIND_LABEL.get(r['kind'], r['kind']))}</td>"
-        f"<td>{esc(r['title'])}</td><td>{pill(r['status'])}</td>"
+        f"<td>{esc(r['title'])}</td><td>{pill(r['status'], r.get('mark', ''))}</td>"
         f"<td>{esc(qt.get(r['queue'], r['queue']))}</td>"
         f"<td class=muted>{esc(r['updated'][:16].replace('T', ' '))}</td></tr>"
         for r in rows)
@@ -538,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(413, "")
         if p == "/platform/feedback":
             return self.feedback_post()
+        if p.startswith("/platform/feedback/mine/"):
+            return self.feedback_mine_post(p[len("/platform/feedback/mine/"):])
         if p == "/platform/cases/submit":
             return self.backend_submit()
         if p == "/platform/cases/node":
@@ -615,11 +669,45 @@ class Handler(BaseHTTPRequestHandler):
         uid = self.headers.get("X-OAAP-User-Id", "").strip()
         if not src or not uid:
             return self.json(404, {"ok": False})
-        nums = [n.strip() for n in ",".join(q.get("numbers") or []).split(",") if n.strip()]
-        got = self.store.status_of(nums, uid)
-        return self.json(200, {"cases": {n: {"status": s, "label": STATUS_LABEL.get(s, s),
-                                             "answered": s in ("answered", "closed")}
-                                         for n, s in got.items()}})
+        # 0.9.0 (RFC-0103 D7/D8): je Vorgang auch Markierung, Bezug und die Adresse; ohne
+        # `numbers` alle eigenen (höchstens 200, neueste zuerst) -- ein Aufruf färbt den Baum
+        if "numbers" in q:
+            nums = [n.strip() for n in ",".join(q.get("numbers") or []).split(",") if n.strip()]
+            rows = list(self.store.status_of(nums, uid).values())
+        else:
+            rows = self.store.mine(uid)
+        return self.json(200, {"cases": {r["number"]: mine_row(r) for r in rows},
+                               "accept_days": ACCEPT_DAYS_NOW[0]})
+
+    def feedback_mine_post(self, rest):
+        """0.9.0 (RFC-0103 D10, Köder 6): „Lösung passt“ / „Passt nicht“ aus der Seite einer
+        App (dem Chat), als die Person, die das Gateway bezeugt. Nur die meldende Person; für
+        alle anderen gibt es den Vorgang auf diesem Weg nicht (sie nehmen die Seite)."""
+        src = self.attested()
+        who = self.who()
+        if not src or not who:
+            return self.json(404, {"ok": False})
+        if not self.same_origin():
+            return self.json(403, {"error": "Das kam nicht von der Seite der App."})
+        if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            return self.json(415, {"error": "JSON erwartet."})
+        number, _, action = rest.partition("/")
+        c = self.store.get(number) if action in ("accept", "reopen") else None
+        if not c or c["reporter"] != who.id:
+            return self.json(404, {"error": "Diesen Vorgang hast du nicht gemeldet."})
+        try:
+            doc = json.loads(self.body().decode("utf-8") or "{}")
+            if not isinstance(doc, dict):
+                raise Refused("JSON-Objekt erwartet.")
+            if action == "accept":
+                self.store.accept(c, who.id, who.name)
+            else:
+                self.store.not_fitting(c, who.id, who.name, doc.get("text"))
+        except (Refused, ValueError) as e:
+            return self.json(409 if isinstance(e, Refused) else 400,
+                             {"error": str(e) if isinstance(e, Refused) else "Ungültig."})
+        got = self.store.status_of([number], who.id)
+        return self.json(200, {"ok": True, "case": mine_row(got[number])})
 
     def feedback_post(self):
         src = self.attested()
@@ -1049,7 +1137,9 @@ Betreff und Text.</p>
                 head = f"angelegt in {esc(qt.get(d.get('queue'), d.get('queue', '')))}"
             elif e["type"] == "status":
                 head = (f"Status {esc(STATUS_LABEL.get(d.get('from'), d.get('from', '')))} → "
-                        f"{esc(STATUS_LABEL.get(d.get('to'), d.get('to', '')))}")
+                        f"{esc(STATUS_LABEL.get(d.get('to'), d.get('to', '')))}"
+                        + (f" ({esc(MARK_LABEL[d['mark']])})" if d.get("mark") in MARK_LABEL else "")
+                        + (" (passt nicht)" if d.get("mark") == "not_fitting" else ""))
             elif e["type"] == "move":
                 head = (f"verschoben {esc(qt.get(d.get('from'), d.get('from', '')))} → "
                         f"{esc(qt.get(d.get('to'), d.get('to', '')))}")
@@ -1069,6 +1159,17 @@ Betreff und Text.</p>
             ent.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div>{text}</div>")
         forms = ""
         base = f"/v/{quote(c['number'])}"
+        if c["reporter"] == who.id and c["status"] == "answered":
+            # 0.9.0 (RFC-0103 D10): abnehmen oder wieder öffnen -- dieselben Regeln wie im Chat
+            forms += (f"<div class=card><h2 style='margin-top:0'>Passt die Lösung?</h2>"
+                      f"<form method=post action='{base}/accept' class=inline>"
+                      f"<button>Lösung passt</button></form>"
+                      f"<form method=post action='{base}/reopen'>"
+                      f"<label>Passt nicht — was fehlt noch?</label>"
+                      f"<textarea name=text maxlength=10000 required></textarea>"
+                      f"<p><button>Passt nicht, wieder öffnen</button></p></form>"
+                      f"<p class=muted>Ohne Rückmeldung schließt sich der Vorgang nach "
+                      f"{ACCEPT_DAYS_NOW[0]} Tagen von selbst.</p></div>")
         if can_comment(who, c):
             forms += (f"<h2>Kommentar</h2><form method=post action='{base}/comment'>"
                       f"<textarea name=text maxlength=10000 required></textarea>"
@@ -1114,21 +1215,22 @@ Betreff und Text.</p>
                      if c["observers"] else "")
         # 0.7.0: Wer hier nichts umstellen kann, erfährt warum -- statt eines fehlenden Formulars.
         rights = ""
-        if not nxt and c["status"] not in ("closed", "rejected"):
+        if not nxt and c["status"] not in ("closed", "rejected") and not (
+                c["reporter"] == who.id and c["status"] == "answered"):
             how = (f"Im Bereich <b>{esc(qt.get(c['queue'], c['queue']))}</b> stellen ihn die "
                    "Zuständigen dieses Bereichs um (Seite „Bereiche“) und der "
                    "<code>tenant_admin</code>"
                    + (", im Eingang auch die App-Rolle <code>admin</code>" if c["queue"] == DEFAULT_QUEUE else "")
                    + ". In großen Mandanten vergibt „Rollen &amp; Rechte“ dasselbe mit den Vorlagen "
                    "<i>Bearbeiter/in</i> und <i>Clearing</i>.")
-            mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, den "
-                    "Vorgang schließen." if c["reporter"] == who.id else "")
+            mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, sagen, "
+                    "ob die Lösung passt." if c["reporter"] == who.id else "")
             rights = f"<div class=rights>Den Status kannst du hier nicht ändern. {how}{mine}</div>"
         toggle = ('<div style="float:right" class=seg role=group aria-label="Darstellung">'
                   '<button type=button data-md-mode=formatted aria-pressed=true>Formatiert</button>'
                   '<button type=button data-md-mode=raw aria-pressed=false>Roh</button></div>')
         body = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
-                f"{pill(c['status'])} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
+                f"{pill(c['status'], c.get('mark', ''))} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
                 f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
                 f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div>"
                 f"{techbox}</div>"
@@ -1152,6 +1254,10 @@ Betreff und Text.</p>
             if not who.may("move", c["queue"]):
                 raise Refused("Verschieben darf nur, wer den Bereich bearbeitet.")
             self.store.move(c, who.id, who.name, f.get("queue", ""), f.get("text", ""))
+        elif action == "accept":
+            self.store.accept(c, who.id, who.name)
+        elif action == "reopen":
+            self.store.not_fitting(c, who.id, who.name, f.get("text", ""))
         elif action == "antwort":
             if not who.may("hand_over", c["queue"]):
                 raise Refused("Antworten an einen Partner darf nur das Clearing dieses Bereichs.")
@@ -1174,8 +1280,10 @@ def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     STORE = Store(os.path.join(DATA_DIR, "vorgaenge.db"))
     RETENTION = retention_months()
-    print(f"Löschfrist: {RETENTION} Monate nach Abschluss", flush=True)
-    threading.Thread(target=retention_loop, args=(RETENTION,), daemon=True).start()
+    ACCEPT_DAYS_NOW[0] = accept_days()
+    print(f"Löschfrist: {RETENTION} Monate nach Abschluss; beantwortet ohne "
+          f"Rückmeldung geschlossen nach {ACCEPT_DAYS_NOW[0]} Tagen", flush=True)
+    threading.Thread(target=retention_loop, args=(RETENTION, ACCEPT_DAYS_NOW[0]), daemon=True).start()
     threading.Thread(target=outbox_loop, args=(STORE, OUTBOX_KICK), daemon=True).start()
     AUTHZ = authz_client.Authz(app=None)
     if not AUTHZ.url:

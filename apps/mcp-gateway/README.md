@@ -651,6 +651,13 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
 - **Zeitraum:** Messzeilen reichen nur so weit zurück wie ihre
   Aufbewahrung. Die Seite sagt, seit wann.
 
+## Wie ein Vorgang ausging (0.26)
+
+RFC-0103 D10. `POST …/<id>/cases` nimmt zusätzlich `outcome`
+(`accepted`, `reopened`, `no_response`); der letzte gilt, gezählt wird der
+Vorgang weiter einmal. Die Auswertung je Revision zeigt „davon Lösung
+passt“ neben den Vorgängen.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

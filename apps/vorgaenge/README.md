@@ -217,6 +217,31 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## Rückweg in den Chat, „Lösung passt“ (seit 0.9.0, RFC-0103 Stufe 2)
+
+- **Link:** `GET /platform/feedback/mine` nennt je eigenem Vorgang `url`,
+  gebaut aus dem ersten öffentlichen Namen der Instanz
+  (`OAAP_INSTANCE_NAMES`) als `//host/v/<Nummer>`, ohne Schema: der
+  Browser nimmt das der Seite, auf der der Link steht.
+- **Alle eigenen:** Ohne `numbers` liefert `/mine` alle eigenen Meldungen
+  (höchstens 200, neueste zuerst) mit Bezug (`object`), Betreff, Status,
+  Markierung und letzter Änderung. Der Chat färbt damit seine Gespräche.
+  Nur Eigenes, nie etwas von anderen.
+- **Abnehmen:** Bei einem beantworteten Vorgang sieht die meldende Person
+  „Lösung passt“ (geschlossen mit der Markierung `accepted`) und „Passt
+  nicht“ (wieder offen, Kommentar Pflicht), auf der Seite und im Chat. Der
+  Chat geht über `POST /platform/feedback/mine/<Nummer>/accept` bzw.
+  `…/reopen` auf seiner eigenen Adresse. Das Gateway bezeugt die Person,
+  die App nimmt es nur von der meldenden Person an; für alle anderen gibt
+  es den Vorgang auf diesem Weg nicht (404).
+- **Schließen über das Statusformular:** Die meldende Person schließt
+  nicht mehr dort, sonst fehlte die Markierung. Schließen Bearbeitende,
+  bleibt die Markierung leer. Wiederöffnen leert sie.
+- **Ohne Rückmeldung:** Ein beantworteter Vorgang ohne jede Bewegung
+  schließt sich nach `VORGAENGE_ACCEPT_DAYS` Tagen (Vorgabe 14) mit der
+  Markierung `no_response`, nie `accepted`. Geprüft wird im Takt der
+  Löschfrist (alle sechs Stunden).
+
 ## tenant_admin und Zuständige je Bereich (seit 0.8.0, RFC-0103 Stufe 1)
 
 - **tenant_admin:** Er bearbeitet jeden Bereich: lesen, kommentieren,

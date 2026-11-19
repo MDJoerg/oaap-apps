@@ -187,7 +187,11 @@ ok("fremder Bereich darf nicht schließen", st == 404, st)
 st, b, _ = call("POST", f"/v/{num}/comment", {**user("u-anna"), **ORIGIN}, "text=Danke")
 ok("die Meldende kommentiert", st == 303, st)
 st, b, _ = call("POST", f"/v/{num}/status", {**user("u-anna"), **ORIGIN}, "status=closed")
-ok("die Meldende schließt die Antwort", st == 303 and app.STORE.get(num)["status"] == "closed", st)
+ok("0.9.0: die Meldende schließt nicht mehr über das Statusformular (sonst fehlte „Lösung passt“)",
+   st == 400 and app.STORE.get(num)["status"] == "answered", st)
+st, b, _ = call("POST", f"/v/{num}/accept", {**user("u-anna"), **ORIGIN}, "")
+ok("die Meldende nimmt die Antwort ab („Lösung passt“)",
+   st == 303 and app.STORE.get(num)["status"] == "closed" and app.STORE.get(num)["mark"] == "accepted", st)
 types = [e["type"] for e in app.STORE.get(num)["entries"]]
 ok("Verlauf ist vollständig und nur angehängt",
    types == ["created", "status", "move", "status", "comment", "status"], types)
@@ -437,6 +441,87 @@ ok("0.8.0: entfernen: danach darf Hans in jira nichts mehr",
    st == 303 and app.STORE.memberships("u-hans") == {}, app.STORE.memberships("u-hans"))
 st, b, _ = call("POST", "/bereiche", {**TA, **ORIGIN}, "id=finanzen&title=Finanzen", "application/x-www-form-urlencoded")
 ok("0.8.0: der tenant_admin legt Bereiche an", st == 303 and app.STORE.queue("finanzen"), (st, b[-200:]))
+
+# --- 0.9.0 (RFC-0103 Stufe 2): Link, alle eigenen Vorgänge, abnehmen aus dem Chat, ohne Rückmeldung
+os.environ["OAAP_INSTANCE_NAMES"] = "http://vorgaenge.bec.example.org,https://alias.example.org"
+ANNA = {**SOURCE, **user("u-anna")}
+st, b, _ = report(kind="question", title="Aus dem Chat", subkind="chat-answer", fields={"rev": 1},
+                  object={"kind": "conversation", "id": "conv-42"})
+n10 = json.loads(b)["number"]
+st, b, _ = call("GET", "/platform/feedback/mine", ANNA)
+d = json.loads(b) if st == 200 else {}
+row = (d.get("cases") or {}).get(n10) or {}
+ok("0.9.0: /mine ohne numbers listet alle eigenen, mit Bezug und Link ohne Schema",
+   st == 200 and row.get("object") == {"kind": "conversation", "id": "conv-42"}
+   and row.get("url") == f"//vorgaenge.bec.example.org/v/{n10}" and row.get("title") == "Aus dem Chat"
+   and d.get("accept_days") == 14, (st, row))
+ok("0.9.0: ... neueste zuerst", list(d["cases"])[0] == n10, list(d["cases"])[:3])
+st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **user("u-bert")})
+ok("0.9.0: KÖDER 5: Bert listet nichts von Anna", st == 200 and n10 not in json.loads(b)["cases"], b[:300])
+POSTJ = {**ANNA, **ORIGIN}
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/accept", POSTJ, {}, "application/json")
+ok("0.9.0: abnehmen geht nur bei beantwortet (409 mit Satz)", st == 409 and "beantwortet" in b, (st, b))
+app.STORE.set_status(app.STORE.get(n10), "u-x", "X", "answered", "So.")
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/accept", {**SOURCE, **user("u-trainer"), **ORIGIN}, {},
+                "application/json")
+ok("0.9.0: KÖDER 6: eine Bearbeiterin nimmt über den Weg des Chats nicht ab (404)",
+   st == 404 and app.STORE.get(n10)["status"] == "answered", (st, b))
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/accept", {**user("u-anna"), **ORIGIN}, {}, "application/json")
+ok("0.9.0: ohne Gateway-Herkunft: 404", st == 404, st)
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/accept", ANNA, {}, "application/json")
+ok("0.9.0: fremde Seite (ohne Origin): 403", st == 403, st)
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/reopen", POSTJ, {"text": ""}, "application/json")
+ok("0.9.0: „Passt nicht“ ohne Kommentar abgelehnt", st == 409 and "was nicht passt" in b, (st, b))
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/reopen", POSTJ, {"text": "Fehlt noch X"}, "application/json")
+ok("0.9.0: „Passt nicht“ öffnet wieder, mit dem Kommentar im Verlauf",
+   st == 200 and json.loads(b)["case"]["status"] == "reopened"
+   and app.STORE.get(n10)["entries"][-1]["text"] == "Fehlt noch X", (st, b))
+app.STORE.set_status(app.STORE.get(n10), "u-x", "X", "answered", "Jetzt mit X.")
+st, b, _ = call("POST", f"/platform/feedback/mine/{n10}/accept", POSTJ, {}, "application/json")
+cs = json.loads(b).get("case") or {}
+ok("0.9.0: „Lösung passt“ aus dem Chat: geschlossen, Markierung accepted",
+   st == 200 and cs.get("status") == "closed" and cs.get("mark") == "accepted"
+   and app.STORE.get(n10)["mark"] == "accepted", (st, b))
+st, pg, _ = call("GET", f"/v/{n10}", user("u-anna"))
+ok("0.9.0: die Seite zeigt „geschlossen (Lösung passt)“", "geschlossen (Lösung passt)" in pg, pg[-500:])
+app.STORE.set_status(app.STORE.get(n10), "u-anna", "Anna", "reopened", "Doch nicht")
+ok("0.9.0: Wiederöffnen leert die Markierung", app.STORE.get(n10)["mark"] == "", app.STORE.get(n10)["mark"])
+# die Seite: Knöpfe nur für die Meldende bei beantwortet
+st, b, _ = report(kind="question", title="Seite")
+n11 = json.loads(b)["number"]
+app.STORE.set_status(app.STORE.get(n11), "u-x", "X", "answered", "So.")
+st, pg, _ = call("GET", f"/v/{n11}", user("u-anna"))
+ok("0.9.0: die Meldende sieht „Lösung passt“ und „Passt nicht“ auf der Seite, keinen Rechte-Hinweis",
+   "/accept'" in pg and "/reopen'" in pg and "Den Status kannst du hier nicht ändern" not in pg, pg[-900:])
+st, pg, _ = call("GET", f"/v/{n11}", TA)
+ok("0.9.0: der tenant_admin sieht die Knöpfe der Meldenden nicht", "/accept'" not in pg, None)
+st, b, _ = call("POST", f"/v/{n11}/accept", {**TA, **ORIGIN}, "")
+ok("0.9.0: ... und nimmt auch über die Seite nicht ab", st == 400 and app.STORE.get(n11)["status"] == "answered",
+   (st, b[-200:]))
+st, b, _ = call("POST", f"/v/{n11}/status", {**TA, **ORIGIN}, "status=closed&text=", "application/x-www-form-urlencoded")
+ok("0.9.0: schließt ein Bearbeitender, bleibt die Markierung leer",
+   st == 303 and app.STORE.get(n11)["status"] == "closed" and app.STORE.get(n11)["mark"] == "", (st, b[-200:]))
+# ohne Rückmeldung (D11, Köder 7)
+st, b, _ = report(kind="question", title="Still")
+n12 = json.loads(b)["number"]
+st, b, _ = report(kind="question", title="Frisch")
+n13 = json.loads(b)["number"]
+for n in (n12, n13):
+    app.STORE.set_status(app.STORE.get(n), "u-x", "X", "answered", "So.")
+import time as _t  # noqa: E402
+with app.STORE.lock, app.STORE.db:
+    old = _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(_t.time() - 15 * 86400))
+    app.STORE.db.execute("UPDATE cases SET updated=? WHERE number=?", (old, n12))
+done = app.STORE.close_unanswered(14)
+c12 = app.STORE.get(n12)
+ok("0.9.0: KÖDER 7: 15 Tage still -> geschlossen als no_response, nie accepted",
+   done == [n12] and c12["status"] == "closed" and c12["mark"] == "no_response"
+   and c12["entries"][-1]["actor_name"] == "Automatisch", (done, c12["status"], c12["mark"]))
+ok("0.9.0: ein frisch beantworteter bleibt offen", app.STORE.get(n13)["status"] == "answered", None)
+ok("0.9.0: Einstellung VORGAENGE_ACCEPT_DAYS: Unsinn -> 14, 7 -> 7",
+   app.accept_days("abc") == 14 and app.accept_days("7") == 7 and app.accept_days("0") == 14, None)
+del os.environ["OAAP_INSTANCE_NAMES"]
+ok("0.9.0: ohne öffentlichen Namen kein Link", app.case_url(n12) == "", app.case_url(n12))
 
 srv.shutdown()
 print("")

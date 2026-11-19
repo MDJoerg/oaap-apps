@@ -48,6 +48,10 @@ NEXT = {
     "handed_over": ("in_progress", "answered", "rejected"),
 }
 MANUAL_EXCLUDED = ("handed_over",)
+# 0.9.0 (RFC-0103 D10/D11): wie ein Vorgang geschlossen wurde -- eine Markierung am
+# Schließen, kein eigener Status. Leer: von den Bearbeitenden geschlossen.
+MARK_LABEL = {"accepted": "Lösung passt", "no_response": "ohne Rückmeldung"}
+ACCEPT_DAYS = 14
 OPEN = ("new", "triage", "in_progress", "answered", "reopened", "handed_over")
 
 # RFC-0061 §5.2 / §10.3: was eine Uebergabe NIE enthalten darf. Geprueft
@@ -214,6 +218,9 @@ class Store:
                     "WHERE status IN ('closed', 'rejected')")
             if "scrubbed" not in have:
                 self.db.execute("ALTER TABLE cases ADD COLUMN scrubbed TEXT NOT NULL DEFAULT ''")
+            # 0.9.0 (RFC-0103 D10): accepted | no_response | '' -- nur bei closed gesetzt
+            if "mark" not in have:
+                self.db.execute("ALTER TABLE cases ADD COLUMN mark TEXT NOT NULL DEFAULT ''")
             # 0.2.0 (RFC-0061 §5): Partner, Uebergaben in beide Richtungen,
             # und der Ausgang, aus dem bis zur Quittung wiederholt wird.
             self.db.executescript("""
@@ -468,16 +475,82 @@ class Store:
         with self.lock:
             return [dict(r) for r in self.db.execute(sql, args)]
 
+    MINE_COLS = "number, title, status, mark, object_kind, object_id, updated"
+
     def status_of(self, numbers, reporter):
-        """0.6.0: Status der eigenen Vorgänge -- nur die, die diese Person gemeldet hat."""
+        """0.6.0: Status der eigenen Vorgänge -- nur die, die diese Person gemeldet hat.
+        0.9.0: je Nummer die Zeile (Status, Markierung, Bezug, Betreff, letzte Änderung)."""
         numbers = [n for n in numbers if isinstance(n, str) and n][:50]
-        if not numbers or not reporter:
+        if not numbers or not reporter or reporter == REMOVED:
             return {}
         with self.lock:
             rows = self.db.execute(
-                f"SELECT number, status FROM cases WHERE reporter=? AND number IN "
+                f"SELECT {self.MINE_COLS} FROM cases WHERE reporter=? AND number IN "
                 f"({','.join('?' * len(numbers))})", (reporter, *numbers)).fetchall()
-        return {r["number"]: r["status"] for r in rows}
+        return {r["number"]: dict(r) for r in rows}
+
+    def mine(self, reporter, limit=200):
+        """0.9.0 (RFC-0103 D8): alle eigenen Meldungen, neueste zuerst, höchstens 200 --
+        damit der Chat seine Gespräche mit einem Aufruf färbt."""
+        if not reporter or reporter == REMOVED:
+            return []
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                f"SELECT {self.MINE_COLS} FROM cases WHERE reporter=? "
+                "ORDER BY updated DESC, number DESC LIMIT ?", (reporter, int(limit)))]
+
+    # ------------------------------- die meldende Person nimmt ab (0.9.0, RFC-0103 D10)
+    def accept(self, c, actor, actor_name):
+        """„Lösung passt“: beantwortet -> geschlossen mit der Markierung accepted. Nur die
+        meldende Person (die Prüfung steht HIER, damit Seite und Chat-Weg dieselbe ist)."""
+        if not actor or c["reporter"] != actor:
+            raise Refused("Abnehmen kann nur, wer den Vorgang gemeldet hat.")
+        if c["status"] != "answered":
+            raise Refused("Abnehmen geht nur bei einem beantworteten Vorgang.")
+        with self.lock, self.db:
+            if not self.db.execute(
+                    "UPDATE cases SET status='closed', mark='accepted', ended=? "
+                    "WHERE id=? AND status='answered'", (_now(), c["id"])).rowcount:
+                raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
+            self._entry(c["id"], actor, actor_name, "status", "Lösung passt.",
+                        {"from": "answered", "to": "closed", "mark": "accepted"})
+
+    def not_fitting(self, c, actor, actor_name, text):
+        """„Passt nicht“: beantwortet -> wieder offen, mit einem Kommentar (Pflicht)."""
+        if not actor or c["reporter"] != actor:
+            raise Refused("Das kann nur, wer den Vorgang gemeldet hat.")
+        if c["status"] != "answered":
+            raise Refused("Das geht nur bei einem beantworteten Vorgang.")
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Bitte schreib dazu, was nicht passt.")
+        if len(text) > BODY_MAX:
+            raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
+        with self.lock, self.db:
+            if not self.db.execute(
+                    "UPDATE cases SET status='reopened', mark='', ended='' "
+                    "WHERE id=? AND status='answered'", (c["id"],)).rowcount:
+                raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
+            self._entry(c["id"], actor, actor_name, "status", text,
+                        {"from": "answered", "to": "reopened", "mark": "not_fitting"})
+
+    def close_unanswered(self, days=ACCEPT_DAYS, now=None):
+        """RFC-0103 D11: ein beantworteter Vorgang ohne jede Bewegung seit `days` Tagen
+        schließt sich -- mit der Markierung no_response, nie accepted (Köder 7).
+        „Bewegung“ ist jeder Eintrag (cases.updated). Gibt die Nummern zurück."""
+        now = now or time.time()
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - int(days) * 86400))
+        done = []
+        with self.lock, self.db:
+            for r in self.db.execute("SELECT id, number FROM cases WHERE status='answered' "
+                                     "AND updated <= ?", (cutoff,)).fetchall():
+                if self.db.execute("UPDATE cases SET status='closed', mark='no_response', ended=? "
+                                   "WHERE id=? AND status='answered'", (_now(), r["id"])).rowcount:
+                    self._entry(r["id"], "system", "Automatisch", "status",
+                                f"Nach {days} Tagen ohne Rückmeldung geschlossen.",
+                                {"from": "answered", "to": "closed", "mark": "no_response"})
+                    done.append(r["number"])
+        return done
 
     def comment(self, c, actor, actor_name, text):
         text = (text or "").strip()
@@ -499,7 +572,8 @@ class Store:
             # Q6: die Frist laeuft ab dem Abschluss, und ein Wiederoeffnen
             # haelt sie an
             ended = _now() if new in ENDED else ""
-            if not self.db.execute("UPDATE cases SET status=?, ended=? WHERE id=? AND status=?",
+            # 0.9.0: wer ohne die meldende Person schließt, lässt die Markierung leer
+            if not self.db.execute("UPDATE cases SET status=?, ended=?, mark='' WHERE id=? AND status=?",
                                    (new, ended, c["id"], c["status"])).rowcount:
                 raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
             self._entry(c["id"], actor, actor_name, "status", text,

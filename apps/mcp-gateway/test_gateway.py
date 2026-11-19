@@ -1900,6 +1900,19 @@ check("Auswertung je Revision: Aufrufe, abgewiesen, Fehler, Personen aus den Mes
 check("... dazu Sterne (Verteilung, Anteil 0–2) und Vorgänge, getrennt je Revision",
       r2.get("ratings", {}).get("count", 0) >= 1 and sum(r2["ratings"]["stars"]) == r2["ratings"]["count"]
       and r2.get("cases") == 1 and r1.get("cases") == 0 and r1["ratings"]["count"] == 0, (r1, r2))
+print("\n-- 0.26.0 RFC-0103 D10: wie ein Vorgang ausging")
+st, d = ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001", "outcome": "accepted"})
+st2, d2 = ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001", "outcome": "gelöst!"})
+st3, ev3 = ax("GET", "/a-priv/evaluation")
+r23 = next((x for x in ev3.get("revisions", []) if x["rev"] == 2), {})
+check("„Lösung passt“ zum schon gezählten Vorgang: nicht neu gezählt, aber als accepted geführt",
+      st == 200 and d["counted"] is False and r23.get("cases") == 1 and r23.get("accepted") == 1, (st, d, r23))
+check("ein anderes Wort als accepted/reopened/no_response: 400", st2 == 400, (st2, d2))
+ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001", "outcome": "reopened"})
+st3, ev3 = ax("GET", "/a-priv/evaluation")
+check("... der letzte Ausgang gilt (reopened -> nicht mehr accepted)",
+      next(x for x in ev3["revisions"] if x["rev"] == 2)["accepted"] == 0, ev3)
+ax("POST", "/a-priv/cases", {"rev": 2, "number": "V-2026-0001", "outcome": "accepted"})
 st, d = ax("GET", "/a-priv/evaluation", uid="u-bert", roles="user,tenant_admin")
 check("KÖDER: tenant_admin liest die Auswertung eines fremden privaten Assistenten nicht (404)", st == 404, (st, d))
 st, d = ax("GET", "/a-alle/evaluation", uid="u-bert")
