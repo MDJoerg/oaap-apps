@@ -160,6 +160,11 @@ class Fake(BaseHTTPRequestHandler):
                 for a in body["assistants"]:
                     GWA["items"][a["id"]] = (a, 1, "active")
                 return self.reply(200, {"migrated": len(body["assistants"])})
+            if rest.endswith("/ratings"):
+                if GWA.get("rate_refuse"):
+                    return self.reply(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
+                return self.reply(200, {"rated": body.get("stars"), "rev": body.get("rev"),
+                                        "scope": body.get("scope"), "text": "text" in body})
             if rest.endswith("/state"):
                 aid = rest.split("/")[1]
                 d, r, _ = GWA["items"][aid]
@@ -843,6 +848,52 @@ with open(app.conv_path("id-anna", c9["id"]), encoding="utf-8") as f:
     replies = [m for m in json.load(f)["messages"] if m["role"] == "assistant"]
 check("0.9.0: die Antwort im Verlauf trägt die Revision (für spätere Bewertungen)",
       replies and all(m.get("rev") == 2 for m in replies), replies)
+
+# ------------------------------------------------ 0.10.0: Sterne (RFC-0101 Stufe 2)
+st, v10 = req("GET", f"/api/conv/{c9['id']}")
+ix = [i for i, m in enumerate(v10["messages"]) if m.get("rate")]
+check("0.10.0: die Schlussantwort ist bewertbar (rate), das Gespräch auch",
+      st == 200 and len(ix) == 1 and v10["rateable"] is True, v10)
+check("0.10.0: die Antwort hält Modell und Ampel von damals fest",
+      replies[-1].get("model") and replies[-1].get("light") == "yellow", replies[-1])
+GWA["posts"].clear()
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": ix[0], "stars": 4})
+sent = [b for rest, b in GWA["posts"] if rest == "/alt-privat/ratings"]
+check("0.10.0: 4 Sterne gehen ans Gateway: assistant@rev, Antwort, Runde 1, Umstände",
+      st == 200 and sent and sent[-1]["rev"] == 2 and sent[-1]["scope"] == "answer"
+      and sent[-1]["round"] == 1 and sent[-1]["stars"] == 4 and sent[-1]["conversation"] == c9["id"]
+      and sent[-1]["light"] == "yellow" and sent[-1]["view"], (st, r, sent))
+check("0.10.0: KÖDER: ohne Haken kein Text; Werkzeuge nur Name, Wirkung, Ausgang",
+      sent and "text" not in sent[-1] and all(set(t) == {"name", "effect", "outcome"} for t in sent[-1]["tools"]),
+      sent and sent[-1])
+check("0.10.0: der Verlauf zeigt die eigenen Sterne", r["messages"][ix[0]].get("stars") == 4, r["messages"][ix[0]])
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": ix[0], "stars": 2, "share": True})
+check("0.10.0: mit Haken: Frage und Antwort reisen mit",
+      st == 200 and GWA["posts"][-1][1]["text"]["question"] == "Projekte?"
+      and GWA["posts"][-1][1]["text"]["answer"] == v10["messages"][ix[0]]["content"], GWA["posts"][-1])
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"stars": 5})
+check("0.10.0: das ganze Gespräch: scope conversation, Sterne am Gespräch",
+      st == 200 and GWA["posts"][-1][1]["scope"] == "conversation" and r["stars"] == 5, (st, r.get("stars")))
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": ix[0], "stars": None})
+check("0.10.0: zurückziehen: stars null ans Gateway, aus dem Verlauf weg",
+      st == 200 and GWA["posts"][-1][1]["stars"] is None and "stars" not in r["messages"][ix[0]], r["messages"][ix[0]])
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": 0, "stars": 3})
+check("0.10.0: die Frage der Person ist keine Antwort (400)", st == 400, (st, r))
+st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": ix[0], "stars": 9})
+check("0.10.0: 9 Sterne: 400", st == 400, (st, r))
+GWA["rate_refuse"] = True
+try:
+    st, r = req("POST", f"/api/conv/{c9['id']}/rate", {"index": ix[0], "stars": 1})
+finally:
+    GWA["rate_refuse"] = False
+with open(app.conv_path("id-anna", c9["id"]), encoding="utf-8") as f:
+    kept = json.load(f)["messages"][ix[0]]
+check("0.10.0: lehnt das Gateway ab, steht im Verlauf nichts (kein Stern, der nirgends gezählt ist)",
+      st == 400 and "stars" not in kept, (st, r, kept.get("stars")))
+_, cp = req("POST", "/api/conv", {"assistant": "projekte"})
+st, r = req("POST", f"/api/conv/{cp['id']}/rate", {"stars": 3})
+check("0.10.0: D8: ohne Revision (Assistent aus der Konfiguration) keine Sterne",
+      st == 400 and "keine Antwort" in r.get("error", ""), (st, r))
 st, r = req("POST", "/api/assistants/alt-privat/state", {"state": "inactive"})
 st2, r2 = req("POST", "/api/conv", {"assistant": "alt-privat"})
 check("0.9.0: deaktiviert: kein neues Gespräch (409)", st == 200 and st2 == 409, (st, r, st2, r2))
@@ -868,6 +919,8 @@ st, _ct, html = raw_get("/")
 html = html.decode("utf-8")
 check("0.9.0: die Seite zeigt Fassung, deaktiviert, Übernehmen und Deaktivieren",
       '"Fassung " + a.rev' in html and "Ins MCP-Gateway übernehmen" in html and '"Deaktivieren"' in html)
+check("0.10.0: die Seite hat Sterne an der Antwort, „Gespräch bewerten“ und den Haken",
+      "function rateRow(" in html and 'id="rateconv"' in html and "Frage und Antwort mitgeben" in html)
 GWA["on"] = False
 
 srv.shutdown()

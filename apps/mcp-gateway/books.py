@@ -88,6 +88,30 @@ CREATE TABLE IF NOT EXISTS assistant_revisions (
   compacted   INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (id, rev)
 );
+-- 0.23 (RFC-0101 Stufe 2): Sterne je Antwort und je Gespräch, mit den Umständen.
+-- Kein Name, keine Kennung: `who` ist ein HMAC der Person mit einem Schlüssel dieses
+-- Gateways (D3), `slot` ein HMAC von Gespräch, Umfang und Runde -- dieselbe Person
+-- ersetzt ihre Bewertung, statt eine zweite anzulegen. `text` nur mit Haken (D4).
+CREATE TABLE IF NOT EXISTS ratings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  assistant   TEXT NOT NULL,
+  rev         INTEGER NOT NULL,
+  who         TEXT NOT NULL,
+  slot        TEXT NOT NULL,
+  scope       TEXT NOT NULL,
+  round       INTEGER NOT NULL DEFAULT 0,
+  stars       INTEGER NOT NULL,
+  model       TEXT NOT NULL DEFAULT '',
+  model_light TEXT NOT NULL DEFAULT '',
+  light       TEXT NOT NULL DEFAULT '',
+  view        TEXT NOT NULL DEFAULT '',
+  gateway     TEXT NOT NULL DEFAULT '',
+  tools       TEXT NOT NULL DEFAULT '[]',
+  ms          INTEGER NOT NULL DEFAULT 0,
+  at          TEXT NOT NULL,
+  text        TEXT NOT NULL DEFAULT '',
+  UNIQUE (assistant, who, slot)
+);
 CREATE TABLE IF NOT EXISTS protocol (
   day     TEXT NOT NULL,
   key_id  TEXT NOT NULL,
@@ -1447,6 +1471,9 @@ def compact_assistant(db, aid, keep_last=KEEP_LAST):
         return 0
     used = {r["assistant_rev"] for r in db.execute(
         "SELECT DISTINCT assistant_rev FROM usage WHERE assistant=? AND assistant_rev>0", (aid,))}
+    # 0.23: ebenso jede Revision, die eine Bewertung nennt (RFC-0101 D8: ein Stern, der
+    # einen Prompt nennt, den niemand mehr lesen kann, misst nichts).
+    used |= {r["rev"] for r in db.execute("SELECT DISTINCT rev FROM ratings WHERE assistant=?", (aid,))}
     cur = db.execute("SELECT rev FROM assistants WHERE id=?", (aid,)).fetchone()
     keep = set(revs[:keep_last]) | used | ({cur["rev"]} if cur else set())
     drop = [r for r in revs if r not in keep]
@@ -1454,3 +1481,74 @@ def compact_assistant(db, aid, keep_last=KEEP_LAST):
         db.execute("UPDATE assistant_revisions SET doc='', compacted=1 WHERE id=? AND rev=?", (aid, r))
     db.commit()
     return len(drop)
+
+
+# ---- Bewertungen (0.23, RFC-0101 Stufe 2)
+
+RATING_TEXT_DAYS = 180               # D4: danach geht der Text, die Sterne bleiben
+RATING_FIELDS = ("rev", "scope", "round", "stars", "model", "model_light", "light", "view",
+                 "gateway", "tools", "ms")
+
+
+def rating_write(db, aid, who, slot, r):
+    """Setzt (oder ersetzt) die Bewertung dieser Person an dieser Stelle. `r` ist geprüft."""
+    at = now()
+    db.execute(
+        "INSERT INTO ratings (assistant, rev, who, slot, scope, round, stars, model, model_light,"
+        " light, view, gateway, tools, ms, at, text) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(assistant, who, slot) DO UPDATE SET rev=excluded.rev, stars=excluded.stars,"
+        " model=excluded.model, model_light=excluded.model_light, light=excluded.light,"
+        " view=excluded.view, gateway=excluded.gateway, tools=excluded.tools, ms=excluded.ms,"
+        " at=excluded.at, text=excluded.text",
+        (aid, r["rev"], who, slot, r["scope"], r["round"], r["stars"], r["model"], r["model_light"],
+         r["light"], r["view"], r["gateway"], json.dumps(r["tools"], ensure_ascii=False), r["ms"], at,
+         json.dumps(r["text"], ensure_ascii=False) if r.get("text") else ""))
+    purge_rating_texts(db)
+    db.commit()
+
+
+def rating_withdraw(db, aid, who, slot):
+    n = db.execute("DELETE FROM ratings WHERE assistant=? AND who=? AND slot=?", (aid, who, slot)).rowcount
+    db.commit()
+    return n
+
+
+def purge_rating_texts(db, days=RATING_TEXT_DAYS):
+    """D4: Texte älter als `days` Tage gehen; die Bewertung bleibt."""
+    cut = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return db.execute("UPDATE ratings SET text='' WHERE text!='' AND at<?", (cut,)).rowcount
+
+
+def _rating(r, with_who=False):
+    d = {k: r[k] for k in RATING_FIELDS}
+    d["tools"] = json.loads(r["tools"] or "[]")
+    d["at"] = r["at"]
+    if r["text"]:
+        d["text"] = json.loads(r["text"])
+    if with_who:
+        d["assistant"] = r["assistant"]
+    return d
+
+
+def ratings_of(db, aid, limit=500):
+    """Für die, die den Assistenten pflegen: Zusammenfassung je Revision und die Bewertungen
+    (ohne `who` -- gezählt wird, wie viele Personen, nicht welche)."""
+    revs = {}
+    for r in db.execute("SELECT rev, stars, COUNT(*) AS n FROM ratings WHERE assistant=? "
+                        "GROUP BY rev, stars", (aid,)):
+        d = revs.setdefault(r["rev"], {"rev": r["rev"], "count": 0, "stars": [0] * 6})
+        d["stars"][r["stars"]] += r["n"]
+        d["count"] += r["n"]
+    for r in db.execute("SELECT rev, COUNT(DISTINCT who) AS p FROM ratings WHERE assistant=? "
+                        "GROUP BY rev", (aid,)):
+        revs[r["rev"]]["persons"] = r["p"]
+    for d in revs.values():
+        d["low"] = round(sum(d["stars"][:3]) / d["count"], 3) if d["count"] else 0
+    rows = [_rating(r) for r in db.execute(
+        "SELECT * FROM ratings WHERE assistant=? ORDER BY id DESC LIMIT ?", (aid, int(limit)))]
+    return {"revisions": sorted(revs.values(), key=lambda d: -d["rev"]), "ratings": rows}
+
+
+def ratings_mine(db, who, limit=500):
+    return [_rating(r, with_who=True) for r in db.execute(
+        "SELECT * FROM ratings WHERE who=? ORDER BY id DESC LIMIT ?", (who, int(limit)))]

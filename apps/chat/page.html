@@ -151,6 +151,19 @@ form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
 .acard .acts button{font-size:.85rem;padding:.3rem .7rem}
 .badge{display:inline-block;font-size:.72rem;padding:.08rem .45rem;border-radius:.7rem;background:var(--tool);color:var(--muted);margin:0 .25rem .15rem 0}
 
+/* ---- 0.10.0 (RFC-0101 Stufe 2): Sterne an der Antwort und am Gespräch */
+.rate{align-self:flex-start;display:flex;flex-wrap:wrap;align-items:center;gap:.1rem;font-size:.8rem;color:var(--muted);margin-top:calc(var(--gap) * -.5)}
+.rate button{background:none;border:0;padding:.15rem .2rem;cursor:pointer;color:var(--muted);font-size:1.05rem;line-height:1;border-radius:.3rem}
+.rate button:hover{background:var(--tool)}
+.rate button.on{color:var(--yellow)}
+.rate button.zero{font-size:.75rem;border:1px solid var(--line);padding:.1rem .35rem;margin-right:.15rem}
+.rate button.zero.on{color:var(--ink);background:var(--tool)}
+.rate button.back{font-size:.75rem;text-decoration:underline}
+.rate label,dialog .rate label{display:inline-flex;align-items:center;gap:.25rem;margin:0 0 0 .5rem;font-size:.78rem;color:var(--muted)}
+.rate input,dialog .rate input{width:auto;margin:0}
+.rate .said{margin-left:.4rem}
+dialog .rate{margin:.6rem 0 0}
+
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
 dialog::backdrop{background:rgba(0,0,0,.35)}
@@ -204,6 +217,7 @@ dialog input,dialog textarea,dialog select{width:100%}
     <button class="lightchip" id="lightbtn" type="button" hidden title="Ampel dieses Gesprächs: was du eingeben wirst"></button>
     <details class="menu" id="menu"><summary role="button" aria-label="Menü" title="Menü">⋯</summary>
       <div class="mbody">
+        <button id="rateconv" type="button">Gespräch bewerten</button>
         <button id="ren" type="button">Umbenennen</button>
         <button id="del" type="button">Löschen</button>
         <hr>
@@ -249,6 +263,14 @@ dialog input,dialog textarea,dialog select{width:100%}
   <label id="lightsurel" hidden><input type="checkbox" id="lightsure" style="width:auto"> <span id="lightsuret"></span></label>
   <p class="err" id="lighterr"></p>
   <div class="row"><button class="primary" type="button" id="lightok">Übernehmen</button></div>
+</dialog>
+<dialog id="ratedlg">
+  <div class="dhead"><b>Gespräch bewerten</b><button type="button" class="hbtn" id="rateclose">Schließen</button></div>
+  <p class="muted" style="font-size:.88rem">0 bis 5 Sterne für das ganze Gespräch. 0 heißt „unbrauchbar“.
+  Die Bewertung zählt für die Revision des Assistenten, die zuletzt geantwortet hat.</p>
+  <div id="ratebox"></div>
+  <p class="muted" style="font-size:.8rem">Ohne Haken bekommt das MCP-Gateway nur Sterne und Umstände
+  (Assistent und Revision, Modell, Ampel, welche Werkzeuge mit welchem Ausgang), keinen Text und keinen Namen.</p>
 </dialog>
 <dialog id="reqdlg">
   <div class="dhead"><b id="reqtitle">Anfrage an die Verwaltung</b><button type="button" class="hbtn" id="reqclose">Schließen</button></div>
@@ -579,7 +601,47 @@ function renderSide(){
 // Neu zeichnen, ohne Ansichten neu zu laden: Nachrichten werden nur angehängt, solange
 // es dasselbe Gespräch ist (ein iframe, das man umhängt, lädt neu).
 let SHOWN = {id: null, n: 0};
-function msgNodes(m){
+// 0.10.0 (RFC-0101 Stufe 2): 0–5 Sterne; dieselbe Stelle noch einmal ersetzt, „zurückziehen“ nimmt sie weg.
+const SHARE = {};
+function rateRow(index){
+  const box = el("div", "rate"), key = C.id + ":" + (index === null ? "c" : index), cid = C.id;
+  let said = "";
+  const now = () => index === null ? C.stars : (C.messages[index] || {}).stars;
+  async function send(n){
+    if (!C || C.id !== cid) return;
+    said = "…"; draw();
+    const r = await api("POST", "api/conv/" + cid + "/rate", {index, stars: n, share: !!SHARE[key]});
+    if (r.error) said = r.error;
+    else {
+      if (C && C.id === cid) {
+        if (index === null) C.stars = r.stars; else C.messages[index].stars = r.messages[index].stars;
+      }
+      said = n === null ? "zurückgezogen" : r.rated.text ? "gespeichert, mit Frage und Antwort" : "gespeichert";
+    }
+    draw();
+  }
+  function draw(){
+    box.textContent = "";
+    const cur = now(), has = typeof cur === "number";
+    box.appendChild(el("span", "", index === null ? "Gespräch:" : "Antwort bewerten:"));
+    const z = el("button", "zero" + (has && cur === 0 ? " on" : ""), "0");
+    z.type = "button"; z.title = "0 Sterne: unbrauchbar"; z.onclick = () => send(0); box.appendChild(z);
+    for (let n = 1; n <= 5; n++) {
+      const b = el("button", has && cur >= n ? "on" : "", has && cur >= n ? "★" : "☆");
+      b.type = "button"; b.title = n + " von 5 Sternen"; b.setAttribute("aria-label", n + " Sterne");
+      b.onclick = () => send(n); box.appendChild(b);
+    }
+    const lab = el("label"), cb = el("input");
+    cb.type = "checkbox"; cb.checked = !!SHARE[key]; cb.onchange = () => { SHARE[key] = cb.checked; };
+    lab.title = "Ohne Haken bekommt das MCP-Gateway nur Sterne und Umstände, keinen Text.";
+    lab.append(cb, "Frage und Antwort mitgeben"); box.appendChild(lab);
+    if (has) { const w = el("button", "back", "zurückziehen"); w.type = "button"; w.onclick = () => send(null); box.appendChild(w); }
+    if (said) box.appendChild(el("span", "said", said));
+  }
+  draw();
+  return box;
+}
+function msgNodes(m, i){
   const out = [];
   if (m.role === "user") {
     const d = el("div", "msg user");
@@ -587,6 +649,7 @@ function msgNodes(m){
     d.appendChild(document.createTextNode(m.content)); out.push(d);
   } else if (m.role === "assistant" && m.content) {
     out.push(mdEl(m.content));
+    if (m.rate && typeof i === "number") out.push(rateRow(i));
   }
   for (const c of m.calls || []) out.push(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
   if (m.role === "tool") {
@@ -609,6 +672,7 @@ function render(status){
     $("cassist").textContent = a ? "mit " + a.title : (C ? "Assistent nicht verfügbar" : "");
   }
   $("ren").disabled = $("del").disabled = !C;
+  $("rateconv").disabled = !C || !C.rateable;
   let head = $("loghead"), msgs = $("logmsgs"), tail = $("logtail");
   if (!head) {
     log.textContent = "";
@@ -627,7 +691,7 @@ function render(status){
     return;
   }
   if (SHOWN.id !== C.id || C.messages.length < SHOWN.n) { msgs.textContent = ""; SHOWN = {id: C.id, n: 0}; dropFrames(); }
-  for (const m of C.messages.slice(SHOWN.n)) for (const node of msgNodes(m)) msgs.appendChild(node);
+  for (let i = SHOWN.n; i < C.messages.length; i++) for (const node of msgNodes(C.messages[i], i)) msgs.appendChild(node);
   SHOWN.n = C.messages.length;
   tail.textContent = "";
   if (C.confirm && !busy) {
@@ -899,6 +963,11 @@ $("fs").hidden = !document.documentElement.requestFullscreen;
 $("fs").onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); };
 document.addEventListener("fullscreenchange", () => { $("fs").textContent = document.fullscreenElement ? "Vollbild beenden" : "Vollbild"; });
 $("chk").onclick = () => checkSetup(C ? C.assistant : $("pick").value);
+$("rateconv").onclick = () => {
+  if (!C || !C.rateable) return;
+  const box = $("ratebox"); box.textContent = ""; box.appendChild(rateRow(null)); $("ratedlg").showModal();
+};
+$("rateclose").onclick = () => $("ratedlg").close();
 $("ren").onclick = async () => {
   if (!C) return;
   const t = prompt("Neuer Titel für dieses Gespräch:", C.title); if (!t) return;

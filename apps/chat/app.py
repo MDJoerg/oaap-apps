@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -489,7 +489,11 @@ def step(person, person_name, assertion, assistant, conv, decision):
     reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv))
     reply["at"] = now()
     if assistant.get("rev"):
-        reply["rev"] = assistant["rev"]       # für spätere Bewertungen (RFC-0101 Stufe 2)
+        reply["rev"] = assistant["rev"]       # für Bewertungen (RFC-0101 Stufe 2)
+        # 0.10.0: die Umstände dieser Antwort, wie sie damals waren -- ein später geänderter
+        # Assistent darf eine alte Bewertung nicht einem anderen Modell zuschreiben.
+        reply["model"] = assistant.get("model") or ""
+        reply["light"] = conv_light(conv)
     msgs.append(reply)
     return "more" if reply.get("tool_calls") else "done"
 
@@ -861,12 +865,76 @@ class Home:
         return len(self.local) if st == 200 and isinstance(doc.get("assistants"), list) else 0
 
 
+def rateable(m):
+    """Eine Antwort, die man bewerten kann: der Schlusstext einer Runde, von einem Assistenten
+    mit Revision (RFC-0101 D8 -- ohne Revision misst ein Stern nichts)."""
+    return (m.get("role") == "assistant" and bool(m.get("content")) and not m.get("tool_calls")
+            and bool(m.get("rev")))
+
+
+def stamp_ms(a, b):
+    try:
+        t = [datetime.strptime(x, "%Y-%m-%dT%H:%M:%SZ") for x in (a, b)]
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int((t[1] - t[0]).total_seconds() * 1000))
+
+
+def tool_lines(conv, msgs):
+    """Je Werkzeugaufruf Name, Wirkung, Ausgang -- nie Argumente oder Ergebnisse (§3.2)."""
+    effects = conv.get("effects") or {}
+    out = []
+    for m in msgs:
+        if m.get("role") != "tool":
+            continue
+        content = str(m.get("content") or "")
+        outcome = ("refused" if m.get("confirmed") is False else
+                   "error" if content.startswith("Fehler") else "ok")
+        eff = effects.get(m.get("name")) or ("read" if "confirmed" not in m else "write")
+        out.append({"name": str(m.get("name") or "")[:100], "effect": eff, "outcome": outcome})
+    return out[:100]
+
+
+def rating_body(conv, index, stars, share):
+    """(Assistent, Körper für POST …/ratings) oder (None, Satz). `index` None = das Gespräch."""
+    msgs = conv["messages"]
+    if index is None:
+        answers = [i for i, m in enumerate(msgs) if rateable(m)]
+        if not answers:
+            return None, "In diesem Gespräch gibt es noch keine Antwort, die man bewerten kann."
+        i, u = answers[-1], 0
+        body = {"scope": "conversation", "round": sum(1 for m in msgs if m.get("role") == "user"),
+                "tools": tool_lines(conv, msgs),
+                "ms": stamp_ms(msgs[0].get("at"), msgs[-1].get("at"))}
+    else:
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(msgs):
+            return None, "Diese Antwort gibt es in diesem Gespräch nicht."
+        i = index
+        if not rateable(msgs[i]):
+            return None, ("Sterne gibt es nur für Antworten eines Assistenten mit Revisionen im "
+                          "MCP-Gateway (RFC-0101 D8).")
+        u = max((k for k in range(i) if msgs[k].get("role") == "user"), default=0)
+        body = {"scope": "answer",
+                "round": sum(1 for m in msgs[:i] if m.get("role") == "user"),
+                "tools": tool_lines(conv, msgs[u:i]),
+                "ms": stamp_ms(msgs[u].get("at"), msgs[i].get("at"))}
+    ans = msgs[i]
+    body.update(rev=ans["rev"], stars=stars, conversation=conv["id"],
+                model=ans.get("model") or "", light=ans.get("light") or "")
+    if share and stars is not None:
+        q = next((msgs[k].get("content") for k in range(i, -1, -1) if msgs[k].get("role") == "user"), "")
+        body["text"] = {"question": str(q or "")[:8000], "answer": str(ans.get("content") or "")[:8000]}
+    return conv.get("assistant") or "", body
+
+
 def view_of(conv):
     """Was der Browser zeigt -- ohne eigene Vermerke, die er nicht braucht."""
     shown = []
     for m in conv["messages"]:
         x = {k: m[k] for k in ("role", "content", "name", "confirmed", "seconds", "at", "command",
-                               "tool_call_id") if k in m}
+                               "tool_call_id", "stars") if k in m}
+        if rateable(m):
+            x["rate"] = True
         if m.get("view"):
             x["view"] = m["view"]
         if m.get("tool_calls"):
@@ -875,7 +943,8 @@ def view_of(conv):
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
             "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),
-            "light": conv_light(conv)}
+            "light": conv_light(conv), "stars": conv.get("stars"),
+            "rateable": any(rateable(m) for m in conv["messages"])}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1204,7 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
             if conv is None:
                 return self.json(404, {"error": "Kein solches Gespräch."})
             return self.view_call(person, who, conv, body)
-        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light)$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light|rate)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")
         cid, action = m.groups()
@@ -1236,9 +1305,49 @@ class Handler(BaseHTTPRequestHandler):
                     conv.setdefault("lights", []).append({"at": now(), "light": new})
                     save_conv(person, conv)
                 return self.json(200, view_of(conv))
+            if action == "rate":
+                return self.rate(person, who, conv, body)
             return self.round(person, who, conv, action, body)
         finally:
             lock.release()
+
+    def rate(self, person, who, conv, body):
+        """0.10.0 (RFC-0101 Stufe 2): Sterne an eine Antwort (`index`) oder das Gespräch.
+        Gespeichert wird im MCP-Gateway, als die Person; hier nur, was sie gegeben hat --
+        damit ihr Verlauf es zeigt. `stars: null` zieht zurück."""
+        stars = body.get("stars")
+        if stars is not None and (not isinstance(stars, int) or isinstance(stars, bool) or not 0 <= stars <= 5):
+            return self.json(400, {"error": "0 bis 5 Sterne."})
+        index = body.get("index")
+        aid, doc = rating_body(conv, index, stars, body.get("share") is True)
+        if aid is None:
+            return self.json(400, {"error": doc})
+        assertion = self.headers.get(ASSERTION, "").strip()
+        if not assertion:
+            return self.json(401, {"error": NO_ASSERTION})
+        a, origin = Home(assertion).find(aid, who)
+        if a is None or origin != "gateway":
+            return self.json(404, {"error": "Diesen Assistenten gibt es für dich nicht (mehr) im MCP-Gateway."})
+        doc["view"] = a.get("view") or ""
+        try:
+            doc["gateway"] = gateway_for(a.get("gateway") or "")["name"]
+        except Stop:
+            doc["gateway"] = ""
+        models, _err = ki_models()
+        ml = next((x.get("light") for x in models if x["id"] == doc["model"]), "")
+        doc["model_light"] = ml if ml in LIGHT_RANK else ""
+        st, said = gw_assist("POST", f"/{aid}/ratings", assertion, doc)
+        errs = gw_errors(st, said)
+        if errs:
+            return self.json(502 if st in (0, 500, 502) else 400, {"error": " ".join(errs)})
+        target = conv if index is None else conv["messages"][index]
+        if stars is None:
+            target.pop("stars", None)
+        else:
+            target["stars"] = stars
+        save_conv(person, conv)
+        return self.json(200, dict(view_of(conv), rated={"index": index, "stars": stars,
+                                                        "text": "text" in doc}))
 
     def round(self, person, who, conv, action, body):
         # §5.2: ohne Zusicherung keine Runde -- nie ein Rückfall auf die App selbst.

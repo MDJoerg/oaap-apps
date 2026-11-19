@@ -1763,6 +1763,104 @@ revs = {r["rev"]: r for r in ax("GET", "/a-viel/revisions")[1]["revisions"]}
 check("D6: die verdichtete Zeile behält Nummer, Zeit und wer", revs[3]["compacted"] is True
       and revs[3]["changed_by"] == "u-anna" and len(revs) == 26, revs.get(3))
 
+print("\n-- 0.23.0 RFC-0101 Stufe 2: Sterne je Antwort und Gespräch")
+
+
+def rate(aid, uid="u-anna", roles="user", **kw):
+    body = dict({"rev": 2, "scope": "answer", "round": 1, "conversation": "c0000000001a", "stars": 4,
+                 "model": "standard", "model_light": "yellow", "light": "yellow", "view": "a-sicht",
+                 "gateway": "standard", "ms": 1234,
+                 "tools": [{"name": "whoami", "effect": "read", "outcome": "ok",
+                            "arguments": {"geheim": "nie speichern"}, "result": "auch nicht"}]}, **kw)
+    return ax("POST", f"/{aid}/ratings", body, uid=uid, roles=roles)
+
+
+def rating_rows(aid):
+    return [dict(r) for r in app.DB.execute("SELECT * FROM ratings WHERE assistant=? ORDER BY id", (aid,))]
+
+
+st, d = rate("a-priv")
+check("Anna bewertet eine Antwort von a-priv@2 mit 4 Sternen", st == 200 and d == {
+      "rated": 4, "rev": 2, "scope": "answer", "text": False}, (st, d))
+rr = rating_rows("a-priv")
+check("die Bewertung nennt assistant@rev und die Umstände", len(rr) == 1 and rr[0]["rev"] == 2
+      and rr[0]["model"] == "standard" and rr[0]["light"] == "yellow" and rr[0]["ms"] == 1234
+      and rr[0]["scope"] == "answer" and rr[0]["round"] == 1, rr)
+check("KÖDER: ohne Haken kein Inhalt -- kein Text, Werkzeuge nur Name/Wirkung/Ausgang (Argumente "
+      "und Ergebnis, die der Chat mitschickte, nicht gespeichert)",
+      rr and rr[0]["text"] == "" and json.loads(rr[0]["tools"]) == [{"name": "whoami", "effect": "read", "outcome": "ok"}]
+      and "nie speichern" not in json.dumps(rr, ensure_ascii=False), rr)
+check("D3: die Person steht nur als HMAC drin, nicht als Kennung",
+      rr and "u-anna" not in json.dumps(rr) and len(rr[0]["who"]) == 32, rr)
+st, d = rate("a-priv", stars=2)
+rr = rating_rows("a-priv")
+check("dieselbe Stelle noch einmal bewertet: ersetzt (eine Zeile, 2 Sterne)",
+      st == 200 and len(rr) == 1 and rr[0]["stars"] == 2, rr)
+rate("a-priv", round=2, stars=0)
+rate("a-priv", scope="conversation", round=3, stars=5,
+     text={"question": "Wer bin ich?", "answer": "Du bist Anna."})
+rr = rating_rows("a-priv")
+check("andere Runde und das Gespräch: eigene Zeilen (3); 0 Sterne zählen als Bewertung",
+      [(r["scope"], r["stars"]) for r in rr] == [("answer", 2), ("answer", 0), ("conversation", 5)], rr)
+check("mit Haken: Frage und Antwort stehen bei der Bewertung",
+      json.loads(rr[2]["text"]) == {"question": "Wer bin ich?", "answer": "Du bist Anna."}, rr[2:])
+st, d = rate("a-priv", text={"question": "x" * 8001, "answer": ""})
+check("Text über 8000 Zeichen: abgelehnt", st == 400 and "8000" in json.dumps(d), (st, d))
+st, d = rate("a-priv", uid="u-bert")
+check("KÖDER: Bert bewertet Annas privaten Assistenten -- 404 wie unbekannt", st == 404, (st, d))
+st, d = rate("gibt-es-nicht")
+check("... ebenso ein unbekannter (gleiche Antwort)", st == 404, (st, d))
+st, d = rate("a-priv", rev=99)
+check("eine Revision, die es nicht gibt: abgelehnt", st == 400 and "Revision 99" in json.dumps(d, ensure_ascii=False), (st, d))
+st, d = rate("a-priv", stars=6)
+check("6 Sterne: abgelehnt", st == 400, (st, d))
+st, d = rate("a-priv", stars=True)
+check("stars: true ist keine Zahl: abgelehnt", st == 400, (st, d))
+st, d = rate("a-priv", rev=None)
+check("ohne rev keine Bewertung (D8: nur mit Revision)", st == 400 and "rev" in json.dumps(d), (st, d))
+st, d = rate("a-alle", uid="u-bert", rev=2, stars=1)
+check("Bert bewertet den Mandanten-Assistenten, den er benutzt", st == 200, (st, d))
+st, d = ax("GET", "/a-priv/ratings")
+check("Anna (pflegt a-priv) liest die Bewertungen: je Revision Zahl, Verteilung, Anteil 0–2, Personen",
+      st == 200 and d["revisions"] == [{"rev": 2, "count": 3, "stars": [1, 0, 1, 0, 0, 1],
+                                        "persons": 1, "low": 0.667}] and len(d["ratings"]) == 3, (st, d))
+check("... ohne `who` in der Antwort", st == 200 and all("who" not in r for r in d["ratings"]), d)
+st, d = ax("GET", "/a-alle/ratings")
+check("KÖDER: wer A pflegt, liest nichts von B (Anna, a-alle: 403)", st == 403, (st, d))
+st, d = ax("GET", "/a-alle/ratings", uid="u-bert")
+check("... und wer B nur benutzt, auch nicht (403)", st == 403, (st, d))
+st, d = ax("GET", "/a-alle/ratings", roles="user,tenant_admin")
+check("tenant_admin liest a-alle: Berts eine Bewertung, und keine von a-priv",
+      st == 200 and d["revisions"][0]["count"] == 1 and len(d["ratings"]) == 1, (st, d))
+st, d = ax("GET", "/a-priv/ratings", uid="u-bert", roles="user,tenant_admin")
+check("KÖDER: einen fremden privaten Assistenten liest auch ein tenant_admin nicht (404)", st == 404, (st, d))
+st, d = ax("GET", "/_ratings")
+check("die eigenen Bewertungen (§6.6): Anna sieht ihre drei, Berts nicht",
+      st == 200 and sorted(r["stars"] for r in d["ratings"]) == [0, 2, 5]
+      and {r["assistant"] for r in d["ratings"]} == {"a-priv"}, (st, d))
+st, d = ax("GET", "/_ratings", uid="u-bert")
+check("... Bert seine eine", st == 200 and [(r["assistant"], r["stars"]) for r in d["ratings"]] == [("a-alle", 1)], d)
+st, d = rate("a-priv", round=2, stars=None)
+check("zurückgezogen (stars: null): die Zeile ist weg", st == 200 and d == {"withdrawn": True}
+      and len(rating_rows("a-priv")) == 2, (st, d))
+app.DB.execute("UPDATE ratings SET at='2026-01-01T00:00:00Z' WHERE text!=''")
+app.DB.commit()
+n_purged = books.purge_rating_texts(app.DB)
+app.DB.commit()
+rr = rating_rows("a-priv")
+check("D4: nach 180 Tagen geht der Text, die Sterne bleiben", n_purged == 1
+      and [(r["scope"], r["stars"], r["text"]) for r in rr if r["scope"] == "conversation"] == [("conversation", 5, "")], rr)
+ax("POST", "", adoc("a-stern", system="Fassung 0"))
+rate("a-stern", rev=1, stars=3)
+for n in range(25):
+    ax("POST", "", adoc("a-stern", system=f"Fassung {n + 1}"))
+st1, d1 = ax("GET", "/a-stern?rev=1")
+st2, d2 = ax("GET", "/a-stern?rev=2")
+check("D6 mit Sternen: eine bewertete Revision wird nicht verdichtet, die unbewertete daneben schon",
+      st1 == 200 and d1["system"] == "Fassung 0" and st2 == 410, (st1, st2))
+check("der Schlüssel für die HMACs liegt in /data (ratings.key, 32 Byte)",
+      os.path.getsize(app.RATING_KEY_FILE) == 32, app.RATING_KEY_FILE)
+
 # ---- 0.7.3: Grenzen ändern, Gründe nennen, Quellen einlesen
 admin("/view-save", name="a-zwei", max_effect="read", ways="key")
 

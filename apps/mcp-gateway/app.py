@@ -60,7 +60,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.22.1"
+VERSION = "0.23.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -524,6 +524,113 @@ ASSISTANTS_PATH = "/mcp/_assistants"  # 0.22.0: Assistenten mit Revisionen (RFC-
 AUTHZ = Authz(app=None)
 # Felder, die das Gateway führt und die beim Speichern nie vom Schreibenden kommen.
 ASSISTANT_RECORD_FIELDS = ("rev", "state", "manage", "changed_at", "changed_by", "created")
+
+# 0.23.0 (RFC-0101 Stufe 2): Sterne. Die Person steht in einer Bewertung nur als HMAC mit
+# einem Schlüssel dieses Gateways (D3) -- genug, um die eigene Bewertung zu ersetzen und
+# Personen zu zählen, nicht genug, sie zu nennen.
+RATING_KEY_FILE = os.path.join(DATA_DIR, "ratings.key")
+RATING_TEXT_MAX = 8000                                   # D4, je Frage und Antwort
+RATING_LIGHTS = ("", "green", "yellow", "red")
+RATING_WORD_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+RATING_NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
+_RATING_KEY = []
+
+
+def rating_key():
+    """Der Schlüssel für `who` und `slot` -- einmal erzeugt, 0600, bleibt in /data."""
+    if not _RATING_KEY:
+        try:
+            with open(RATING_KEY_FILE, "rb") as f:
+                key = f.read()
+        except FileNotFoundError:
+            key = b""
+        if len(key) < 32:
+            key = secrets.token_bytes(32)
+            os.makedirs(DATA_DIR, exist_ok=True)
+            fd = os.open(RATING_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(key)
+        _RATING_KEY.append(key)
+    return _RATING_KEY[0]
+
+
+def rating_mac(*parts):
+    import hashlib
+    import hmac
+    return hmac.new(rating_key(), "\x1f".join(str(p) for p in parts).encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def rating_who(uid):
+    return rating_mac("who", uid)
+
+
+def rating_check(body):
+    """(geprüfte Bewertung, Fehlersätze). Was nicht in der Liste steht, wird nicht gespeichert --
+    so hält eine Bewertung ohne Haken keinen Inhalt (RFC-0101 §3.2), auch wenn ein Chat mehr schickt."""
+    errs = []
+
+    def word(key, rx, n=100):
+        v = body.get(key, "")
+        if v in ("", None):
+            return ""
+        if not isinstance(v, str) or len(v) > n or not rx.match(v):
+            errs.append(f"{key}: ungültig.")
+            return ""
+        return v
+
+    r = {}
+    rev = body.get("rev")
+    if not isinstance(rev, int) or isinstance(rev, bool) or rev < 1:
+        errs.append("rev: die Revision, die gesprochen hat (eine Zahl ab 1).")
+    r["rev"] = rev
+    r["scope"] = body.get("scope")
+    if r["scope"] not in ("answer", "conversation"):
+        errs.append("scope: answer oder conversation.")
+    rnd = body.get("round", 0)
+    if not isinstance(rnd, int) or isinstance(rnd, bool) or not 0 <= rnd <= 100000:
+        errs.append("round: eine Zahl.")
+        rnd = 0
+    r["round"] = rnd
+    stars = body.get("stars")
+    if stars is not None and (not isinstance(stars, int) or isinstance(stars, bool) or not 0 <= stars <= 5):
+        errs.append("stars: 0 bis 5, oder null zum Zurückziehen.")
+    r["stars"] = stars
+    conv = body.get("conversation")
+    if not isinstance(conv, str) or not 1 <= len(conv) <= 64:
+        errs.append("conversation: die Kennung des Gesprächs (1 bis 64 Zeichen).")
+    r["conversation"] = conv
+    r["model"] = word("model", RATING_NAME_RE)
+    r["view"] = word("view", RATING_NAME_RE)
+    r["gateway"] = word("gateway", RATING_NAME_RE)
+    for k in ("model_light", "light"):
+        r[k] = body.get(k) or ""
+        if r[k] not in RATING_LIGHTS:
+            errs.append(f"{k}: green, yellow oder red.")
+    ms = body.get("ms", 0)
+    r["ms"] = ms if isinstance(ms, int) and not isinstance(ms, bool) and 0 <= ms < 10 ** 9 else 0
+    tools = body.get("tools") or []
+    if not isinstance(tools, list) or len(tools) > 100:
+        errs.append("tools: eine Liste (höchstens 100).")
+        tools = []
+    r["tools"] = []
+    for t in tools:
+        if not isinstance(t, dict) or not RATING_NAME_RE.match(str(t.get("name") or "")):
+            errs.append("tools: je Aufruf name, effect, outcome.")
+            break
+        # Nur Name, Wirkung, Ausgang -- nie Argumente oder Ergebnisse (§3.2).
+        r["tools"].append({"name": t["name"],
+                           "effect": t.get("effect") if RATING_WORD_RE.match(str(t.get("effect") or "")) else "",
+                           "outcome": t.get("outcome") if RATING_WORD_RE.match(str(t.get("outcome") or "")) else ""})
+    text = body.get("text")
+    r["text"] = None
+    if text is not None:
+        if not isinstance(text, dict) or not all(isinstance(text.get(k, ""), str) for k in ("question", "answer")):
+            errs.append("text: {question, answer}, nur mit dem Haken „Frage und Antwort mitgeben“.")
+        elif any(len(text.get(k, "")) > RATING_TEXT_MAX for k in ("question", "answer")):
+            errs.append(f"text: höchstens {RATING_TEXT_MAX} Zeichen je Frage und Antwort.")
+        else:
+            r["text"] = {"question": text.get("question", ""), "answer": text.get("answer", "")}
+    return r, errs
 # D2 (0.17): die Kennung der Person im Realm, von der Plattform auf /me gesetzt. Geglaubt
 # NUR, wenn die Plattform sagt, dass sie diese Kopfzeile setzt und auf jeder anderen Route
 # entfernt (OAAP_IDENTITY_HEADERS, ab Plattform 0.1.307) -- eine ältere ließe einen Client
@@ -2380,6 +2487,10 @@ class Handler(BaseHTTPRequestHandler):
                                 manage=manage))
             self.send_json(200, {"v": 1, "assistants": out, "grants_known": who.grants is not None})
             return
+        if rest == "_ratings":
+            # 0.23 (RFC-0101 §6.6): die eigenen Bewertungen, über den neu gerechneten HMAC.
+            self.send_json(200, {"ratings": books.ratings_mine(DB, rating_who(carried["sub"]))})
+            return
         aid, _, sub = rest.partition("/")
         row = books.assistant_row(DB, aid) if ASSISTANT_RE.match(aid) else None
         if not row or row["state"] == "deleted" or not arules.can_see(row["doc"], who):
@@ -2387,6 +2498,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
             return
         manage = arules.can_manage(row["doc"], who)
+        if sub == "ratings":
+            # Lesen dürfen, wer ihn pflegt, und der tenant_admin (RFC-0101 §3.3) -- nur
+            # für Assistenten, die sie sehen; wer A pflegt, liest nichts von B.
+            if not (manage or "tenant_admin" in who.roles):
+                self.send_json(403, {"error": "Die Bewertungen liest, wer den Assistenten pflegt."})
+                return
+            self.send_json(200, dict(books.ratings_of(DB, aid), id=aid, rev=row["rev"]))
+            return
         if sub == "revisions":
             if not manage:
                 self.send_json(403, {"error": "Die Revisionen sieht, wer den Assistenten pflegt."})
@@ -2475,6 +2594,9 @@ class Handler(BaseHTTPRequestHandler):
         if not row or row["state"] == "deleted" or not arules.can_see(row["doc"], who):
             self.send_json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
             return
+        if sub == "ratings":
+            self.rating_post(aid, carried, body)
+            return
         if sub != "state":
             self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
             return
@@ -2489,6 +2611,27 @@ class Handler(BaseHTTPRequestHandler):
         books.log(DB, by, "assistant.state", aid, state)
         DB.commit()
         self.send_json(200, {"id": aid, "state": state})
+
+    def rating_post(self, aid, carried, body):
+        """POST /mcp/_assistants/<id>/ratings (0.23, RFC-0101 Stufe 2): 0–5 Sterne je Antwort
+        oder Gespräch; dieselbe Person an derselben Stelle ersetzt, `stars: null` zieht zurück.
+        Sichtbarkeit ist schon geprüft (wer ihn nicht sieht, bekam 404 wie unbekannt)."""
+        r, errs = rating_check(body)
+        if not errs and books.assistant_revision(DB, aid, r["rev"]) is None:
+            errs.append(f"rev: die Revision {r['rev']} gibt es nicht.")
+        if errs:
+            self.send_json(400, {"errors": errs})
+            return
+        who = rating_who(carried["sub"])
+        slot = rating_mac("slot", carried["sub"], r["conversation"], r["scope"],
+                          r["round"] if r["scope"] == "answer" else 0)
+        if r["stars"] is None:
+            books.rating_withdraw(DB, aid, who, slot)
+            self.send_json(200, {"withdrawn": True})
+            return
+        books.rating_write(DB, aid, who, slot, r)
+        self.send_json(200, {"rated": r["stars"], "rev": r["rev"], "scope": r["scope"],
+                             "text": r["text"] is not None})
 
     def assistant_view_problem(self, a):
         view = a.get("view") if isinstance(a, dict) else None

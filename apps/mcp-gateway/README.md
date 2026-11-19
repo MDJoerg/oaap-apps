@@ -603,6 +603,28 @@ Person:
 - Die Betreiberseite listet Assistenten noch nicht. Das kommt mit
   Stufe 2 (Auswertung je Revision).
 
+## Sterne (0.23)
+
+RFC-0101 Stufe 2. Personen bewerten Antworten und ganze Gespräche mit 0
+bis 5 Sternen. Der Chat schickt das über die via-Tür als die Person:
+
+| Weg | was |
+|---|---|
+| `POST /mcp/_assistants/<id>/ratings` | eine Bewertung setzen, ersetzen oder mit `stars: null` zurückziehen |
+| `GET /mcp/_assistants/<id>/ratings` | je Revision Zahl, Verteilung, Anteil 0–2, Personen; dazu die letzten 500 -- für wer pflegt und tenant_admin |
+| `GET /mcp/_assistants/_ratings` | die eigenen Bewertungen |
+
+- **Wer:** nur ein HMAC der Person mit `/data/ratings.key` (entsteht
+  beim ersten Mal, 0600). Die Kennung des Gesprächs steckt nur in einem
+  zweiten HMAC. Ein Name oder eine Kennung steht nirgends.
+- **Kein Inhalt ohne Haken:** Gespeichert werden nur die bekannten
+  Felder, von Werkzeugen nur Name, Wirkung und Ausgang. Frage und
+  Antwort nur mit Haken, höchstens 8000 Zeichen je Teil, nach 180 Tagen
+  gelöscht (die Sterne bleiben).
+- Eine Revision, die eine Bewertung nennt, wird nicht verdichtet.
+- Die Betreiberseite zeigt die Bewertungen noch nicht. Das kommt mit der
+  Auswertung je Revision (RFC-0097 Stufe 2 / RFC-0101 Stufe 4).
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

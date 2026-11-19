@@ -258,10 +258,26 @@ Laufzeit und hält die Verläufe.
 - Die Ampel aus 0.8.0 stand auch auf der Seite „Assistenten“. Das ist
   behoben.
 
+## Sterne (0.10.0)
+
+RFC-0101 Stufe 2. Unter jeder Schlussantwort eines Assistenten aus dem
+MCP-Gateway stehen 0 bis 5 Sterne; „Gespräch bewerten“ im Menü bewertet
+das ganze Gespräch. 0 heißt „unbrauchbar“.
+
+- Die Bewertung geht als die Person ans MCP-Gateway, mit `assistant@rev`
+  und den Umständen der Antwort (Modell und Ampel von damals, Sicht, je
+  Werkzeug Name, Wirkung, Ausgang, Dauer). Text nur mit dem Haken „Frage
+  und Antwort mitgeben“.
+- Dieselbe Stelle noch einmal bewerten ersetzt, „zurückziehen“ nimmt sie
+  weg. Im Verlauf der Person steht nur, was das Gateway angenommen hat.
+- Assistenten aus der Konfiguration (`CHAT_ASSISTANT`) und Antworten ohne
+  Revision bekommen keine Sterne (RFC-0101 D8).
+- „Nicht zufrieden? An den Support geben“ kommt mit Stufe 3.
+
 ## Prüfen
 
 ```sh
-py -3 apps/chat/test_chat.py      # 149 Prüfpunkte gegen eine nachgebaute Plattform
+py -3 apps/chat/test_chat.py      # 162 Prüfpunkte gegen eine nachgebaute Plattform
 node apps/chat/test_markdown.js   # 26 Prüfpunkte: Darstellung und Sicherheit des Renderers
 ```
 
