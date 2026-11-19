@@ -523,6 +523,22 @@ def rows_after(sql, n, wait=3.0):
         time.sleep(0.05)
 
 
+def count_rows(where):
+    """Wie viele Messzeilen es schon gibt -- damit `rows_after` auf die NEUE wartet,
+    nicht auf eine Zahl, die frühere Abschnitte schon erreicht haben."""
+    return app.DB.execute(f"SELECT COUNT(*) FROM usage WHERE {where}").fetchone()[0]
+
+
+def rows_until(sql, pred, wait=3.0):
+    """Wie rows_after, aber bis die Zeilen eine Bedingung erfüllen."""
+    end = time.monotonic() + wait
+    while True:
+        rows = list(app.DB.execute(sql))
+        if (rows and pred(rows)) or time.monotonic() > end:
+            return rows
+        time.sleep(0.05)
+
+
 def err(msgs):
     """Der Fehler der letzten Nachricht — {} statt eines Absturzes, wenn ein Ergebnis kam."""
     return (msgs[-1].get("error") or {}) if msgs else {}
@@ -1314,7 +1330,8 @@ check("Tausch abgelehnt: -32003, Server nicht gerufen, kein Rückfall",
       err(msgs).get("code") == -32003 and len(XS["calls"]) == calls_before, msgs)
 check("Fehlertext des Anmeldediensts nicht weitergereicht", "GEHEIM-IDP-TEXT" not in json.dumps(msgs))
 IDP["mode"] = None
-row = list(app.DB.execute("SELECT * FROM usage WHERE server='xs' ORDER BY id"))
+row = rows_until("SELECT * FROM usage WHERE server='xs' ORDER BY id",
+                 lambda rs: rs[-1]["outcome"] == "upstream_error")
 check("Messzeilen von X: Verfahren X, sub, Ausgang", row and all(r["procedure"] == "X" for r in row)
       and row[0]["user_sub"] == "person-x" and row[-1]["outcome"] == "upstream_error"
       and row[-1]["reason"] == "exchange", [dict(r) for r in row])
@@ -1528,6 +1545,21 @@ st, sid = session_a("a-sicht")
 check("Profil @chat: Sitzung eröffnet", st == 200 and bool(sid), st)
 
 print("\n-- 0.21.0 RFC-0101: X-OAAP-Light, die Ampel des Gesprächs als Decke je Anfrage")
+
+
+def usage_max():
+    return app.DB.execute("SELECT COALESCE(MAX(id), 0) FROM usage").fetchone()[0]
+
+
+def usage_after(before, cols):
+    """Die erste Messzeile nach `before`. Das Gateway schreibt sie NACH der Antwort
+    (wegen gestreamter Antworten), also wird kurz gewartet statt sofort gelesen."""
+    for _ in range(100):
+        row = app.DB.execute(f"SELECT {cols} FROM usage WHERE id>? ORDER BY id LIMIT 1", (before,)).fetchone()
+        if row:
+            return row
+        time.sleep(0.02)
+    return None
 _kp_light = books.server_row(app.DB, "kp")["light"]
 _chat_ceiling = [k for k in books.keys(app.DB) if k["label"] == "a-chat"][0]["ceiling"]
 app.DB.execute("UPDATE servers SET light='yellow' WHERE name='kp'")
@@ -1558,9 +1590,10 @@ check("KÖDER: rot in der Kopfzeile lockert die Decke des Profils (grün) nicht:
 app.DB.execute("UPDATE keys SET ceiling='yellow' WHERE label='a-chat'")
 app.DB.commit()
 st, sid_l = session_a("a-sicht", light="yellow")
+_before = usage_max()
 rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
                   "params": {"name": "whoami", "arguments": {}}}, sid_l, light="yellow")
-row = app.DB.execute("SELECT light FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+row = usage_after(_before, "light")
 check("die Messzeile trägt die verlangte Ampel", row and row[0] == "yellow", row and tuple(row))
 app.DB.execute("UPDATE servers SET light=? WHERE name='kp'", (_kp_light,))
 app.DB.execute("UPDATE keys SET ceiling=? WHERE label='a-chat'", (_chat_ceiling,))
@@ -1691,22 +1724,25 @@ st2, d2 = ax("GET", "/i-neu")
 check("Import: wer importiert, wird Besitzer", st == 200 and st2 == 200 and d2["owner"] == "u-anna", (st, d, d2))
 
 sid_ar = session_a("a-sicht", assistant="a-priv@2")[1]
+_before = usage_max()
 rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 5, "method": "tools/call",
                   "params": {"name": "whoami", "arguments": {}}}, sid_ar, assistant="a-priv@2")
-row = app.DB.execute("SELECT assistant, assistant_rev FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+row = usage_after(_before, "assistant, assistant_rev")
 check("die Messzeile trägt Assistent und Revision getrennt (a-priv, 2)", row and tuple(row) == ("a-priv", 2),
       row and tuple(row))
 sid_ar = session_a("a-sicht", assistant="a-priv")[1]
+_before = usage_max()
 rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 6, "method": "tools/call",
                   "params": {"name": "whoami", "arguments": {}}}, sid_ar, assistant="a-priv")
-row = app.DB.execute("SELECT assistant, assistant_rev FROM usage ORDER BY id DESC LIMIT 1").fetchone()
+row = usage_after(_before, "assistant, assistant_rev")
 check("ohne @: wie bisher, Revision 0", row and tuple(row) == ("a-priv", 0), row and tuple(row))
 
 for n in range(25):
     ax("POST", "", adoc("a-viel", system=f"Fassung {n}"))
     if n == 2:
-        # eine Messzeile zeigt auf Revision 2 (wie nach einem Gespräch mit ihr)
-        app.DB.execute("UPDATE usage SET assistant='a-viel', assistant_rev=2 WHERE id=(SELECT MAX(id) FROM usage)")
+        # eine Messzeile zeigt auf Revision 2 (wie nach einem Gespräch mit ihr) --
+        # die eben gewartete Zeile, nicht „die letzte“, die noch unterwegs sein könnte
+        app.DB.execute("UPDATE usage SET assistant='a-viel', assistant_rev=2 WHERE id=?", (_before + 1,))
         app.DB.commit()
 check("25 Mal gespeichert: Revision 25", ax("GET", "/a-viel")[1].get("rev") == 25)
 ax("POST", "", adoc("a-viel", system="Fassung 26"))
@@ -1786,6 +1822,7 @@ IS_["asrt"].clear()
 IS_["auth"].clear()
 IDP["exchanges"].clear()
 app.EXCHANGED.clear()
+_n_a = count_rows("view='a-sicht'")
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
                                 "params": {"name": "whoami", "arguments": {}}}, sid)
 seen = json.loads(((msgs[-1].get("result") or {}).get("content") or [{}])[0].get("text") or "{}") if msgs else {}
@@ -1795,7 +1832,7 @@ check("… und die Zusicherung der Plattform an dieses Gateway als Act-Zusicheru
       IS_["asrt"] and IS_["asrt"][-1] == ASRT, IS_["asrt"])
 check("… kein Act-Token, kein Tausch beim Anmeldedienst",
       not any(IS_["act"]) and not IDP["exchanges"], (IS_["act"], IDP["exchanges"]))
-row = rows_after("SELECT * FROM usage WHERE view='a-sicht' ORDER BY id", 1)
+row = rows_after("SELECT * FROM usage WHERE view='a-sicht' ORDER BY id", _n_a + 1)
 check("Messzeile: Verfahren A, Kennung der Person, Issuer platform, Chat, Assistent, Profil",
       row and row[-1]["procedure"] == "A" and row[-1]["user_sub"] == "u-anna"
       and row[-1]["user_iss"] == "platform" and row[-1]["client"] == "chat"
@@ -1804,9 +1841,10 @@ check("Messzeile: Verfahren A, Kennung der Person, Issuer platform, Chat, Assist
       and row[-1]["ctx_cost_center"] == "KS-CHAT", [dict(r) for r in row])
 check("0.7.2: ohne Angabe des Chats ist der Aufruf nicht als bestätigt vermerkt",
       row and row[-1]["confirmed"] == "", [dict(r) for r in row][-1:])
+_n_a = count_rows("view='a-sicht'")
 rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 33, "method": "tools/call",
                   "params": {"name": "whoami", "arguments": {}}}, sid, confirmed="yes")
-row = rows_after("SELECT confirmed, procedure FROM usage WHERE view='a-sicht' ORDER BY id", 2)
+row = rows_after("SELECT confirmed, procedure FROM usage WHERE view='a-sicht' ORDER BY id", _n_a + 1)
 check("0.7.2: X-OAAP-Confirmed: yes vom Chat -> confirmed=yes in der Messzeile (Verfahren A)",
       row and row[-1]["confirmed"] == "yes" and row[-1]["procedure"] == "A", [dict(r) for r in row][-2:])
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}, sid, uid="u-bert")
