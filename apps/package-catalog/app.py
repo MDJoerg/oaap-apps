@@ -25,7 +25,7 @@ import multipart
 import upstream
 import zipinfo
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:
@@ -150,7 +150,7 @@ def render_index():
 
 
 def mirror_card():
-    """Der Spiegel (RFC-0077 §7.2) -- nur, wenn eine Destination gebunden ist."""
+    """Der Spiegel (RFC-0077 §7.2) -- nur, wenn eine Destination zugeordnet ist."""
     if not MIRROR or not MIRROR.enabled:
         return ""
     st = MIRROR.status()
@@ -283,7 +283,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.upload(who, length)
         if path == "/upstream/poll":
             if not MIRROR or not MIRROR.enabled:
-                return self.back("Kein Upstream gebunden (Destination „upstream“).", False)
+                return self.back("Keine Destination „upstream“ zugeordnet (Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“).", False)
             st = MIRROR.poll()
             return self.back(("Abgerufen." if not st.get("last_error")
                               else "Abruf fehlgeschlagen: " + st["last_error"]),

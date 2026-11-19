@@ -191,6 +191,12 @@ Behoben: Ein Assistent mit Ansichten (MCP Apps) erbte die Sitzung eines
 Assistenten ohne Ansichten auf derselben Sicht und bekam dann keine
 Ansichten. Ob Ansichten angesagt sind, gehört jetzt zur Sitzung.
 
+## Wortwahl „zugeordnet“ (0.7.1)
+
+Die Meldung ohne Destination `ki` sagt „zugeordnet“ wie das Portal und
+nennt den Ort: Seite der Instanz, Reiter Netz & Adressen, Destinationen,
+„Zuordnen“ (L16).
+
 ## Prüfen
 
 ```sh

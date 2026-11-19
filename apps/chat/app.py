@@ -44,7 +44,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -335,7 +335,8 @@ class McpWay:
 
 def ask_model(assistant, person_name, msgs, tools):
     if not KI_URL:
-        raise Stop("Keine Destination ki gebunden -- der Chat erreicht kein Modell.")
+        raise Stop("Keine Destination ki zugeordnet -- der Chat erreicht kein Modell. "
+                   "(Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“)")
     d = datetime.now()
     today = WEEKDAYS[d.weekday()] + d.strftime(", %d.%m.%Y")
     system = (assistant["system"] + f"\n\nHeute ist {today}. Du sprichst mit {person_name}. "

@@ -11,7 +11,7 @@ Zurückgerufen im Marketplace (D7): mit `auto` wird eine lokal
 freigegebene Version zurückgezogen, mit Grund im Protokoll; gelöscht wird
 nie, laufende Instanzen bleiben unberührt. Mit `hold` wird sie nur markiert.
 
-Ohne gebundene Destination tut dieses Modul nichts: der Katalog ist dann
+Ohne zugeordnete Destination tut dieses Modul nichts: der Katalog ist dann
 genau 0.1.
 """
 import hashlib
@@ -240,8 +240,9 @@ class Mirror:
         -> (ok, Satz)."""
         if not self.enabled:
             return False, ("Kein Marketplace angebunden. Schritt für den Betreiber: die Destination "
-                           "„upstream“ dieser Instanz an den Marketplace binden (bearer mit dem "
-                           "API-Schlüssel eines Maschinenbenutzers dort).")
+                           "„upstream“ (Ziel der Marketplace, bearer mit dem API-Schlüssel eines "
+                           "Maschinenbenutzers dort) anlegen und dieser Instanz zuordnen "
+                           "(Portal: Seite der Instanz, Reiter Netz & Adressen).")
         aid, host, channel = parse_link(link)
         if not aid:
             return False, ("Das ist kein Link auf ein Asset eines Marketplace "

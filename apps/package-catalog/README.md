@@ -66,7 +66,8 @@ nicht genannten Mandanten ab — auch für den Betreiber. Die Liste steht als `v
 
 ## Spiegel eines Marketplace (seit 0.2, RFC-0077 §7.2)
 
-Bindet der Betreiber die Destination **`upstream`** (Ziel = ein Marketplace,
+Ordnet der Betreiber dieser Instanz die Destination **`upstream`** zu
+(Portal: Seite der Instanz, Reiter Netz & Adressen; Ziel = ein Marketplace,
 Authentifizierung `bearer` mit dem API-Schlüssel eines Maschinenbenutzers
 dort), folgt der Katalog dessen Feed: alle 15 Minuten oder mit „Jetzt
 abrufen“. Für jede Version, die er noch nicht hat, lädt er das Paket über
