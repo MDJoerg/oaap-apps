@@ -217,6 +217,36 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## Arbeit im Vorgang (seit 0.10.0, RFC-0103 Stufe 3)
+
+- **Verantwortlich:** eine Zuständige des Bereichs (Liste auf „Bereiche“
+  oder ein Grant aus „Rollen & Rechte“). Setzen dürfen Zuständige und der
+  `tenant_admin`. Verschieben leert das Feld; der neue Bereich entscheidet.
+- **Zugewiesen:** jede Person, die die App einmal geöffnet hat. Sie liest,
+  kommentiert und ändert den Status, aber sie verschiebt nicht, schließt
+  nicht, lehnt nicht ab, übergibt nicht und weist nicht weiter zu.
+- **Beteiligt:** Wer je verantwortlich oder zugewiesen war, liest den
+  Vorgang weiter (auch interne Kommentare), ändert und kommentiert aber
+  nichts mehr. Jeder Wechsel steht im Verlauf, als interner Eintrag.
+- **Unterstatus von „in Arbeit“** (fest, nicht je Mandant), mit denselben
+  Wegen wie „in Arbeit“:
+  - `clarify_internal` (in Klärung intern);
+  - `clarify_external` (in Klärung extern);
+  - `waiting_test` (wartet auf Test);
+  - `waiting_reporter`: für die meldende Person „Rückfrage an dich“, im
+    Chat ein roter Punkt. Ihr nächster Kommentar setzt den Vorgang von
+    selbst zurück auf „in Arbeit“.
+- **Interne Kommentare:** Für Bearbeitende ist „intern“ vorbelegt (auch an
+  der MCP-Tür, ohne Angabe von `internal`).
+  - Lesen dürfen sie der Bereich, die Beobachter-Bereiche, alle je
+    Beteiligten und der `tenant_admin`.
+  - Die meldende Person sieht sie nirgends: nicht auf der Seite, nicht über
+    `/platform/feedback/mine`, nicht an der MCP-Tür.
+  - Bei einer Übergabe geht ein interner Kommentar nur mit, wenn er im
+    Entwurf angehakt ist. Im Entwurf steht er als „(intern)“.
+- **Übersicht:** Ein eigener Abschnitt „Mir zugewiesen oder von mir
+  verantwortet“. `list_cases` an der MCP-Tür nimmt diese Vorgänge mit.
+
 ## Rückweg in den Chat, „Lösung passt“ (seit 0.9.0, RFC-0103 Stufe 2)
 
 - **Link:** `GET /platform/feedback/mine` nennt je eigenem Vorgang `url`,

@@ -32,7 +32,13 @@ KIND_LABEL = {"bug": "Fehler", "question": "Frage", "idea": "Idee",
 STATUS_LABEL = {"new": "neu", "triage": "Klärung", "in_progress": "in Arbeit",
                 "answered": "beantwortet", "closed": "geschlossen",
                 "rejected": "abgelehnt", "reopened": "wieder offen",
-                "handed_over": "übergeben"}
+                "handed_over": "übergeben",
+                # 0.10.0 (RFC-0103 D4): feste Unterstatus von „in Arbeit“
+                "clarify_internal": "in Klärung intern", "clarify_external": "in Klärung extern",
+                "waiting_test": "wartet auf Test", "waiting_reporter": "Rückfrage an die Meldende"}
+# 0.10.0: dieselben Übergänge wie `in_progress`. Fest, nicht je Mandant: Auswertungen,
+# die MCP-Tür und der Chat brauchen Wörter, die sie kennen.
+SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter")
 
 # RFC-0061 §4. `voting` (§7) kommt mit seiner Stufe. `handed_over` (§5)
 # steht hier, damit die Regel EINE Tabelle bleibt; erreicht wird es nur
@@ -48,11 +54,33 @@ NEXT = {
     "handed_over": ("in_progress", "answered", "rejected"),
 }
 MANUAL_EXCLUDED = ("handed_over",)
+
+
+def _with_substatus(nxt):
+    """0.10.0 (RFC-0103 D4): überall, wo `in_progress` erreichbar ist, auch die
+    Unterstatus; aus einem Unterstatus dieselben Wege wie aus `in_progress`, dazu
+    zurück nach `in_progress` und in die anderen Unterstatus."""
+    out = {}
+    for k, v in nxt.items():
+        v = list(v)
+        if "in_progress" in v:
+            i = v.index("in_progress") + 1
+            v[i:i] = list(SUBSTATUS)
+        elif k == "in_progress":
+            v = list(SUBSTATUS) + v
+        out[k] = tuple(v)
+    for sub in SUBSTATUS:
+        out[sub] = tuple(["in_progress"] + [x for x in SUBSTATUS if x != sub]
+                         + list(nxt["in_progress"]))
+    return out
+
+
+NEXT = _with_substatus(NEXT)
 # 0.9.0 (RFC-0103 D10/D11): wie ein Vorgang geschlossen wurde -- eine Markierung am
 # Schließen, kein eigener Status. Leer: von den Bearbeitenden geschlossen.
 MARK_LABEL = {"accepted": "Lösung passt", "no_response": "ohne Rückmeldung"}
 ACCEPT_DAYS = 14
-OPEN = ("new", "triage", "in_progress", "answered", "reopened", "handed_over")
+OPEN = ("new", "triage", "in_progress", "answered", "reopened", "handed_over") + SUBSTATUS
 
 # RFC-0061 §5.2 / §10.3: was eine Uebergabe NIE enthalten darf. Geprueft
 # wird das fertige Dokument, Schluessel fuer Schluessel und in jeder Tiefe
@@ -221,6 +249,18 @@ class Store:
             # 0.9.0 (RFC-0103 D10): accepted | no_response | '' -- nur bei closed gesetzt
             if "mark" not in have:
                 self.db.execute("ALTER TABLE cases ADD COLUMN mark TEXT NOT NULL DEFAULT ''")
+            # 0.10.0 (RFC-0103 D3): verantwortlich (ein Zuständiger des Bereichs) und
+            # zugewiesen (irgendwer im Mandanten); leer = niemand
+            for col in ("responsible", "assignee"):
+                if col not in have:
+                    self.db.execute(f"ALTER TABLE cases ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            # 0.10.0 (D5): ein Eintrag kann intern sein -- nie für die meldende Person
+            if "internal" not in {r[1] for r in self.db.execute("PRAGMA table_info(entries)")}:
+                self.db.execute("ALTER TABLE entries ADD COLUMN internal INTEGER NOT NULL DEFAULT 0")
+            # 0.10.0 (D3): wer je verantwortlich oder zugewiesen war, liest weiter
+            self.db.execute("CREATE TABLE IF NOT EXISTS involved (case_id TEXT NOT NULL, "
+                            "uid TEXT NOT NULL, role TEXT NOT NULL, since TEXT NOT NULL, "
+                            "PRIMARY KEY (case_id, uid, role))")
             # 0.2.0 (RFC-0061 §5): Partner, Uebergaben in beide Richtungen,
             # und der Ausgang, aus dem bis zur Quittung wiederholt wird.
             self.db.executescript("""
@@ -430,12 +470,12 @@ class Store:
                         {"queue": queue})
         return {"id": cid, "number": number}
 
-    def _entry(self, cid, actor, actor_name, typ, text, data=None):
+    def _entry(self, cid, actor, actor_name, typ, text, data=None, internal=False):
         self.db.execute(
-            "INSERT INTO entries (case_id, at, actor, actor_name, type, text, data) "
-            "VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO entries (case_id, at, actor, actor_name, type, text, data, internal) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             (cid, _now(), actor, _clip(actor_name, 120), typ, text or "",
-             json.dumps(data or {}, ensure_ascii=False)))
+             json.dumps(data or {}, ensure_ascii=False), 1 if internal else 0))
         self.db.execute("UPDATE cases SET updated=? WHERE id=?", (_now(), cid))
 
     def get(self, number):
@@ -450,9 +490,12 @@ class Store:
                                             "ORDER BY seq", (c["id"],))]
             c["observers"] = [o["queue"] for o in self.db.execute(
                 "SELECT queue FROM observers WHERE case_id=? ORDER BY queue", (c["id"],))]
+            # 0.10.0 (D3): alle, die je verantwortlich oder zugewiesen waren
+            c["involved"] = sorted({r["uid"] for r in self.db.execute(
+                "SELECT uid FROM involved WHERE case_id=?", (c["id"],))})
         return c
 
-    def listing(self, *, queues=(), reporter=None, open_only=True):
+    def listing(self, *, queues=(), reporter=None, open_only=True, person=None):
         """Vorgaenge in diesen Bereichen ODER von dieser Person -- nur das,
         was der Aufrufer sehen darf, wird ueberhaupt gefragt."""
         conds, args = [], []
@@ -465,6 +508,10 @@ class Store:
         if reporter:
             conds.append("reporter=?")
             args.append(reporter)
+        if person:
+            # 0.10.0 (D3): jetzt verantwortlich oder zugewiesen
+            conds.append("responsible=? OR assignee=?")
+            args += [person, person]
         if not conds:
             return []
         sql = "SELECT * FROM cases WHERE (" + " OR ".join(conds) + ")"
@@ -552,14 +599,24 @@ class Store:
                     done.append(r["number"])
         return done
 
-    def comment(self, c, actor, actor_name, text):
+    def comment(self, c, actor, actor_name, text, internal=False):
+        """0.10.0: `internal` -- nur für die Bearbeitenden (wer darf, prüft der Aufrufer).
+        Antwortet die meldende Person auf eine Rückfrage, geht der Vorgang von selbst
+        zurück nach „in Arbeit“ (RFC-0103 §3)."""
         text = (text or "").strip()
         if not text:
             raise Refused("Ein leerer Kommentar wird nicht gespeichert.")
         if len(text) > BODY_MAX:
             raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
         with self.lock, self.db:
-            self._entry(c["id"], actor, actor_name, "comment", text)
+            self._entry(c["id"], actor, actor_name, "comment", text, internal=internal)
+            if (not internal and actor and actor == c["reporter"]
+                    and c["status"] == "waiting_reporter"
+                    and self.db.execute("UPDATE cases SET status='in_progress' WHERE id=? "
+                                        "AND status='waiting_reporter'", (c["id"],)).rowcount):
+                self._entry(c["id"], "system", "Automatisch", "status",
+                            "Die Meldende hat geantwortet.",
+                            {"from": "waiting_reporter", "to": "in_progress"})
 
     def set_status(self, c, actor, actor_name, new, text=""):
         if new not in NEXT.get(c["status"], ()):
@@ -578,6 +635,40 @@ class Store:
                 raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
             self._entry(c["id"], actor, actor_name, "status", text,
                         {"from": c["status"], "to": new})
+
+    # ------------------------- verantwortlich und zugewiesen (0.10.0, RFC-0103 D3)
+    ROLE_WORD = {"responsible": "verantwortlich", "assignee": "zugewiesen"}
+
+    def set_role(self, c, role, uid, actor, actor_name):
+        """Setzt `responsible` oder `assignee` (leer = niemand). Ob die Person das darf
+        und ob die neue Person passt (verantwortlich: ein Zuständiger des Bereichs),
+        prüft der Aufrufer -- dort stehen die Rechte. Hier: es gibt die Person, und
+        jeder Wechsel ist ein Eintrag im Verlauf; wer es war, liest weiter."""
+        if role not in self.ROLE_WORD:
+            raise Refused("Rolle: verantwortlich oder zugewiesen.")
+        uid = (uid or "").strip()
+        if c["status"] in ENDED:
+            raise Refused("Ein beendeter Vorgang bekommt niemanden mehr zugeteilt.")
+        if uid == c.get(role, ""):
+            raise Refused(f"Das ist schon so ({self.ROLE_WORD[role]}).")
+        with self.lock, self.db:
+            name = ""
+            if uid:
+                r = self.db.execute("SELECT name FROM people WHERE uid=?", (uid,)).fetchone()
+                if not r:
+                    raise Refused("Diese Person kennt die App noch nicht. Sie öffnet die App "
+                                  "Vorgänge einmal, danach steht sie in der Auswahl.")
+                name = r["name"]
+            if not self.db.execute(f"UPDATE cases SET {role}=? WHERE id=? AND {role}=?",
+                                   (uid, c["id"], c.get(role, ""))).rowcount:
+                raise Refused("Der Vorgang wurde inzwischen geändert. Bitte neu laden.")
+            if uid:
+                self.db.execute("INSERT OR IGNORE INTO involved VALUES (?,?,?,?)",
+                                (c["id"], uid, role, _now()))
+            # intern: wer bearbeitet, ist Sache der Bearbeitenden (die Meldende sieht auch die
+            # Zeile „Verantwortlich / Zugewiesen“ nicht)
+            self._entry(c["id"], actor, actor_name, "role", name,
+                        {"role": role, "from": c.get(role, ""), "to": uid}, internal=True)
 
     # ------------------------------------------ der Knoten (RFC-0069 Stufe 2)
     def open_by_object(self, kind, oid):
@@ -615,7 +706,8 @@ class Store:
         with self.lock, self.db:
             if not self.db.execute("SELECT 1 FROM queues WHERE id=?", (target,)).fetchone():
                 raise Refused("Diesen Bereich gibt es nicht.")
-            if not self.db.execute("UPDATE cases SET queue=? WHERE id=? AND queue=?",
+            # 0.10.0 (D3): verschieben leert „verantwortlich“ -- der neue Bereich entscheidet
+            if not self.db.execute("UPDATE cases SET queue=?, responsible='' WHERE id=? AND queue=?",
                                    (target, c["id"], c["queue"])).rowcount:
                 raise Refused("Der Vorgang wurde inzwischen verschoben. Bitte neu laden.")
             # RFC-0061 §2.3: der alte Bereich bleibt Beobachter
@@ -624,7 +716,8 @@ class Store:
             self.db.execute("DELETE FROM observers WHERE case_id=? AND queue=?",
                             (c["id"], target))
             self._entry(c["id"], actor, actor_name, "move", (text or "").strip(),
-                        {"from": c["queue"], "to": target})
+                        {"from": c["queue"], "to": target,
+                         **({"responsible_cleared": c["responsible"]} if c.get("responsible") else {})})
 
     def remove_person_data(self, months, now=None):
         """Q6: Personendaten eines Vorgangs, der seit `months` Monaten

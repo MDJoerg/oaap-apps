@@ -60,9 +60,12 @@ TOOLS = [
                    "description": "Kennung aus list_queues; weglassen, wenn die Person keinen nennt"}}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False}},
     {"name": "comment_case",
-     "description": "Einen Kommentar an einen Vorgang schreiben.",
+     "description": "Einen Kommentar an einen Vorgang schreiben. Bearbeitende schreiben ohne "
+                    "Angabe intern (die meldende Person sieht ihn nicht); internal=false für eine "
+                    "Nachricht an sie.",
      "inputSchema": {"type": "object", "required": ["number", "text"], "properties": {
-         "number": {"type": "string"}, "text": {"type": "string", "maxLength": 10000}}},
+         "number": {"type": "string"}, "text": {"type": "string", "maxLength": 10000},
+         "internal": {"type": "boolean", "description": "nur für Bearbeitende"}}},
      "annotations": {"readOnlyHint": False, "destructiveHint": False}},
 ]
 
@@ -71,8 +74,9 @@ class Rules:
     """Was die Seite weiß, gebündelt: Prüfungen, Bezeichnungen, Konstanten."""
 
     def __init__(self, can_see, can_comment, refused, kinds, kind_label, status_label,
-                 default_queue, open_statuses, attest):
+                 default_queue, open_statuses, attest, can_read_internal=lambda who, c: False):
         self.can_see, self.can_comment, self.refused = can_see, can_comment, refused
+        self.can_read_internal = can_read_internal
         self.kinds, self.kind_label, self.status_label = kinds, kind_label, status_label
         self.default_queue, self.open = default_queue, open_statuses
         self.attest = attest
@@ -108,6 +112,8 @@ def _tool(store, who, rules, name, args):
             rows += store.listing(queues=readable, open_only=open_only)
         if scope in ("all", "mine"):
             rows += store.listing(reporter=who.id, open_only=open_only)
+        if scope == "all":
+            rows += store.listing(person=who.id, open_only=open_only)
         seen, out = set(), []
         for c in rows:
             if c["number"] not in seen and rules.can_see(who, c):
@@ -123,13 +129,22 @@ def _tool(store, who, rules, name, args):
         if name == "comment_case":
             if not rules.can_comment(who, c):
                 raise rules.refused("Kommentieren dürfen hier nur die Meldende und der Bereich.")
-            store.comment(c, who.id, who.name, args.get("text"))
-            return {"number": c["number"], "commented": True}
+            handler = rules.can_read_internal(who, c)
+            internal = args.get("internal")
+            internal = handler if internal is None else bool(internal)
+            if internal and not handler:
+                raise rules.refused("Intern kommentieren können nur die Bearbeitenden.")
+            store.comment(c, who.id, who.name, args.get("text"), internal)
+            return {"number": c["number"], "commented": True, "internal": internal}
         out = _short(c, qt, rules)
         out["description"] = c["body"]
-        # Der ganze Verlauf, wie die Seite ihn jedem zeigt, der den Vorgang sieht.
-        out["history"] = [{"at": e["at"][:16].replace("T", " "), "by": e["actor_name"],
-                           "type": e["type"], "text": e["text"]} for e in c["entries"]]
+        # Der Verlauf, wie die Seite ihn dieser Person zeigt: interne Einträge nur für die
+        # Bearbeitenden (0.10.0, RFC-0103 D5, Köder 4)
+        internal = rules.can_read_internal(who, c)
+        out["history"] = [dict({"at": e["at"][:16].replace("T", " "), "by": e["actor_name"],
+                                "type": e["type"], "text": e["text"]},
+                               **({"internal": True} if e.get("internal") else {}))
+                          for e in c["entries"] if internal or not e.get("internal")]
         return out
     if name == "create_case":
         kind = args.get("kind") or "question"

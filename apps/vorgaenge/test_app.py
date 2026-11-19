@@ -523,6 +523,110 @@ ok("0.9.0: Einstellung VORGAENGE_ACCEPT_DAYS: Unsinn -> 14, 7 -> 7",
 del os.environ["OAAP_INSTANCE_NAMES"]
 ok("0.9.0: ohne öffentlichen Namen kein Link", app.case_url(n12) == "", app.case_url(n12))
 
+# --- 0.10.0 (RFC-0103 Stufe 3): verantwortlich, zugewiesen, Unterstatus, interne Kommentare
+MIA, OTTO = user("u-mia", name="Mia"), user("u-otto", name="Otto")
+for h in (MIA, OTTO):
+    call("GET", "/", h)                     # wer die App öffnet, steht in der Auswahl
+call("POST", "/bereiche", {**TA, **ORIGIN}, "id=s3&title=Stufe+drei")
+call("POST", "/bereiche/mitglied", {**TA, **ORIGIN}, "queue=s3&uid=u-mia&op=set&kind=handler")
+st, b, _ = report(kind="question", title="Stufe drei")
+n20 = json.loads(b)["number"]
+call("POST", f"/v/{n20}/move", {**TA, **ORIGIN}, "queue=s3")
+c20 = lambda: app.STORE.get(n20)  # noqa: E731
+
+
+def post(h, action, form):
+    return call("POST", f"/v/{n20}/{action}", {**h, **ORIGIN}, form)
+
+
+st, b, _ = post(MIA, "rolle", "role=responsible&uid=u-mia")
+ok("0.10.0: Mia (Zuständige von s3) übernimmt die Verantwortung, mit Eintrag im Verlauf",
+   st == 303 and c20()["responsible"] == "u-mia" and c20()["entries"][-1]["type"] == "role", (st, b[-300:]))
+st, b, _ = post(TA, "rolle", "role=responsible&uid=u-otto")
+ok("0.10.0: verantwortlich wird nur ein Zuständiger des Bereichs (Otto nicht)",
+   st == 400 and "Zuständiger" in b and c20()["responsible"] == "u-mia", (st, b[-300:]))
+st, b, _ = post(MIA, "rolle", "role=assignee&uid=u-otto")
+ok("0.10.0: Mia weist Otto zu (irgendwer im Mandanten)", st == 303 and c20()["assignee"] == "u-otto", (st, b[-300:]))
+st, pg, _ = call("GET", "/", OTTO)
+ok("0.10.0: Ottos Übersicht: „Mir zugewiesen“ mit dem Vorgang", "Mir zugewiesen" in pg and n20 in pg, pg[-800:])
+st, pg, _ = call("GET", f"/v/{n20}", OTTO)
+ok("0.10.0: Otto (außerhalb des Bereichs) sieht den Vorgang, Verantwortlich Mia, Zugewiesen Otto",
+   st == 200 and "Verantwortlich: <b>Mia</b>" in pg and "Zugewiesen: <b>Otto</b>" in pg, (st, pg[-600:]))
+ok("0.10.0: ... und bekommt weder Verschieben noch Rollen noch „geschlossen“ angeboten",
+   "/move'" not in pg and "/rolle'" not in pg and "value=closed" not in pg and "value=rejected" not in pg, None)
+st, b, _ = post(OTTO, "status", "status=waiting_test&text=")
+ok("0.10.0: Otto ändert den Status (wartet auf Test)", st == 303 and c20()["status"] == "waiting_test", (st, b[-300:]))
+st1, _, _ = post(OTTO, "move", "queue=jira")
+st2, _, _ = post(OTTO, "rolle", "role=assignee&uid=u-anna")
+st3, _, _ = post(OTTO, "status", "status=rejected&text=nein")
+st4, _, _ = call("GET", f"/v/{n20}/uebergabe?partner=x", OTTO)
+post(OTTO, "status", "status=answered&text=So.")
+st5, _, _ = post(OTTO, "status", "status=closed&text=")
+ok("0.10.0: KÖDER 3: Otto verschiebt nicht, weist nicht weiter zu, lehnt nicht ab, übergibt nicht, schließt nicht",
+   (st1, st2, st3, st4, st5) == (400, 400, 400, 403, 400) and c20()["queue"] == "s3"
+   and c20()["assignee"] == "u-otto" and c20()["status"] == "answered", (st1, st2, st3, st4, st5, c20()["status"]))
+post(MIA, "status", "status=in_progress&text=")
+# interne Kommentare (D5, Köder 4)
+st, pg, _ = call("GET", f"/v/{n20}", MIA)
+ok("0.10.0: für Bearbeitende ist „intern“ vorbelegt", "name=internal value=1 checked" in pg, None)
+st, b, _ = post(MIA, "comment", "text=Intern%3A+Kunde+ist+schwierig&internal=1")
+st, pg, _ = call("GET", f"/v/{n20}", user("u-anna"))
+ok("0.10.0: KÖDER 4: die Meldende sieht den internen Kommentar nicht, und kein Häkchen „intern“",
+   st == 200 and "schwierig" not in pg and "name=internal" not in pg, pg[-600:])
+ok("0.10.0: ... und weder, wer verantwortlich oder zugewiesen ist, noch die Wechsel dazu",
+   "Verantwortlich:" not in pg and "zugewiesen: " not in pg and "verantwortlich: " not in pg, pg[-900:])
+st, pg, _ = call("GET", f"/v/{n20}", OTTO)
+ok("0.10.0: die Zugewiesene liest ihn, als intern bezeichnet", "schwierig" in pg and ">intern</span>" in pg, None)
+st, b, _ = post(user("u-anna"), "comment", "text=x&internal=1")
+ok("0.10.0: die Meldende kommentiert nicht intern", st == 400, st)
+st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **user("u-anna")})
+ok("0.10.0: /mine trägt keinen Verlauf (nichts Internes)", "schwierig" not in b, b[:300])
+# Rückfrage (D4)
+st, b, _ = post(MIA, "status", "status=waiting_reporter&text=Welche+Version%3F")
+st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **user("u-anna")})
+row = json.loads(b)["cases"][n20]
+ok("0.10.0: Rückfrage: /mine sagt waiting_reporter, „Rückfrage an dich“",
+   row["status"] == "waiting_reporter" and row["label"] == "Rückfrage an dich", row)
+st, pg, _ = call("GET", f"/v/{n20}", user("u-anna"))
+ok("0.10.0: ... die Seite sagt es ihr auch, mit dem Weg (Kommentar)",
+   "Rückfrage an dich" in pg and "antworte unten mit einem Kommentar" in pg, pg[-900:])
+post(user("u-anna"), "comment", "text=Version+3")
+ok("0.10.0: antwortet die Meldende, geht der Vorgang von selbst nach „in Arbeit“",
+   c20()["status"] == "in_progress" and c20()["entries"][-1]["actor_name"] == "Automatisch", c20()["status"])
+post(MIA, "comment", "text=noch+intern&internal=1")
+post(MIA, "status", "status=waiting_reporter&text=Und+die+Uhrzeit%3F")
+post(MIA, "comment", "text=nur+intern&internal=1")
+ok("0.10.0: ein interner Kommentar der Bearbeitenden beendet die Rückfrage nicht",
+   c20()["status"] == "waiting_reporter", c20()["status"])
+ok("0.10.0: Unterstatus haben dieselben Wege wie „in Arbeit“",
+   store.NEXT["new"][:6] == ("triage", "in_progress", "clarify_internal", "clarify_external", "waiting_test",
+                             "waiting_reporter") and "answered" in store.NEXT["clarify_external"]
+   and store.NEXT["in_progress"][:4] == store.SUBSTATUS
+   and all(x in store.OPEN for x in store.SUBSTATUS), store.NEXT["new"])
+# verschieben leert „verantwortlich“, die Zuweisung bleibt
+post(TA, "move", "queue=jira")
+ok("0.10.0: verschieben leert „verantwortlich“, „zugewiesen“ bleibt",
+   c20()["responsible"] == "" and c20()["assignee"] == "u-otto"
+   and c20()["entries"][-1]["data"].get("responsible_cleared") == "u-mia", (c20()["responsible"], c20()["assignee"]))
+# frühere Beteiligte lesen, ändern nicht (Köder 8)
+post(TA, "rolle", "role=assignee&uid=")
+st, pg, _ = call("GET", f"/v/{n20}", OTTO)
+ok("0.10.0: der frühere Zugewiesene liest weiter, interne Kommentare eingeschlossen, steht unter „Beteiligt“",
+   st == 200 and "schwierig" in pg and "Beteiligt: " in pg and "/status'" not in pg, (st, pg[-700:]))
+st1, _, _ = post(OTTO, "status", "status=answered&text=x")
+st2, _, _ = post(OTTO, "comment", "text=noch+was")
+ok("0.10.0: KÖDER 8: ein früherer Zugewiesener ändert den Status nicht und kommentiert nicht",
+   st1 == 400 and st2 == 400 and c20()["status"] == "waiting_reporter", (st1, st2))
+st, pg, _ = call("GET", f"/v/{n20}", MIA)
+ok("0.10.0: Mia (Bereich s3, jetzt Beobachterin, früher verantwortlich) liest weiter", st == 200, st)
+app.STORE.set_status(app.STORE.get(n20), "u-x", "X", "rejected", "Nein.")
+try:
+    app.STORE.set_role(app.STORE.get(n20), "assignee", "u-otto", "u-ta", "TA")
+    ended_ok = False
+except store.Refused:
+    ended_ok = True
+ok("0.10.0: ein beendeter Vorgang bekommt niemanden mehr zugeteilt", ended_ok, None)
+
 srv.shutdown()
 print("")
 print("ALLE PASS" if not fails else f"{fails} FAIL")

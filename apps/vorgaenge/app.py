@@ -52,10 +52,10 @@ import urllib.request
 import authz_client
 import mcp_door
 from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, Refused, Store,
-                   canonical)
+                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
+                   Store, canonical)
 
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -228,30 +228,70 @@ class Who:
         return [q["id"] for q in queues if self.may("read", q["id"])]
 
 
+def is_assignee(who, c):
+    """0.10.0 (RFC-0103 D3): jetzt zugewiesen -- liest, kommentiert, ändert den Status;
+    verschiebt, schließt, übergibt nicht und weist nicht weiter zu."""
+    return bool(who.id) and c.get("assignee") == who.id
+
+
+def was_involved(who, c):
+    """Je verantwortlich oder zugewiesen (auch jetzt): liest weiter, interne Kommentare
+    eingeschlossen -- ändern nur, solange die Rolle besteht."""
+    return bool(who.id) and who.id in (c.get("involved") or ())
+
+
+def handles(who, c):
+    """Die Bearbeitenden: Bereich, Beobachter, je Beteiligte (RFC-0103 §4, die Leser
+    interner Kommentare). Die meldende Person gehört nicht dazu -- es sei denn, sie ist
+    selbst eine von ihnen."""
+    return (who.may("read", c["queue"]) or any(who.may("read", o) for o in c.get("observers") or ())
+            or was_involved(who, c))
+
+
 def can_see(who, c):
-    return (c["reporter"] == who.id or who.may("read", c["queue"])
-            or any(who.may("read", o) for o in c.get("observers") or ()))
+    return c["reporter"] == who.id or handles(who, c)
+
+
+def can_read_internal(who, c):
+    """D5: interne Einträge -- nie für die meldende Person als solche."""
+    return handles(who, c)
 
 
 def can_comment(who, c):
     return (c["reporter"] == who.id or who.may("comment", c["queue"])
-            or any(who.may("read", o) for o in c.get("observers") or ()))
+            or any(who.may("read", o) for o in c.get("observers") or ())
+            or is_assignee(who, c))
+
+
+def can_set_roles(who, c):
+    """Verantwortlich und zugewiesen setzen: Zuständige des Bereichs und der
+    tenant_admin -- nicht die zugewiesene Person (keine Ketten, Köder 3)."""
+    return who.may("triage", c["queue"])
+
+
+def visible_entries(who, c):
+    internal = can_read_internal(who, c)
+    return [e for e in c["entries"] if internal or not e.get("internal")]
 
 
 def next_statuses(who, c):
     """Was diese Person aus dem jetzigen Status heraus anbieten darf."""
     out = []
+    assigned = is_assignee(who, c)
     for s in NEXT.get(c["status"], ()):
         if s in MANUAL_EXCLUDED:
             continue
         if s == "closed":
             # 0.9.0 (D10): die meldende Person schließt mit „Lösung passt“, nicht hier --
-            # sonst fehlte die Markierung accepted
+            # sonst fehlte die Markierung accepted. 0.10.0: die Zugewiesene auch nicht.
             ok = who.may("close", c["queue"])
         elif s == "reopened":
-            ok = who.may("triage", c["queue"]) or c["reporter"] == who.id
-        else:
+            ok = who.may("triage", c["queue"]) or c["reporter"] == who.id or assigned
+        elif s == "rejected":
+            # 0.10.0: Ablehnen beendet den Vorgang wie Schließen -- nicht für Zugewiesene
             ok = who.may("triage", c["queue"])
+        else:
+            ok = who.may("triage", c["queue"]) or assigned
         if ok:
             out.append(s)
     return out
@@ -396,8 +436,8 @@ addEventListener("DOMContentLoaded", function () {
 </script></body></html>""")
 
 
-def pill(status, mark=""):
-    word = STATUS_LABEL.get(status, status)
+def pill(status, mark="", reporter=False):
+    word = "Rückfrage an dich" if reporter and status == "waiting_reporter" else STATUS_LABEL.get(status, status)
     if status == "closed" and mark in MARK_LABEL:
         word += f" ({MARK_LABEL[mark]})"
     return f'<span class=pill>{esc(word)}</span>'
@@ -418,7 +458,8 @@ def case_url(number):
 def mine_row(r):
     """Was /platform/feedback/mine je eigenem Vorgang sagt -- nur Eigenes, nichts Internes."""
     st, mark = r["status"], r.get("mark") or ""
-    return {"status": st, "label": STATUS_LABEL.get(st, st), "mark": mark if st == "closed" else "",
+    label = "Rückfrage an dich" if st == "waiting_reporter" else STATUS_LABEL.get(st, st)
+    return {"status": st, "label": label, "mark": mark if st == "closed" else "",
             "mark_label": MARK_LABEL.get(mark, "") if st == "closed" else "",
             "answered": st in ("answered", "closed"), "title": r.get("title", ""),
             "updated": r.get("updated", ""), "url": case_url(r["number"]),
@@ -933,7 +974,8 @@ den Schlüssel, und tragen Sie den Namen des Zugangs hier als <i>eingehenden Zug
         comments = [e for e in c["entries"] if e["type"] == "comment" and e["text"]]
         boxes = "".join(
             f"<label><input type=checkbox name=entry value={e['seq']}"
-            f"{' checked' if str(e['seq']) in picked else ''}> {esc(e['at'][:16].replace('T', ' '))}: "
+            f"{' checked' if str(e['seq']) in picked else ''}> {'(intern) ' if e.get('internal') else ''}"
+            f"{esc(e['at'][:16].replace('T', ' '))}: "
             f"{esc(e['text'][:120])}</label>" for e in comments) or "<p class=muted>keine</p>"
         return f"""
 <p>Was hier steht, verlässt den Mandanten. Die meldende Person, Benutzer-IDs und alle Einträge,
@@ -988,8 +1030,12 @@ Betreff und Text.</p>
         readable = who.readable(queues)
         mine = self.store.listing(reporter=who.id, open_only=not all_)
         work = self.store.listing(queues=readable, open_only=not all_) if readable else []
+        # 0.10.0 (D3): was mir zugewiesen ist oder wofür ich verantwortlich bin
+        mine_now = self.store.listing(person=who.id, open_only=not all_)
         toggle = ("<a href='/'>nur offene</a>" if all_ else "<a href='/?alle=1'>auch erledigte zeigen</a>")
         body = f"<p class=muted>{toggle}</p>"
+        if mine_now:
+            body += "<h2>Mir zugewiesen oder von mir verantwortet</h2>" + case_table(mine_now, queues)
         if readable:
             names = ", ".join(q["title"] for q in queues if q["id"] in readable)
             body += f"<h2>In meinen Bereichen</h2><p class=muted>{esc(names)}</p>" + case_table(work, queues)
@@ -1129,7 +1175,8 @@ Betreff und Text.</p>
                         f"(Unterart <code>{esc(tech['subkind'])}</code>, von der Seite mitgegeben, "
                         f"nicht beglaubigt)</summary><table>{rows}</table></details>")
         ent = []
-        for e in c["entries"]:
+        names = {p["uid"]: p["name"] for p in self.store.people()}
+        for e in visible_entries(who, c):
             when = esc(e["at"][:16].replace("T", " "))
             who_ = esc(e["actor_name"])
             d = e["data"]
@@ -1153,10 +1200,19 @@ Betreff und Text.</p>
                 head = "Antwort des Partners"
             elif e["type"] == "answer_sent":
                 head = "Antwort an den Partner gesendet"
+            elif e["type"] == "role":
+                word = self.store.ROLE_WORD.get(d.get("role"), d.get("role", ""))
+                head = (f"{word}: {esc(names.get(d.get('to'), d.get('to')))}" if d.get("to")
+                        else f"{word}: niemand mehr")
+                ent.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div></div>")
+                continue
             else:
                 head = "Kommentar"
+            if e.get("internal"):
+                head += " <span class=pill style='border-color:#b45309;color:#b45309'>intern</span>"
             text = f"<div class=body data-md>{esc(e['text'])}</div>" if e["text"] else ""
-            ent.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div>{text}</div>")
+            ent.append(f"<div class=card{' style=background:#fff7ed' if e.get('internal') else ''}>"
+                       f"<div class=muted>{when} · {who_} · {head}</div>{text}</div>")
         forms = ""
         base = f"/v/{quote(c['number'])}"
         if c["reporter"] == who.id and c["status"] == "answered":
@@ -1171,9 +1227,16 @@ Betreff und Text.</p>
                       f"<p class=muted>Ohne Rückmeldung schließt sich der Vorgang nach "
                       f"{ACCEPT_DAYS_NOW[0]} Tagen von selbst.</p></div>")
         if can_comment(who, c):
+            # 0.10.0 (D5): für Bearbeitende ist „intern“ vorbelegt -- ein interner Kommentar,
+            # der bei der Meldenden landet, wiegt schwerer als der umgekehrte Fehler
+            tick = ("<label style='display:inline;color:inherit'><input type=checkbox name=internal "
+                    "value=1 checked> intern (die meldende Person sieht ihn nicht)</label> "
+                    if can_read_internal(who, c) else "")
             forms += (f"<h2>Kommentar</h2><form method=post action='{base}/comment'>"
                       f"<textarea name=text maxlength=10000 required></textarea>"
-                      f"<p><button>Kommentieren</button></p></form>")
+                      f"<p>{tick}<button>Kommentieren</button></p></form>")
+        if can_set_roles(who, c) and c["status"] not in ("closed", "rejected"):
+            forms += self._roles_form(c, base)
         nxt = next_statuses(who, c)
         if nxt:
             opts = "".join(f"<option value={s}>{esc(STATUS_LABEL[s])}</option>" for s in nxt)
@@ -1213,6 +1276,13 @@ Betreff und Text.</p>
                       + f"<div class=muted><code>{esc(o['handover_id'][:8])}</code> · {state}</div>")
         observers = (f"<div class=muted>Beobachtet von: {esc(', '.join(qt.get(o, o) for o in c['observers']))}</div>"
                      if c["observers"] else "")
+        # 0.10.0 (D3): verantwortlich, zugewiesen, beteiligt -- nur für die Bearbeitenden
+        if handles(who, c):
+            rs, asg = c.get("responsible"), c.get("assignee")
+            former = [names.get(u, u) for u in c.get("involved") or () if u not in (rs, asg)]
+            observers += (f"<div class=muted>Verantwortlich: <b>{esc(names.get(rs, rs)) if rs else '–'}</b>"
+                          f" · Zugewiesen: <b>{esc(names.get(asg, asg)) if asg else '–'}</b>"
+                          + (f" · Beteiligt: {esc(', '.join(former))}" if former else "") + "</div>")
         # 0.7.0: Wer hier nichts umstellen kann, erfährt warum -- statt eines fehlenden Formulars.
         rights = ""
         if not nxt and c["status"] not in ("closed", "rejected") and not (
@@ -1225,17 +1295,49 @@ Betreff und Text.</p>
                    "<i>Bearbeiter/in</i> und <i>Clearing</i>.")
             mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, sagen, "
                     "ob die Lösung passt." if c["reporter"] == who.id else "")
+            if c["reporter"] == who.id and c["status"] == "waiting_reporter":
+                mine = (" <b>Rückfrage an dich:</b> antworte unten mit einem Kommentar, dann geht der "
+                        "Vorgang von selbst zurück „in Arbeit“.")
+            if was_involved(who, c) and not is_assignee(who, c):
+                mine += (" Du warst an diesem Vorgang beteiligt und liest ihn weiter; ändern kann, "
+                         "wer ihn jetzt bearbeitet.")
             rights = f"<div class=rights>Den Status kannst du hier nicht ändern. {how}{mine}</div>"
         toggle = ('<div style="float:right" class=seg role=group aria-label="Darstellung">'
                   '<button type=button data-md-mode=formatted aria-pressed=true>Formatiert</button>'
                   '<button type=button data-md-mode=raw aria-pressed=false>Roh</button></div>')
         body = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
-                f"{pill(c['status'], c.get('mark', ''))} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
+                f"{pill(c['status'], c.get('mark', ''), c['reporter'] == who.id)} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
                 f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
                 f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div>"
                 f"{techbox}</div>"
                 + "<h2>Verlauf</h2>" + "".join(ent) + rights + forms)
         return self.send(200, page(f"{c['number']}: {c['title']}", body))
+
+    def _roles_form(self, c, base):
+        """0.10.0 (D3): verantwortlich = ein Zuständiger des Bereichs (aus der Liste auf
+        „Bereiche“), zugewiesen = jede Person, die die App kennt."""
+        people = self.store.people()
+        members = {m["uid"] for m in self.store.members(c["queue"])}
+
+        def opts(pool, cur):
+            o = "<option value=''>– niemand –</option>"
+            return o + "".join(f"<option value='{esc(p['uid'])}'{' selected' if p['uid'] == cur else ''}>"
+                               f"{esc(p['name'])}</option>" for p in pool)
+        resp_pool = [p for p in people if p["uid"] in members or p["uid"] == c.get("responsible")]
+        return (f"<h2>Zuständig für diesen Vorgang</h2>"
+                f"<form method=post action='{base}/rolle' class=inline><input type=hidden name=role value=responsible>"
+                f"<div><label>Verantwortlich (aus dem Bereich)</label><select name=uid>"
+                f"{opts(resp_pool, c.get('responsible'))}</select></div><button>Setzen</button></form>"
+                f"<form method=post action='{base}/rolle' class=inline><input type=hidden name=role value=assignee>"
+                f"<div><label>Zugewiesen (liest, kommentiert, ändert den Status)</label><select name=uid>"
+                f"{opts(people, c.get('assignee'))}</select></div><button>Zuweisen</button></form>"
+                f"<p class=muted>Verschieben leert „verantwortlich“. Wer einmal verantwortlich oder "
+                f"zugewiesen war, liest den Vorgang weiter.</p>")
+
+    def target_who(self, uid):
+        """Die Rechte einer ANDEREN Person (für „verantwortlich“): ihre Zuständigkeiten
+        und Grants, ohne Plattformrollen -- die kennt die App nur von der fragenden."""
+        return Who(uid, uid, set(), self.authz.grants(uid), self.store.memberships(uid))
 
     def case_post(self, who, number, action, f):
         c = self.store.get(number)
@@ -1244,7 +1346,19 @@ Betreff und Text.</p>
         if action == "comment":
             if not can_comment(who, c):
                 raise Refused("Kommentieren dürfen hier nur die Meldende und der Bereich.")
-            self.store.comment(c, who.id, who.name, f.get("text"))
+            internal = f.get("internal") == "1"
+            if internal and not can_read_internal(who, c):
+                raise Refused("Intern kommentieren können nur die Bearbeitenden.")
+            self.store.comment(c, who.id, who.name, f.get("text"), internal)
+        elif action == "rolle":
+            if not can_set_roles(who, c):
+                raise Refused("Verantwortlich und zugewiesen setzen die Zuständigen des Bereichs "
+                              "und der tenant_admin.")
+            role, uid = f.get("role", ""), (f.get("uid") or "").strip()
+            if role == "responsible" and uid and not self.target_who(uid).may("triage", c["queue"]):
+                raise Refused("Verantwortlich ist ein Zuständiger dieses Bereichs (Seite „Bereiche“). "
+                              "Für jemand anderen: zuweisen.")
+            self.store.set_role(c, role, uid, who.id, who.name)
         elif action == "status":
             new = f.get("status", "")
             if new not in next_statuses(who, c):
@@ -1269,7 +1383,8 @@ Betreff und Text.</p>
 
 
 MCP_RULES = mcp_door.Rules(
-    can_see=can_see, can_comment=can_comment, refused=Refused, kinds=KINDS,
+    can_see=can_see, can_comment=can_comment, can_read_internal=can_read_internal,
+    refused=Refused, kinds=KINDS,
     kind_label=KIND_LABEL, status_label=STATUS_LABEL, default_queue=DEFAULT_QUEUE,
     open_statuses=OPEN,
     attest=lambda who: {"app": APP_ID, "version": VERSION, "user_id": who.id, "via": "mcp"})

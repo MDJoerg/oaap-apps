@@ -148,7 +148,17 @@ GRANTS["carl"] = [{"object": "case", "activities": ["read", "comment"], "fields"
 err, lst = tool("carl", "list_cases", {"scope": "queues"})
 ok("carl (read im Eingang) sieht annas Vorgang über seinen Bereich",
    not err and num in [x["number"] for x in lst["cases"]], lst)
-err, r = tool("carl", "comment_case", {"number": num, "text": "Toner ist bestellt."})
+err, r = tool("carl", "comment_case", {"number": num, "text": "Intern: Lieferant anrufen."})
+ok("0.10.0: carl (Bearbeiter) kommentiert ohne Angabe intern", not err and r.get("internal") is True, r)
+err, g = tool("anna", "get_case", {"number": num})
+ok("0.10.0: KÖDER 4: annas get_case listet keinen internen Eintrag",
+   not err and not any("Lieferant" in h["text"] or h.get("internal") for h in g["history"]), g)
+err, g = tool("carl", "get_case", {"number": num})
+ok("0.10.0: carl sieht ihn, als intern bezeichnet",
+   not err and any(h["text"] == "Intern: Lieferant anrufen." and h.get("internal") for h in g["history"]), g)
+err, r = tool("anna", "comment_case", {"number": num, "text": "x", "internal": True})
+ok("0.10.0: die Meldende kommentiert nicht intern", err, r)
+err, r = tool("carl", "comment_case", {"number": num, "text": "Toner ist bestellt.", "internal": False})
 ok("carl kommentiert", not err and r.get("commented"), r)
 err, g = tool("anna", "get_case", {"number": num})
 ok("anna sieht carls Kommentar im Verlauf", any(h["text"] == "Toner ist bestellt." and h["by"] == "Carl"
