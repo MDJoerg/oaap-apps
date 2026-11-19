@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import re
 import urllib.error
@@ -55,7 +55,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -368,6 +368,25 @@ STYLE = """<link rel="stylesheet" href="/platform/theme.css">
   form.inline{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;margin:.5rem 0}
   form.inline > *{flex:0 0 auto}
   label{display:block;font-size:.85rem;color:var(--oaap-color-text-muted, #5b616b);margin:.5rem 0 .2rem}
+  /* 0.11.0 (RFC-0103 D6): Statusfarben wie die Punkte im Chat */
+  .pill.s-red{border-color:#dc2626;color:#b91c1c;background:#fef2f2}
+  .pill.s-green{border-color:#16a34a;color:#15803d;background:#f0fdf4}
+  .pill.s-yellow{border-color:#ca8a04;color:#854d0e;background:#fefce8}
+  .pill.s-grey{border-color:#9ca3af;color:#4b5563;background:#f3f4f6}
+  /* Listenbericht: Filter in der Adresse, Sortieren über die Spaltenköpfe */
+  form.filter{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin:0 0 .8rem}
+  form.filter label{margin:0 0 .2rem}
+  th a{color:inherit;text-decoration:none} th a:hover{text-decoration:underline}
+  .quick a{margin-right:.8rem}
+  /* Reiter des Vorgangs: Anker und CSS, ohne Skript; die Adresse behält den Reiter.
+     Der Überblick steht im Dokument zuletzt und wird mit `order` nach vorn gestellt,
+     damit `:target ~ #ueberblick` ihn ausblenden kann. */
+  nav.ctabs{display:flex;flex-wrap:wrap;gap:.2rem;border-bottom:1px solid var(--oaap-color-border, #d8dbe0);margin:.8rem 0 0}
+  nav.ctabs a{padding:.45rem .9rem;text-decoration:none;color:var(--oaap-color-text, #1a1d21);font-size:.9rem;
+       border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;margin-bottom:-1px}
+  .panels{display:flex;flex-direction:column}
+  .tp{display:none;scroll-margin-top:5rem} .tp:target{display:block}
+  #ueberblick{display:block;order:-1} .tp:target ~ #ueberblick{display:none}
 </style>"""
 
 
@@ -436,11 +455,19 @@ addEventListener("DOMContentLoaded", function () {
 </script></body></html>""")
 
 
+def status_color(status):
+    """0.11.0 (RFC-0103 D6): dieselben Farben wie die Punkte im Chat (§6.2) -- rot: die
+    Meldende ist dran, grün: beantwortet, grau: erledigt, gelb: offen."""
+    if status in ("waiting_reporter", "rejected"):
+        return "red"
+    return {"answered": "green", "closed": "grey"}.get(status, "yellow")
+
+
 def pill(status, mark="", reporter=False):
     word = "Rückfrage an dich" if reporter and status == "waiting_reporter" else STATUS_LABEL.get(status, status)
     if status == "closed" and mark in MARK_LABEL:
         word += f" ({MARK_LABEL[mark]})"
-    return f'<span class=pill>{esc(word)}</span>'
+    return f'<span class="pill s-{status_color(status)}">{esc(word)}</span>'
 
 
 def case_url(number):
@@ -610,7 +637,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, page("Nicht angemeldet", "<p>Bitte über die Plattform anmelden.</p>"))
         q = parse_qs(u.query)
         if p == "/":
-            return self.home(who, (q.get("alle") or [""])[0] == "1")
+            return self.home(who, q)
         if p == "/neu":
             return self.new_form(who)
         if p == "/bereiche":
@@ -717,8 +744,14 @@ class Handler(BaseHTTPRequestHandler):
             rows = list(self.store.status_of(nums, uid).values())
         else:
             rows = self.store.mine(uid)
+        # 0.11.0 (RFC-0103 D9): der Chat listet nur die eigenen Meldungen; was der Person
+        # zugeordnet ist, ist eine Zahl mit einem Link hierher -- bearbeitet wird in den Vorgängen
+        assigned = sum(1 for r in self.store.listing(person=uid) if r["status"] in OPEN)
+        base = case_url("x")[:-len("/v/x")] if case_url("x") else ""
         return self.json(200, {"cases": {r["number"]: mine_row(r) for r in rows},
-                               "accept_days": ACCEPT_DAYS_NOW[0]})
+                               "accept_days": ACCEPT_DAYS_NOW[0], "assigned": assigned,
+                               "assigned_url": f"{base}/?view=assigned" if base else "",
+                               "overview_url": f"{base}/?view=mine" if base else ""})
 
     def feedback_mine_post(self, rest):
         """0.9.0 (RFC-0103 D10, Köder 6): „Lösung passt“ / „Passt nicht“ aus der Seite einer
@@ -1025,21 +1058,116 @@ Betreff und Text.</p>
         return self.send(200, page(f"Vorschau der Übergabe {c['number']}", body))
 
     # --- Seiten
-    def home(self, who, all_):
+    LIST_SORT = ("number", "title", "status", "queue", "responsible", "assignee", "updated")
+    LIST_HEAD = (("number", "Nr."), ("title", "Betreff"), ("status", "Status"), ("queue", "Bereich"),
+                 ("responsible", "Verantwortlich"), ("assignee", "Zugewiesen"), ("updated", "Geändert"))
+
+    def home(self, who, q):
+        """0.11.0 (RFC-0103 D6): die Übersicht als Listenbericht. Alles, was die Person sehen
+        darf, in einer Tabelle; Filter und Sortierung stehen in der Adresse
+        (`?queue=jira&status=open&sort=-updated`), damit eine Ansicht ein Lesezeichen sein
+        kann und die Seite kein Skript braucht."""
+        arg = lambda k, d="": (q.get(k) or [d])[0].strip()  # noqa: E731
         queues = self.store.queues()
+        qt = {x["id"]: x["title"] for x in queues}
         readable = who.readable(queues)
-        mine = self.store.listing(reporter=who.id, open_only=not all_)
-        work = self.store.listing(queues=readable, open_only=not all_) if readable else []
-        # 0.10.0 (D3): was mir zugewiesen ist oder wofür ich verantwortlich bin
-        mine_now = self.store.listing(person=who.id, open_only=not all_)
-        toggle = ("<a href='/'>nur offene</a>" if all_ else "<a href='/?alle=1'>auch erledigte zeigen</a>")
-        body = f"<p class=muted>{toggle}</p>"
-        if mine_now:
-            body += "<h2>Mir zugewiesen oder von mir verantwortet</h2>" + case_table(mine_now, queues)
-        if readable:
-            names = ", ".join(q["title"] for q in queues if q["id"] in readable)
-            body += f"<h2>In meinen Bereichen</h2><p class=muted>{esc(names)}</p>" + case_table(work, queues)
-        body += "<h2>Von mir gemeldet</h2>" + case_table(mine, queues)
+        view = arg("view")
+        view = view if view in ("mine", "assigned") else ""
+        status = arg("status", "all" if arg("alle") == "1" else "open")
+        status = status if status in ("open", "all") or status in STATUS_LABEL else "open"
+        queue = arg("queue")
+        sort = arg("sort", "-updated")
+        key = sort.lstrip("-")
+        if key not in self.LIST_SORT:
+            sort, key = "-updated", "updated"
+        # wer die Namen in „verantwortlich / zugewiesen“ lesen darf: die Bearbeitenden
+        # (RFC-0103 §4); auf einer nur eigenen Meldung bleiben die Spalten leer
+        rows, handled = {}, set()
+        for part, h in ((self.store.listing(queues=readable, open_only=False) if readable else [], True),
+                        (self.store.listing(person=who.id, open_only=False), True),
+                        (self.store.listing(involved=who.id, open_only=False), True),
+                        (self.store.listing(reporter=who.id, open_only=False), False)):
+            for r in part:
+                rows.setdefault(r["id"], r)
+                if h:
+                    handled.add(r["id"])
+        names = {p["uid"]: p["name"] for p in self.store.people()}
+        seen_queues = sorted({r["queue"] for r in rows.values()} | set(readable),
+                             key=lambda x: qt.get(x, x).lower())
+
+        def cell(r, k):
+            if k in ("responsible", "assignee"):
+                return names.get(r[k], r[k]) if r[k] and r["id"] in handled else ""
+            if k == "queue":
+                return qt.get(r["queue"], r["queue"])
+            if k == "status":
+                return STATUS_LABEL.get(r["status"], r["status"])
+            return r.get(k) or ""
+
+        out = list(rows.values())
+        if view == "mine":
+            out = [r for r in out if who.id in (r["reporter"], r["responsible"], r["assignee"])]
+        elif view == "assigned":
+            out = [r for r in out if who.id in (r["responsible"], r["assignee"])]
+        if queue:
+            out = [r for r in out if r["queue"] == queue]
+        if status == "open":
+            out = [r for r in out if r["status"] in OPEN]
+        elif status != "all":
+            out = [r for r in out if r["status"] == status]
+        # sortiert wird nach dem, was in der Zelle steht -- eine leere Spalte verrät
+        # über die Reihenfolge nichts
+        out.sort(key=lambda r: (str(cell(r, key)).lower(), r["number"]), reverse=sort.startswith("-"))
+
+        def link(**kw):
+            p = {"view": view, "queue": queue, "status": status, "sort": sort}
+            p.update(kw)
+            return "/?" + urlencode({k: v for k, v in p.items() if v and not (k == "status" and v == "open")
+                                     and not (k == "sort" and v == "-updated")})
+
+        def sel(name, cur, opts):
+            return (f"<select name={name}>" + "".join(
+                f"<option value='{esc(v)}'{' selected' if v == cur else ''}>{esc(t)}</option>"
+                for v, t in opts) + "</select>")
+        form = ("<form method=get action='/' class=filter>"
+                "<div><label>Ansicht</label>" + sel("view", view, (
+                    ("", "alles, was ich sehe"), ("mine", "meine (gemeldet, verantwortlich, zugewiesen)"),
+                    ("assigned", "mir zugewiesen oder von mir verantwortet"))) + "</div>"
+                "<div><label>Bereich</label>" + sel("queue", queue, [("", "alle Bereiche")] + [
+                    (x, qt.get(x, x)) for x in seen_queues]) + "</div>"
+                "<div><label>Status</label>" + sel("status", status, [("open", "offen"), ("all", "alle")] + [
+                    (k, w) for k, w in STATUS_LABEL.items()]) + "</div>"
+                + (f"<input type=hidden name=sort value='{esc(sort)}'>" if sort != "-updated" else "")
+                + "<button>Anzeigen</button></form>")
+        mine_now = sum(1 for r in rows.values() if r["status"] in OPEN
+                       and who.id in (r["responsible"], r["assignee"]))
+        quick = ("<p class='muted quick'>"
+                 + (f"<a href='{esc(link(view='assigned', status='open', queue=''))}'>Mir zugewiesen oder von "
+                    f"mir verantwortet ({mine_now})</a>" if mine_now else "")
+                 + (f"<a href='{esc(link(view='', status='open', queue=''))}'>In meinen Bereichen</a>"
+                    if readable else "")
+                 + f"<a href='{esc(link(view='mine', status='open', queue=''))}'>Von mir gemeldet</a>"
+                 + f"<a href='{esc(link(view='', status='all', queue=''))}'>auch erledigte</a></p>")
+        head = ""
+        for k, t in self.LIST_HEAD:
+            on = key == k
+            nxt = ("-" + k if not sort.startswith("-") else k) if on else ("-" + k if k == "updated" else k)
+            arrow = (" ▼" if sort.startswith("-") else " ▲") if on else ""
+            head += (f"<th{' aria-sort=' + ('descending' if sort.startswith('-') else 'ascending') if on else ''}>"
+                     f"<a href='{esc(link(sort=nxt))}'>{esc(t)}{arrow}</a></th>")
+        if out:
+            tr = "".join(
+                f"<tr><td><a href='/v/{quote(r['number'])}'>{esc(r['number'])}</a></td>"
+                f"<td>{esc(r['title'])} <span class=muted>{esc(KIND_LABEL.get(r['kind'], r['kind']))}</span></td>"
+                f"<td>{pill(r['status'], r.get('mark', ''), r['reporter'] == who.id and r['id'] not in handled)}</td>"
+                f"<td>{esc(cell(r, 'queue'))}</td><td>{esc(cell(r, 'responsible'))}</td>"
+                f"<td>{esc(cell(r, 'assignee'))}</td>"
+                f"<td class=muted>{esc(r['updated'][:16].replace('T', ' '))}</td></tr>"
+                for r in out)
+            table = f"<table class=list><tr>{head}</tr>{tr}</table>"
+        else:
+            table = "<p class=muted>Keine Vorgänge für diese Auswahl.</p>"
+        body = (quick + form + f"<p class=muted>{len(out)} Vorgang{'' if len(out) == 1 else 'e'}</p>" + table)
         return self.send(200, page("Vorgänge", body, "home"))
 
     def new_form(self, who, err=""):
@@ -1174,9 +1302,11 @@ Betreff und Text.</p>
             techbox += (f"<details open><summary class=muted>Angaben der App "
                         f"(Unterart <code>{esc(tech['subkind'])}</code>, von der Seite mitgegeben, "
                         f"nicht beglaubigt)</summary><table>{rows}</table></details>")
-        ent = []
+        ent, ent_int = [], []
         names = {p["uid"]: p["name"] for p in self.store.people()}
         for e in visible_entries(who, c):
+            # 0.11.0 (D6): Öffentliches im Reiter „Verlauf“, Internes im Reiter „Intern“
+            box = ent_int if e.get("internal") else ent
             when = esc(e["at"][:16].replace("T", " "))
             who_ = esc(e["actor_name"])
             d = e["data"]
@@ -1204,16 +1334,16 @@ Betreff und Text.</p>
                 word = self.store.ROLE_WORD.get(d.get("role"), d.get("role", ""))
                 head = (f"{word}: {esc(names.get(d.get('to'), d.get('to')))}" if d.get("to")
                         else f"{word}: niemand mehr")
-                ent.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div></div>")
+                box.append(f"<div class=card><div class=muted>{when} · {who_} · {head}</div></div>")
                 continue
             else:
                 head = "Kommentar"
             if e.get("internal"):
                 head += " <span class=pill style='border-color:#b45309;color:#b45309'>intern</span>"
             text = f"<div class=body data-md>{esc(e['text'])}</div>" if e["text"] else ""
-            ent.append(f"<div class=card{' style=background:#fff7ed' if e.get('internal') else ''}>"
+            box.append(f"<div class=card{' style=background:#fff7ed' if e.get('internal') else ''}>"
                        f"<div class=muted>{when} · {who_} · {head}</div>{text}</div>")
-        forms = ""
+        forms = comment_form = intern_form = hand = ""
         base = f"/v/{quote(c['number'])}"
         if c["reporter"] == who.id and c["status"] == "answered":
             # 0.9.0 (RFC-0103 D10): abnehmen oder wieder öffnen -- dieselben Regeln wie im Chat
@@ -1232,9 +1362,14 @@ Betreff und Text.</p>
             tick = ("<label style='display:inline;color:inherit'><input type=checkbox name=internal "
                     "value=1 checked> intern (die meldende Person sieht ihn nicht)</label> "
                     if can_read_internal(who, c) else "")
-            forms += (f"<h2>Kommentar</h2><form method=post action='{base}/comment'>"
-                      f"<textarea name=text maxlength=10000 required></textarea>"
-                      f"<p>{tick}<button>Kommentieren</button></p></form>")
+            comment_form = (f"<h2>Kommentar</h2><form method=post action='{base}/comment'>"
+                            f"<textarea name=text maxlength=10000 required></textarea>"
+                            f"<p>{tick}<button>Kommentieren</button></p></form>")
+            if can_read_internal(who, c):
+                intern_form = (f"<h2>Interner Kommentar</h2><form method=post action='{base}/comment'>"
+                               f"<input type=hidden name=internal value=1>"
+                               f"<textarea name=text maxlength=10000 required></textarea>"
+                               f"<p><button>Intern kommentieren</button></p></form>")
         if can_set_roles(who, c) and c["status"] not in ("closed", "rejected"):
             forms += self._roles_form(c, base)
         nxt = next_statuses(who, c)
@@ -1258,11 +1393,11 @@ Betreff und Text.</p>
                 and sendable):
             opts = "".join(f"<option value='{esc(x['id'])}'>{esc(x['name'])}</option>"
                            for x in sendable)
-            forms += (f"<h2>Übergeben</h2><form method=get action='{base}/uebergabe' class=inline>"
+            hand += (f"<h2>Übergeben</h2><form method=get action='{base}/uebergabe' class=inline>"
                       f"<select name=partner>{opts}</select><button>Entwurf öffnen</button></form>")
         got = self.store.received_from(c)
         if got and got[1] and who.may("hand_over", c["queue"]):
-            forms += (f"<h2>Antwort an {esc(got[1]['name'])}</h2>"
+            hand += (f"<h2>Antwort an {esc(got[1]['name'])}</h2>"
                       f"<p class=muted>Verlässt den Mandanten. Keine Namen von Personen.</p>"
                       f"<form method=post action='{base}/antwort'>"
                       f"<textarea name=text maxlength=10000 required></textarea>"
@@ -1272,7 +1407,7 @@ Betreff und Text.</p>
             state = (f"quittiert {esc(o['acked'][:16].replace('T', ' '))}" if o["acked"]
                      else f"offen, Versuch {o['attempts']}"
                      + (f" · {esc(o['last_error'])}" if o["last_error"] else ""))
-            forms += (("<h2>Ausgang</h2>" if o is out[0] else "")
+            hand += (("<h2>Ausgang</h2>" if o is out[0] else "")
                       + f"<div class=muted><code>{esc(o['handover_id'][:8])}</code> · {state}</div>")
         observers = (f"<div class=muted>Beobachtet von: {esc(', '.join(qt.get(o, o) for o in c['observers']))}</div>"
                      if c["observers"] else "")
@@ -1293,11 +1428,11 @@ Betreff und Text.</p>
                    + (", im Eingang auch die App-Rolle <code>admin</code>" if c["queue"] == DEFAULT_QUEUE else "")
                    + ". In großen Mandanten vergibt „Rollen &amp; Rechte“ dasselbe mit den Vorlagen "
                    "<i>Bearbeiter/in</i> und <i>Clearing</i>.")
-            mine = (" Als Meldende kannst du kommentieren und, sobald eine Antwort da ist, sagen, "
-                    "ob die Lösung passt." if c["reporter"] == who.id else "")
+            mine = (" Als Meldende kannst du im Reiter <a href='#verlauf'>Verlauf</a> kommentieren und, "
+                    "sobald eine Antwort da ist, sagen, ob die Lösung passt." if c["reporter"] == who.id else "")
             if c["reporter"] == who.id and c["status"] == "waiting_reporter":
-                mine = (" <b>Rückfrage an dich:</b> antworte unten mit einem Kommentar, dann geht der "
-                        "Vorgang von selbst zurück „in Arbeit“.")
+                mine = (" <b>Rückfrage an dich:</b> antworte im Reiter <a href='#verlauf'>Verlauf</a> mit "
+                        "einem Kommentar, dann geht der Vorgang von selbst zurück „in Arbeit“.")
             if was_involved(who, c) and not is_assignee(who, c):
                 mine += (" Du warst an diesem Vorgang beteiligt und liest ihn weiter; ändern kann, "
                          "wer ihn jetzt bearbeitet.")
@@ -1305,12 +1440,33 @@ Betreff und Text.</p>
         toggle = ('<div style="float:right" class=seg role=group aria-label="Darstellung">'
                   '<button type=button data-md-mode=formatted aria-pressed=true>Formatiert</button>'
                   '<button type=button data-md-mode=raw aria-pressed=false>Roh</button></div>')
-        body = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
-                f"{pill(c['status'], c.get('mark', ''), c['reporter'] == who.id)} · Bereich {esc(qt.get(c['queue'], c['queue']))} · "
-                f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
-                f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div>"
-                f"{techbox}</div>"
-                + "<h2>Verlauf</h2>" + "".join(ent) + rights + forms)
+        overview = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
+                    f"{pill(c['status'], c.get('mark', ''), c['reporter'] == who.id)} · Bereich "
+                    f"{esc(qt.get(c['queue'], c['queue']))} · "
+                    f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
+                    f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div></div>"
+                    + rights + forms)
+        # 0.11.0 (RFC-0103 D6): Reiter als Anker mit CSS -- ohne Skript, die Adresse behält
+        # den Reiter. „Intern“ nur für seine Leser, „Übergabe“ nur fürs Clearing.
+        panels = [("verlauf", f"Verlauf ({len(ent)})", "".join(ent) or "<p class=muted>Noch keine Einträge.</p>")]
+        panels[0] = (*panels[0][:2], panels[0][2] + comment_form)
+        if can_read_internal(who, c):
+            panels.append(("intern", f"Intern ({len(ent_int)})",
+                           ("".join(ent_int) or "<p class=muted>Keine internen Einträge.</p>")
+                           + "<p class=muted>Die meldende Person sieht diesen Reiter nicht.</p>" + intern_form))
+        if techbox:
+            panels.append(("technik", "Technik", techbox))
+        if hand:
+            panels.append(("uebergabe", "Übergabe", hand))
+        tabs = "".join(f"<a href='#{k}'>{esc(t)}</a>" for k, t, _ in [("ueberblick", "Überblick", "")] + panels)
+        # den aktiven Reiter hervorheben (wo der Browser :has kann; sonst ohne Hervorhebung)
+        on = "background:var(--oaap-color-surface, #f4f5f7);border-color:var(--oaap-color-border, #d8dbe0)"
+        hl = ("<style>" + "".join(f"body:has(#{k}:target) nav.ctabs a[href='#{k}']{{{on}}}" for k, _, _ in panels)
+              + f"body:not(:has(.tp:target)) nav.ctabs a[href='#ueberblick'],"
+              f"body:has(#ueberblick:target) nav.ctabs a[href='#ueberblick']{{{on}}}</style>")
+        body = (hl + f"<nav class=ctabs aria-label='Reiter des Vorgangs'>{tabs}</nav><div class=panels>"
+                + "".join(f"<section class=tp id={k} aria-label='{esc(t)}'>{h}</section>" for k, t, h in panels)
+                + f"<section class=tp id=ueberblick aria-label='Überblick'>{overview}</section></div>")
         return self.send(200, page(f"{c['number']}: {c['title']}", body))
 
     def _roles_form(self, c, base):
@@ -1350,6 +1506,7 @@ Betreff und Text.</p>
             if internal and not can_read_internal(who, c):
                 raise Refused("Intern kommentieren können nur die Bearbeitenden.")
             self.store.comment(c, who.id, who.name, f.get("text"), internal)
+            return self.redirect(f"/v/{quote(c['number'])}#{'intern' if internal else 'verlauf'}")
         elif action == "rolle":
             if not can_set_roles(who, c):
                 raise Refused("Verantwortlich und zugewiesen setzen die Zuständigen des Bereichs "

@@ -351,7 +351,7 @@ ok("0.7.0: ... auch im Kommentar", app.STORE.get(n7)["entries"][-1]["actor_name"
 st, pg, _ = call("GET", f"/v/{n7}", user("u-joerg", name="J%C3%B6rg%20M%C3%BCller"))
 ok("0.7.0: Meldende ohne Rechte: Hinweis statt fehlendem Formular -- Eingang braucht die App-Rolle admin",
    st == 200 and "Den Status kannst du hier nicht ändern" in pg and "<code>admin</code>" in pg
-   and "tenant_admin" in pg and "Als Meldende kannst du kommentieren" in pg, pg[-1500:])
+   and "tenant_admin" in pg and "Als Meldende kannst du im Reiter <a href='#verlauf'>Verlauf</a> kommentieren" in pg, pg[-1500:])
 ok("0.7.0: OAAP-Kopfzeile mit Benutzermenü: dekodierter Name, Abmelden als POST",
    "<header class=oaap>" in pg and "<summary id=uname>Jörg Müller</summary>" in pg
    and '<form method=post action="/auth/logout">' in pg, None)
@@ -589,7 +589,7 @@ ok("0.10.0: Rückfrage: /mine sagt waiting_reporter, „Rückfrage an dich“",
    row["status"] == "waiting_reporter" and row["label"] == "Rückfrage an dich", row)
 st, pg, _ = call("GET", f"/v/{n20}", user("u-anna"))
 ok("0.10.0: ... die Seite sagt es ihr auch, mit dem Weg (Kommentar)",
-   "Rückfrage an dich" in pg and "antworte unten mit einem Kommentar" in pg, pg[-900:])
+   "Rückfrage an dich" in pg and "antworte im Reiter <a href='#verlauf'>Verlauf</a> mit" in pg, pg[-900:])
 post(user("u-anna"), "comment", "text=Version+3")
 ok("0.10.0: antwortet die Meldende, geht der Vorgang von selbst nach „in Arbeit“",
    c20()["status"] == "in_progress" and c20()["entries"][-1]["actor_name"] == "Automatisch", c20()["status"])
@@ -626,6 +626,99 @@ try:
 except store.Refused:
     ended_ok = True
 ok("0.10.0: ein beendeter Vorgang bekommt niemanden mehr zugeteilt", ended_ok, None)
+
+# --- 0.11.0 (RFC-0103 Stufe 4): Listenbericht und Reiter
+import re as _re  # noqa: E402
+
+
+def numbers(pg):
+    return _re.findall(r"<tr><td><a href='/v/([^']+)'>", pg)
+
+
+st, b, _ = report(kind="question", title="Stufe vier")
+n21 = json.loads(b)["number"]
+call("POST", f"/v/{n21}/move", {**TA, **ORIGIN}, "queue=s3")
+call("POST", f"/v/{n21}/rolle", {**MIA, **ORIGIN}, "role=responsible&uid=u-mia")
+st, b, _ = report(kind="question", title="Stufe vier, jira")
+n22 = json.loads(b)["number"]
+call("POST", f"/v/{n22}/move", {**TA, **ORIGIN}, "queue=jira")
+call("POST", f"/v/{n20}/status", {**TA, **ORIGIN}, "status=reopened&text=")
+call("POST", f"/v/{n20}/status", {**TA, **ORIGIN}, "status=in_progress&text=")
+call("POST", f"/v/{n22}/comment", {**TA, **ORIGIN}, "text=neuester&internal=1")   # n22 zuletzt geändert
+
+st, pg, _ = call("GET", "/?queue=jira&status=open", TA)
+got = numbers(pg)
+want = [r["number"] for r in sorted((r for r in app.STORE.listing(queues=("jira",), open_only=True)
+                                     if r["queue"] == "jira"), key=lambda r: (r["updated"], r["number"]),
+                                    reverse=True)]
+ok("0.11.0: STUFE 4: /?queue=jira&status=open zeigt nur offene in jira, nach letzter Änderung sortiert",
+   st == 200 and got == want and len(got) >= 2 and got[0] == n22, (got, want))
+st, pg, _ = call("GET", "/?queue=jira&status=open&sort=updated", TA)
+ok("0.11.0: sort=updated dreht die Reihenfolge um", numbers(pg) == list(reversed(want)), numbers(pg))
+st, pg, _ = call("GET", "/?queue=jira&status=open", TA)
+ok("0.11.0: der aktive Spaltenkopf trägt den Pfeil und den Link für die andere Richtung",
+   "Geändert ▼" in pg and "sort=updated" in pg and "aria-sort=descending" in pg, pg[:200])
+ok("0.11.0: die Filter stehen in einem GET-Formular (Adresse = Lesezeichen)",
+   "<form method=get action='/' class=filter>" in pg and "<option value='jira' selected>" in pg, None)
+st, pg, _ = call("GET", "/?status=rejected&sort=bogus&queue=nix", TA)
+ok("0.11.0: unbekannte Sortierung fällt auf „letzte Änderung“ zurück, ein fremder Bereich zeigt nichts",
+   st == 200 and numbers(pg) == [], numbers(pg))
+st, pg, _ = call("GET", "/?status=in_progress", TA)
+ok("0.11.0: ein einzelner Status als Filter", n20 in numbers(pg) and n21 not in numbers(pg)
+   and all(app.STORE.get(n)["status"] == "in_progress" for n in numbers(pg)), numbers(pg))
+st, pg, _ = call("GET", "/?view=assigned", MIA)
+ok("0.11.0: „mir zugewiesen oder von mir verantwortet“ für Mia: V-…21", numbers(pg) == [n21], numbers(pg))
+st, pg, _ = call("GET", "/?status=open&sort=-responsible", TA)
+row = pg[pg.index(f"/v/{n21}'"):]
+row = row[:row.index("</tr>")]
+ok("0.11.0: die Spalten Verantwortlich und Zugewiesen für die Bearbeitenden", "<td>Mia</td>" in row, row)
+st, pg, _ = call("GET", "/?view=mine&sort=responsible", user("u-anna"))
+row = pg[pg.index(f"/v/{n21}'"):]
+row = row[:row.index("</tr>")]
+ok("0.11.0: die Meldende sieht ihre Meldung, aber nicht, wer sie bearbeitet (wie auf der Seite)",
+   n21 in numbers(pg) and "Mia" not in row and n22 in numbers(pg), row)
+ok("0.11.0: ... und nur ihre eigenen", all(app.STORE.get(n)["reporter"] == "u-anna" for n in numbers(pg)),
+   numbers(pg))
+st, pg, _ = call("GET", "/?status=all", OTTO)
+ok("0.11.0: der frühere Zugewiesene findet den Vorgang in der Übersicht (er liest ihn ja weiter)",
+   n20 in numbers(pg), numbers(pg))
+st, pg, _ = call("GET", "/?status=all&sort=title", user("u-bob"))
+ok("0.11.0: KÖDER 2 im Listenbericht: Bob ohne Bereich sieht keinen dieser Vorgänge",
+   not ({n20, n21, n22} & set(numbers(pg))), numbers(pg))
+# Reiter
+st, pg, _ = call("GET", f"/v/{n22}", TA)
+ok("0.11.0: Reiter Überblick, Verlauf, Intern für die Bearbeitenden",
+   all(f"href='#{k}'" in pg for k in ("ueberblick", "verlauf", "intern")) and "id=intern" in pg, None)
+intern = pg[pg.index("id=intern"):pg.index("id=ueberblick")]
+verlauf = pg[pg.index("id=verlauf"):pg.index("id=intern")]
+ok("0.11.0: der interne Kommentar steht im Reiter „Intern“, nicht im „Verlauf“",
+   "neuester" in intern and "neuester" not in verlauf, None)
+ok("0.11.0: der Überblick steht zuletzt im Dokument (CSS stellt ihn nach vorn) und trägt die Formulare",
+   pg.index("id=ueberblick") > pg.index("id=intern") and "/status'" in pg[pg.index("id=ueberblick"):], None)
+st, pg, _ = call("GET", f"/v/{n22}", user("u-anna"))
+ok("0.11.0: KÖDER 4: die Meldende hat keinen Reiter „Intern“ und nichts Internes im Dokument",
+   st == 200 and "#intern" not in pg and "id=intern" not in pg and "neuester" not in pg, None)
+ok("0.11.0: Technik nur, wo es etwas gibt: die Meldende sieht keine Browser-Angaben",
+   "#technik" not in pg, None)
+st, pg, _ = call("GET", f"/v/{n22}", TA)
+ok("0.11.0: der Bereich sieht den Reiter Technik mit den Browser-Angaben",
+   "href='#technik'" in pg and "x is undefined" in pg[pg.index("id=technik"):], None)
+ok("0.11.0: kein Reiter Übergabe ohne Partner (nur fürs Clearing)", "#uebergabe" not in pg, None)
+st, _, h = call("POST", f"/v/{n22}/comment", {**TA, **ORIGIN}, "text=Noch+intern&internal=1")
+st2, _, h2 = call("POST", f"/v/{n22}/comment", {**user("u-anna"), **ORIGIN}, "text=Öffentlich")
+ok("0.11.0: nach dem Kommentieren zurück in den Reiter, in dem er steht",
+   h.get("Location", "").endswith("#intern") and h2.get("Location", "").endswith("#verlauf"), (h, h2))
+# /mine: die Zahl der zugeordneten Vorgänge, mit Link -- nichts sonst (D9)
+os.environ["OAAP_INSTANCE_NAMES"] = "http://vorgaenge.bec.example.org"
+st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **MIA})
+d = json.loads(b)
+ok("0.11.0: /mine nennt die Zahl der offenen zugeordneten Vorgänge und den Link dorthin",
+   d["assigned"] == 1 and d["assigned_url"] == "//vorgaenge.bec.example.org/?view=assigned"
+   and d["overview_url"] == "//vorgaenge.bec.example.org/?view=mine", d)
+ok("0.11.0: ... aber keinen dieser Vorgänge (Mia hat keinen gemeldet)", d["cases"] == {}, d["cases"])
+del os.environ["OAAP_INSTANCE_NAMES"]
+st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **MIA})
+ok("0.11.0: ohne öffentlichen Namen kein Link", json.loads(b)["assigned_url"] == "", b[:200])
 
 srv.shutdown()
 print("")

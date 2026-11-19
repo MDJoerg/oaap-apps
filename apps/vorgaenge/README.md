@@ -217,6 +217,40 @@ zweiten Regelsatz gibt es nicht.
 Partner-Zugänge bekommen die Tür nicht (403). Nur `application/json`, also
 kein Formular aus einem fremden Browser-Fenster.
 
+## Übersicht und Reiter (seit 0.11.0, RFC-0103 Stufe 4)
+
+- **Übersicht als Listenbericht:** Eine Tabelle mit allem, was die Person
+  sehen darf: ihre Bereiche und Beobachter-Bereiche, was ihr zugewiesen ist
+  oder wofür sie verantwortlich ist, woran sie je beteiligt war, und ihre
+  eigenen Meldungen.
+  - **Spalten:** Nummer, Betreff (mit Art), Status in seiner Farbe,
+    Bereich, verantwortlich, zugewiesen, letzte Änderung. Die Farben sind
+    die der Punkte im Chat: rot = die Meldende ist dran, grün =
+    beantwortet, grau = erledigt, gelb = offen.
+  - **Filter:** `view` (leer = alles, `mine` = gemeldet, verantwortlich
+    oder zugewiesen, `assigned` = zugewiesen oder verantwortlich),
+    `queue`, `status` (`open` als Vorgabe, `all` oder ein einzelner
+    Status). `?alle=1` von früher heißt `status=all`.
+  - **Sortieren:** ein Klick auf den Spaltenkopf, `sort=-updated` als
+    Vorgabe. Filter und Sortierung stehen in der Adresse, eine Ansicht kann
+    ein Lesezeichen sein; die Seite braucht kein Skript.
+  - **Wer bearbeitet:** Verantwortlich und zugewiesen sehen nur die
+    Bearbeitenden. Auf einer nur eigenen Meldung bleiben die Spalten leer,
+    und sortiert wird nach dem, was in der Zelle steht, damit auch die
+    Reihenfolge nichts verrät.
+- **Reiter am Vorgang:** Überblick (Beschreibung, Status, Bereich, die
+  Rollen und alle Formulare dieser Person), Verlauf (öffentliche Einträge,
+  Kommentar), Intern (nur für die Leser interner Kommentare), Technik (nur,
+  wenn es Angaben gibt), Übergabe (nur fürs Clearing).
+  - Die Reiter sind Anker mit CSS (`#verlauf`, `#intern`, …), ohne Skript.
+    Die Adresse behält den Reiter. Nach einem Kommentar geht es zurück in
+    den Reiter, in dem er steht.
+- **`/platform/feedback/mine`** nennt zusätzlich `assigned` (Zahl der
+  offenen Vorgänge, die der Person zugewiesen sind oder für die sie
+  verantwortlich ist), `assigned_url` und `overview_url` (Links in die
+  Übersicht). Keine dieser Vorgänge selbst: Der Chat listet nur eigene
+  Meldungen.
+
 ## Arbeit im Vorgang (seit 0.10.0, RFC-0103 Stufe 3)
 
 - **Verantwortlich:** eine Zuständige des Bereichs (Liste auf „Bereiche“

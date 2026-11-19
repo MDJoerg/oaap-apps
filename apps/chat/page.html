@@ -45,6 +45,7 @@ background:none;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-sp
 .sfoot{border-top:1px solid var(--line);padding:.4rem .5rem .6rem;display:flex;flex-direction:column;gap:.1rem}
 .sfoot button{text-align:left;border:0;background:none;padding:.45rem .5rem}
 .sfoot button:hover,.sfoot button.on{background:var(--me)}
+.sfoot button .n{float:right;font-size:.75rem;color:var(--muted)}
 #who{font-size:.75rem;padding:.3rem .5rem 0}
 #scrim{display:none}
 
@@ -175,6 +176,14 @@ dialog .rate{margin:.6rem 0 0}
 /* 0.14.0 (RFC-0103 D8): ein Punkt je Gespräch mit Vorgang -- rot = du bist dran */
 .dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.35rem;vertical-align:middle}
 .dot.red{background:#dc2626} .dot.green{background:#16a34a} .dot.yellow{background:#eab308} .dot.grey{background:#9ca3af}
+/* 0.15.0 (RFC-0103 D9): die Ansicht „Vorgänge“ -- nur die eigenen Meldungen */
+.ctable{flex:1;min-height:0;overflow:auto;padding:0 1rem 1rem}
+.ctable table{border-collapse:collapse;width:100%;font-size:.9rem}
+.ctable th,.ctable td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+.ctable th button{border:0;background:none;padding:0;font:inherit;font-weight:600;color:var(--muted);cursor:pointer}
+.ctable tr.go{cursor:pointer} .ctable tr.go:hover td{background:var(--me)}
+.ctable a{color:var(--accent)}
+.atool .cnote{font-size:.85rem;color:var(--muted)}
 .tcard{border:1px solid var(--line);border-radius:.4rem;padding:.35rem .55rem;margin:.3rem 0;font-size:.85rem}
 .tcard label,dialog .tcard label{display:inline-flex;align-items:center;gap:.3rem;margin:.2rem 0 0;font-size:.78rem}
 .tcard input,dialog .tcard input{width:auto;margin:0}
@@ -230,6 +239,7 @@ dialog input,dialog textarea,dialog select{width:100%}
   </div>
   <div id="convs"></div>
   <div class="sfoot">
+    <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
     <button id="manage" type="button">Assistenten</button>
     <button id="nset" type="button">Einstellungen</button>
     <div class="muted" id="who"></div>
@@ -278,6 +288,17 @@ dialog input,dialog textarea,dialog select{width:100%}
     </div>
     <p class="err" id="alisterr" style="margin:.5rem 1rem 0"></p>
     <div class="agrid" id="alist"></div>
+  </section>
+
+  <section class="view" id="caseview" hidden>
+    <div class="atool">
+      <select id="cfopen" aria-label="offen oder alle"><option value="open">offen</option><option value="all">alle</option></select>
+      <select id="cfstatus" aria-label="Status"></select>
+      <select id="cfasst" aria-label="Assistent"></select>
+      <span class="cnote" id="ccount"></span>
+      <a id="cassigned" target="_blank" rel="noopener" hidden></a>
+    </div>
+    <div class="ctable" id="clist"></div>
   </section>
 </main>
 
@@ -626,9 +647,85 @@ async function loadAllCases(){
     if (!r.ok) return;
     const d = await r.json();
     Object.assign(CASESTAT, d.cases || {});
+    CASEMETA = {assigned: d.assigned || 0, url: d.assigned_url || ""};
+    CASESLOADED = true;
   } catch (e) { return; }
   buildDots(); if (S) renderSide();
+  caseCount(); if (VIEW === "cases") renderCases();
 }
+
+// ---- 0.15.0 (RFC-0103 D9): die Ansicht „Vorgänge“. Nur die eigenen Meldungen -- was dir
+// zugeordnet ist, steht als Zahl mit einem Link auf die App Vorgänge: bearbeitet wird dort,
+// eine zweite Arbeitsliste im Chat wäre eine zweite App.
+let CASEMETA = {assigned: 0, url: ""}, CASESLOADED = false, CSORT = "-updated";
+const CASE_ENDED = ["closed", "rejected"];
+function caseRows(){
+  return Object.entries(CASESTAT).map(([n, st]) => {
+    const conv = st.object && st.object.kind === "conversation" && S ? S.conversations.find(c => c.id === st.object.id) : null;
+    return {number: n, st, conv, title: st.title || (conv ? conv.title : ""),
+            assistant: conv ? ((assistant(conv.assistant) || {}).title || "Assistent nicht verfügbar") : "",
+            status: st.label + (st.mark_label ? " (" + st.mark_label + ")" : ""), updated: st.updated || ""};
+  });
+}
+function openCount(){ return Object.values(CASESTAT).filter(st => !CASE_ENDED.includes(st.status)).length; }
+function caseCount(){
+  $("casesbtn").hidden = !CASESLOADED;
+  const n = openCount();
+  $("casesn").textContent = n ? String(n) : "";
+  $("casesbtn").title = n + " offene eigene Vorgänge" + (CASEMETA.assigned ? " · " + CASEMETA.assigned + " dir zugeordnet" : "");
+}
+function fillSelect(sel, first, values){
+  const was = sel.value; sel.textContent = "";
+  const o = el("option", "", first); o.value = ""; sel.appendChild(o);
+  for (const v of values) { const x = el("option", "", v); x.value = v; sel.appendChild(x); }
+  sel.value = values.includes(was) ? was : "";
+}
+function renderCases(){
+  const all = caseRows();
+  fillSelect($("cfstatus"), "jeder Status", [...new Set(all.map(r => r.status))].sort());
+  fillSelect($("cfasst"), "jeder Assistent", [...new Set(all.map(r => r.assistant).filter(Boolean))].sort());
+  const fo = $("cfopen").value, fs = $("cfstatus").value, fa = $("cfasst").value;
+  const rows = all.filter(r => (fo === "all" || !CASE_ENDED.includes(r.st.status))
+                               && (!fs || r.status === fs) && (!fa || r.assistant === fa));
+  const key = CSORT.replace(/^-/, ""), dir = CSORT.startsWith("-") ? -1 : 1;
+  rows.sort((a, b) => dir * (String(a[key]).localeCompare(String(b[key]), "de") || a.number.localeCompare(b.number)));
+  $("ccount").textContent = rows.length + (rows.length === 1 ? " Vorgang" : " Vorgänge") + " · " + openCount() + " offen";
+  const ag = $("cassigned");
+  ag.hidden = !(CASEMETA.assigned && CASEMETA.url);
+  if (!ag.hidden) { ag.href = CASEMETA.url; ag.textContent = CASEMETA.assigned + " dir zugeordnet — in der App Vorgänge"; }
+  const box = $("clist"); box.textContent = "";
+  if (!rows.length) {
+    box.appendChild(el("p", "muted", all.length ? "Kein Vorgang passt zu dieser Auswahl." :
+      "Du hast noch nichts an den Support gegeben. „Nicht zufrieden“ an einer Antwort macht daraus einen Vorgang."));
+    return;
+  }
+  const t = el("table"), head = el("tr");
+  for (const [k, w] of [["number", "Nr."], ["title", "Betreff"], ["assistant", "Assistent"], ["status", "Status"], ["updated", "Geändert"]]) {
+    const th = el("th"), b = el("button", "", w + (key === k ? (dir < 0 ? " ▼" : " ▲") : ""));
+    b.type = "button";
+    if (key === k) th.setAttribute("aria-sort", dir < 0 ? "descending" : "ascending");
+    b.onclick = () => { CSORT = key === k ? (dir < 0 ? k : "-" + k) : (k === "updated" ? "-" + k : k); renderCases(); };
+    th.appendChild(b); head.appendChild(th);
+  }
+  t.appendChild(head);
+  for (const r of rows) {
+    const tr = el("tr", r.conv ? "go" : "");
+    const tn = el("td");
+    if (r.st.url) {
+      const a = el("a", "", r.number); a.href = r.st.url; a.target = "_blank"; a.rel = "noopener";
+      a.title = "Vorgang in der App Vorgänge öffnen"; a.onclick = ev => ev.stopPropagation(); tn.appendChild(a);
+    } else tn.textContent = r.number;
+    const ts = el("td"), c = dotOf(r.st);
+    if (c) { const d = el("span", "dot " + c); d.title = DOTWORD[c]; ts.appendChild(d); }
+    ts.appendChild(document.createTextNode(r.status));
+    tr.append(tn, el("td", "", r.title), el("td", "muted", r.assistant || "—"), ts, el("td", "muted", when(r.updated)));
+    if (r.conv) { tr.title = "Zum Gespräch"; tr.onclick = () => openConv(r.conv.id); }
+    t.appendChild(tr);
+  }
+  box.appendChild(t);
+}
+for (const id of ["cfopen", "cfstatus", "cfasst"]) $(id).onchange = renderCases;
+$("casesbtn").onclick = () => { closeDrawer(); showView("cases"); };
 function sadOnly(index){
   const box = el("div", "rate"), b = el("button", "sad", "Nicht zufrieden");
   b.type = "button"; b.onclick = () => openSad(index); box.appendChild(b); return box;
@@ -1202,17 +1299,21 @@ function startDraft(aid){
 
 // ---- Ansichten der Seite: Gespräch oder Assistenten (#assistenten; die Zurück-Taste geht)
 let VIEW = "chat";
+const VIEWHASH = {asst: "#assistenten", cases: "#vorgaenge"};
 function showView(v){
   VIEW = v;
-  $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst";
+  $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst"; $("caseview").hidden = v !== "cases";
   $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
+  $("casesbtn").classList.toggle("on", v === "cases");
   if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) { renderAssistants(); loadReadiness(); } }
+  else if (v === "cases") { $("ctitle").textContent = "Vorgänge"; $("cassist").textContent = " · deine Meldungen an den Support"; renderCases(); }
   else render();
   renderLight();
-  const want = v === "asst" ? "#assistenten" : "";
+  const want = VIEWHASH[v] || "";
   if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
 }
-window.addEventListener("popstate", () => showView(location.hash === "#assistenten" ? "asst" : "chat"));
+function viewOfHash(){ return location.hash === "#assistenten" ? "asst" : location.hash === "#vorgaenge" ? "cases" : "chat"; }
+window.addEventListener("popstate", () => showView(viewOfHash()));
 
 // ---- Kopfzeile und Menü
 $("sopen").onclick = () => toggleSide();
@@ -1464,6 +1565,7 @@ $("aimp").onchange = async ev => {
   $("who").textContent = (S.user || "") + " · Chat " + S.version;
   loadFeedback();
   if (location.hash === "#assistenten") showView("asst");
+  else if (location.hash === "#vorgaenge") showView("cases");
   else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
   if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);

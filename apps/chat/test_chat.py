@@ -1038,6 +1038,14 @@ check("0.11.0: die Seite hat den Dialog, den Haken je Karte, die Statusabfrage u
       and "Nicht zufrieden? An den Support geben" in html)
 check("0.12.0: die Seite hat die Auswertung mit Sternverteilung und den Vergleich",
       "function openEval(" in html and 'id="evdlg"' in html and "Revisionen vergleichen" in html)
+check("0.15.0 (RFC-0103 D9): die Ansicht „Vorgänge“: Knopf mit Zahl, Tabelle der eigenen Meldungen, "
+      "Filter offen/Status/Assistent, „dir zugeordnet“ als Link",
+      'id="casesbtn"' in html and 'id="caseview"' in html and "function renderCases(" in html
+      and 'id="cfopen"' in html and 'id="cfstatus"' in html and 'id="cfasst"' in html
+      and "d.assigned_url" in html and '"#vorgaenge"' in html and "dir zugeordnet" in html)
+check("0.15.0: gezählt werden die offenen eigenen (nicht geschlossen, nicht abgelehnt)",
+      'const CASE_ENDED = ["closed", "rejected"];' in html
+      and "filter(st => !CASE_ENDED.includes(st.status)).length" in html)
 GWA["on"] = False
 
 srv.shutdown()

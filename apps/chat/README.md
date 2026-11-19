@@ -320,6 +320,21 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
   zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
 
+## Ansicht „Vorgänge“ (0.15.0, RFC-0103 Stufe 4)
+
+- **Wo:** In der Leiste über „Assistenten“ der Eintrag „Vorgänge“ mit der
+  Zahl der offenen eigenen Meldungen (nicht geschlossen, nicht abgelehnt).
+  Er erscheint nur, wenn die Vorgänge antworten. Die Adresse ist
+  `#vorgaenge`, die Zurück-Taste geht.
+- **Was:** Eine Tabelle der **eigenen** Meldungen aus demselben Aufruf von
+  `/platform/feedback/mine`, der die Punkte liefert. Spalten: Nummer (Link
+  auf den Vorgang, neuer Reiter), Betreff, Assistent, Status mit Punkt,
+  letzte Änderung. Sortieren mit einem Klick auf den Spaltenkopf. Filter:
+  offen/alle, Status, Assistent. Ein Klick auf die Zeile öffnet das
+  Gespräch.
+- **Was nicht:** Vorgänge, die dir zugewiesen sind, stehen hier nicht.
+  „N dir zugeordnet“ führt in die App Vorgänge; bearbeitet wird dort.
+
 ## Punkte, Link, „Lösung passt“ (0.14.0, RFC-0103 Stufe 2)
 
 - **Punkte im Baum:** Beim Laden fragt die Seite einmal

@@ -495,7 +495,7 @@ class Store:
                 "SELECT uid FROM involved WHERE case_id=?", (c["id"],))})
         return c
 
-    def listing(self, *, queues=(), reporter=None, open_only=True, person=None):
+    def listing(self, *, queues=(), reporter=None, open_only=True, person=None, involved=None):
         """Vorgaenge in diesen Bereichen ODER von dieser Person -- nur das,
         was der Aufrufer sehen darf, wird ueberhaupt gefragt."""
         conds, args = [], []
@@ -512,6 +512,10 @@ class Store:
             # 0.10.0 (D3): jetzt verantwortlich oder zugewiesen
             conds.append("responsible=? OR assignee=?")
             args += [person, person]
+        if involved:
+            # 0.11.0 (RFC-0103 D6): wer je beteiligt war, findet den Vorgang in der Übersicht
+            conds.append("id IN (SELECT case_id FROM involved WHERE uid=?)")
+            args.append(involved)
         if not conds:
             return []
         sql = "SELECT * FROM cases WHERE (" + " OR ".join(conds) + ")"
