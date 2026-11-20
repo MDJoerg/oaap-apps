@@ -456,8 +456,9 @@ def admin_get(path):
 
 
 def rpc(view, msg, key=None, sid=None, accept="application/json, text/event-stream",
-        version=None, method="POST", addr=None):
+        version=None, method="POST", addr=None, extra=None):
     headers = {"Content-Type": "application/json", "Accept": accept}
+    headers.update(extra or {})
     if addr:
         # Wie hinter der Plattform: die Adresse des Clients setzt das Gateway davor.
         headers["X-Forwarded-For"] = addr
@@ -715,6 +716,39 @@ check("und kann es nicht rufen (-32002)", err(msgs).get("code") == -32002)
 l_sid, _ = session("lesen", LESER)
 check("Sicht bis lesen zeigt write_thing nicht, auch für einen execute-Schlüssel",
       set(listed("lesen", LESER, l_sid)) == {"echo"})
+
+print("\n-- 0.34 (RFC-0105 §7.1) Schreiben mit einem Schlüssel nur mit Freigabe eines Menschen")
+books.set_view_approval(app.DB, "test", "alles", "required")
+
+
+def call_h(name, args, extra):
+    return rpc("alles", {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                         "params": {"name": name, "arguments": args}}, VOLL, SID, extra=extra)
+
+
+before = len(P["calls"])
+st, _, msgs, _ = call_h("write_thing", {"v": "a"}, {})
+check("Sicht verlangt Freigabe: write_thing ohne Kopfzeilen abgelehnt (-32003), der Server sah nichts",
+      err(msgs).get("code") == -32003 and len(P["calls"]) == before, msgs)
+st, _, msgs, _ = call_h("write_thing", {"v": "a"}, {"X-OAAP-Confirmed": "yes"})
+check("KÖDER: nur „bestätigt“ ohne freigebende Person reicht nicht", err(msgs).get("code") == -32003, msgs)
+st, _, msgs, _ = call_h("write_thing", {"v": "a"}, {"X-OAAP-Approved-By": "Anna Admin"})
+check("KÖDER: nur die Person ohne „bestätigt“ reicht nicht", err(msgs).get("code") == -32003, msgs)
+st, _, msgs, _ = call_h("write_thing", {"v": "a"}, {"X-OAAP-Confirmed": "yes", "X-OAAP-Approved-By": "Anna  Admin"})
+row = app.DB.execute("SELECT outcome, approved_by FROM usage WHERE tool='write_thing' "
+                     "ORDER BY id DESC LIMIT 1").fetchone()
+check("mit beiden: durch, die Messzeile nennt die freigebende Person",
+      msgs and "result" in msgs[-1] and row["outcome"] == "ok" and row["approved_by"] == "Anna Admin",
+      (msgs, dict(row)))
+ref = app.DB.execute("SELECT reason, door FROM usage WHERE tool='write_thing' AND outcome='refused' "
+                     "ORDER BY id DESC LIMIT 1").fetchone()
+check("die Ablehnung steht als needs_approval am Gateway",
+      ref["reason"] == "needs_approval" and ref["door"] == "gateway", dict(ref))
+st, _, msgs, _ = call_h("echo", {"text": "lesen geht"}, {})
+check("ein lesendes Werkzeug braucht keine Freigabe", msgs and "result" in msgs[-1], msgs)
+books.set_view_approval(app.DB, "test", "alles", "none")
+st, _, msgs, _ = call_h("write_thing", {"v": "b"}, {})
+check("ohne die Einstellung wie bisher (kein Bruch für Pipelines)", msgs and "result" in msgs[-1], msgs)
 
 print("\n-- §12.5 Argumente (A1)")
 before = len(P["calls"])

@@ -190,5 +190,77 @@ ok("verschoben nach analyse: der Spezialist wird verantwortlich", S.get(c2["numb
 st, page = call("GET", "/bereiche", ADMIN)
 ok("Bereiche zeigen die Erstbearbeitung mit KI-Marke", "Erstbearbeitung" in page and "Analyse (KI)" in page, "")
 
+# ================================================= 0.14.0 (RFC-0105 Stufe 2): Freigabe
+c3 = S.create(kind="bug", title="Lizenz fehlt", body="Bitte Lizenz eintragen.", reporter="mel",
+              reporter_name="Melanie", queue="analyse")
+N3 = c3["number"]
+st, d = call("POST", f"/api/spez/case/{N3}/entry", SPEZ,
+             {"kind": "plan", "text": "Ich trage die Lizenz ein.", "tool": "set_license",
+              "arguments": {"user": "mel", "license": "A"}, "sha256": "gefaelscht", "run": "p1"})
+c = S.get(N3)
+plan = [e for e in c["entries"] if e["type"] == "spec" and e["data"].get("kind") == "plan"][-1]
+ok("Plan: Status „wartet auf Freigabe“, Hash von Vorgänge (nicht vom Spezialisten)",
+   st == 200 and c["status"] == "waiting_approval" and plan["data"]["sha256"] != "gefaelscht"
+   and plan["data"]["sha256"] == S.plan_hash("plan", plan["data"], plan["text"]) and plan["internal"], (st, d, c["status"]))
+st, d = call("GET", f"/api/spez/case/{N3}", SPEZ)
+ok("der Spezialist liest seinen Plan mit Werkzeug, Argumenten und Hash",
+   any(e.get("step", {}).get("kind") == "plan" and e["step"]["tool"] == "set_license"
+       and e["step"]["arguments"] == {"user": "mel", "license": "A"} for e in d["entries"]), d)
+st, page = call("GET", f"/v/{N3}", ("mel", "user"))
+ok("KÖDER: die Meldende sieht den Plan nicht", "set_license" not in page and "Ich trage die Lizenz" not in page, "")
+st, page = call("GET", f"/v/{N3}", ADMIN)
+ok("Bearbeitende sehen den Plan mit Freigeben/Ablehnen", "plant set_license" in page and "Freigeben" in page
+   and "Ablehnen" in page, "")
+st, _ = form(f"/v/{N3}/freigabe", ("mel", "user"), {"seq": plan["seq"], "ok": "1"})
+ok("KÖDER: die Meldende gibt nicht frei", st == 400, st)
+st, _ = form(f"/v/{N3}/freigabe", SPEZ, {"seq": plan["seq"], "ok": "1"})
+ok("KÖDER: der Spezialist gibt seinen eigenen Plan nicht frei (obwohl er den Bereich bearbeitet)", st == 400, st)
+# verfälschen: die Argumente in der Ablage ändern -- die Freigabe darf nicht greifen
+with S.lock, S.db:
+    dd = dict(plan["data"]); dd["arguments"] = {"user": "mel", "license": "ALLES"}
+    S.db.execute("UPDATE entries SET data=? WHERE seq=?", (json.dumps(dd), plan["seq"]))
+st, _ = form(f"/v/{N3}/freigabe", ADMIN, {"seq": plan["seq"], "ok": "1"})
+ok("KÖDER: verfälschte Argumente -- Freigabe abgelehnt", st == 400, st)
+with S.lock, S.db:
+    S.db.execute("UPDATE entries SET data=? WHERE seq=?", (json.dumps(plan["data"]), plan["seq"]))
+st, _ = form(f"/v/{N3}/freigabe", ADMIN, {"seq": plan["seq"], "ok": "1", "text": "passt"})
+c = S.get(N3)
+appr = [e for e in c["entries"] if e["type"] == "approval"]
+ok("freigegeben: Eintrag mit Hash und Person, Status zurück in Arbeit",
+   st in (302, 303) and appr and appr[0]["data"]["ok"] and appr[0]["data"]["sha256"] == plan["data"]["sha256"]
+   and appr[0]["internal"] and c["status"] == "in_progress", (st, c["status"]))
+st, d = call("GET", "/api/spez/turn", SPEZ)
+ok("nach der Freigabe ist der Spezialist wieder an der Reihe",
+   N3 in [x["number"] for x in d["cases"] if x["last"]["actor"] != "spez"], d)
+st, _ = form(f"/v/{N3}/freigabe", ADMIN, {"seq": plan["seq"], "ok": "0"})
+ok("KÖDER: zweimal entscheiden geht nicht", st == 400, st)
+st, d = call("GET", f"/api/spez/case/{N3}", SPEZ)
+ok("die Freigabe steht für den Spezialisten lesbar (plan, ok, Hash)",
+   any(e.get("approval", {}).get("plan") == plan["seq"] and e["approval"]["ok"] for e in d["entries"]), d)
+
+# Entwurf an die Meldende
+st, d = call("POST", f"/api/spez/case/{N3}/entry", SPEZ, {"kind": "draft", "text": "Die Lizenz ist eingetragen.",
+                                                          "run": "p2"})
+c = S.get(N3)
+draft = [e for e in c["entries"] if e["type"] == "spec" and e["data"].get("kind") == "draft"][-1]
+st, page = call("GET", f"/v/{N3}", ("mel", "user"))
+ok("Entwurf: wartet auf Freigabe, die Meldende sieht ihn noch nicht",
+   c["status"] == "waiting_approval" and "Die Lizenz ist eingetragen" not in page, c["status"])
+st, _ = form(f"/v/{N3}/freigabe", ADMIN, {"seq": draft["seq"], "ok": "1"})
+st, page = call("GET", f"/v/{N3}", ("mel", "user"))
+c = S.get(N3)
+pub = [e for e in c["entries"] if e["type"] == "comment" and not e["internal"]]
+ok("Entwurf veröffentlicht: öffentlich im Namen des Spezialisten, mit der freigebenden Person",
+   "Die Lizenz ist eingetragen" in page and pub and pub[-1]["actor"] == "spez"
+   and pub[-1]["data"].get("approved_by") == "Chef", pub[-1:] if pub else None)
+st, d = call("POST", f"/api/spez/case/{N3}/entry", SPEZ, {"kind": "draft", "text": "Noch ein Satz.", "run": "p3"})
+d2 = [e for e in S.get(N3)["entries"] if e["type"] == "spec" and e["data"].get("kind") == "draft"][-1]
+form(f"/v/{N3}/freigabe", ADMIN, {"seq": d2["seq"], "ok": "0", "text": "zu knapp"})
+st, page = call("GET", f"/v/{N3}", ("mel", "user"))
+ok("verworfener Entwurf bleibt intern", "Noch ein Satz" not in page, "")
+st, page = call("GET", f"/v/{N3}", ADMIN)
+ok("KÖDER: „wartet auf Freigabe“ steht nicht im Statusformular",
+   "value=waiting_approval" not in page and "value='waiting_approval'" not in page, "")
+
 print("ALLE PASS" if not fails else f"{fails} FAIL")
 sys.exit(1 if fails else 0)

@@ -219,6 +219,19 @@ nur, wo er verantwortlich ist.
 - **Stopp:** Wer den Bereich bearbeitet, kann am Vorgang „Spezialist anhalten“ drücken.
   Danach nimmt Vorgänge vom Spezialisten nur noch das Ende des Laufs an, bis jemand ihn
   wieder zulässt.
+- **Freigabe (seit 0.14.0, Stufe 2):** Ein Spezialist kann einen schreibenden Aufruf
+  (`plan`) oder eine Antwort an die meldende Person (`draft`) nur vorlegen.
+  - Vorgänge rechnet den Hash über Werkzeug und Argumente bzw. über den Text selbst aus.
+  - Der Vorgang wechselt auf **wartet auf Freigabe**.
+  - Wer den Bereich bearbeitet, drückt „Freigeben“ oder „Ablehnen“, bei einem Entwurf
+    „Veröffentlichen“ oder „Verwerfen“. Der Spezialist selbst kann das nie, und über
+    einen Schritt wird nur einmal entschieden.
+  - Ist der Plan nachträglich verändert, wird er nicht freigegeben.
+  - Ein freigegebener Entwurf wird öffentlich: im Namen des Spezialisten, mit der
+    freigebenden Person.
+  - Danach steht der Vorgang wieder auf „in Arbeit“, und der Spezialist ist dran. Er
+    führt genau den freigegebenen Aufruf aus.
+  - „Wartet auf Freigabe“ steht nicht im Statusformular.
 
 ## MCP-Tür (seit 0.4.0, RFC-0073/RFC-0074)
 

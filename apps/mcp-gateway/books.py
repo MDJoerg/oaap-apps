@@ -311,6 +311,10 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # Sicht) und das Zielsystem eines Aufrufs in der Messzeile.
     ("views", "reference", "TEXT NOT NULL DEFAULT ''"),
     ("usage", "system", "TEXT NOT NULL DEFAULT ''"),
+    # 0.34 (RFC-0105 Stufe 2): eine Sicht kann verlangen, dass ein Schlüssel nur mit der
+    # Freigabe eines Menschen schreibt ('required'); die Messzeile nennt, wer freigab.
+    ("views", "approval", "TEXT NOT NULL DEFAULT ''"),
+    ("usage", "approved_by", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -1135,6 +1139,22 @@ def exchange_servers(db, view):
         (view,))]
 
 
+APPROVAL = ("", "required")
+
+
+def set_view_approval(db, actor, name, approval):
+    """0.34 (RFC-0105 §7.1): '' = wie bisher, 'required' = ein Schlüssel schreibt in dieser
+    Sicht nur mit X-OAAP-Confirmed: yes und X-OAAP-Approved-By (die freigebende Person)."""
+    approval = "" if approval in ("", "none", "aus") else approval
+    if approval not in APPROVAL:
+        raise ValueError("Freigabe: required oder none.")
+    if not view_row(db, name):
+        raise ValueError(f"Die Sicht {name} gibt es nicht.")
+    db.execute("UPDATE views SET approval=?, updated=? WHERE name=?", (approval, now(), name))
+    log(db, actor, "view.approval", name, approval or "none")
+    db.commit()
+
+
 def view_ways(vrow):
     return [w for w in (vrow["ways"] or "key").split(",") if w]
 
@@ -1407,7 +1427,7 @@ def remove_item(db, actor, view, kind, name):
 # ------------------------------------------------------------------ Messung
 
 def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down,
-           person=None, procedure="T", status=0, door="", light="", system=""):
+           person=None, procedure="T", status=0, door="", light="", system="", approved_by=""):
     """Eine Messzeile je Aufruf. `key` ist die Schlüsselzeile vom Beginn der Anfrage.
 
     `name`/`source` sind Namen in der Sicht und beim Server — bei einer
@@ -1424,6 +1444,9 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
     if system:
         cols.append("system")
         values.append(str(system)[:48])
+    if approved_by:
+        cols.append("approved_by")
+        values.append(str(approved_by)[:120])
     if (person or {}).get("client"):
         cols += ["client", "assistant", "confirmed", "assistant_rev"]
         values += [person["client"], person.get("assistant", ""), person.get("confirmed", ""),

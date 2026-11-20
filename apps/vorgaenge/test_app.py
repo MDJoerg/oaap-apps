@@ -599,9 +599,9 @@ post(MIA, "comment", "text=nur+intern&internal=1")
 ok("0.10.0: ein interner Kommentar der Bearbeitenden beendet die Rückfrage nicht",
    c20()["status"] == "waiting_reporter", c20()["status"])
 ok("0.10.0: Unterstatus haben dieselben Wege wie „in Arbeit“",
-   store.NEXT["new"][:6] == ("triage", "in_progress", "clarify_internal", "clarify_external", "waiting_test",
-                             "waiting_reporter") and "answered" in store.NEXT["clarify_external"]
-   and store.NEXT["in_progress"][:4] == store.SUBSTATUS
+   store.NEXT["new"][:7] == ("triage", "in_progress", "clarify_internal", "clarify_external", "waiting_test",
+                             "waiting_reporter", "waiting_approval") and "answered" in store.NEXT["clarify_external"]
+   and store.NEXT["in_progress"][:5] == store.SUBSTATUS
    and all(x in store.OPEN for x in store.SUBSTATUS), store.NEXT["new"])
 # verschieben leert „verantwortlich“, die Zuweisung bleibt
 post(TA, "move", "queue=jira")

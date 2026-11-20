@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import runner
 from store import Refused, Store, import_assistant
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("SPEZ_DATA_DIR", "/data")
 
@@ -36,7 +36,7 @@ LIMITS = {"max_steps": env_int("SPEZ_MAX_STEPS", 20, 1, 100),
 STORE = None
 STATUS = {}             # je Spezialist: letzter Abruf, Fehler (nur im Speicher)
 RUNNING = set()
-REASON = {"done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
+REASON = {"needs_approval": "wartet auf Freigabe", "done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
           "error": "Fehler, zurückgegeben", "not_mine": "nicht mehr verantwortlich",
           "stopped_before": "schon angehalten", "runs": "Läufe je Vorgang erreicht, zurückgegeben"}
 esc = html.escape
@@ -175,6 +175,7 @@ def spec_form(s, msg=""):
 <div><label>Schritte je Lauf (höchstens {LIMITS['max_steps']})</label><input name=max_steps type=number min=1 max={LIMITS['max_steps']} value='{v("max_steps", LIMITS["max_steps"])}'></div>
 <div><label>Minuten je Lauf (höchstens {LIMITS['max_minutes']})</label><input name=max_minutes type=number min=1 max={LIMITS['max_minutes']} value='{v("max_minutes", LIMITS["max_minutes"])}'></div>
 <div><label>Läufe je Vorgang (höchstens {LIMITS['max_runs']})</label><input name=max_runs type=number min=1 max={LIMITS['max_runs']} value='{v("max_runs", LIMITS["max_runs"])}'></div></div>
+<label style='display:flex;gap:.4rem;align-items:center;color:#1f2937'><input type=checkbox name=public value=1 style='width:auto'{' checked' if s.get('public') else ''}> darf Antworten an die meldende Person entwerfen (ein Mensch veröffentlicht sie)</label>
 <label style='display:flex;gap:.4rem;align-items:center;color:#1f2937'><input type=checkbox name=active value=1 style='width:auto'{' checked' if s.get('active') else ''}> aktiv -- arbeitet Vorgänge im Hintergrund</label>
 <p><button>Speichern</button></p></form>
 <form method=post action='uebernehmen' class=card><h2 style='margin-top:0'>Aus dem Export eines Assistenten übernehmen</h2>
@@ -284,6 +285,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
+        # Erst den Rumpf lesen, dann ablehnen: sonst bricht die Verbindung ab, bevor die
+        # Antwort ankommt, und der Browser zeigt statt des Grundes einen Netzfehler.
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 200000:
+            self.close_connection = True
+            return self.send(413, "")
+        raw = self.rfile.read(n).decode("utf-8", "replace")
         uid, roles, name = self.who()
         if not uid:
             return self.send(401, "")
@@ -292,11 +300,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.same_origin() or not (self.headers.get("Content-Type") or "").startswith(
                 "application/x-www-form-urlencoded"):
             return self.send(403, page("Abgelehnt", "<p>Dieses Formular kam nicht von dieser Seite.</p>"))
-        n = int(self.headers.get("Content-Length") or 0)
-        if n > 200000:
-            return self.send(413, "")
-        f = {k: v[-1] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"),
-                                                       keep_blank_values=True).items()}
+        f = {k: v[-1] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
         actor = name or uid
         try:
             if p == "/speichern":

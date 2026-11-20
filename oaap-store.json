@@ -264,7 +264,7 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.33.0",
+      "version": "0.34.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -949,7 +949,7 @@
       "id": "vorgaenge",
       "name": "Vorgänge",
       "type": "native",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -996,7 +996,7 @@
       "id": "spezialisten",
       "name": "Spezialisten",
       "type": "native",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -1024,7 +1024,7 @@
         "hintergrund"
       ],
       "summary": "KI-Spezialisten, die Vorgänge im Hintergrund bearbeiten -- mit eigenem Agenten, nur lesend, jeder Schritt im Vorgang.",
-      "description": "Ein Spezialist ist eine festgehaltene Assistenten-Revision mit eigenem Agenten und engen Rechten nur in seinen Bereichen (RFC-0105 Stufe 1). Die App fragt die App Vorgänge (ab 0.13.0), welche Vorgänge an ihm dran sind, liest den Vorgang als zitierte Daten, ruft lesende Werkzeuge seiner eigenen Sicht im MCP-Gateway und das Modell über das KI-Gateway, schreibt jeden Schritt intern in den Vorgang und gibt am Ende an die Zuständigen zurück. Grenzen je Lauf und je Vorgang, Stopp-Knopf am Vorgang; die meldende Person sieht davon nichts.",
+      "description": "Ein Spezialist ist eine festgehaltene Assistenten-Revision mit eigenem Agenten und engen Rechten nur in seinen Bereichen (RFC-0105 Stufe 1). Die App fragt die App Vorgänge (ab 0.13.0), welche Vorgänge an ihm dran sind, liest den Vorgang als zitierte Daten, ruft lesende Werkzeuge seiner eigenen Sicht im MCP-Gateway und das Modell über das KI-Gateway, schreibt jeden Schritt intern in den Vorgang und gibt am Ende an die Zuständigen zurück. Grenzen je Lauf und je Vorgang, Stopp-Knopf am Vorgang; die meldende Person sieht davon nichts. Seit 0.2.0 schreibt er nur nach Freigabe: ein schreibendes Werkzeug wird als Plan vorgelegt, ein Mensch gibt genau diesen Aufruf frei, und eine Antwort an die Meldende ist ein Entwurf, den ein Mensch veröffentlicht.",
       "links": [
         {
           "rel": "source",

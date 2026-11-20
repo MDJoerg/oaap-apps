@@ -57,6 +57,9 @@ class Store:
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, actor TEXT NOT NULL,
                 what TEXT NOT NULL);
             """)
+            # 0.2.0 (RFC-0105 D5): darf Entwürfe an die meldende Person schreiben (Vorgabe: nein)
+            if "public" not in {r[1] for r in self.db.execute("PRAGMA table_info(specialists)")}:
+                self.db.execute("ALTER TABLE specialists ADD COLUMN public INTEGER NOT NULL DEFAULT 0")
 
     # ---------------------------------------------------------------- Spezialisten
     def all(self, with_secrets=False):
@@ -112,6 +115,7 @@ class Store:
                 raise Refused(f"{word}: 1 bis {limits[k]} (Grenze des Mandanten).")
             lim[k] = v
         active = 1 if doc.get("active") in (True, "1", "on", 1) else 0
+        public = 1 if doc.get("public") in (True, "1", "on", 1) else 0
         sec = {k: (doc.get(k) or "").strip() for k in SECRETS}
         sid = doc.get("id")
         with self.lock, self.db:
@@ -126,21 +130,21 @@ class Store:
                 self.db.execute(
                     "UPDATE specialists SET name=?, assistant=?, system=?, model=?, vorgaenge_url=?, agent_key=?, "
                     "mcp_url=?, mcp_key=?, ai_url=?, ai_key=?, max_steps=?, max_minutes=?, max_runs=?, active=?, "
-                    "changed=?, changed_by=? WHERE id=?",
+                    "public=?, changed=?, changed_by=? WHERE id=?",
                     (name, assistant, system, model, urls["vorgaenge_url"], sec["agent_key"], urls["mcp_url"],
                      sec["mcp_key"], urls["ai_url"], sec["ai_key"], lim["max_steps"], lim["max_minutes"],
-                     lim["max_runs"], active, now(), actor, sid))
+                     lim["max_runs"], active, public, now(), actor, sid))
                 what = f"geändert: {name} ({assistant}){', aktiv' if active else ', aus'}"
             else:
                 if self.db.execute("SELECT 1 FROM specialists WHERE name=?", (name,)).fetchone():
                     raise Refused(f"Den Spezialisten „{name}“ gibt es schon.")
                 cur = self.db.execute(
                     "INSERT INTO specialists (name, assistant, system, model, vorgaenge_url, agent_key, mcp_url, "
-                    "mcp_key, ai_url, ai_key, max_steps, max_minutes, max_runs, active, changed, changed_by) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "mcp_key, ai_url, ai_key, max_steps, max_minutes, max_runs, active, public, changed, changed_by) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (name, assistant, system, model, urls["vorgaenge_url"], sec["agent_key"], urls["mcp_url"],
                      sec["mcp_key"], urls["ai_url"], sec["ai_key"], lim["max_steps"], lim["max_minutes"],
-                     lim["max_runs"], active, now(), actor))
+                     lim["max_runs"], active, public, now(), actor))
                 sid = cur.lastrowid
                 what = f"angelegt: {name} ({assistant})"
             if active and not all(sec.values()):

@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.33.0"
+VERSION = "0.34.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -121,6 +121,9 @@ ASSISTANT_REV_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,47})(?:@([1-9][0-9]{0,8}))
 # 0.7.2 (RFC-0074 §5.6): der Chat sagt, dass die Person DIESEN Aufruf bestätigt hat.
 # Nur zur Auskunft in der Messzeile, nur bei Verfahren A; nie eine Erlaubnis.
 CONFIRMED_HEADER = "X-OAAP-Confirmed"
+# 0.34 (RFC-0105 §7.1): die Person, die genau diesen Aufruf freigab (ein Spezialist schreibt
+# nie auf eigenes Wort). Eine Angabe des Aufrufers, gemessen und gezeigt, nicht geprüft.
+APPROVED_HEADER = "X-OAAP-Approved-By"
 # 0.21.0 (RFC-0101 §2.2): die Ampel eines Gesprächs als zusätzliche Decke DIESER
 # Anfrage -- verschärft die Decke des Schlüssels/Profils, lockert sie nie.
 LIGHT_HEADER = "X-OAAP-Light"
@@ -3502,6 +3505,17 @@ class Handler(BaseHTTPRequestHandler):
                     land, ensure_ascii=False, indent=1)}], "structuredContent": land}))
                 return
             state.update(kind=kind, name=measured, server=item["server"], source=item["source"])
+            if kind == "tool" and not self.person and item["effect"] != "read" \
+                    and (vrow["approval"] if "approval" in vrow.keys() else "") == "required":
+                # 0.34 (RFC-0105 §7.1): in dieser Sicht schreibt ein Schlüssel nur mit Freigabe
+                who_ok = " ".join((self.headers.get(APPROVED_HEADER) or "").split())[:120]
+                if (self.headers.get(CONFIRMED_HEADER) or "").strip().lower() != "yes" or not who_ok:
+                    done("refused", "needs_approval", door="gateway")
+                    answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {measured} ändert etwas; "
+                                     "hier nur mit der Freigabe eines Menschen (X-OAAP-Confirmed: yes, "
+                                     "X-OAAP-Approved-By)."))
+                    return
+                state["approved_by"] = who_ok
             doc = json.loads(item["approved_doc"])
             server_name = item["server"]
             arguments = params.get("arguments")
@@ -3580,7 +3594,7 @@ class Handler(BaseHTTPRequestHandler):
                          (time.monotonic() - t0) * 1000, bytes_up, state["down"],
                          person=self.person, procedure=state.get("procedure", "T"),
                          status=state["status"], door=state["door"], light=self.asked,
-                         system=state.get("system", ""))
+                         system=state.get("system", ""), approved_by=state.get("approved_by", ""))
             if state["sse"]:
                 self.close_connection = True
 
@@ -5043,7 +5057,7 @@ def cli(argv):
     usage = ("Aufruf: app.py server set <name> --address A|destination:D[/pfad] [--auth none|bearer|basic|header:N|propagate] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
              "        app.py view set <name> [--max-effect read|write|execute] "
-             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] | view list\n"
+             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] [--approval required|none] | view list\n"
              "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
              "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
@@ -5186,7 +5200,8 @@ def cli(argv):
             for v in books.views(DB):
                 reqs = books.view_requests(v)
                 print(f'{v["name"]:20} bis={v["max_effect"]} ampel={books.view_light(DB, v["name"])} zugänge={v["ways"]} '
-                      + " ".join(f"{r}={reqs[r]}" for r in books.REQUESTS))
+                      + " ".join(f"{r}={reqs[r]}" for r in books.REQUESTS)
+                      + (" freigabe=required" if v["approval"] == "required" else ""))
                 for item in books.items(DB, v["name"]):
                     print(f'    {item["kind"]:8} {item["name"]:30} {item["server"]}:{item["source"]} '
                           f'{item["effect"]:8} {books.item_state(DB, item)}'
@@ -5202,6 +5217,8 @@ def cli(argv):
             books.save_view(DB, "cli", pos[0],
                             opts.get("max-effect", old["max_effect"] if old else "read"), reqs or None,
                             opts.get("ways"))
+            if "approval" in opts:
+                books.set_view_approval(DB, "cli", pos[0], opts["approval"])
             print("gespeichert")
             return 0
         if area == "view" and action == "add" and len(pos) >= 3:

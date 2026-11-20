@@ -3,10 +3,10 @@ oaap_manifest: "0.17"
 app:
   id: spezialisten
   name: Spezialisten
-  version: 0.1.0
+  version: 0.2.0
   type: native
   class: frontend
-  description: "KI-Spezialisten, die Vorgaenge im Hintergrund bearbeiten (RFC-0105 Stufe 1). Ein Spezialist ist eine festgehaltene Assistenten-Revision (Kennung@Revision) mit eigenem Agenten (RFC-0067, oaap authz agent-add) und engen Rechten nur in seinen Bereichen. Die App fragt alle 30 s die App Vorgaenge (ab 0.13.0), welche Vorgaenge an ihm dran sind (Erstbearbeitung eines Bereichs), liest den Vorgang als zitierte Daten, ruft nur lesende Werkzeuge seiner eigenen Sicht im MCP-Gateway (Verfahren T, ein Gateway-Schluessel nur fuer diese Sicht) und das Modell ueber das KI-Gateway (eigener Schluessel), schreibt jeden Schritt intern in den Vorgang (Notiz, Werkzeugaufruf, Ende mit Grund) und gibt am Ende an die Zustaendigen zurueck. Grenzen je Lauf (Schritte, Minuten) und je Vorgang (Laeufe), Stopp-Knopf am Vorgang. Die meldende Person sieht nichts davon. Gepflegt vom tenant_admin; die drei Schluessel werden nie zurueckgezeigt."
+  description: "KI-Spezialisten, die Vorgaenge im Hintergrund bearbeiten (RFC-0105 Stufe 1). Ein Spezialist ist eine festgehaltene Assistenten-Revision (Kennung@Revision) mit eigenem Agenten (RFC-0067, oaap authz agent-add) und engen Rechten nur in seinen Bereichen. Die App fragt alle 30 s die App Vorgaenge (ab 0.13.0), welche Vorgaenge an ihm dran sind (Erstbearbeitung eines Bereichs), liest den Vorgang als zitierte Daten, ruft nur lesende Werkzeuge seiner eigenen Sicht im MCP-Gateway (Verfahren T, ein Gateway-Schluessel nur fuer diese Sicht) und das Modell ueber das KI-Gateway (eigener Schluessel), schreibt jeden Schritt intern in den Vorgang (Notiz, Werkzeugaufruf, Ende mit Grund) und gibt am Ende an die Zustaendigen zurueck. Grenzen je Lauf (Schritte, Minuten) und je Vorgang (Laeufe), Stopp-Knopf am Vorgang. Die meldende Person sieht nichts davon. Seit 0.2.0 (Stufe 2) plant er schreibende Werkzeuge nur: der Aufruf geht als Plan in den Vorgang, ein Mensch des Bereichs gibt genau diesen frei (Hash, Vorgaenge ab 0.14.0), der naechste Lauf fuehrt ihn mit X-OAAP-Confirmed und X-OAAP-Approved-By aus (MCP-Gateway ab 0.34.0, Sicht mit --approval required); Antworten an die Meldende nur als Entwurf, den ein Mensch veroeffentlicht (je Spezialist einschaltbar). Gepflegt vom tenant_admin; die drei Schluessel werden nie zurueckgezeigt."
 
 care:
   rebuild: self

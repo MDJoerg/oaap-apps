@@ -739,6 +739,29 @@ Gruppen); bei einem Profil für bestimmte Gruppen steht deshalb „ob du dazugeh
 die Anmeldung“. Fehlt bei einem Server mit Verfahren U der eigene Zugang, steht „erst Zugang
 hinterlegen“.
 
+## Schreiben mit Schlüssel nur nach Freigabe (0.34, RFC-0105 Stufe 2)
+
+Ein Schlüssel hat keinen Menschen hinter sich. Ein KI-Spezialist soll trotzdem schreiben
+können, aber nie auf eigenes Wort. Dafür gibt es eine Einstellung je Sicht:
+
+```sh
+docker exec <container> python3 /srv/app.py view set spez-analyse --approval required
+```
+
+Damit gilt in dieser Sicht:
+- Ein Werkzeug der Klasse `write` oder `execute` läuft über einen Schlüssel nur, wenn der
+  Aufruf `X-OAAP-Confirmed: yes` **und** `X-OAAP-Approved-By: <Person>` trägt.
+- Fehlt eines davon, lehnt das Gateway mit `-32003` ab. Die Messzeile hat dann den Grund
+  `needs_approval` und die Tür `gateway`, der Server sieht nichts.
+- Bei Erfolg steht die freigebende Person in der Messzeile (`approved_by`).
+- Lesende Werkzeuge laufen wie bisher.
+- Sichten ohne die Einstellung verhalten sich wie bisher, für Pipelines ändert sich nichts.
+
+Die Angabe kommt vom Aufrufer, das Gateway prüft sie nicht. Verbindlich ist die Freigabe
+in **Vorgänge**: Sie hängt dort an einem Hash über Werkzeug und Argumente, und die App
+Spezialisten führt nur aus, was so freigegeben ist. Das Gateway sorgt dafür, dass ohne
+diese Angabe nichts schreibt, und hält sie fest.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

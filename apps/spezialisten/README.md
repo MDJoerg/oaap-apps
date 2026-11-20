@@ -32,10 +32,21 @@ jemand wieder zulässt.
 
 **Ausschalten:** Ist ein Spezialist aus, beginnt er keinen neuen Lauf.
 
-Was Stufe 1 **nicht** kann, kommt mit den nächsten Stufen von RFC-0105:
-- schreiben (Stufe 2, nur mit Freigabe),
-- der meldenden Person antworten (Stufe 2, als Entwurf),
-- andere fragen (Stufe 3).
+**Schreiben nur nach Freigabe (seit 0.2.0, Stufe 2):**
+- Ein Werkzeug, das etwas ändert, ruft der Lauf nie auf eigenes Wort. Woran er das
+  erkennt: `oaap/effect` vom Gateway; ohne Angabe gilt „ändert“.
+- Stattdessen legt er einen **Plan** vor (Werkzeug, Argumente, Begründung) und endet.
+- Ein Mensch des Bereichs gibt in Vorgänge genau diesen Aufruf frei. Die Freigabe hängt
+  an einem Hash.
+- Der nächste Lauf führt ihn aus, mit `X-OAAP-Confirmed: yes` und
+  `X-OAAP-Approved-By: <Person>`. Das MCP-Gateway verlangt beides, wenn die Sicht
+  `--approval required` hat.
+- Ein abgelehnter Plan läuft nicht. Ein freigegebener läuft genau einmal.
+- Mit dem Haken „darf Antworten an die meldende Person entwerfen“ bekommt das Modell
+  zusätzlich `antwort_entwurf`. Der Entwurf wird erst öffentlich, wenn ein Mensch ihn
+  veröffentlicht.
+
+Andere Spezialisten oder Menschen fragen kommt mit Stufe 3.
 
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 
@@ -61,6 +72,8 @@ sudo oaap authz agent-add analyse-ki --tenant T --collection <volle Kennung der 
 docker exec -i <gateway> python3 /srv/app.py server set <quelle>-analyse \
      --address http://oaap-gateway-1:<port der quelle>/mcp --auth bearer --credential-stdin ja
 docker exec <gateway> python3 /srv/app.py view set spez-analyse --ways key --max-effect read
+# soll er schreiben dürfen (Stufe 2): Wirkungsklasse write und Freigabepflicht
+docker exec <gateway> python3 /srv/app.py view set spez-analyse --max-effect write --approval required
 docker exec <gateway> python3 /srv/app.py view add spez-analyse <quelle>-analyse <werkzeug> --effect read
 docker exec <gateway> python3 /srv/app.py key issue spez-analyse --views spez-analyse
 ```

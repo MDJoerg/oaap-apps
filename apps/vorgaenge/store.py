@@ -17,6 +17,7 @@ Server zu starten:
 import hashlib
 import json
 import re
+import hashlib
 import sqlite3
 import threading
 import time
@@ -35,10 +36,12 @@ STATUS_LABEL = {"new": "neu", "triage": "Klärung", "in_progress": "in Arbeit",
                 "handed_over": "übergeben",
                 # 0.10.0 (RFC-0103 D4): feste Unterstatus von „in Arbeit“
                 "clarify_internal": "in Klärung intern", "clarify_external": "in Klärung extern",
-                "waiting_test": "wartet auf Test", "waiting_reporter": "Rückfrage an die Meldende"}
+                "waiting_test": "wartet auf Test", "waiting_reporter": "Rückfrage an die Meldende",
+                # 0.14.0 (RFC-0105 D6): ein Spezialist wartet auf die Freigabe eines Menschen
+                "waiting_approval": "wartet auf Freigabe"}
 # 0.10.0: dieselben Übergänge wie `in_progress`. Fest, nicht je Mandant: Auswertungen,
 # die MCP-Tür und der Chat brauchen Wörter, die sie kennen.
-SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter")
+SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter", "waiting_approval")
 
 # RFC-0061 §4. `voting` (§7) kommt mit seiner Stufe. `handed_over` (§5)
 # steht hier, damit die Regel EINE Tabelle bleibt; erreicht wird es nur
@@ -53,7 +56,8 @@ NEXT = {
     "reopened":    ("triage", "in_progress", "answered", "rejected", "handed_over"),
     "handed_over": ("in_progress", "answered", "rejected"),
 }
-MANUAL_EXCLUDED = ("handed_over",)
+# 0.14.0: „wartet auf Freigabe“ setzt nur ein Plan des Spezialisten, nie das Statusformular
+MANUAL_EXCLUDED = ("handed_over", "waiting_approval")
 
 
 def _with_substatus(nxt):
@@ -711,7 +715,18 @@ class Store:
                         {"role": role, "from": c.get(role, ""), "to": uid}, internal=True)
 
     # ------------------------------ Spezialisten (0.13.0, RFC-0105 Stufe 1)
-    SPEC_KINDS = ("note", "tool", "end")
+    SPEC_KINDS = ("note", "tool", "end", "plan", "draft")
+    # 0.14.0 (RFC-0105 Stufe 2): was ein Mensch freigeben muss -- ein geplanter Aufruf
+    # (Werkzeug + Argumente) oder ein Entwurf an die meldende Person
+    WAITING = ("plan", "draft")
+
+    @staticmethod
+    def plan_hash(kind, data, text):
+        """Der Hash, an den eine Freigabe gebunden ist (§7.1): genau dieser Aufruf, genau dieser Text."""
+        doc = ({"tool": data.get("tool"), "arguments": data.get("arguments") or {}} if kind == "plan"
+               else {"draft": text})
+        return hashlib.sha256(json.dumps(doc, sort_keys=True, ensure_ascii=False,
+                                         separators=(",", ":")).encode()).hexdigest()
 
     def turn(self, uid):
         """Offene Vorgänge, für die uid verantwortlich ist und an denen kein Stopp hängt --
@@ -754,7 +769,47 @@ class Store:
                 raise Refused("Der Vorgang ist beendet.")
             if r["spec_stop"] and kind != "end":
                 raise Refused("An diesem Vorgang ist der Spezialist angehalten.")
+            if kind in self.WAITING:
+                if kind == "plan" and not data.get("tool"):
+                    raise Refused("Ein geplanter Aufruf nennt sein Werkzeug.")
+                # der Hash entsteht hier, nicht beim Spezialisten: Vorgänge bindet die Freigabe
+                data["sha256"] = self.plan_hash(kind, data, text)
             self._entry(c["id"], uid, name, "spec", text, data, internal=True)
+            if kind in self.WAITING and "waiting_approval" in NEXT.get(r["status"], ()):
+                self.db.execute("UPDATE cases SET status='waiting_approval' WHERE id=?", (c["id"],))
+                self._entry(c["id"], uid, name, "status", "",
+                            {"from": r["status"], "to": "waiting_approval"}, internal=True)
+
+    def decide(self, c, seq, ok, actor, actor_name, text=""):
+        """§7.1/§7.2: ein Mensch gibt einen geplanten Aufruf oder einen Entwurf frei -- oder nicht.
+        Nie der Spezialist selbst, nie zweimal. Ein freigegebener Entwurf wird öffentlich (im
+        Namen des Spezialisten, mit der freigebenden Person). Danach ist der Spezialist wieder dran."""
+        with self.lock, self.db:
+            e = self.db.execute("SELECT * FROM entries WHERE seq=? AND case_id=? AND type='spec'",
+                                (seq, c["id"])).fetchone()
+            data = json.loads(e["data"] or "{}") if e else {}
+            if not e or data.get("kind") not in self.WAITING:
+                raise Refused("Diesen geplanten Schritt gibt es nicht.")
+            if e["actor"] == actor:
+                raise Refused("Seinen eigenen Plan gibt niemand selbst frei.")
+            if self.db.execute("SELECT 1 FROM entries WHERE case_id=? AND type='approval' AND "
+                               "json_extract(data, '$.plan')=?", (c["id"], seq)).fetchone():
+                raise Refused("Darüber ist schon entschieden.")
+            if self.plan_hash(data["kind"], data, e["text"]) != data.get("sha256"):
+                raise Refused("Der Plan wurde verändert; so wird er nicht freigegeben.")
+            r = self.db.execute("SELECT status FROM cases WHERE id=?", (c["id"],)).fetchone()
+            if r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            self._entry(c["id"], actor, actor_name, "approval", _clip((text or "").strip(), 2000),
+                        {"plan": seq, "sha256": data["sha256"], "ok": bool(ok), "kind": data["kind"]},
+                        internal=True)
+            if ok and data["kind"] == "draft":
+                self._entry(c["id"], e["actor"], e["actor_name"], "comment", e["text"],
+                            {"draft": seq, "approved_by": actor_name}, internal=False)
+            if r["status"] == "waiting_approval":
+                self.db.execute("UPDATE cases SET status='in_progress' WHERE id=?", (c["id"],))
+                self._entry(c["id"], actor, actor_name, "status", "",
+                            {"from": "waiting_approval", "to": "in_progress"}, internal=True)
 
     def give_back(self, c, uid, name, reason, run=""):
         """RFC-0105 §7.3: zurück an die Menschen des Bereichs -- verantwortlich leer, Status

@@ -58,7 +58,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -757,8 +757,11 @@ class Handler(BaseHTTPRequestHandler):
                     "entries": [{"seq": e["seq"], "at": e["at"], "by": e["actor_name"],
                                  "by_me": e["actor"] == who.id, "type": e["type"], "text": e["text"],
                                  "internal": bool(e.get("internal")),
-                                 **({"step": {k: e["data"].get(k) for k in ("kind", "run", "assistant", "tool", "reason")
-                                              if e["data"].get(k) is not None}} if e["type"] == "spec" else {})}
+                                 **({"step": {k: e["data"].get(k) for k in ("kind", "run", "assistant", "tool", "reason",
+                                                                           "arguments", "sha256", "plan")
+                                              if e["data"].get(k) is not None}} if e["type"] == "spec" else {}),
+                                 **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind")}}
+                                    if e["type"] == "approval" else {})}
                                 for e in c["entries"]]})
         except Refused as e:
             return self.json(404, {"error": str(e)})
@@ -780,7 +783,7 @@ class Handler(BaseHTTPRequestHandler):
             c = self.spez_case(who, parts[1])
             if parts[2] == "entry":
                 data = {k: doc.get(k) for k in ("run", "assistant", "tool", "arguments", "ms", "call_id",
-                                                "reason", "steps") if doc.get(k) is not None}
+                                                "reason", "steps", "plan", "approved_by") if doc.get(k) is not None}
                 self.store.spec_entry(c, who.id, who.name, doc.get("kind", ""), doc.get("text", ""), data)
                 return self.json(200, {"ok": True})
             self.store.give_back(c, who.id, who.name, doc.get("reason", ""), str(doc.get("run") or ""))
@@ -1441,6 +1444,7 @@ Betreff und Text.</p>
                         f"nicht beglaubigt)</summary><table>{rows}</table></details>")
         ent, ent_int = [], []
         names = {p["uid"]: p["name"] for p in self.store.people()}
+        decided = {e["data"].get("plan"): e for e in c["entries"] if e["type"] == "approval"}
         for e in visible_entries(who, c):
             # 0.11.0 (D6): Öffentliches im Reiter „Verlauf“, Internes im Reiter „Intern“
             box = ent_int if e.get("internal") else ent
@@ -1471,13 +1475,36 @@ Betreff und Text.</p>
                 # 0.13.0 (RFC-0105 §4): der „dunkle Chat“ -- Notizen offen, Werkzeugaufrufe zugeklappt
                 k = d.get("kind")
                 label = {"note": "Notiz", "tool": "Werkzeug " + esc(d.get("tool") or ""),
+                         "plan": "plant " + esc(d.get("tool") or ""), "draft": "Entwurf an die Meldende",
                          "end": "Lauf beendet" + (f" ({esc(SPEC_END.get(d.get('reason'), d.get('reason') or ''))})"
                                                  if d.get("reason") else "")}.get(k, "Schritt")
                 meta = esc(" · ".join(x for x in (str(d.get("assistant") or ""), ("Lauf " + str(d["run"])) if d.get("run") else "") if x))
                 body = (f"<details><summary class=muted>Aufruf und Ergebnis</summary><pre>{esc(e['text'])}</pre></details>"
                         if k == "tool" else f"<div class=body data-md>{esc(e['text'])}</div>")
+                if k == "plan":
+                    body += (f"<pre>{esc(d.get('tool') or '')} {esc(json.dumps(d.get('arguments') or {}, ensure_ascii=False, indent=1))}</pre>"
+                             f"<div class=muted>SHA-256 {esc((d.get('sha256') or '')[:16])}…</div>")
+                if k in ("plan", "draft"):
+                    dec = decided.get(e["seq"])
+                    if dec:
+                        body += (f"<div class=muted>{'freigegeben' if dec['data'].get('ok') else 'abgelehnt'} von "
+                                 f"{esc(dec['actor_name'])}{(': ' + esc(dec['text'])) if dec['text'] else ''}</div>")
+                    elif who.may("triage", c["queue"]) and who.id != e["actor"]:
+                        yes = "Veröffentlichen" if k == "draft" else "Freigeben"
+                        body += (f"<form method=post action='/v/{quote(c['number'])}/freigabe' class=inline>"
+                                 f"<input type=hidden name=seq value='{e['seq']}'>"
+                                 f"<input name=text placeholder='Bemerkung (optional)' maxlength=2000>"
+                                 f"<button name=ok value=1>{yes}</button> "
+                                 f"<button name=ok value=0 style='background:transparent;color:inherit;border:1px solid currentColor'>"
+                                 f"{'Verwerfen' if k == 'draft' else 'Ablehnen'}</button></form>")
                 box.append(f"<div class=card style='background:#eef2ff'><div class=muted>{when} · {who_} "
                            f"<span class=pill>KI</span> · {label}{(' · ' + meta) if meta else ''}</div>{body}</div>")
+                continue
+            elif e["type"] == "approval":
+                box.append(f"<div class=card><div class=muted>{when} · {who_} · "
+                           f"{'gibt frei' if d.get('ok') else 'lehnt ab'}: "
+                           f"{'Entwurf' if d.get('kind') == 'draft' else 'geplanten Aufruf'}"
+                           f"{(' – ' + esc(e['text'])) if e['text'] else ''}</div></div>")
                 continue
             elif e["type"] == "spec_stop":
                 box.append(f"<div class=card><div class=muted>{when} · {who_} · Spezialist "
@@ -1690,6 +1717,15 @@ Betreff und Text.</p>
             self.store.accept(c, who.id, who.name)
         elif action == "reopen":
             self.store.not_fitting(c, who.id, who.name, f.get("text", ""))
+        elif action == "freigabe":
+            # 0.14.0 (RFC-0105 §7.1/§7.2): wer den Bereich bearbeitet, nie der Spezialist selbst
+            if not who.may("triage", c["queue"]):
+                raise Refused("Freigeben darf, wer den Bereich bearbeitet.")
+            try:
+                seq = int(f.get("seq") or 0)
+            except ValueError:
+                raise Refused("Unbekannter Schritt.")
+            self.store.decide(c, seq, f.get("ok") == "1", who.id, who.name, f.get("text", ""))
         elif action == "spezstop":
             if not who.may("triage", c["queue"]):
                 raise Refused("Anhalten darf, wer den Bereich bearbeitet.")
