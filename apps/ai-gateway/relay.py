@@ -19,6 +19,8 @@ import json
 import urllib.error
 import urllib.request
 
+import props
+
 # Wie lange auf ein Modell gewartet wird. Ein großes Modell mit langem
 # Kontext braucht Minuten; ein zu kurzer Wert erzeugt Abbrüche, die wie
 # ein Fehler der Bezugsquelle aussehen, aber unsere Ungeduld sind.
@@ -110,10 +112,18 @@ def call(supplier, path, payload, timeout=READ_TIMEOUT, stream=False):
 
 
 def probe(supplier, timeout=15):
+    """Wie probe_list, aber nur die Kennungen der Modelle (die Form vor 0.11)."""
+    status, ms, entries, error = probe_list(supplier, timeout)
+    return status, ms, [e["id"] for e in entries], error
+
+
+def probe_list(supplier, timeout=15):
     """Verbindungstest (0.6): `GET …/models` bei der Quelle -- ein Ping, der
     auch die Anmeldung prüft, aber kein Modell rechnen lässt und nichts kostet.
 
-    Gibt (status, ms, model_ids, error) zurück. Wie überall hier: nie die
+    Gibt (status, ms, einträge, error) zurück; ein Eintrag ist
+    {"id": …, "props": {…}} -- `props` ist, was die Quelle über das Modell
+    ausdrücklich sagt (props.from_listing, RFC-0106 §2.3). Wie überall hier: nie die
     Zugangsdaten, und bei einem Fehler nur seine Art. Bei einer HTTP-Ablehnung
     ist `error` der Anfang ihres Rumpfs (höchstens 300 Zeichen): Die Plattform
     sagt dort, ob ein Tunnel fehlt oder ein Angebot (oaap.net.connector).
@@ -149,12 +159,39 @@ def probe(supplier, timeout=15):
         return 0, int((time.monotonic() - started) * 1000), [], f"{kind}: {text}"[:200]
     ms = int((time.monotonic() - started) * 1000)
     doc = _safe_json(body)
-    ids = []
+    entries = []
     if isinstance(doc, dict) and isinstance(doc.get("data"), list):
-        ids = [str(m.get("id")) for m in doc["data"] if isinstance(m, dict) and m.get("id")]
+        entries = [{"id": str(m.get("id")), "props": props.from_listing(m),
+                    "owner": str(m.get("owned_by") or "")}
+                   for m in doc["data"] if isinstance(m, dict) and m.get("id")]
     elif isinstance(doc, dict) and isinstance(doc.get("models"), list):     # Ollama /api/tags
-        ids = [str(m.get("name")) for m in doc["models"] if isinstance(m, dict) and m.get("name")]
-    return status, ms, ids, ""
+        entries = [{"id": str(m.get("name")), "props": props.from_listing(m),
+                    "owner": "library"}
+                   for m in doc["models"] if isinstance(m, dict) and m.get("name")]
+    return status, ms, entries, ""
+
+
+def ollama_show(supplier, model, timeout=5):
+    """`POST <basis>/api/show` bei einer Ollama-Quelle -- {prop: wert} oder {}.
+
+    Nur für Ziele, über die die Modellliste nichts sagt (RFC-0106 §2.3); ein
+    Fehler ist keine Auskunft und gibt {}.
+    """
+    base = supplier["url"].rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if supplier.get("credential"):
+        headers["Authorization"] = "Bearer " + supplier["credential"]
+    try:
+        resp = urllib.request.urlopen(urllib.request.Request(
+            base + "/api/show", data=json.dumps({"model": model}).encode("utf-8"),
+            headers=headers, method="POST"), timeout=timeout)
+        doc = _safe_json(resp.read(4 * 1024 * 1024))
+        resp.close()
+    except Exception:
+        return {}
+    return props.from_ollama_show(doc)
 
 
 def call_json(supplier, path, payload, timeout=READ_TIMEOUT):

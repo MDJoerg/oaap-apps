@@ -21,7 +21,9 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin aigw
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen, sonst startet der Container
 # nicht (die Datei wird einzeln aufgezählt, nicht per COPY . kopiert).
-COPY app.py store.py supply.py relay.py catalog.py vault.py report.py charts.py dash.py cohort.py assets.py setupdoor.py /srv/
+COPY app.py store.py supply.py relay.py catalog.py vault.py report.py charts.py dash.py cohort.py assets.py setupdoor.py props.py templates.py /srv/
+# Die Vorlagen für Clients sind Daten (RFC-0106 §3.2).
+COPY templates/ /srv/templates/
 # Die gemeinsamen Bücher der Gateways (RFC-0065 Stufe 0). Eine Kopie von
 # oaap-apps/lib/gwcore — geändert wird dort, check-shared.py gleicht ab.
 COPY gwcore/ /srv/gwcore/

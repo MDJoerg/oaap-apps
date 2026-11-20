@@ -1,0 +1,28 @@
+{
+  "target": "vscode",
+  "title": "VS Code (Custom Endpoint)",
+  "format": "chatLanguageModels.json mit vendor customendpoint, laut VS-Code-Dokumentation vom 18.11.2026",
+  "checked": "2026-11-20",
+  "file": "chatLanguageModels.json",
+  "where": "In VS Code: Language Models öffnen, Add Models, Custom Endpoint. VS Code öffnet die Datei; den Inhalt einfügen oder den Eintrag ergänzen. Erscheint ein Modell nicht sofort, VS Code neu starten.",
+  "key_hint": "VS Code fragt beim ersten Aufruf nach dem Wert für ${input:oaapAiKey} und bewahrt ihn sicher auf. Der Wert ist dein Schlüssel für dieses Gateway.",
+  "document": [
+    {
+      "name": "{gateway}",
+      "vendor": "customendpoint",
+      "apiKey": "${input:oaapAiKey}",
+      "apiType": "chat-completions",
+      "models": "{models}"
+    }
+  ],
+  "models_as": "list",
+  "model": {
+    "id": "{id}",
+    "name": "{name}",
+    "url": "{url}/chat/completions",
+    "toolCalling": "{tools}",
+    "vision": "{vision}",
+    "contextWindow": "{context}",
+    "maxOutputTokens": "{output}"
+  }
+}

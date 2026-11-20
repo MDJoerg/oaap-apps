@@ -52,14 +52,16 @@ import catalog
 import charts
 import cohort
 import dash
+import props
 import relay
 import report
 import setupdoor
 import store
+import templates
 import supply
 import vault
 
-VERSION = "0.10.1"
+VERSION = "0.11.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -108,6 +110,48 @@ def reload_supply():
         else:
             suppliers, aliases, errors = catalog.load(DB, MASTER)
         SUPPLIERS, ALIASES, CONFIG_ERRORS = suppliers, aliases, errors
+    learn_cached()
+
+
+# RFC-0106 §2.3: was eine Quelle in ihrer Modellliste zuletzt über ihre
+# Modelle sagte, {quelle: {modell: {prop: wert}}}. Nur im Speicher -- in die
+# Bücher kommt davon, was ein Ziel eines Modellnamens ist (learn).
+LISTED = {}
+OLLAMA_SHOW_MAX = 20
+
+
+def learn(name, entries):
+    """Die Angaben der Modellliste für die Ziele, die Modellnamen benutzen."""
+    LISTED[name] = {e["id"]: e["props"] for e in entries if e.get("props")}
+    used = {t["model"] for a in ALIASES.values() for t in a["targets"] if t["supplier"] == name}
+    for model in sorted(used & set(LISTED[name])):
+        props.note(DB, name, model, LISTED[name][model], "supplier")
+    # Ollama nennt in /v1/models nur Kennungen (`owned_by: library`), sagt aber
+    # auf /api/show mehr. Gefragt wird nur für Ziele, über die noch gar nichts
+    # in den Büchern steht -- nicht bei jedem minütlichen Test aufs Neue.
+    src = SUPPLIERS.get(name)
+    owners = {e["id"]: e.get("owner", "") for e in entries}
+    if src is None:
+        return
+    tab = props.table(DB)
+    for model in sorted(used - set(LISTED[name]))[:OLLAMA_SHOW_MAX]:
+        if owners.get(model) == "library" and (name, model) not in tab:
+            found = relay.ollama_show(src, model)
+            if found:
+                props.note(DB, name, model, found, "supplier")
+
+
+def learn_cached():
+    """Nach jeder Änderung der Modellnamen: ein neues Ziel bekommt sofort,
+    was die Quelle beim letzten Abruf über es sagte (etwa beim Anlegen aus
+    der Modellliste)."""
+    if MODE != "app":
+        return
+    for name, listed in list(LISTED.items()):
+        for a in ALIASES.values():
+            for t in a["targets"]:
+                if t["supplier"] == name and t["model"] in listed:
+                    props.note(DB, name, t["model"], listed[t["model"]], "supplier")
 
 
 reload_supply()
@@ -222,6 +266,27 @@ def unreachable_note(label, unreachable):
     return (f"Achtung: „{label}“ erreicht diese Modellnamen nie: " + ", ".join(parts)
             + ". Die Obergrenze des Schlüssels heben oder die Modellnamen weglassen -- "
             "/v1/models bietet sie ihm nicht an, eine Anfrage darauf wird abgelehnt.")
+
+
+def key_models(row, ceiling=None):
+    """[(name, alias, ampel)] -- was dieser Schlüssel wirklich benutzen kann.
+
+    Die eine Regel hinter /v1/models und den Vorlagen (RFC-0106 D8): Die
+    Farbe ist die schlechteste unter den Zielen, die dieser Schlüssel
+    erreichen darf -- ein Alias, der auf einen roten Anbieter ausweichen
+    kann, ist nicht grün. Ein Name ohne erreichbares Ziel fehlt: ihn
+    anzubieten hieße, dem Client eine Wahl hinzulegen, die beim ersten
+    Klick scheitert.
+    """
+    ceiling = ceiling_of(row) if ceiling is None else ceiling
+    pbd = pbd_of(row)
+    out = []
+    for name in sorted(allowed_aliases(row)):
+        alias = ALIASES.get(name)
+        light = supply.alias_light(alias, SUPPLIERS, ceiling, pbd) if alias else ""
+        if light:
+            out.append((name, alias, light))
+    return out
 
 
 def allowed_aliases(row):
@@ -592,9 +657,60 @@ def supply_notes():
     return out
 
 
+def props_summary(values):
+    """Werkzeuge ✓ · Bilder ? · 128k ein · 8k aus"""
+    return (f'Werkzeuge {props.short("tools", values["tools"])} · '
+            f'Bilder {props.short("vision", values["vision"])} · '
+            f'{props.short("context", values["context"])} ein · '
+            f'{props.short("output", values["output"])} aus')
+
+
+def props_forms(alias, tab):
+    """Je Ziel ein Formular mit den vier Angaben, Herkunft und Meldung (RFC-0106 §2.3)."""
+    out = []
+    for target in alias["targets"]:
+        key = (target["supplier"], target["model"])
+        have = tab.get(key, {})
+        fields, notes = [], []
+        for prop in props.PROPS:
+            cell = have.get(prop, {})
+            value, origin = cell.get("value", ""), cell.get("origin", "")
+            if prop in props.BOOLS:
+                opts = "".join(f'<option value="{v}"{" selected" if v == value else ""}>{t}</option>'
+                               for v, t in (("", "unbekannt"), ("true", "ja"), ("false", "nein")))
+                inp = f'<select name="{prop}">{opts}</select>'
+            else:
+                inp = (f'<input name="{prop}" type="text" inputmode="numeric" value="{esc(value)}" '
+                       f'placeholder="unbekannt" style="max-width:9rem">')
+            where = (f' <span class="muted" style="font-size:.8rem">{props.ORIGIN_DE.get(origin, "")}'
+                     f'</span>' if origin else "")
+            fields.append(f'<div><label>{props.LABEL_DE[prop]}</label>{inp}{where}</div>')
+            seen = cell.get("seen", "")
+            if origin == "operator" and seen and seen != value:
+                notes.append(
+                    f'<form method="post" action="model-props-take" style="margin:.2rem 0">'
+                    f'<input type="hidden" name="supplier" value="{esc(key[0])}">'
+                    f'<input type="hidden" name="model" value="{esc(key[1])}">'
+                    f'<input type="hidden" name="prop" value="{prop}">'
+                    f'<span class="muted">{props.LABEL_DE[prop]}: '
+                    f'{props.ORIGIN_DE.get(cell.get("seen_origin"), "")} gemeldet '
+                    f'<code>{esc(props.short(prop, seen))}</code>, gesetzt '
+                    f'<code>{esc(props.short(prop, value))}</code></span> '
+                    f'<button class="quiet" type="submit">übernehmen</button></form>')
+        out.append(
+            f'<form class="grid" method="post" action="model-props" style="margin-top:.6rem">'
+            f'<input type="hidden" name="supplier" value="{esc(key[0])}">'
+            f'<input type="hidden" name="model" value="{esc(key[1])}">'
+            f'<div style="grid-column:1/-1"><b><code>{esc(key[0])} · {esc(key[1])}</code></b></div>'
+            f'{"".join(fields)}<div><button class="quiet" type="submit">Eigenschaften speichern'
+            f'</button></div></form>{"".join(notes)}')
+    return "".join(out)
+
+
 def aliases_card():
     editable = MODE == "app"
     rows = []
+    tab = props.table(DB)
     stored = {r["name"]: r for r in catalog.alias_rows(DB)} if editable else {}
     names = sorted(set(ALIASES) | set(stored))
     for name in names:
@@ -613,14 +729,21 @@ def aliases_card():
             worst = light_badge(supply.alias_light(alias, SUPPLIERS, "red"))
             order_listed = alias["order_listed"]
             text = supply.targets_text(alias)
+            traits = props_summary(props.of_alias(alias, tab))
         else:
+            traits = ""
             targets = [f'<code>{esc(stored[name]["targets"])}</code>']
             worst = '<span class="badge err">unbenutzbar</span>'
             order_listed = bool(stored[name]["order_listed"])
             text = stored[name]["targets"]
         action = ""
+        if editable and alias:
+            action = (f'<details><summary class="muted">Eigenschaften</summary>'
+                      f'<p class="hint" style="margin:.4rem 0 0">Je Ziel; der Modellname bekommt je '
+                      f'Angabe das schwächste seiner Ziele. Leer heißt unbekannt — geraten wird '
+                      f'nicht; meldet die Quelle etwas, gilt dann wieder ihr Wert.</p>{props_forms(alias, tab)}</details>')
         if editable:
-            action = (f'<details><summary class="muted">ändern</summary>'
+            action += (f'<details><summary class="muted">ändern</summary>'
                       f'<form class="grid" method="post" action="alias" style="margin-top:.6rem">'
                       f'<input type="hidden" name="name" value="{esc(name)}">'
                       f'<div><label>Ziele (quelle:modell, …)</label>'
@@ -635,13 +758,19 @@ def aliases_card():
         test = (f'<form method="post" action="alias-test">'
                 f'<input type="hidden" name="name" value="{esc(name)}">'
                 f'<button class="quiet" type="submit" title="Jedes Ziel mit einer Mini-Anfrage '
-                f'prüfen">testen</button></form>' if alias else "")
+                f'prüfen">testen</button></form>'
+                f'<form method="post" action="alias-tooltest">'
+                f'<input type="hidden" name="name" value="{esc(name)}">'
+                f'<button class="quiet" type="submit" title="Je Ziel eine kleine Anfrage mit einem '
+                f'harmlosen Werkzeug — kostet bei der Quelle ein paar Token">Werkzeugaufruf '
+                f'probieren</button></form>' if alias else "")
         order = "wie aufgeführt" if order_listed else "grün vor gelb vor rot"
         rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{worst}</td>'
                     f'<td>{"<br>".join(targets)}</td><td class="muted">{esc(order)}</td>'
+                    f'<td class="muted">{esc(traits)}</td>'
                     f'<td><div class="rowactions">{test}{action}</div></td></tr>')
     table = (f'<table><tr><th>Modellname</th><th>Ampel</th><th>Bezugsquellen</th>'
-             f'<th>Reihenfolge</th><th></th></tr>{"".join(rows)}</table>' if rows else
+             f'<th>Reihenfolge</th><th>Eigenschaften</th><th></th></tr>{"".join(rows)}</table>' if rows else
              '<p class="muted">Noch kein Modellname — ohne ihn kann kein Verbraucher etwas anfragen.</p>')
     form = ""
     if editable:
@@ -816,7 +945,7 @@ def suppliers_card():
 TABS = (("dashboard", "./", "Dashboard"), ("anfragen", "anfragen", "Letzte Anfragen"),
         ("auswertung", "auswertung", "Auswertung"), ("schluessel", "schluessel", "Schlüssel"),
         ("kohorten", "kohorten", "Kohorten"), ("modelle", "modelle", "Modelle"),
-        ("quellen", "quellen", "Bezugsquellen"))
+        ("quellen", "quellen", "Bezugsquellen"), ("vorlagen", "vorlagen", "Vorlagen"))
 
 
 def tab_counts():
@@ -1640,9 +1769,16 @@ def probe_supplier(name):
     if src is None:
         return {"name": name, "status": None, "ms": 0, "ids": [], "via": via,
                 "error": "nicht nutzbar (Zugangsdaten nicht lesbar oder Eintrag fehlerhaft)"}
-    status, ms, ids, error = relay.probe(src, timeout=PROBE_TIMEOUT)
+    status, ms, entries, error = relay.probe_list(src, timeout=PROBE_TIMEOUT)
     SEEN.note(name, assets.reached(status))
-    return {"name": name, "status": status, "ms": ms, "ids": ids, "error": error, "via": via}
+    if entries and MODE == "app":
+        try:
+            learn(name, entries)
+        except Exception as exc:                        # noqa: BLE001
+            sys.stdout.write(f"Eigenschaften aus der Modellliste: {type(exc).__name__}\n")
+    return {"name": name, "status": status, "ms": ms, "ids": [e["id"] for e in entries],
+            "listed": {e["id"]: e["props"] for e in entries if e["props"]},
+            "error": error, "via": via}
 
 
 # 0.10.0 (RFC-0104 §3.1): die Einrichtungstür. Von außen unter `/` und damit
@@ -1659,7 +1795,10 @@ def asset_answer():
     dests = bound_destinations()
     via = {n: destination_of(src["url"], dests) for n, src in suppliers.items()}
     SEEN.forget(set(suppliers))
-    return assets.answer(suppliers, aliases, SEEN, {n: d for n, d in via.items() if d})
+    tab = props.table(DB)
+    return assets.answer(suppliers, aliases, SEEN, {n: d for n, d in via.items() if d},
+                         props={n: props.api_fields(props.of_alias(a, tab))
+                                for n, a in aliases.items()})
 
 
 def check_destination_sources():
@@ -1798,6 +1937,194 @@ def test_alias(name):
                         "text": f"HTTP {up.status} in {charts.fmt_num(ms)} ms"
                                 + (f" — {hint}" if hint else "")})
     return out
+
+
+TOOL_TEST_TOOL = {"type": "function", "function": {
+    "name": "now", "description": "Returns the current time. Takes no arguments.",
+    "parameters": {"type": "object", "properties": {}}}}
+TOOL_TEST_MAX_TOKENS = 60
+
+
+def tool_test(name):
+    """„Werkzeugaufruf probieren“ (RFC-0106 §2.4): je Ziel eine kleine Anfrage
+    mit einem harmlosen Werkzeug. Nur auf Klick, nicht in den Verbrauch
+    gezählt; die Quelle zählt die paar Token.
+
+    Ein Werkzeugaufruf in der Antwort → `tools` ja; eine Antwort ohne → nein;
+    eine Ablehnung, die das Feld `tools` nennt → nein; alles andere setzt
+    nichts (eine Störung ist keine Auskunft über das Modell).
+    """
+    alias = ALIASES.get(name)
+    if alias is None:
+        return [{"target": name, "cls": "critical", "text": "gibt es nicht (mehr)"}]
+    out = []
+    for target in alias["targets"]:
+        src = SUPPLIERS.get(target["supplier"])
+        label = f'{target["supplier"]} · {target["model"]}'
+        if src is None:
+            out.append({"target": label, "cls": "critical", "text": "Quelle nicht nutzbar"})
+            continue
+        started = time.monotonic()
+        up, _counts = relay.call_json(src, "/v1/chat/completions", {
+            "model": target["model"], "max_tokens": TOOL_TEST_MAX_TOKENS, "stream": False,
+            "tools": [TOOL_TEST_TOOL], "tool_choice": "auto",
+            "messages": [{"role": "user", "content": "What time is it? Use the tool now; "
+                                                     "do not answer in text."}]},
+            timeout=ALIAS_TEST_TIMEOUT)
+        ms = int((time.monotonic() - started) * 1000)
+        verdict = None
+        if 200 <= up.status < 300:
+            doc = relay._safe_json(up.body) or {}
+            msg = ((doc.get("choices") or [{}])[0] or {}).get("message") or {}
+            calls = msg.get("tool_calls") if isinstance(msg, dict) else None
+            verdict = "true" if isinstance(calls, list) and calls else "false"
+            text = (f"ruft das Werkzeug auf — HTTP {up.status} in {charts.fmt_num(ms)} ms"
+                    if verdict == "true" else
+                    f"antwortet, ruft aber kein Werkzeug auf — HTTP {up.status} in "
+                    f"{charts.fmt_num(ms)} ms")
+            cls = "good" if verdict == "true" else "warning"
+        elif up.status == 400 and b"tool" in (up.body or b"").lower():
+            verdict, cls = "false", "warning"
+            text = f"lehnt Werkzeuge ab — HTTP 400 in {charts.fmt_num(ms)} ms"
+        elif up.status == 0:
+            cls, text = "critical", f"nicht erreichbar — {esc(up.error[:200])}"
+        else:
+            cls = "serious" if up.status < 500 else "critical"
+            text = f"HTTP {up.status} in {charts.fmt_num(ms)} ms — keine Auskunft, nichts gesetzt"
+        if verdict is not None and MODE == "app":
+            props.note(DB, target["supplier"], target["model"], {"tools": verdict}, "test")
+            text += f" · gemerkt: Werkzeuge {'ja' if verdict == 'true' else 'nein'} (aus dem Test)"
+        out.append({"target": label, "cls": cls, "text": text})
+    return out
+
+
+def tool_test_card(name, results):
+    rows = "".join(
+        f'<div class="probe {r["cls"]}"><span class="pm">{charts.STATUS[r["cls"]][1]}</span>'
+        f'<div><code>{esc(r["target"])}</code> — {r["text"]}</div></div>' for r in results)
+    return (f'<div class="card"><h2>Werkzeugaufruf „{esc(name)}“</h2>{rows}'
+            f'<p class="hint" style="margin:.6rem 0 0">Jedes Ziel bekam eine kleine Anfrage mit '
+            f'einem harmlosen Werkzeug (<code>now</code>, höchstens {TOOL_TEST_MAX_TOKENS} Token). '
+            f'Sie zählt nicht in den Verbrauch dieses Gateways; die Quelle zählt sie. Ein Wert vom '
+            f'Betreiber bleibt — die Meldung steht dann daneben.</p></div>')
+
+
+def change_props(form, user):
+    """POST /model-props und /model-props-take — gibt den Satz für die Seite zurück."""
+    if MODE != "app":
+        return "Gesperrt, solange die Übernahme aus der Konfiguration wartet (AIGW_MASTER_KEY fehlt)."
+    supplier, model = form.get("supplier", ""), form.get("model", "")
+    used = any(t["supplier"] == supplier and t["model"] == model
+               for a in ALIASES.values() for t in a["targets"])
+    if not used:
+        return f"„{supplier} · {model}“ ist kein Ziel eines Modellnamens."
+    try:
+        if form.get("prop"):
+            props.take_seen(DB, user, supplier, model, form["prop"])
+            return f"Übernommen für {supplier} · {model}."
+        changed = props.set_operator(DB, user, supplier, model,
+                                     {p: form.get(p, "") for p in props.PROPS})
+    except ValueError as exc:
+        return str(exc)
+    return (f"Eigenschaften von {supplier} · {model} gespeichert ({', '.join(changed)})."
+            if changed else f"Eigenschaften von {supplier} · {model} unverändert.")
+
+
+# ---- Vorlagen für Clients (RFC-0106 Stufe 2)
+
+TEMPLATES = templates.load()
+
+
+def client_file(tpl, names, host):
+    """(text, fehlende) für diese Modellnamen; die Adresse ist die dieses Gateways."""
+    tab = props.table(DB)
+    models = [{"id": n, "props": props.of_alias(ALIASES[n], tab)} for n in names if n in ALIASES]
+    return templates.render(tpl, models, f"https://{host}/v1", f"OAAP KI-Gateway {host}")
+
+
+def templates_result(params, picked, host):
+    """(text, vorlage, fehlende, namen, satz) oder None, solange nichts gewählt ist."""
+    tpl = TEMPLATES.get(params.get("ziel", ""))
+    if tpl is None:
+        return None
+    if params.get("quelle") == "schluessel":
+        label = params.get("schluessel", "")
+        row = next((r for r in store.keys(DB, include_revoked=False)
+                    if r["label"] == label and r["kind"] == "key"), None)
+        if row is None:
+            return None
+        names = [n for n, _a, _l in key_models(row)]
+        said = (f"Die Modellnamen, die der Schlüssel „{label}“ benutzen kann ({len(names)}) — "
+                f"genau die Liste, die er unter /v1/models bekommt.")
+    else:
+        names = [n for n in picked if n in ALIASES]
+        said = f"{len(names)} von Hand gewählte Modellnamen."
+    if not names:
+        return None
+    text, missing = client_file(tpl, names, host)
+    return text, tpl, missing, names, said
+
+
+def templates_page(user, roles, host, params, picked, built):
+    target = params.get("ziel", "") or (sorted(TEMPLATES)[0] if TEMPLATES else "")
+    mode = params.get("quelle", "schluessel")
+    keys = [r for r in store.keys(DB, include_revoked=False) if r["kind"] == "key"
+            and store.usable(r)]
+    key_opts = "".join(f'<option value="{esc(r["label"])}"'
+                       f'{" selected" if r["label"] == params.get("schluessel") else ""}>'
+                       f'{esc(r["label"])}</option>' for r in keys)
+    boxes = "".join(f'<label style="display:inline-block;margin-right:1rem">'
+                    f'<input type="checkbox" name="m" value="{esc(n)}"'
+                    f'{" checked" if n in picked else ""}> <code>{esc(n)}</code></label>'
+                    for n in sorted(ALIASES))
+    form = f"""<form method="get" action="vorlagen" class="grid">
+    <div><label for="tp-ziel">Werkzeug</label><select id="tp-ziel" name="ziel">
+      {options(sorted(TEMPLATES), target, {k: v["title"] for k, v in TEMPLATES.items()})}</select></div>
+    <div><fieldset><legend>Modellnamen</legend>
+      <label><input type="radio" name="quelle" value="schluessel"{" checked" if mode == "schluessel" else ""}>
+        aus einem Schlüssel</label>
+      <label><input type="radio" name="quelle" value="hand"{" checked" if mode == "hand" else ""}>
+        von Hand</label></fieldset></div>
+    <div><label for="tp-key">Schlüssel (Etikett)</label><select id="tp-key" name="schluessel">
+      <option value="">—</option>{key_opts}</select></div>
+    <div style="grid-column:1/-1"><label>Von Hand (wenn gewählt)</label>{boxes or
+      '<span class="muted">Noch kein Modellname.</span>'}</div>
+    <div><button type="submit">Datei erzeugen</button></div>
+  </form>"""
+    parts = [f"""<div class="card">
+  <h2>Vorlagen für Clients</h2>
+  <p class="hint">Erzeugt die Konfiguration eines Werkzeugs für die Modellnamen dieses Gateways —
+    mit den Eigenschaften, die das Gateway kennt (Reiter Modelle). Der Schlüssel steht nie in der
+    Datei, nur ein Platzhalter. Wer einen Schlüssel hat, holt sich die Datei auch selbst:
+    <code>GET https://{esc(host)}/v1/oaap/client-config?target=&lt;werkzeug&gt;</code>
+    mit dem Schlüssel.</p>
+  {form}
+</div>"""]
+    if params.get("ziel") and not built:
+        parts.append('<div class="card"><p class="muted">Nichts zu erzeugen — kein Schlüssel '
+                     'gewählt, oder er kann keinen Modellnamen erreichen, oder keiner '
+                     'angehakt.</p></div>')
+    if built:
+        text, tpl, missing, names, said = built
+        gone = "".join(f'<li><code>{esc(n)}</code>: ' +
+                       ", ".join(props.LABEL_DE[p] for p in ps) + '</li>'
+                       for n, ps in missing.items())
+        query = urlencode([(k, v) for k, v in params.items() if k != "laden"]
+                          + [("m", n) for n in picked] + [("laden", "1")])
+        parts.append(f"""<div class="card">
+  <div class="cardhead"><h2>{esc(tpl["title"])}: <code>{esc(tpl["file"])}</code></h2>
+    <a class="button quiet" href="vorlagen?{esc(query)}">herunterladen</a></div>
+  <p class="summary">{esc(said)}</p>
+  <pre style="white-space:pre-wrap">{esc(text)}</pre>
+  <p class="hint"><b>Wohin:</b> {esc(tpl["where"])}</p>
+  <p class="hint"><b>Schlüssel:</b> {esc(tpl["key_hint"])}</p>
+  {f'<p class="hint"><b>Unbekannt und deshalb weggelassen</b> (das Werkzeug nimmt seinen '
+   f'eigenen Vorgabewert; nachtragen im Reiter Modelle):</p><ul class="hint">{gone}</ul>'
+   if gone else ''}
+  <p class="hint">Geprüft gegen: {esc(tpl["format"])} (am {esc(tpl["checked"])}). Formate von
+    Werkzeugen ändern sich — lädt das Werkzeug die Datei nicht, bitte melden.</p>
+</div>""")
+    return page("Vorlagen", "".join(parts), user, roles, tab="vorlagen")
 
 
 def alias_test_card(name, results):
@@ -2004,6 +2331,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_file(self, text, filename):
+        """Eine erzeugte Datei zum Herunterladen (RFC-0106 §3.1); nie im Cache."""
+        body = text.encode("utf-8")
+        safe = "".join(c for c in filename if c.isalnum() or c in "._-") or "datei.json"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def send_error_doc(self, status, message, code, extra_headers=()):
         self.send_raw_json(status, error_bytes(message, code), extra_headers)
 
@@ -2122,25 +2461,32 @@ class Handler(BaseHTTPRequestHandler):
             if bad:
                 self.send_error_doc(400, bad, "bad_light")
                 return
-            ceiling, pbd = request_ceiling(row, asked), pbd_of(row)
             data = []
-            for name in sorted(allowed_aliases(row)):
-                # Die Farbe ist die schlechteste unter den Zielen, die
-                # dieser Schlüssel erreichen darf. Ein Alias, der auf einen
-                # roten Anbieter ausweichen kann, ist nicht grün — sonst
-                # wäre die Ampel eine Beruhigung statt einer Auskunft.
-                alias = ALIASES.get(name)
-                light = supply.alias_light(alias, SUPPLIERS, ceiling, pbd) if alias else ""
-                if not light:
-                    # Für diesen Schlüssel gibt es kein erreichbares Ziel.
-                    # Ihn trotzdem anzubieten hieße, dem Client eine Wahl
-                    # hinzulegen, die beim ersten Klick scheitert.
-                    continue
+            tab = props.table(DB)
+            for name, alias, light in key_models(row, request_ceiling(row, asked)):
                 data.append({"id": name, "object": "model", "created": 0,
                              "owned_by": "oaap", "oaap_light": light,
                              "oaap_light_meaning": supply.LIGHT_LABELS[light],
-                             "oaap_data_rule": supply.LIGHT_RULES[light]})
+                             "oaap_data_rule": supply.LIGHT_RULES[light],
+                             # RFC-0106 §2.5: nur gesetzte Eigenschaften.
+                             **props.api_fields(props.of_alias(alias, tab))})
             self.send_json(200, {"object": "list", "data": data})
+            return
+        if path == "/v1/oaap/client-config":
+            # RFC-0106 §3.4: die Datei für die Modellnamen DIESES Schlüssels.
+            # Der Schlüssel, mit dem gefragt wurde, steht nicht darin (D9).
+            row = self.authorize()
+            if row is None:
+                return
+            query = dict(parse_qsl(self.path.partition("?")[2]))
+            tpl = TEMPLATES.get(query.get("target", ""))
+            if tpl is None:
+                self.send_error_doc(400, "target kennt: " + ", ".join(sorted(TEMPLATES)),
+                                    "unknown_target")
+                return
+            names = [n for n, _a, _l in key_models(row)]
+            text, _missing = client_file(tpl, names, self.headers.get("Host", "<gateway>"))
+            self.send_file(text, tpl["file"])
             return
         if path == "/v1/usage":
             row = self.authorize()
@@ -2207,6 +2553,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, models_page(user, roles, params=params))
         elif path == "/quellen":
             self.send_html(200, sources_page(user, roles))
+        elif path == "/vorlagen":
+            picked = [v for k, v in parse_qsl(self.path.partition("?")[2]) if k == "m"]
+            built = templates_result(params, picked, host)
+            if built and params.get("laden") == "1":
+                self.send_file(built[0], built[1]["file"])
+            else:
+                self.send_html(200, templates_page(user, roles, host, params, picked, built))
         elif path == "/":
             self.send_html(200, dashboard_page(user, roles, host, params))
         else:
@@ -2301,7 +2654,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in ("/issue", "/revoke", "/context", "/key-aliases", "/supplier", "/supplier-delete",
                     "/alias", "/alias-delete", "/supplier-test", "/alias-test",
-                    "/cohort-issue", "/cohort-extend", "/cohort-revoke", "/alias-import"):
+                    "/cohort-issue", "/cohort-extend", "/cohort-revoke", "/alias-import",
+                    "/alias-tooltest", "/model-props", "/model-props-take"):
             self.handle_admin_post(path)
             return
         self.send_error_doc(404, "Diesen Pfad kennt das Gateway nicht.", "unknown_path")
@@ -2348,6 +2702,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/alias-import":
             self.send_html(200, models_page(user, roles, notice=import_aliases(form, multi, user)))
+            return
+        if path == "/alias-tooltest":
+            name = form.get("name", "")
+            self.send_html(200, models_page(user, roles,
+                                            tests=tool_test_card(name, tool_test(name))))
+            return
+        if path in ("/model-props", "/model-props-take"):
+            self.send_html(200, models_page(user, roles, notice=change_props(form, user)))
             return
         if path == "/alias-test":
             name = form.get("name", "")

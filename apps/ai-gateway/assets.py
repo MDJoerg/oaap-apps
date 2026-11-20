@@ -76,12 +76,14 @@ def model_state(states):
     return "idle"
 
 
-def answer(suppliers, aliases, seen, via, now=None):
+def answer(suppliers, aliases, seen, via, now=None, props=None):
     """Die Antwort der Tür: {"v": 1, "assets": [...]}.
 
     suppliers -- {name: quelle}, aliases -- {name: {"targets": [{"supplier":
     name, "model": ...}]}}, seen -- Seen, via -- {quelle: destination} für
-    Quellen, deren Adresse über eine gebundene Destination führt."""
+    Quellen, deren Adresse über eine gebundene Destination führt; props --
+    {modellname: {"oaap_tools": …}} (RFC-0106 §2.5, nur gesetzte), ohne
+    Präfix in den Eintrag übernommen."""
     out = []
     states = {}
     for name in sorted(suppliers):
@@ -93,6 +95,9 @@ def answer(suppliers, aliases, seen, via, now=None):
     for name in sorted(aliases):
         uses = sorted({t["supplier"] for t in aliases[name].get("targets") or []
                        if t.get("supplier") in suppliers})
-        out.append({"kind": "model", "name": name,
-                    "state": model_state([states[u] for u in uses]), "uses": uses})
+        row = {"kind": "model", "name": name,
+               "state": model_state([states[u] for u in uses]), "uses": uses}
+        for k, v in ((props or {}).get(name) or {}).items():
+            row[k[len("oaap_"):] if k.startswith("oaap_") else k] = v
+        out.append(row)
     return {"v": 1, "assets": out[:MAX_ASSETS]}

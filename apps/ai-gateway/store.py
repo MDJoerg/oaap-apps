@@ -108,6 +108,20 @@ CREATE TABLE IF NOT EXISTS setup_items (
   digest TEXT NOT NULL,
   PRIMARY KEY (kind, id)
 );
+-- Seit 0.11.0 (RFC-0106): Eigenschaften je Ziel (Quelle + Modell der
+-- Quelle) mit Herkunft; `seen` ist, was Quelle oder Test zuletzt meldeten,
+-- wenn der Betreiber etwas anderes gesetzt hat (props.py).
+CREATE TABLE IF NOT EXISTS model_props (
+  supplier    TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  prop        TEXT NOT NULL,
+  value       TEXT NOT NULL,
+  origin      TEXT NOT NULL,
+  seen        TEXT NOT NULL DEFAULT '',
+  seen_origin TEXT NOT NULL DEFAULT '',
+  updated     TEXT NOT NULL,
+  PRIMARY KEY (supplier, model, prop)
+);
 """
 
 # Spalten, die nach 0.2 dazukamen (RFC-0064). Sie werden bei jedem Start

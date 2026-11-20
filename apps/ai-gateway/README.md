@@ -572,6 +572,54 @@ Art `client` in `keys`, deren Etikett der Name des Chats ist.
 Prüfen: `python3 apps/ai-gateway/test_setup.py` (Köder 2, 3, 5, 6, 7 aus
 RFC-0104 §8).
 
+## Eigenschaften der Modelle und Vorlagen für Clients (0.11.0, RFC-0106)
+
+**Eigenschaften.** Je Modellname vier Angaben: Werkzeuge (`tools`), Bilder
+(`vision`), Kontextfenster (`context`, Ein- und Ausgabe zusammen) und
+größte Ausgabe (`output`). Gespeichert wird je Ziel (Quelle + Modell der
+Quelle); ein Modellname mit mehreren Zielen bekommt je Angabe das
+**schwächste** — wie bei der Ampel. Jede Angabe ist gesetzt oder
+unbekannt; geraten wird nichts. Woher ein Wert kommt, steht daneben:
+
+- **von der Quelle** — beim Verbindungstest oder beim Abruf der
+  Modellliste, nur was die Quelle ausdrücklich sagt (`context_length`,
+  `context_window`, `max_completion_tokens`, eine Fähigkeitenliste mit
+  `tools`/`vision`, Eingabe-Arten mit `image` …). Fehlt ein Wort in einer
+  Liste, heißt das nicht „nein“.
+- **aus dem Test** — Knopf „Werkzeugaufruf probieren“ im Reiter Modelle:
+  je Ziel eine kleine Anfrage mit dem harmlosen Werkzeug `now`
+  (höchstens 60 Token). Nur auf Klick; nicht im Verbrauch dieses
+  Gateways, die Quelle zählt die paar Token.
+- **vom Betreiber** — unter „Eigenschaften“ je Ziel. Ein Betreiberwert
+  wird nie überschrieben; meldet Quelle oder Test später etwas anderes,
+  steht es daneben mit „übernehmen“. Ein geleertes Feld heißt
+  unbekannt — meldet die Quelle etwas, gilt dann wieder ihr Wert.
+
+`GET /v1/models` trägt die gesetzten Angaben als `oaap_tools`,
+`oaap_vision`, `oaap_context`, `oaap_output` neben der Ampel; die
+Asset-Tür `/oaap/assets` ebenso (ohne Präfix). Die Einrichtungstür nimmt
+sie beim Eintrag `alias` an (`"context": 128000`, `"tools": true`), als
+Angabe des Betreibers; einen anderen Betreiberwert überschreibt sie nicht.
+
+**Vorlagen.** Reiter „Vorlagen“: Werkzeug wählen (VS Code, opencode),
+Modellnamen aus einem Schlüssel (genau die Liste, die er unter
+`/v1/models` bekommt) oder von Hand, Datei ansehen oder herunterladen.
+Unbekannte Angaben fallen weg — das Werkzeug nimmt seinen eigenen
+Vorgabewert, und die Seite nennt sie. Der Schlüssel steht nie in der
+Datei: VS Code fragt nach `${input:oaapAiKey}`, opencode liest
+`OAAP_AI_KEY` aus der Umgebung. Wer einen Schlüssel hat, holt sich seine
+Datei selbst:
+
+```
+curl -H "Authorization: Bearer $OAAP_AI_KEY" \
+  "https://<gateway>/v1/oaap/client-config?target=vscode" -o chatLanguageModels.json
+```
+
+Eine Vorlage ist Daten (`templates/<werkzeug>.json`) mit der Fassung des
+Formats und dem Tag, an dem sie geprüft wurde. Formate von Werkzeugen
+ändern sich; die eigentliche Probe ist, die Datei einmal im echten
+Werkzeug zu laden.
+
 ## Was noch fehlt
 
 - **RFC-0064 Stufe 4:** Verdichtung und Aufbewahrung der Messzeilen.

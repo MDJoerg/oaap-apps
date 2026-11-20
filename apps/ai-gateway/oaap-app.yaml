@@ -3,10 +3,10 @@ oaap_manifest: "0.18"
 app:
   id: ai-gateway
   name: OAAP KI-Gateway
-  version: 0.10.1
+  version: 0.11.0
   type: native
   class: frontend
-  description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023) Seit 0.9.0 nimmt jede Anfrage mit X-OAAP-Light eine zusaetzliche Decke an, die die des Schluessels nur verschaerft (Ampel des Gespraechs, RFC-0101). Seit 0.10.0 Einrichtungstuer fuer den Aufbau aus einem Profil und Freigabe fuer einen Chat ohne Schluessel (RFC-0104). Seit 0.10.1 traegt eine Freigabe den Mandanten als Kontext (Feld tenant beim Einrichten)."
+  description: "Eine Bezugsquelle für alle KI-Verbräuche — OpenAI-kompatibel, mit API-Schlüsseln, Aliassen nach Zweck und Verbrauchsmessung (Capability oaap.ai.gateway, RFC-0023) Seit 0.9.0 nimmt jede Anfrage mit X-OAAP-Light eine zusaetzliche Decke an, die die des Schluessels nur verschaerft (Ampel des Gespraechs, RFC-0101). Seit 0.10.0 Einrichtungstuer fuer den Aufbau aus einem Profil und Freigabe fuer einen Chat ohne Schluessel (RFC-0104). Seit 0.10.1 traegt eine Freigabe den Mandanten als Kontext (Feld tenant beim Einrichten). Seit 0.11.0 Eigenschaften je Modellname (Werkzeuge, Bilder, Kontext, Ausgabe) und Reiter Vorlagen fuer VS Code und opencode (RFC-0106)."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.

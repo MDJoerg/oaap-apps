@@ -12,7 +12,12 @@ Drei Arten:
 - `supplier` — eine Bezugsquelle **ohne** Zugangsdaten; die trägt ein
   Mensch auf der Seite ein. `ready` heißt: Zugangsdaten gespeichert und
   der Verbindungstest der Seite antwortet jetzt.
-- `alias` — ein Modellname auf genau ein Ziel (Quelle + Modell der Quelle).
+- `alias` — ein Modellname auf genau ein Ziel (Quelle + Modell der Quelle);
+  seit 0.11.0 (RFC-0106 §2.6) optional mit den Eigenschaften `tools`,
+  `vision`, `context`, `output` dieses Ziels. Sie gelten als Angabe des
+  Betreibers; einen anderen Wert, den ein Mensch gesetzt hat, überschreibt
+  die Tür nicht (`conflict`). Sie zählen nicht zum Digest: `remove` fragt
+  nur, ob der Modellname noch so ist, wie die Einrichtung ihn anlegte.
 - `client` — die Freigabe für einen Chat (§4), eine Zeile der Art
   `client` in `keys` ohne benutzbaren Digest.
 
@@ -33,6 +38,7 @@ import re
 import threading
 
 import catalog
+import props
 import store
 import supply
 
@@ -44,7 +50,7 @@ KINDS = ("supplier", "alias", "client")
 SECRET_FIELDS = {"key", "token", "secret", "password", "credentials", "credential", "api_key"}
 
 FIELDS = {"supplier": {"url", "light"},
-          "alias": {"supplier", "model"},
+          "alias": {"supplier", "model"} | set(props.PROPS),
           "client": {"aliases", "ceiling", "personal_data", "tenant"}}
 
 ACTOR_CHARS = re.compile(r"[^\w.@:+-]")
@@ -129,7 +135,22 @@ def wish(item):
             return None, "supplier und model sind nicht leerer Text."
         if "," in src or ":" in src or "," in model:
             return None, "supplier ohne „,“ und „:“, model ohne „,“."
-        return {"targets": f"{src.strip()}:{model.strip()}", "order_listed": 0}, ""
+        wanted = {}
+        for prop in props.PROPS:
+            if prop in item:
+                if prop in props.BOOLS and not isinstance(item[prop], bool):
+                    return None, f"{prop} ist true oder false."
+                if prop in props.INTS and (isinstance(item[prop], bool)
+                                           or not isinstance(item[prop], int)):
+                    return None, f"{prop} ist eine Zahl von Token."
+                try:
+                    wanted[prop] = props.norm(prop, item[prop])
+                except ValueError as exc:
+                    return None, str(exc)
+        norm = {"targets": f"{src.strip()}:{model.strip()}", "order_listed": 0}
+        if wanted:
+            norm["props"] = wanted
+        return norm, ""
     names = item.get("aliases", [])
     ceiling = item.get("ceiling", supply.DEFAULT_CEILING)
     pbd = item.get("personal_data", False)
@@ -289,12 +310,17 @@ class Door:
         norm, why = wish(item)
         if why:
             return out("refused", why)
+        wanted = norm.pop("props", {}) if kind == "alias" else {}
         have, block, row = self.current(kind, ident)
         if block:
             return out("conflict", block)
         if have is not None:
-            diff = differences(norm, have)
-            return out("conflict", "; ".join(diff)) if diff else out("present")
+            diff = differences(norm, have) + self._prop_conflicts(norm, wanted)
+            if diff:
+                return out("conflict", "; ".join(diff))
+            if wanted and not dry and self._set_props(norm, wanted, actor):
+                return out("present", "Eigenschaften gesetzt")
+            return out("present")
         why = self._missing(kind, norm, planned)
         if why:
             return out("refused", why)
@@ -317,6 +343,8 @@ class Door:
                             bool(norm["personal_data"]), tenant=norm.get("tenant", ""))
         except ValueError as exc:
             return out("refused", str(exc))
+        if wanted:
+            self._set_props(norm, wanted, actor)
         if kind in ("supplier", "alias"):
             self.reload()
         # Gemerkt wird der Ist-Zustand nach dem Anlegen, so wie `current` ihn
@@ -328,6 +356,26 @@ class Door:
         store.log(self.db, actor, "setup.make", f"{kind}:{ident}", f"digest={d[:16]}")
         self.db.commit()
         return out("made")
+
+    # ---- Eigenschaften (RFC-0106 §2.6)
+
+    def _prop_conflicts(self, norm, wanted):
+        """Ein anderer Wert, den ein Mensch gesetzt hat, bleibt -- als Unterschied benannt."""
+        if not wanted:
+            return []
+        src, _, model = norm["targets"].partition(":")
+        have = props.table(self.db).get((src, model), {})
+        out = []
+        for prop, value in wanted.items():
+            cell = have.get(prop)
+            if cell and cell["origin"] == "operator" and cell["value"] != value:
+                out.append(f"{props.LABEL_DE[prop]}: ist „{cell['value']}“ (vom Betreiber), "
+                           f"gewünscht „{value}“")
+        return out
+
+    def _set_props(self, norm, wanted, actor):
+        src, _, model = norm["targets"].partition(":")
+        return props.set_operator(self.db, actor, src, model, wanted)
 
     # ---- POST remove
 

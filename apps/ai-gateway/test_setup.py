@@ -190,7 +190,7 @@ CLIENT = {"kind": "client", "id": "kit-chat", "aliases": ["standard"], "ceiling"
 
 print("-- Grundgerüst")
 status, body = http("/healthz")
-check("Version 0.10.0", json.loads(body)["version"] == "0.10.0", body)
+check(f"Version {app.VERSION}", json.loads(body)["version"] == app.VERSION, body)
 
 print("\n-- §8 Köder 2: nur der eigene Einrichtungsschlüssel öffnet die Tür")
 status, _ = door(key=None)

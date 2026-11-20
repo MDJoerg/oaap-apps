@@ -1,0 +1,29 @@
+{
+  "target": "opencode",
+  "title": "opencode",
+  "format": "opencode.jsonc mit providers und dem Paket openai-compatible, laut opencode-Dokumentation (providers, models) vom 20.11.2026",
+  "checked": "2026-11-20",
+  "file": "opencode.jsonc",
+  "where": "Als opencode.jsonc ins Projekt oder in die globale Konfiguration von opencode legen; gibt es die Datei schon, den Eintrag unter providers ergänzen.",
+  "key_hint": "opencode liest den Schlüssel aus der Umgebungsvariable OAAP_AI_KEY. Setze sie vor dem Start, zum Beispiel in deiner Shell. Der Wert ist dein Schlüssel für dieses Gateway.",
+  "document": {
+    "$schema": "https://opencode.ai/config.json",
+    "providers": {
+      "oaap": {
+        "name": "{gateway}",
+        "env": ["OAAP_AI_KEY"],
+        "package": "@opencode/ai/providers/openai-compatible",
+        "settings": {"baseURL": "{url}"},
+        "models": "{models}"
+      }
+    }
+  },
+  "models_as": "map",
+  "model": {
+    "modelID": "{id}",
+    "name": "{name}",
+    "capabilities": {"tools": "{tools}", "input": "{vision}"},
+    "limit": {"context": "{context}", "output": "{output}"}
+  },
+  "values": {"vision": {"true": ["text", "image"], "false": ["text"]}}
+}
