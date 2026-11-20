@@ -1888,7 +1888,7 @@ check("KÖDER: Bert zählt keinen Vorgang zu Annas privatem Assistenten (404 wie
 _base = {r["rev"]: r["calls"] for r in books.assistant_evaluation(app.DB, "a-priv")["revisions"]}
 for rev, outcome, sub in ((2, "ok", "u-anna"), (2, "refused", "u-bert"), (2, "tool_error", "u-anna"), (1, "ok", "u-anna")):
     app.DB.execute("INSERT INTO usage (time, key_id, view, tool, outcome, user_sub, client, assistant, assistant_rev) "
-                   "VALUES (?,?,?,?,?,?,?,?,?)", ("2026-11-19T10:00:00Z", "k", "a-sicht", "whoami", outcome, sub,
+                   "VALUES (?,?,?,?,?,?,?,?,?)", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "k", "a-sicht", "whoami", outcome, sub,
                                                   "chat", "a-priv", rev))
 app.DB.commit()
 st, ev = ax("GET", "/a-priv/evaluation")
