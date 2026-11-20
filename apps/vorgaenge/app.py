@@ -58,7 +58,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -665,6 +665,8 @@ class Handler(BaseHTTPRequestHandler):
         if not who:
             return self.send(401, page("Nicht angemeldet", "<p>Bitte über die Plattform anmelden.</p>"))
         q = parse_qs(u.query)
+        if p.startswith("/api/spez/"):
+            return self.spez_get(who, p[len("/api/spez/"):])
         if p == "/":
             return self.home(who, q)
         if p == "/neu":
@@ -702,6 +704,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, "")
         if p == "/mcp":
             return self.mcp_post(who)
+        if p.startswith("/api/spez/"):
+            return self.spez_post(who, p[len("/api/spez/"):])
         if not self.same_origin():
             return self.send(403, page("Abgelehnt", "<p>Dieses Formular kam nicht von dieser Seite.</p>"))
         try:
@@ -712,6 +716,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.queues_post(who, f)
             if p == "/bereiche/mitglied":
                 return self.member_post(who, f)
+            if p == "/bereiche/spezialist":
+                return self.first_responder_post(who, f)
             if p == "/partner":
                 return self.partners_post(who, f)
             if p.startswith("/v/") and p.endswith("/uebergabe"):
@@ -722,6 +728,71 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(400, page("Nicht möglich", f"<p class=err>{esc(str(e))}</p>"
                                        "<p><a href='javascript:history.back()'>Zurück</a></p>"))
         return self.send(404, "")
+
+    # --- 0.13.0 (RFC-0105 Stufe 1): die Tür für den Lauf eines Spezialisten. Der Spezialist
+    # ist hier eine Person wie jede andere (sein Agent, RFC-0067): er liest, was seine
+    # Zuweisung erlaubt, und schreibt nur, wo er verantwortlich ist. Nur JSON (kein Formular).
+    def spez_case(self, who, number):
+        c = self.store.get(mcp_door.case_number(number))
+        if not c or not can_see(who, c) or not can_read_internal(who, c):
+            raise Refused("Diesen Vorgang gibt es nicht, oder er liegt nicht in deinen Bereichen.")
+        return c
+
+    def spez_get(self, who, rest):
+        try:
+            if rest == "turn":
+                return self.json(200, {"uid": who.id, "cases": self.store.turn(who.id)})
+            if rest.startswith("case/"):
+                c = self.spez_case(who, rest[5:])
+                qt = {q["id"]: q["title"] for q in self.store.queues()}
+                tech = c["tech"] or {}
+                return self.json(200, {
+                    "number": c["number"], "title": c["title"], "description": c["body"],
+                    "kind": KIND_LABEL.get(c["kind"], c["kind"]), "status": c["status"],
+                    "queue": c["queue"], "queue_title": qt.get(c["queue"], c["queue"]),
+                    "reported_by": c["reporter_name"], "created": c["created"],
+                    "fields": tech.get("fields") or {}, "subkind": tech.get("subkind") or "",
+                    "responsible": c["responsible"], "mine": c["responsible"] == who.id,
+                    "stopped": bool(c.get("spec_stop")),
+                    "entries": [{"seq": e["seq"], "at": e["at"], "by": e["actor_name"],
+                                 "by_me": e["actor"] == who.id, "type": e["type"], "text": e["text"],
+                                 "internal": bool(e.get("internal")),
+                                 **({"step": {k: e["data"].get(k) for k in ("kind", "run", "assistant", "tool", "reason")
+                                              if e["data"].get(k) is not None}} if e["type"] == "spec" else {})}
+                                for e in c["entries"]]})
+        except Refused as e:
+            return self.json(404, {"error": str(e)})
+        return self.json(404, {"error": "unbekannt"})
+
+    def spez_post(self, who, rest):
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            return self.json(415, {"error": "Nur JSON."})
+        try:
+            doc = json.loads(self.body() or b"{}")
+            if not isinstance(doc, dict):
+                raise ValueError
+        except ValueError:
+            return self.json(400, {"error": "Kein JSON-Objekt."})
+        parts = rest.split("/")
+        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back"):
+            return self.json(404, {"error": "unbekannt"})
+        try:
+            c = self.spez_case(who, parts[1])
+            if parts[2] == "entry":
+                data = {k: doc.get(k) for k in ("run", "assistant", "tool", "arguments", "ms", "call_id",
+                                                "reason", "steps") if doc.get(k) is not None}
+                self.store.spec_entry(c, who.id, who.name, doc.get("kind", ""), doc.get("text", ""), data)
+                return self.json(200, {"ok": True})
+            self.store.give_back(c, who.id, who.name, doc.get("reason", ""), str(doc.get("run") or ""))
+            return self.json(200, {"ok": True, "given_back": True})
+        except Refused as e:
+            return self.json(409, {"error": str(e)})
+
+    def first_responder_post(self, who, f):
+        if not who.manager:
+            raise Refused("Die Erstbearbeitung eines Bereichs stellt der tenant_admin ein.")
+        self.store.set_first_responder(f.get("queue", ""), f.get("uid", ""))
+        return self.redirect("/bereiche")
 
     # --- die MCP-Tür (0.4.0, RFC-0073): dieselbe Person, dieselben Regeln wie die Seite
     def mcp_post(self, who):
@@ -1247,6 +1318,9 @@ Betreff und Text.</p>
             names = ", ".join(f"{esc(m['name'])} ({kind_word.get(m['kind'], m['kind'])})" for m in mem) or \
                 '<span class=muted>noch niemand</span>'
             mine = ("bearbeiten" if who.may("triage", q["id"]) else "lesen" if who.may("read", q["id"]) else "")
+            fr_name = self.store.person_name(q["first_responder"]) if q.get("first_responder") else ""
+            if fr_name:
+                names += f" · <span class=pill>KI</span> {esc(fr_name)} (Erstbearbeitung)"
             row = (f"<tr><td><code>{esc(q['id'])}</code></td><td>{esc(q['title'])}</td>"
                    f"<td>{names}</td><td>{mine}</td></tr>")
             if who.manager:
@@ -1267,7 +1341,20 @@ Betreff und Text.</p>
                         f"<option value=clearing>Clearing (darf auch übergeben)</option></select></div>"
                         f"<button>Eintragen</button></form>"
                         f"<p class=muted>Fehlt jemand? Die Person öffnet die App Vorgänge einmal, danach steht "
-                        f"sie hier. Ein Verzeichnis aller Benutzer bekommt diese App nicht.</p></details></td></tr>")
+                        f"sie hier. Ein Verzeichnis aller Benutzer bekommt diese App nicht.</p></details>"
+                        # 0.13.0 (RFC-0105 §3.1): ein Spezialist bekommt neue Vorgänge zuerst
+                        f"<details><summary class=muted>Erstbearbeitung durch einen Spezialisten"
+                        f"{': ' + esc(fr_name) if fr_name else ''}</summary>"
+                        f"<form method=post action=/bereiche/spezialist class=inline>"
+                        f"<input type=hidden name=queue value='{esc(q['id'])}'>"
+                        f"<div><label>Spezialist (KI)</label><select name=uid><option value=''>keiner</option>"
+                        + "".join(f"<option value='{esc(p['uid'])}'{' selected' if p['uid'] == q.get('first_responder') else ''}>"
+                                  f"{esc(p['name'])}</option>" for p in people)
+                        + f"</select></div><button>Speichern</button></form>"
+                        f"<p class=muted>Neue und hierher verschobene Vorgänge bekommt zuerst dieser Spezialist "
+                        f"als Verantwortlichen (RFC-0105). Er arbeitet im Hintergrund, schreibt nur intern und gibt "
+                        f"an die Zuständigen zurück. Zur Auswahl steht er, sobald die App Spezialisten einmal für "
+                        f"ihn gelaufen ist.</p></details></td></tr>")
             rows.append(row)
         rows = "".join(rows)
         body = (f"<p>Ein Bereich ist eine Zuständigkeit: ein Thema oder ein Team. Vorgänge kommen im "
@@ -1380,6 +1467,22 @@ Betreff und Text.</p>
                 head = "Antwort des Partners"
             elif e["type"] == "answer_sent":
                 head = "Antwort an den Partner gesendet"
+            elif e["type"] == "spec":
+                # 0.13.0 (RFC-0105 §4): der „dunkle Chat“ -- Notizen offen, Werkzeugaufrufe zugeklappt
+                k = d.get("kind")
+                label = {"note": "Notiz", "tool": "Werkzeug " + esc(d.get("tool") or ""),
+                         "end": "Lauf beendet" + (f" ({esc(SPEC_END.get(d.get('reason'), d.get('reason') or ''))})"
+                                                 if d.get("reason") else "")}.get(k, "Schritt")
+                meta = esc(" · ".join(x for x in (str(d.get("assistant") or ""), ("Lauf " + str(d["run"])) if d.get("run") else "") if x))
+                body = (f"<details><summary class=muted>Aufruf und Ergebnis</summary><pre>{esc(e['text'])}</pre></details>"
+                        if k == "tool" else f"<div class=body data-md>{esc(e['text'])}</div>")
+                box.append(f"<div class=card style='background:#eef2ff'><div class=muted>{when} · {who_} "
+                           f"<span class=pill>KI</span> · {label}{(' · ' + meta) if meta else ''}</div>{body}</div>")
+                continue
+            elif e["type"] == "spec_stop":
+                box.append(f"<div class=card><div class=muted>{when} · {who_} · Spezialist "
+                           f"{'angehalten' if d.get('on') else 'wieder zugelassen'}</div></div>")
+                continue
             elif e["type"] == "role":
                 word = self.store.ROLE_WORD.get(d.get("role"), d.get("role", ""))
                 head = (f"{word}: {esc(names.get(d.get('to'), d.get('to')))}" if d.get("to")
@@ -1395,6 +1498,14 @@ Betreff und Text.</p>
                        f"<div class=muted>{when} · {who_} · {head}</div>{text}</div>")
         forms = comment_form = intern_form = hand = ""
         base = f"/v/{quote(c['number'])}"
+        # 0.13.0 (RFC-0105 §5): anhalten / wieder zulassen -- wer den Bereich bearbeitet
+        if who.may("triage", c["queue"]) and c["status"] not in ("closed", "rejected") and (
+                c.get("spec_stop") or any(e["type"] == "spec" for e in c["entries"])):
+            on = not c.get("spec_stop")
+            forms += (f"<div class=card><form method=post action='{base}/spezstop' class=inline>"
+                      f"<input type=hidden name=on value='{1 if on else 0}'>"
+                      f"<button>{'Spezialist anhalten' if on else 'Spezialist wieder zulassen'}</button></form>"
+                      f"<span class=muted> {'Der Lauf endet nach dem laufenden Schritt; danach arbeitet hier kein Spezialist, bis ihn jemand wieder zulässt.' if on else 'An diesem Vorgang ist der Spezialist angehalten.'}</span></div>")
         if c["reporter"] == who.id and c["status"] == "answered":
             # 0.9.0 (RFC-0103 D10): abnehmen oder wieder öffnen -- dieselben Regeln wie im Chat
             forms += (f"<div class=card><h2 style='margin-top:0'>Passt die Lösung?</h2>"
@@ -1579,6 +1690,10 @@ Betreff und Text.</p>
             self.store.accept(c, who.id, who.name)
         elif action == "reopen":
             self.store.not_fitting(c, who.id, who.name, f.get("text", ""))
+        elif action == "spezstop":
+            if not who.may("triage", c["queue"]):
+                raise Refused("Anhalten darf, wer den Bereich bearbeitet.")
+            self.store.set_spec_stop(c, f.get("on") == "1", who.id, who.name)
         elif action == "antwort":
             if not who.may("hand_over", c["queue"]):
                 raise Refused("Antworten an einen Partner darf nur das Clearing dieses Bereichs.")
@@ -1587,6 +1702,10 @@ Betreff und Text.</p>
         else:
             return self.send(404, "")
         return self.redirect(f"/v/{quote(c['number'])}")
+
+
+SPEC_END = {"done": "fertig", "gave_back": "zurückgegeben", "limit": "Grenze erreicht",
+            "stopped": "angehalten", "error": "Fehler", "needs_approval": "wartet auf Freigabe"}
 
 
 MCP_RULES = mcp_door.Rules(

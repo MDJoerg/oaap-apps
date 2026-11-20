@@ -949,7 +949,7 @@
       "id": "vorgaenge",
       "name": "Vorgänge",
       "type": "native",
-      "version": "0.12.0",
+      "version": "0.13.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -979,7 +979,7 @@
         "mandant"
       ],
       "summary": "Melden, Klären und Übergeben im Mandanten — nimmt den Feedback-Knopf der Plattform an.",
-      "description": "Vorgänge (RFC-0061): nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Übergaben zwischen Mandanten (Stufe 2). Eine Instanz je Mandant.",
+      "description": "Vorgänge (RFC-0061): nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Übergaben zwischen Mandanten (Stufe 2). Eine Instanz je Mandant. Seit 0.13.0 können KI-Spezialisten (App Spezialisten, RFC-0105) Vorgänge eines Bereichs zuerst bearbeiten: im Hintergrund, nur intern, mit Stopp-Knopf und Rückgabe an die Zuständigen.",
       "links": [
         {
           "rel": "source",
@@ -989,6 +989,51 @@
           "rel": "docs",
           "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0061-cases-feedback-and-handover.md",
           "label": "RFC-0061 — Vorgänge"
+        }
+      ]
+    },
+    {
+      "id": "spezialisten",
+      "name": "Spezialisten",
+      "type": "native",
+      "version": "0.1.0",
+      "released": "2026-11-20",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/spezialisten"
+      },
+      "roles": [
+        "admin",
+        "keyuser"
+      ],
+      "categories": [
+        "business",
+        "ai"
+      ],
+      "app_class": "frontend",
+      "audience": [
+        "operator"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "ki",
+        "agent",
+        "vorgang",
+        "spezialist",
+        "hintergrund"
+      ],
+      "summary": "KI-Spezialisten, die Vorgänge im Hintergrund bearbeiten -- mit eigenem Agenten, nur lesend, jeder Schritt im Vorgang.",
+      "description": "Ein Spezialist ist eine festgehaltene Assistenten-Revision mit eigenem Agenten und engen Rechten nur in seinen Bereichen (RFC-0105 Stufe 1). Die App fragt die App Vorgänge (ab 0.13.0), welche Vorgänge an ihm dran sind, liest den Vorgang als zitierte Daten, ruft lesende Werkzeuge seiner eigenen Sicht im MCP-Gateway und das Modell über das KI-Gateway, schreibt jeden Schritt intern in den Vorgang und gibt am Ende an die Zuständigen zurück. Grenzen je Lauf und je Vorgang, Stopp-Knopf am Vorgang; die meldende Person sieht davon nichts.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/spezialisten"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0105-specialists-in-cases.md",
+          "label": "RFC-0105 — Spezialisten in Vorgängen"
         }
       ]
     },

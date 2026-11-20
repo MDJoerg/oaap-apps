@@ -231,7 +231,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS entries_case ON entries(case_id, seq);
             """)
             # RFC-0061 §2.2: jeder Mandant hat einen Eingang, ab Installation
-            self.db.execute("INSERT OR IGNORE INTO queues VALUES (?,?,?)",
+            self.db.execute("INSERT OR IGNORE INTO queues (id, title, created) VALUES (?,?,?)",
                             (DEFAULT_QUEUE, "Eingang", _now()))
             # 0.1.1 (Q6): wann ein Vorgang endete, und wann seine
             # Personendaten entfernt wurden. Eine Ablage aus 0.1.0 bekommt
@@ -257,6 +257,13 @@ class Store:
             # 0.10.0 (D5): ein Eintrag kann intern sein -- nie für die meldende Person
             if "internal" not in {r[1] for r in self.db.execute("PRAGMA table_info(entries)")}:
                 self.db.execute("ALTER TABLE entries ADD COLUMN internal INTEGER NOT NULL DEFAULT 0")
+            # 0.13.0 (RFC-0105 Stufe 1): ein Spezialist darf an diesem Vorgang nicht mehr
+            # laufen, bis ein Mensch es wieder zulässt
+            if "spec_stop" not in have:
+                self.db.execute("ALTER TABLE cases ADD COLUMN spec_stop INTEGER NOT NULL DEFAULT 0")
+            # 0.13.0: Erstbearbeitung eines Bereichs durch einen Spezialisten (uid, leer = keiner)
+            if "first_responder" not in {r[1] for r in self.db.execute("PRAGMA table_info(queues)")}:
+                self.db.execute("ALTER TABLE queues ADD COLUMN first_responder TEXT NOT NULL DEFAULT ''")
             # 0.10.0 (D3): wer je verantwortlich oder zugewiesen war, liest weiter
             self.db.execute("CREATE TABLE IF NOT EXISTS involved (case_id TEXT NOT NULL, "
                             "uid TEXT NOT NULL, role TEXT NOT NULL, since TEXT NOT NULL, "
@@ -400,7 +407,35 @@ class Store:
         with self.lock, self.db:
             if self.db.execute("SELECT 1 FROM queues WHERE id=?", (qid,)).fetchone():
                 raise Refused(f"Den Bereich „{qid}“ gibt es schon.")
-            self.db.execute("INSERT INTO queues VALUES (?,?,?)", (qid, title, _now()))
+            self.db.execute("INSERT INTO queues (id, title, created) VALUES (?,?,?)", (qid, title, _now()))
+
+    def set_first_responder(self, qid, uid):
+        """0.13.0 (RFC-0105 §3.1): neue und hierher verschobene Vorgänge bekommt zuerst
+        dieser Spezialist als Verantwortlichen. Leer = niemand. Ob uid ein Spezialist ist,
+        weiß die App nicht -- sie kennt ihn wie jede Person, sobald er einmal da war."""
+        uid = (uid or "").strip()
+        with self.lock, self.db:
+            if uid and not self.db.execute("SELECT 1 FROM people WHERE uid=?", (uid,)).fetchone():
+                raise Refused("Diesen Spezialisten kennt die App noch nicht. Er meldet sich "
+                              "beim ersten Lauf der App Spezialisten an; danach steht er in der Auswahl.")
+            if not self.db.execute("UPDATE queues SET first_responder=? WHERE id=?",
+                                   (uid, qid)).rowcount:
+                raise Refused("Diesen Bereich gibt es nicht.")
+
+    def _first_responder(self, cid, queue):
+        """Unter der Sperre: der Spezialist des Bereichs wird verantwortlich (intern vermerkt)."""
+        r = self.db.execute("SELECT q.first_responder AS uid, p.name AS name FROM queues q "
+                            "JOIN people p ON p.uid = q.first_responder WHERE q.id=? "
+                            "AND q.first_responder != ''", (queue,)).fetchone()
+        if not r:
+            return ""
+        self.db.execute("UPDATE cases SET responsible=?, spec_stop=0 WHERE id=?", (r["uid"], cid))
+        self.db.execute("INSERT OR IGNORE INTO involved VALUES (?,?,?,?)",
+                        (cid, r["uid"], "responsible", _now()))
+        self._entry(cid, "system", "Automatisch", "role", r["name"],
+                    {"role": "responsible", "from": "", "to": r["uid"], "first_responder": True},
+                    internal=True)
+        return r["uid"]
 
     def rename_queue(self, qid, title):
         title = _clip((title or "").strip(), 80)
@@ -468,6 +503,7 @@ class Store:
                  json.dumps(tech, ensure_ascii=False), at, at))
             self._entry(cid, reporter, reporter_name, "created", "",
                         {"queue": queue})
+            self._first_responder(cid, queue)
         return {"id": cid, "number": number}
 
     def _entry(self, cid, actor, actor_name, typ, text, data=None, internal=False):
@@ -674,6 +710,77 @@ class Store:
             self._entry(c["id"], actor, actor_name, "role", name,
                         {"role": role, "from": c.get(role, ""), "to": uid}, internal=True)
 
+    # ------------------------------ Spezialisten (0.13.0, RFC-0105 Stufe 1)
+    SPEC_KINDS = ("note", "tool", "end")
+
+    def turn(self, uid):
+        """Offene Vorgänge, für die uid verantwortlich ist und an denen kein Stopp hängt --
+        mit dem letzten Eintrag, damit der Spezialist sieht, ob seit seinem Lauf etwas kam."""
+        with self.lock:
+            rows = self.db.execute(
+                f"SELECT * FROM cases WHERE responsible=? AND spec_stop=0 AND status IN "
+                f"({','.join('?' * len(OPEN))}) ORDER BY updated LIMIT 200", [uid] + list(OPEN)).fetchall()
+            out = []
+            for c in rows:
+                last = self.db.execute("SELECT seq, actor, type, at FROM entries WHERE case_id=? "
+                                       "AND type != 'role' ORDER BY seq DESC LIMIT 1", (c["id"],)).fetchone()
+                runs = self.db.execute("SELECT COUNT(DISTINCT json_extract(data, '$.run')) FROM entries "
+                                       "WHERE case_id=? AND actor=? AND type='spec'", (c["id"], uid)).fetchone()[0]
+                out.append({"number": c["number"], "title": c["title"], "status": c["status"],
+                            "queue": c["queue"], "updated": c["updated"], "runs": runs,
+                            "last": dict(last) if last else None})
+        return out
+
+    def spec_entry(self, c, uid, name, kind, text, data):
+        """Ein Schritt eines Laufs, immer intern: note (Modelltext), tool (Aufruf, gekürzt),
+        end (warum der Lauf endete). Nur, wer verantwortlich ist; nach einem Stopp nur noch end."""
+        if kind not in self.SPEC_KINDS:
+            raise Refused("Art des Eintrags: note, tool oder end.")
+        text = (text or "").strip()
+        if len(text) > BODY_MAX:
+            text = text[:BODY_MAX - 1] + "…"
+        if not text:
+            raise Refused("Ein leerer Eintrag wird nicht gespeichert.")
+        data = {k: v for k, v in (data or {}).items() if FIELD_KEY.match(str(k)) and _plain(v)}
+        if len(json.dumps(data, ensure_ascii=False)) > FIELDS_MAX:
+            raise Refused("Die Angaben zum Schritt sind zu groß.")
+        data["kind"] = kind
+        with self.lock, self.db:
+            r = self.db.execute("SELECT responsible, spec_stop, status FROM cases WHERE id=?",
+                                (c["id"],)).fetchone()
+            if not r or r["responsible"] != uid:
+                raise Refused("Schreiben darf hier nur, wer verantwortlich ist.")
+            if r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            if r["spec_stop"] and kind != "end":
+                raise Refused("An diesem Vorgang ist der Spezialist angehalten.")
+            self._entry(c["id"], uid, name, "spec", text, data, internal=True)
+
+    def give_back(self, c, uid, name, reason, run=""):
+        """RFC-0105 §7.3: zurück an die Menschen des Bereichs -- verantwortlich leer, Status
+        Klärung (wo erlaubt), ein interner Eintrag mit dem Grund."""
+        reason = _clip((reason or "").strip(), 2000) or "zurückgegeben"
+        with self.lock, self.db:
+            r = self.db.execute("SELECT responsible, status FROM cases WHERE id=?", (c["id"],)).fetchone()
+            if not r or r["responsible"] != uid:
+                raise Refused("Zurückgeben kann nur, wer verantwortlich ist.")
+            self.db.execute("UPDATE cases SET responsible='' WHERE id=?", (c["id"],))
+            self._entry(c["id"], uid, name, "role", "",
+                        {"role": "responsible", "from": uid, "to": "", "given_back": True}, internal=True)
+            self._entry(c["id"], uid, name, "spec", reason,
+                        {"kind": "end", "reason": "gave_back", "run": _clip(run, 40)}, internal=True)
+            new = "triage" if "triage" in NEXT.get(r["status"], ()) else ""
+            if new:
+                self.db.execute("UPDATE cases SET status=? WHERE id=?", (new, c["id"]))
+                self._entry(c["id"], uid, name, "status", "",
+                            {"from": r["status"], "to": new}, internal=True)
+
+    def set_spec_stop(self, c, on, actor, actor_name):
+        """§5: ein Mensch hält den Spezialisten an diesem Vorgang an (oder lässt ihn wieder zu)."""
+        with self.lock, self.db:
+            self.db.execute("UPDATE cases SET spec_stop=? WHERE id=?", (1 if on else 0, c["id"]))
+            self._entry(c["id"], actor, actor_name, "spec_stop", "", {"on": bool(on)}, internal=True)
+
     # ------------------------------------------ der Knoten (RFC-0069 Stufe 2)
     def open_by_object(self, kind, oid):
         """Der offene Vorgang zu einem Bezug, oder None. Damit ein Absender,
@@ -722,6 +829,7 @@ class Store:
             self._entry(c["id"], actor, actor_name, "move", (text or "").strip(),
                         {"from": c["queue"], "to": target,
                          **({"responsible_cleared": c["responsible"]} if c.get("responsible") else {})})
+            self._first_responder(c["id"], target)
 
     def remove_person_data(self, months, now=None):
         """Q6: Personendaten eines Vorgangs, der seit `months` Monaten

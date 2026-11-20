@@ -196,6 +196,30 @@ Absender wird sie ein Eintrag „Antwort des Partners“, und der Vorgang
 geht von `übergeben` auf `beantwortet`. Antworten darf nur der Partner,
 an den übergeben wurde.
 
+## KI-Spezialisten (seit 0.13.0, RFC-0105 Stufe 1)
+
+Ein Spezialist ist ein Agent mit eigenen Rechten. Die App **Spezialisten** führt seine
+Läufe aus. Für Vorgänge ist er eine Person wie jede andere: Er liest, was seine
+Zuweisung erlaubt, zum Beispiel „Bearbeiter/in“ im Bereich `analyse`. Schreiben darf er
+nur, wo er verantwortlich ist.
+
+- **Erstbearbeitung:** Unter „Bereiche“ wählt der `tenant_admin` je Bereich einen
+  Spezialisten. Neue und dorthin verschobene Vorgänge bekommen ihn als Verantwortlichen.
+  Das wird intern vermerkt. Zur Auswahl steht er, sobald die App Spezialisten einmal für
+  ihn gelaufen ist.
+- **Tür für den Lauf** (`/api/spez/…`, nur JSON, als der Agent):
+  - `GET turn`: welche Vorgänge an ihm dran sind, mit dem letzten Eintrag und der Zahl
+    seiner Läufe.
+  - `GET case/<nr>`: der Vorgang mit Verlauf.
+  - `POST case/<nr>/entry`: ein Schritt `note`, `tool` oder `end`, immer intern.
+  - `POST case/<nr>/give-back`: verantwortlich leer, Status Klärung.
+- **Dunkler Chat:** Die Schritte stehen im Reiter „Intern“ mit der Marke **KI**. Die
+  Werkzeugaufrufe sind zugeklappt, jeder Schritt nennt Lauf und `assistent@rev`. Die
+  meldende Person sieht keinen davon.
+- **Stopp:** Wer den Bereich bearbeitet, kann am Vorgang „Spezialist anhalten“ drücken.
+  Danach nimmt Vorgänge vom Spezialisten nur noch das Ende des Laufs an, bis jemand ihn
+  wieder zulässt.
+
 ## MCP-Tür (seit 0.4.0, RFC-0073/RFC-0074)
 
 Unter `/mcp` (Manifest `mcp: {path: /mcp}`) ist Vorgänge eine MCP-Quelle für
