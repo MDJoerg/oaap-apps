@@ -63,7 +63,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.28.0"
+VERSION = "0.29.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4202,6 +4202,52 @@ def setup_gone(kind, obs):
             or (kind == "assistant" and obs["state"] == "deleted"))
 
 
+def setup_removed_by_door(kind, sid, obs):
+    """Steht hier nur noch ein Rest von etwas, das die Einrichtungstür SELBST entfernt
+    hat? (0.29.0, RFC-0109 D12) Dann darf die Tür es zurückholen -- sonst ginge nach
+    einem Rückgängig nie wieder ein Lauf, denn ein Etikett bleibt seinem Eintrag.
+
+    Beweis ist die Prüfspur des Gateways, nicht das Gedächtnis der Tür: beim Profil kam
+    der letzte Widerruf dieses Etiketts von „setup:…“, beim Assistenten die letzte
+    Änderung (das Löschen). Was ein Mensch widerrufen oder gelöscht hat, bleibt ein
+    conflict. Ein Schlüssel (kein Profil) kommt nie zurück: sein Wert ist verworfen."""
+    if obs is None or not setup_gone(kind, obs):
+        return False
+    if kind == "profile":
+        if obs["kind"] != "profile":
+            return False
+        row = DB.execute("SELECT actor FROM audit WHERE action='key.revoke' AND subject=? "
+                         "ORDER BY id DESC LIMIT 1", (sid,)).fetchone()
+        return bool(row) and str(row["actor"]).startswith("setup:")
+    if kind == "assistant":
+        row = DB.execute("SELECT changed_by FROM assistants WHERE id=?", (sid,)).fetchone()
+        return bool(row) and str(row["changed_by"]).startswith("setup:")
+    return False
+
+
+def setup_revive(kind, sid, wish, by):
+    """Holt zurück, wie gewünscht (setup_removed_by_door ist geprüft). Wirft ValueError."""
+    if kind == "profile":
+        row = DB.execute("SELECT id FROM keys WHERE label=? AND kind='profile'", (sid,)).fetchone()
+        if not row:
+            raise ValueError(f"Ein Zugangsprofil „{sid}“ gibt es nicht.")
+        views = ",".join(wish["views"])
+        DB.execute("UPDATE keys SET revoked='', groups=?, views=?, max_effect=?, ceiling=? "
+                   "WHERE id=?", (wish["groups"], views, wish["max_effect"], wish["ceiling"],
+                                  row["id"]))
+        books.log(DB, by, "profile.revive", sid,
+                  f"gruppen={wish['groups']} sichten={views} bis={wish['max_effect']} "
+                  f"ampel={wish['ceiling']}")
+        DB.commit()
+        return f"Zugangsprofil „{sid}“ zurückgeholt (die Einrichtung hatte es widerrufen)."
+    if kind == "assistant":
+        rev = books.assistant_write(DB, wish, by)
+        books.log(DB, by, "assistant.revive", sid, f"rev={rev}")
+        DB.commit()
+        return f"Assistent „{sid}“ zurückgeholt, Revision @{rev} (die früheren bleiben)."
+    raise ValueError("unbekannte Art")
+
+
 def setup_wish(kind, sid, item, planned, actor):
     """Der Wunsch in der Form, in der er verglichen und angelegt wird. Wirft SetupRefused.
 
@@ -4339,8 +4385,8 @@ def setup_difference(kind, wish, obs):
         if obs["kind"] != "profile":
             return "Das Etikett trägt einen Schlüssel, kein Zugangsprofil."
         if obs["revoked"]:
-            return ("Das Zugangsprofil ist widerrufen; ein Etikett bleibt seinem Eintrag für "
-                    "immer (bitte ein anderes wählen).")
+            return ("Das Zugangsprofil ist widerrufen, nicht von der Einrichtung; ein Etikett "
+                    "bleibt seinem Eintrag für immer (bitte ein anderes wählen).")
         bits = [f"{w} {obs[k] if k != 'views' else ','.join(obs[k])} statt "
                 f"{wish[k] if k != 'views' else ','.join(wish[k])}"
                 for k, w in (("groups", "Gruppen"), ("views", "Sichten"), ("ceiling", "Ampel"),
@@ -4349,8 +4395,8 @@ def setup_difference(kind, wish, obs):
         return "Das Zugangsprofil gibt es schon, anders: " + "; ".join(bits) + "."
     if kind == "assistant":
         if obs["state"] == "deleted":
-            return (f"Der Assistent ist gelöscht, seine Revisionen bleiben (zuletzt @{obs['rev']}); "
-                    "eine erste Revision @1 gibt es nicht mehr.")
+            return (f"Der Assistent ist gelöscht, nicht von der Einrichtung; seine Revisionen "
+                    f"bleiben (zuletzt @{obs['rev']}), und die Einrichtung holt ihn nicht zurück.")
         if obs["state"] != "active":
             return f"Der Assistent ist {obs['state']} (@{obs['rev']})."
         diff = sorted(k for k in set(obs["doc"]) | set(wish) if k != "owner"
@@ -4465,6 +4511,17 @@ def setup_item(item, dry, actor, planned):
                              books.setup_digest(setup_observed(kind, sid)))
         return "made", f"Ampel von „{srow['name']}“: red → {wish['light']}."
     obs = setup_observed(kind, sid)
+    if setup_removed_by_door(kind, sid, obs):
+        if dry:
+            planned.add((kind, sid))
+            return "would_make", "Holt zurück, was die Einrichtung selbst entfernt hat."
+        try:
+            note = setup_revive(kind, sid, wish, by)
+        except ValueError as exc:
+            return "refused", str(exc)
+        books.setup_remember(DB, kind, sid, actor, books.setup_digest(wish),
+                             books.setup_digest(setup_observed(kind, sid)))
+        return "made", note
     if obs is not None:
         if setup_matches(kind, sid, wish, obs):
             return "present", ""

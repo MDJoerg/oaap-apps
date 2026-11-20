@@ -313,6 +313,61 @@ ok("Prüfspur: auch removed und conflict mit Name der Einrichtung",
                   ("setup:" + ACTOR,)).fetchone()[0] == 4
    and app.DB.execute("SELECT COUNT(*) FROM audit WHERE action='setup.conflict'").fetchone()[0] >= 3)
 
+print("--- 0.29.0 (RFC-0109 D12): zurückholen, was die Tür selbst entfernt hat")
+BACK = [ITEMS[3], ITEMS[4]]                      # Profil ws-chat, Assistent hilfe -- oben entfernt
+st, doc = call("POST", body={"v": 1, "dry": True, "items": BACK})
+ok("dry: would_make für Profil und Assistent, mit dem Satz „Holt zurück“",
+   results(doc) == ["would_make", "would_make"]
+   and all("zurück" in r["note"] for r in doc["results"]), doc)
+ok("… dry holt nichts zurück",
+   app.DB.execute("SELECT revoked FROM keys WHERE label='ws-chat'").fetchone()["revoked"]
+   and books.assistant_row(app.DB, "hilfe")["state"] == "deleted")
+st, doc = call("POST", body={"v": 1, "items": BACK})
+ok("Lauf nach dem Rückgängig: made, made", results(doc) == ["made", "made"], doc)
+prof = app.DB.execute("SELECT * FROM keys WHERE label='ws-chat'").fetchone()
+ok("das Profil gilt wieder, wie gewünscht (Gruppe, Sicht, Decke)",
+   not prof["revoked"] and prof["kind"] == "profile" and prof["groups"] == "@ws-chat"
+   and prof["views"] == "hilfe" and prof["ceiling"] == "yellow", dict(prof))
+ok("… eine Person aus dem Chat findet es wieder",
+   (books.match_profile(app.DB, ["@ws-chat"], "hilfe", "@*") or {"label": ""})["label"] == "ws-chat")
+arow = books.assistant_row(app.DB, "hilfe")
+ok("der Assistent ist wieder aktiv, mit einer neuen Revision @2 (die @1 bleibt)",
+   arow["state"] == "active" and arow["rev"] == 2
+   and app.DB.execute("SELECT COUNT(*) FROM assistant_revisions WHERE id='hilfe'").fetchone()[0] == 2,
+   arow)
+ok("Prüfspur: profile.revive und assistant.revive mit dem Namen der Einrichtung",
+   app.DB.execute("SELECT COUNT(*) FROM audit WHERE action IN ('profile.revive','assistant.revive') "
+                  "AND actor=?", ("setup:" + ACTOR,)).fetchone()[0] == 2)
+st, doc = call("POST", body={"v": 1, "items": BACK})
+ok("noch einmal: present, present (kein zweites Zurückholen)",
+   results(doc) == ["present", "present"] and books.assistant_row(app.DB, "hilfe")["rev"] == 2, doc)
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "assistant", "id": "hilfe"},
+                                                {"kind": "profile", "id": "ws-chat"}]})
+ok("das Zurückgeholte lässt sich wieder entfernen (removed, removed)",
+   results(doc) == ["removed", "removed"], doc)
+st, doc = call("POST", body={"v": 1, "items": BACK})
+ok("… und wieder zurückholen (Rückgängig und Lauf beliebig oft)",
+   results(doc) == ["made", "made"], doc)
+
+print("--- KÖDER: was ein Mensch widerrufen oder gelöscht hat, kommt nicht zurück")
+books.revoke(app.DB, "ws-chat", "anna")
+books.assistant_set_state(app.DB, "hilfe", "deleted", "anna")
+st, doc = call("POST", body={"v": 1, "dry": True, "items": BACK})
+ok("dry: conflict, conflict, die Notiz sagt „nicht von der Einrichtung“",
+   results(doc) == ["conflict", "conflict"]
+   and all("nicht von der Einrichtung" in r["note"] for r in doc["results"]), doc)
+st, doc = call("POST", body={"v": 1, "items": BACK})
+ok("… auch ohne dry: das Profil bleibt widerrufen, der Assistent gelöscht",
+   results(doc)[0] == "conflict"
+   and app.DB.execute("SELECT revoked FROM keys WHERE label='ws-chat'").fetchone()["revoked"]
+   and books.assistant_row(app.DB, "hilfe")["state"] == "deleted", doc)
+books.issue(app.DB, "ws-schluessel", "anna", views=["hilfe"])
+books.revoke(app.DB, "ws-schluessel", "setup:jemand")
+st, doc = call("POST", body={"v": 1, "items": [dict(ITEMS[3], id="ws-schluessel")]})
+ok("ein SCHLÜSSEL kommt nie zurück, auch wenn „setup:“ ihn widerrief",
+   results(doc) == ["conflict"]
+   and app.DB.execute("SELECT revoked FROM keys WHERE label='ws-schluessel'").fetchone()["revoked"], doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")
