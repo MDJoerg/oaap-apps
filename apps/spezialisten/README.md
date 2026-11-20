@@ -72,8 +72,10 @@ sudo oaap authz agent-add analyse-ki --tenant T --collection <volle Kennung der 
 docker exec -i <gateway> python3 /srv/app.py server set <quelle>-analyse \
      --address http://oaap-gateway-1:<port der quelle>/mcp --auth bearer --credential-stdin ja
 docker exec <gateway> python3 /srv/app.py view set spez-analyse --ways key --max-effect read
-# soll er schreiben dürfen (Stufe 2): Wirkungsklasse write und Freigabepflicht
+# soll er schreiben dürfen (Stufe 2): drei Einstellungen müssen zusammenpassen --
+# Sicht bis write, Sicht mit Freigabepflicht, Schlüssel bis write
 docker exec <gateway> python3 /srv/app.py view set spez-analyse --max-effect write --approval required
+docker exec <gateway> python3 /srv/app.py key set spez-analyse --max-effect write
 docker exec <gateway> python3 /srv/app.py view add spez-analyse <quelle>-analyse <werkzeug> --effect read
 docker exec <gateway> python3 /srv/app.py key issue spez-analyse --views spez-analyse
 ```
