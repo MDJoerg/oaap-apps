@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.32.0"
+VERSION = "0.33.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -785,9 +785,11 @@ def read_catalog(name, person=None):
                        f"Person — app.py server read {name} --token-stdin ja.")
     if srow["auth_kind"] == "propagate" and not (person and person.get("assertion")):
         # P3: kein technischer Katalog-Benutzer -- es liest eine Person als sie selbst.
-        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Als "
-                       f"Person mit eigenem Benutzer im Zielsystem auf der Seite des Gateways auf "
-                       f"„Katalog jetzt lesen“ klicken.")
+        return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Eine "
+                       f"Person mit eigenem Benutzer im Zielsystem liest die erste Werkzeugliste "
+                       f"im Portal unter „Meine Werkzeuge“; die Verwaltung liest auf der Seite "
+                       f"des Gateways mit „Katalog jetzt lesen“, wenn sie selbst dort einen "
+                       f"Benutzer hat.")
     if srow["auth_kind"] == "personal" and not person:
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren U liest mit dem eigenen "
                        f"Zugang einer Person -- auf der Seite des Gateways auf „Katalog jetzt "
@@ -1550,25 +1552,58 @@ def me_readiness(uid):
             "ready": all(r["state"] == "ready" for r in rows)}
 
 
-def me_catalog_read(uid, server):
+def me_catalog_read(uid, server, assertion=""):
     """L29 (0.18.1): die ERSTE Werkzeugliste eines Servers mit Verfahren U, gelesen mit dem
     Zugang dieser Person. Nur solange sie noch nie gelesen wurde -- ein Zugang mit
     weniger Rechten soll die Liste der anderen nie verkürzen. Freigeben bleibt Sache der
-    Verwaltung; die Prüfspur nennt die Person mit Kennung."""
+    Verwaltung; die Prüfspur nennt die Person mit Kennung.
+
+    0.33.0 (bec, 20.11.): dasselbe für Verfahren P -- die Person liest als sie selbst,
+    mit ihrem Benutzer im Zielsystem, über die Zusicherung, die die Plattform ihr auf
+    dieser Seite mitgibt. Wer SAP-Rechte hat, braucht dafür keine Verwaltungsrolle."""
     srow = books.server_row(DB, server)
-    if not srow or srow["auth_kind"] != "personal":
-        return f"Der Server „{server}“ nimmt keinen persönlichen Zugang."
+    if not srow or srow["auth_kind"] not in ("personal", "propagate"):
+        return (f"Der Server „{server}“ nimmt weder einen persönlichen Zugang noch trägt er "
+                "die Person ins Zielsystem.")
     if srow["last_read"]:
         return (f"Die Werkzeugliste von {server} ist schon gelesen; neu lesen kann sie die "
                 "Verwaltung.")
-    if books.personal_row(DB, "platform", uid, server) is None:
-        return f"Für {server} hast du noch keinen Zugang hinterlegt."
-    ok_, text = read_catalog(server, {"iss": "platform", "sub": uid, "procedure": "U"})
+    if srow["auth_kind"] == "propagate":
+        if not assertion:
+            return (f"Für {server} fehlt die Zusicherung der Plattform -- diese Seite bitte "
+                    "über das Portal öffnen („Meine Werkzeuge“).")
+        person = {"iss": "platform", "sub": uid, "assertion": assertion, "procedure": "A"}
+    else:
+        if books.personal_row(DB, "platform", uid, server) is None:
+            return f"Für {server} hast du noch keinen Zugang hinterlegt."
+        person = {"iss": "platform", "sub": uid, "procedure": "U"}
+    ok_, text = read_catalog(server, person)
     books.log(DB, f"person:{uid}", "catalog.first", server, "gelesen" if ok_ else "nicht gelesen")
     if ok_:
         return (f"Werkzeugliste von {server} gelesen. Die Verwaltung gibt die Werkzeuge in "
                 "einer Sicht frei; bis dahin kannst du sie noch nicht benutzen.")
     return text
+
+
+def me_first_read_card():
+    """0.33.0: Server mit Verfahren P, deren Katalog noch nie gelesen wurde. Jede Person
+    mit eigenem Benutzer im Zielsystem darf die ERSTE Liste lesen -- als sie selbst."""
+    servers = [s for s in books.servers(DB) if s["auth_kind"] == "propagate" and not s["last_read"]]
+    if not servers:
+        return ""
+    rows = "".join(
+        f'<tr><td><b>{esc(s["name"])}</b>'
+        + (f'<br><span class="err">{esc(s["last_error"])}</span>' if s["last_error"] else "")
+        + f'</td><td><form method="post" action="me/catalog-read" style="display:inline">'
+        f'<input type="hidden" name="server" value="{esc(s["name"])}">'
+        f'<button>Werkzeugliste für die Verwaltung lesen</button></form></td></tr>'
+        for s in servers)
+    return f'''<div class="card"><h2>Werkzeuglisten, die noch niemand gelesen hat</h2>
+<p class="hint">Diese Server tragen dich mit deinem eigenen Benutzer ins Zielsystem, etwa SAP. Ihre
+Werkzeugliste kann nur eine Person lesen, die dort einen Benutzer hat -- als sie selbst. Hast du einen,
+lies sie hier einmal für die Verwaltung. Gelesen ist noch nicht freigegeben: Welche Werkzeuge der Chat
+bekommt, entscheidet die Verwaltung. Danach liest nur noch sie neu.</p>
+<div class="scroll"><table><tr><th>Server</th><th></th></tr>{rows}</table></div></div>'''
 
 
 def me_credentials_card(uid, notice=""):
@@ -1656,7 +1691,8 @@ def me_page(user, uid, query, admin=False, notice="", also=()):
                 f'<input type="date" name="day" value="{esc(flt["day"])}"> <button class="quiet">Tag</button></form>')
     empty = ("Keine Probleme in den letzten 30 Tagen." if flt["problems"] and not flt["view"]
              and not flt["day"] else "Keine Aufrufe für diesen Filter.")
-    body = f'''<div class="card"><h2>Meine Aufrufe</h2>
+    top = f'<div class="card attention"><p>{esc(notice)}</p></div>' if notice else ""
+    body = top + f'''<div class="card"><h2>Meine Aufrufe</h2>
 <p class="hint">Deine Aufrufe über dieses Gateway in den letzten {ME_DAYS} Tagen – aus dem Chat,
 aus Apps der Plattform. Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
 Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.</p>
@@ -1667,7 +1703,7 @@ Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.<
 <p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
 Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
 <p class="hint">{esc(doc["note"])}</p></div>
-{me_credentials_card(uid, notice)}{me_templates_card(uid)}'''
+{me_first_read_card()}{me_credentials_card(uid)}{me_templates_card(uid)}'''
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meine Werkzeuge — OAAP MCP-Gateway</title>
@@ -3959,7 +3995,8 @@ class Handler(BaseHTTPRequestHandler):
                 replaced = books.personal_store(DB, "platform", uid, server, sealed)
                 notice = f"Zugang für {server} {'ersetzt' if replaced else 'gespeichert'}."
             elif path == "/me/catalog-read":
-                notice = me_catalog_read(uid, server)
+                notice = me_catalog_read(uid, server,
+                                         (self.headers.get("X-OAAP-User-Assertion") or "").strip())
             else:
                 gone = books.personal_delete(DB, "platform", uid, server)
                 notice = f"Zugang für {server} gelöscht." if gone else "Da war kein Zugang."

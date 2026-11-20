@@ -3125,11 +3125,67 @@ st, html_ = me_post("/me/catalog-read", "u-ida-u", server="lies2")
 check("L29: ohne eigenen Zugang liest niemand, auch nicht bei nie gelesener Liste",
       "noch keinen Zugang" in html_ and not books.catalog(app.DB, "lies2"), html_[-300:])
 st, html_ = me_post("/me/catalog-read", "u-hans-u", server="papier")
-check("L29: ein Server ohne Verfahren U: nicht über /me", "keinen persönlichen Zugang" in html_)
+check("L29: ein Server ohne Verfahren U oder P: nicht über /me", "weder einen persönlichen Zugang" in html_)
 me_post("/me/credential", "u-op-u", server="lies2", value="op-tok")
 page = admin("/server-read", NOASRT, name="lies2")
 check("L29: die Verwaltung mit eigenem Zugang liest ohne Zusicherung",
       len(books.catalog(app.DB, "lies2")) == 1 and BS_["auth"][-1] == "Bearer op-tok", page[-300:])
+
+print("\n-- 0.33.0: die erste Werkzeugliste eines P-Servers liest eine Person auf /me (bec, 20.11.)")
+
+
+def me_post_a(path, uid, asrt, **form):
+    headers = {"X-OAAP-User": "vp-person", "X-OAAP-Roles": "user", "X-OAAP-User-Id": uid}
+    if asrt:
+        headers["X-OAAP-User-Assertion"] = asrt
+    req = urllib.request.Request(GW + path, data=urlencode(form).encode(), method="POST",
+                                 headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        resp = exc
+    return resp.status, resp.read().decode()
+
+
+# das Zielsystem auf Papier noch einmal (das erste ist oben schon beendet)
+dest = ThreadingHTTPServer(("0.0.0.0", 0), Dest)
+threading.Thread(target=dest.serve_forever, daemon=True).start()
+os.environ["OAAP_DESTINATION_SAP_PROBE_URL"] = f"http://{IP}:{dest.server_address[1]}/destinations/sap-probe/"
+admin("/server-save", name="sap-neu", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="yellow")
+okr, text = app.read_catalog("sap-neu")
+check("0.33: ohne Person verweist der Satz auf „Meine Werkzeuge“", not okr and "Meine Werkzeuge" in text, text)
+st, html_ = me_get("/me", "u-anna")
+check("0.33: /me zeigt den nie gelesenen P-Server mit Knopf -- auch ohne Rolle admin",
+      st == 200 and "Werkzeuglisten, die noch niemand gelesen hat" in html_ and "sap-neu" in html_
+      and "Werkzeugliste für die Verwaltung lesen" in html_)
+D["seen"].clear()
+st, html_ = me_post_a("/me/catalog-read", "u-anna", "", server="sap-neu")
+check("0.33 Köder: ohne Zusicherung liest niemand, nichts geht hinaus",
+      "Zusicherung" in html_ and not books.catalog(app.DB, "sap-neu") and not D["seen"], html_[-300:])
+D["seen"].clear()
+st, html_ = me_post_a("/me/catalog-read", "u-ohne", ASRT_OHNE, server="sap-neu")
+check("0.33: ohne Benutzer im Zielsystem: nicht gelesen, Satz der Destination, Knopf bleibt",
+      not books.catalog(app.DB, "sap-neu") and "nicht gelesen" in html_
+      and not books.server_row(app.DB, "sap-neu")["last_read"]
+      and "Werkzeugliste für die Verwaltung lesen" in html_, html_[-400:])
+D["seen"].clear()
+st, html_ = me_post_a("/me/catalog-read", "u-anna", ASRT_ANNA, server="sap-neu")
+check("0.33: Anna mit SAP-Benutzer liest die erste Liste als sie selbst",
+      "Werkzeugliste von sap-neu gelesen" in html_
+      and [c["name"] for c in books.catalog(app.DB, "sap-neu", "tool")] == ["who_am_i"]
+      and D["seen"] and all(s_["asrt"] == ASRT_ANNA for s_ in D["seen"]), (html_[-300:], D["seen"]))
+check("0.33: Prüfspur catalog.first nennt Anna; gelesen ist nicht freigegeben",
+      any(r["action"] == "catalog.first" and r["actor"] == "person:u-anna" and r["subject"] == "sap-neu"
+          for r in books.audit(app.DB, 50))
+      and not app.DB.execute("SELECT 1 FROM items WHERE server='sap-neu'").fetchone())
+D["seen"].clear()
+st, html_ = me_post_a("/me/catalog-read", "u-bert", ASRT_BERT, server="sap-neu")
+st2, page_ = me_get("/me", "u-bert")
+check("0.33: danach liest keine Person mehr (eine mit weniger Rechten verkürzt nie die Liste), "
+      "der Knopf ist weg, nichts hinaus",
+      "schon gelesen" in html_ and not D["seen"] and "sap-neu" not in page_, html_[-300:])
+dest.shutdown()
 
 print("\n-- 0.19.0: Gruppen eines Zugangsprofils ändern (L11), Link ins Portal (L1, L5)")
 page = admin("/key-limits", label="b-prof", views="b-sicht", max_effect="read", ceiling="red",
