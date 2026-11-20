@@ -20,6 +20,9 @@ Eine Instanz je Mandant. Sie nimmt zweierlei an:
    Neustart mit dem Beweis. Durch darf nur der Prinzipal
    `platform:<diese Instanz>`, dessen Schluessel das Gateway nur an dieser
    Tuer dieser Site annimmt.
+5. Seit 0.12.0 **Anfragen eines Mandanten an den Betreiber** durch dieselbe
+   Tuer (RFC-0109 §13): `object: request`, `from` nennt Mandant und Person;
+   `op: read` gibt dem Knoten Status und Antworten zurueck (nie Internes).
 
 Geklaert wird in **Bereichen** (Queues). Ein Bereich ist ein Kontext im
 Sinn von RFC-0045: wer welchen Bereich bearbeitet, vergibt der Mandant in
@@ -55,7 +58,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -65,6 +68,32 @@ DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
 REPORTS_PER_HOUR = 20
 # §3.2: Vorgaenge aus dem Backend einer App, je meldende Instanz und Stunde
 SUBMISSIONS_PER_HOUR = 600
+# 0.12.0: was der Knoten an seiner Tür anlegen darf -- seinen Neustart-Plan
+# (RFC-0069) und die Anfrage eines Mandanten an den Betreiber (RFC-0109 §13)
+NODE_OBJECTS = ("reboot", "request")
+NODE_READ_ENTRIES = 20
+NODE_READ_TEXT = 2000
+
+
+def node_reading(c, principal):
+    """Status und Antworten eines Vorgangs des Knotens, für den Knoten."""
+    replies = []
+    for e in c.get("entries") or []:
+        if e.get("internal") or e.get("actor") == principal:
+            continue
+        text = (e.get("text") or "").strip()
+        data = e.get("data") or {}
+        if e.get("type") == "status":
+            to = data.get("to", "")
+            replies.append({"at": e.get("at", ""), "by": e.get("actor_name", ""),
+                            "status": to, "status_label": STATUS_LABEL.get(to, to),
+                            "text": text[:NODE_READ_TEXT]})
+        elif e.get("type") == "comment" and text:
+            replies.append({"at": e.get("at", ""), "by": e.get("actor_name", ""),
+                            "text": text[:NODE_READ_TEXT]})
+    return {"ok": True, "number": c["number"], "status": c["status"],
+            "status_label": STATUS_LABEL.get(c["status"], c["status"]),
+            "updated": c.get("updated", ""), "replies": replies[-NODE_READ_ENTRIES:]}
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 # RFC-0061 Q6: Personendaten eines abgeschlossenen Vorgangs werden nach so
@@ -883,6 +912,16 @@ class Handler(BaseHTTPRequestHandler):
             op = str(doc.get("op") or "")
             node = str(doc.get("node") or "").strip()[:80]
             name = f"Knoten {node}" if node else "Knoten"
+            # 0.12.0 (RFC-0109 §13): eine Anfrage eines Mandanten an den
+            # Betreiber. Der Knoten schreibt sie, nicht der Mandant; `from`
+            # sagt, für wen (Mandant und Name der Person), und steht als
+            # Absender -- beglaubigt ist nur, dass der Knoten schreibt.
+            obj_kind = str(doc.get("object") or "reboot")
+            if obj_kind not in NODE_OBJECTS:
+                raise Refused("object: reboot oder request.")
+            said = str(doc.get("from") or "").strip()[:120]
+            if obj_kind == "request" and said:
+                name = f"{said} (über den Knoten {node or '?'})"[:120]
             if op == "open":
                 if self.store.submissions_by(src["instance"], 3600) >= SUBMISSIONS_PER_HOUR:
                     return self.json(429, {"error": "Zu viele Vorgänge des Knotens in der "
@@ -890,7 +929,7 @@ class Handler(BaseHTTPRequestHandler):
                 ref = str(doc.get("ref") or "").strip()[:200]
                 if not ref:
                     raise Refused("ref fehlt: der Bezug des Plans.")
-                have = self.store.open_by_object("reboot", ref)
+                have = self.store.open_by_object(obj_kind, ref)
                 if have:
                     return self.json(200, {"ok": True, "number": have["number"],
                                            "id": have["id"], "existing": True})
@@ -898,8 +937,10 @@ class Handler(BaseHTTPRequestHandler):
                     kind="internal", title=doc.get("title"), body=doc.get("body") or "",
                     reporter=principal, reporter_name=name,
                     queue=str(doc.get("queue") or DEFAULT_QUEUE),
-                    obj={"kind": "reboot", "id": ref},
-                    attested=dict(src, submitted_by=principal, node=node))
+                    obj={"kind": obj_kind, "id": ref},
+                    attested=dict(src, submitted_by=principal, node=node,
+                                  **({"on_behalf": said} if obj_kind == "request" and said
+                                     else {})))
                 print(f"case {made['number']} from node {node}", flush=True)
                 return self.json(201, {"ok": True, "number": made["number"], "id": made["id"]})
             c = self.store.get(str(doc.get("number") or ""))
@@ -908,10 +949,15 @@ class Handler(BaseHTTPRequestHandler):
             if op == "note":
                 self.store.comment(c, principal, name, doc.get("text"))
                 return self.json(200, {"ok": True, "number": c["number"]})
+            if op == "read":
+                # 0.12.0: was der Mandant auf seiner Seite „Einrichten“ sieht --
+                # Status und die Antworten der Bearbeitenden, nie interne
+                # Kommentare, nie die Einträge des Knotens selbst.
+                return self.json(200, node_reading(c, principal))
             if op == "close":
                 closed = self.store.close_by_node(c, principal, name, doc.get("text") or "")
                 return self.json(200, {"ok": True, "number": c["number"], "closed": closed})
-            raise Refused("op: open, note oder close.")
+            raise Refused("op: open, note, read oder close.")
         except (Refused, ValueError) as e:
             return self.json(400, {"error": str(e) if isinstance(e, Refused) else "Ungültige Meldung."})
 
@@ -1280,7 +1326,11 @@ Betreff und Text.</p>
         tech = c["tech"] or {}
         att = tech.get("attested") or {}
         src = ""
-        if att.get("node"):
+        if att.get("node") and c["object_kind"] == "request":
+            src = (f"<div class=muted>Anfrage an den Betreiber, geschrieben vom Knoten "
+                   f"<b>{esc(att['node'])}</b> für <b>{esc(att.get('on_behalf', ''))}</b> "
+                   "(RFC-0109; beglaubigt ist der Knoten, nicht die Person)</div>")
+        elif att.get("node"):
             src = (f"<div class=muted>Gemeldet vom Knoten <b>{esc(att['node'])}</b> "
                    "(Neustart-Plan der Plattform, vom Gateway beglaubigt)</div>")
         elif att.get("instance"):

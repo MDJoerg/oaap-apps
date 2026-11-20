@@ -82,7 +82,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.3   |
 | [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.7   |
 | [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.12.0   |
-| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch, Vorlagen für Werkzeuge | 0.30.0   |
+| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch, Vorlagen für Werkzeuge | 0.31.0   |
 | [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.16.0   |
 | [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.2   |
 | [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.4.1   |
@@ -93,7 +93,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [VPN-Client](apps/vpn-client/)    | Tunnel als App (RFC-0060): fremdes OpenVPN in einem Container, Ziele dahinter als Destination `through`; Installation nur mit `--confirm-tun` | 0.2.0   |
 | [Partnerverwaltung](apps/partnerverwaltung/) | Referenz-App digitaler Zwilling: Owner von Firma/Kontaktperson, zweiter Owner von Projekt (RFC-0031) | 0.1.5   |
 | [Rollen & Rechte](apps/rollen-rechte/) | Werkzeug des Mandanten-Admins: wer darf was in welcher App — Rollen, Berechtigungspakete, Zuordnungen, Gruppen (RFC-0045 A7); privilegiert, Installation nur mit `--confirm-administer` | 0.2.2   |
-| [Vorgänge](apps/vorgaenge/)       | Melden, Klären und Übergeben zwischen Mandanten (RFC-0061 Stufe 1+2): nimmt den Feedback-Knopf der Plattform an, Bereiche als Kontexte aus „Rollen & Rechte“; eine Instanz je Mandant, Löschfrist je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier an (RFC-0069); Plattform ab 0.1.201 | 0.11.0  |
+| [Vorgänge](apps/vorgaenge/)       | Melden, Klären und Übergeben zwischen Mandanten (RFC-0061 Stufe 1+2): nimmt den Feedback-Knopf der Plattform an, Bereiche als Kontexte aus „Rollen & Rechte“; eine Instanz je Mandant, Löschfrist je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier an (RFC-0069); seit 0.12.0 nimmt sie Anfragen der Mandanten an den Betreiber an (RFC-0109); Plattform ab 0.1.201 | 0.12.0  |
 | [RACI](apps/raci/)                 | Referenz-App digitaler Zwilling: Contributor `raci.assignments` (RFC-0031) | 0.1.3   |
 | [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.1.2   |
 | [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.1.2   |

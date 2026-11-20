@@ -72,6 +72,7 @@ os.environ["OAAP_MCP_SOURCES_KEY"] = "oaapk_quellen"
 
 import app  # noqa: E402
 import books  # noqa: E402
+import guard  # noqa: E402
 
 CAT = {"tool": [
     {"name": "help_search", "description": "suchen", "inputSchema": {"type": "object"},
@@ -164,7 +165,8 @@ os.environ["OAAP_SETUP_KEY"] = SETUP_KEY
 print("--- Form")
 st, doc = call("GET")
 ok("GET: die Arten, die das Gateway einrichten kann",
-   st == 200 and doc == {"v": 1, "kinds": ["refresh", "server_light", "view", "profile", "assistant"]},
+   st == 200 and doc == {"v": 1, "kinds": ["refresh", "server_light", "view", "profile", "assistant",
+                                     "server"]},
    (st, doc))
 st, doc = call("POST", body=b"kein json")
 ok("kaputter Körper: 400", st == 400, (st, doc))
@@ -395,6 +397,50 @@ st, doc = call("POST", body={"v": 1, "items": [dict(ITEMS[3], id="ws-schluessel"
 ok("ein SCHLÜSSEL kommt nie zurück, auch wenn „setup:“ ihn widerrief",
    results(doc) == ["conflict"]
    and app.DB.execute("SELECT revoked FROM keys WHERE label='ws-schluessel'").fetchone()["revoked"], doc)
+
+print("--- 0.31.0 (RFC-0109 §12): ein Server hinter einer Destination")
+SRV = {"kind": "server", "id": "sap", "address": "destination:sap/zmcp2/bc/access-support",
+       "auth": "propagate", "light": "yellow"}
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [SRV]})
+ok("dry: would_make, nichts angelegt", results(doc) == ["would_make"]
+   and books.server_row(app.DB, "sap") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [SRV]})
+srow = books.server_row(app.DB, "sap")
+ok("angelegt: Adresse, Verfahren P, Ampel gelb", results(doc) == ["made"] and srow
+   and srow["address"] == SRV["address"] and srow["auth_kind"] == "propagate"
+   and srow["light"] == "yellow", doc)
+st, doc = call("POST", body={"v": 1, "items": [SRV]})
+ok("noch einmal: present", results(doc) == ["present"], doc)
+st, doc = call("GET", "/oaap/setup?kind=server&id=sap")
+ok("der Zustand: da, aber nicht bereit, solange keine Person den Katalog las",
+   doc.get("state") == "present" and doc.get("ready") is False, doc)
+st, doc = call("GET", "/oaap/setup?kind=server")
+ok("die Liste nennt den Server mit Ampel, ohne Adresse",
+   {"id": "sap", "title": "sap", "light": "yellow"} in doc.get("items", [])
+   and "destination" not in json.dumps(doc), doc)
+for bad, word in ((dict(SRV, id="frei", address="https://irgendwo.example/mcp"), "Destination"),
+                  (dict(SRV, id="pfad", address="destination:sap/../x"), ".."),
+                  (dict(SRV, id="zugang", auth="bearer"), "propagate oder none"),
+                  (dict(SRV, id="geheim", token="abc"), "Geheimnisse")):
+    st, doc = call("POST", body={"v": 1, "dry": True, "items": [bad]})
+    ok(f"Köder {bad['id']}: refused ({word})", results(doc) == ["refused"]
+       and word in doc["results"][0]["note"], doc)
+books.save_server(app.DB, "anna", "sap", SRV["address"], "propagate", "red",
+                  guard.clean(dict(guard.DEFAULTS)))
+st, doc = call("POST", body={"v": 1, "items": [SRV]})
+ok("von Hand auf rot gestellt: conflict, bleibt rot", results(doc) == ["conflict"]
+   and books.server_row(app.DB, "sap")["light"] == "red" and "Ampel red statt yellow"
+   in doc["results"][0]["note"], doc)
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "server", "id": "sap"}]})
+ok("remove nach Handarbeit: conflict, der Server bleibt", results(doc) == ["conflict"]
+   and books.server_row(app.DB, "sap") is not None, doc)
+books.save_server(app.DB, "anna", "sap", SRV["address"], "propagate", "yellow",
+                  guard.clean(dict(guard.DEFAULTS)))
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "server", "id": "sap"}]})
+ok("wieder wie angelegt: remove entfernt ihn", results(doc) == ["removed"]
+   and books.server_row(app.DB, "sap") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [SRV]})
+ok("… und ein neuer Lauf legt ihn wieder an", results(doc) == ["made"], doc)
 
 gw.shutdown()
 plat.shutdown()

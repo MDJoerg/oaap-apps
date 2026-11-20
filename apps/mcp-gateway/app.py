@@ -63,7 +63,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.30.0"
+VERSION = "0.31.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4126,7 +4126,11 @@ def save_server(form, user):
 # Unterschied ist `conflict`.
 
 SETUP_PATH = "/oaap/setup"
-SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant")
+SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "server")
+# 0.31.0 (RFC-0109 §12): ein Server hinter einer Destination der Plattform -- nur
+# `destination:<bindung>[/pfad]`, nie eine freie Adresse: wohin er reicht, sagt die
+# Destination, die der Betreiber oder ein freigegebenes Rezept angelegt hat.
+SETUP_SERVER_AUTH = ("propagate", "none")
 SETUP_SECRET_FIELDS = {"key", "token", "secret", "password", "credentials"}
 SETUP_FIELDS = {
     "refresh": set(),
@@ -4135,6 +4139,7 @@ SETUP_FIELDS = {
     "profile": {"group", "views", "ceiling", "max_effect"},
     "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
                   "commands", "views", "support_queue"},
+    "server": {"address", "auth", "light"},
 }
 SETUP_PROFILE_ID = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._-]{0,63}$")
 SETUP_LOCK = threading.Lock()
@@ -4197,6 +4202,10 @@ def setup_observed(kind, sid):
     if kind == "assistant":
         row = books.assistant_row(DB, sid)
         return {"rev": row["rev"], "state": row["state"], "doc": row["doc"]} if row else None
+    if kind == "server":
+        srow = books.server_row(DB, sid)
+        return ({"address": srow["address"], "auth_kind": srow["auth_kind"],
+                 "light": srow["light"], "source": srow["source"] or ""} if srow else None)
     return None
 
 
@@ -4262,6 +4271,30 @@ def setup_wish(kind, sid, item, planned, actor):
         if item.get("light") not in books.LIGHTS:
             raise SetupRefused("light ist green, yellow oder red.")
         return {"light": item["light"]}
+    if kind == "server":
+        try:
+            books.valid_name(sid, "eines Servers")
+        except ValueError as exc:
+            raise SetupRefused(str(exc)) from None
+        address = str(item.get("address") or "").strip()
+        if not address.startswith("destination:"):
+            raise SetupRefused("address: destination:<bindung>[/pfad] -- die Einrichtung legt "
+                               "nur Server hinter einer Destination der Plattform an.")
+        need, _, path = address[len("destination:"):].partition("/")
+        if not books.NAME.match(need):
+            raise SetupRefused("Nach destination: folgt der Name der Bindung (Kleinbuchstaben, "
+                               "Ziffern, Bindestriche), danach wahlweise /pfad.")
+        if path and (not upstream.DESTINATION_PATH.match(path) or ".." in path.split("/")):
+            raise SetupRefused("Der Pfad hinter der Destination darf kein „..“, keine Abfrage "
+                               "und kein Fragment enthalten.")
+        auth = item.get("auth", "propagate")
+        if auth not in SETUP_SERVER_AUTH:
+            raise SetupRefused("auth ist propagate oder none -- Zugangsdaten trägt ein Mensch "
+                               "auf der Seite des Gateways ein.")
+        light = item.get("light", "red")
+        if light not in books.LIGHTS:
+            raise SetupRefused("light ist green, yellow oder red.")
+        return {"address": address, "auth_kind": auth, "light": light}
     if kind == "view":
         if not books.NAME.match(sid):
             raise SetupRefused("Der Name einer Sicht besteht aus Kleinbuchstaben, Ziffern und "
@@ -4380,11 +4413,21 @@ def setup_matches(kind, sid, wish, obs):
     if kind == "assistant":
         strip = lambda d: {k: v for k, v in d.items() if k != "owner"}
         return strip(obs["doc"]) == strip(wish)
+    if kind == "server":
+        return (not obs["source"] and obs["address"] == wish["address"]
+                and obs["auth_kind"] == wish["auth_kind"] and obs["light"] == wish["light"])
     return False
 
 
 def setup_difference(kind, wish, obs):
     """Ein Satz, was abweicht -- für die Notiz eines `conflict`."""
+    if kind == "server":
+        if obs["source"]:
+            return "Ein Server dieses Namens kommt aus einer Quelle der Plattform."
+        bits = [f"{w} {obs[k]} statt {wish[k]}" for k, w in (
+            ("address", "Adresse"), ("auth_kind", "Verfahren"), ("light", "Ampel"))
+            if obs[k] != wish[k]]
+        return "Den Server gibt es schon, anders: " + "; ".join(bits) + "."
     if kind == "profile":
         if obs["kind"] != "profile":
             return "Das Etikett trägt einen Schlüssel, kein Zugangsprofil."
@@ -4435,6 +4478,12 @@ def setup_set_light(srow, light, by):
 
 def setup_make(kind, sid, wish, by):
     """Legt an, mit den Funktionen der Betreiberseite. Wirft ValueError mit einem Satz."""
+    if kind == "server":
+        books.save_server(DB, by, sid, wish["address"], wish["auth_kind"], wish["light"],
+                          guard.clean(dict(guard.DEFAULTS)))
+        return (f"Server „{sid}“ angelegt ({wish['address']}, Verfahren "
+                f"{'P' if wish['auth_kind'] == 'propagate' else 'ohne Zugang'}, Ampel "
+                f"{wish['light']}); den Katalog liest eine Person.")
     if kind == "view":
         books.save_view(DB, by, sid, wish["max_effect"], None, wish["ways"])
         try:
@@ -4578,6 +4627,8 @@ def setup_remove(item, actor):
             books.assistant_set_state(DB, sid, "deleted", by)
             books.log(DB, by, "assistant.state", sid, "deleted")
             DB.commit()
+        elif kind == "server":
+            books.delete_server(DB, by, sid)
     except ValueError as exc:
         return "conflict", str(exc)
     books.setup_forget(DB, kind, sid)
@@ -4586,12 +4637,12 @@ def setup_remove(item, actor):
 
 def setup_state(kind, sid):
     """GET ?kind=&id=: (state, ready, note) -- `ready` ist, was `setup.ready` fragt."""
-    if kind in ("refresh", "server_light"):
+    if kind in ("refresh", "server_light", "server"):
         srow = setup_server(sid)
         if not srow:
             return "absent", False, f"Einen Server „{sid}“ gibt es nicht."
         n = len(catalog_tools(srow["name"]))
-        if kind == "refresh":
+        if kind in ("refresh", "server"):
             return "present", n > 0, f"{n} Tool(s) im Katalog."
         return "present", True, f"Ampel {srow['light']}."
     obs = setup_observed(kind, sid)
@@ -4617,7 +4668,7 @@ def setup_items(kind):
     kennt. **Nie** ein Schlüssel, eine Zugangsangabe oder die Adresse eines Servers.
     Widerrufene Profile und gelöschte Assistenten stehen nicht darin."""
     out = []
-    if kind in ("refresh", "server_light"):
+    if kind in ("refresh", "server_light", "server"):
         for row in DB.execute("SELECT name, light FROM servers ORDER BY name"):
             out.append({"id": row["name"], "title": row["name"], "light": row["light"]})
     elif kind == "view":

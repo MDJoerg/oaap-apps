@@ -264,7 +264,7 @@
       "id": "mcp-gateway",
       "name": "OAAP MCP-Gateway",
       "type": "native",
-      "version": "0.30.0",
+      "version": "0.31.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -949,8 +949,8 @@
       "id": "vorgaenge",
       "name": "Vorgänge",
       "type": "native",
-      "version": "0.11.0",
-      "released": "2026-11-19",
+      "version": "0.12.0",
+      "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/vorgaenge"
