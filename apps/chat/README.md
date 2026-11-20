@@ -344,6 +344,13 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   Homescreen-Symbole als PNG (180 für iOS ohne Transparenz, 192 und 512).
   Das Manifest wird mit Anmeldung geholt (`crossorigin="use-credentials"`),
   weil die Plattform vor jeder Route anmeldet.
+- **Kontextmenü (⋯).** Jede Frage und jede Antwort und jedes Gespräch in der
+  Leiste haben dasselbe Symbol; am großen Bildschirm erscheint es beim
+  Überfahren, auf dem Telefon steht es immer da. An Nachrichten: **Kopieren**
+  (Antworten als formatierter Text und als Markdown-Klartext, je nachdem,
+  wohin man einfügt). In der Leiste: **Umbenennen** und **Löschen** – auch für
+  ein Gespräch, das gerade nicht offen ist. Weitere Funktionen sind je ein
+  Eintrag in `MSG_ACTIONS` bzw. `CONV_ACTIONS` in `page.html`.
 
 ## KI-Gateway ohne Schlüssel (0.16.0, RFC-0104 §4)
 

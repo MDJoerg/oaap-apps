@@ -69,6 +69,26 @@ transform:rotate(-45deg);transition:transform .15s}
 #who{font-size:.75rem;padding:.3rem .5rem 0}
 #scrim{display:none}
 
+/* ---- 0.17.0: Kontextmenü -- ein Symbol, dasselbe an jeder Nachricht und jedem Gespräch */
+.ctxbtn{border:0;background:none;padding:.15rem .3rem;border-radius:.35rem;color:var(--muted);line-height:0;cursor:pointer}
+.ctxbtn svg{width:1.1rem;height:1.1rem}
+.ctxbtn:hover,.ctxbtn[aria-expanded=true]{background:var(--tool);color:var(--ink)}
+.msg.has-ctx{position:relative;padding-right:2.1rem}
+.msg>.ctxbtn{position:absolute;top:.3rem;right:.3rem}
+.citem{display:flex;align-items:center;border-radius:.4rem}
+.citem:hover,.citem.on{background:var(--me)}
+.citem .conv{flex:1;min-width:0;background:none}
+.citem .ctxbtn{flex:none;margin-right:.15rem}
+@media (hover:hover){.msg>.ctxbtn,.citem .ctxbtn{opacity:0}
+  .msg:hover>.ctxbtn,.msg:focus-within>.ctxbtn,.citem:hover .ctxbtn,.citem:focus-within .ctxbtn,.citem.on .ctxbtn,
+  .ctxbtn[aria-expanded=true]{opacity:1}}
+#ctx{position:fixed;z-index:40;margin:0;right:auto;width:max-content;max-width:calc(100vw - 16px)}
+#ctx[hidden]{display:none}
+#ctx button.danger{color:var(--err)}
+#toast{position:fixed;left:50%;bottom:5.5rem;transform:translateX(-50%);background:var(--ink);color:var(--panel);
+padding:.45rem .9rem;border-radius:.5rem;font-size:.88rem;z-index:50;pointer-events:none}
+#toast[hidden]{display:none}
+
 /* ---- Arbeitsfläche */
 main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 header{flex:none;display:flex;align-items:center;gap:.4rem;padding:.45rem .6rem;border-bottom:1px solid var(--line);background:var(--panel)}
@@ -323,6 +343,8 @@ dialog input,dialog textarea,dialog select{width:100%}
   </section>
 </main>
 
+<div id="ctx" class="mbody" role="menu" hidden></div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <dialog id="sdlg"><div id="sbox"></div></dialog>
 <dialog id="lightdlg">
   <div class="dhead"><b>Ampel dieses Gesprächs</b><button type="button" class="hbtn" id="lightclose">Schließen</button></div>
@@ -491,6 +513,87 @@ async function drawMermaid(root){
     catch (e) { SVG.set(src, b.innerHTML + '<div class="muted">Diagramm nicht lesbar — oben der Quelltext.</div>');
                 b.innerHTML = SVG.get(src); }
   }
+}
+// ---- 0.17.0: Kontextmenü. Ein Symbol (⋯) öffnet die Funktionen eines Bereichs; neue
+// Funktionen kommen als Eintrag in MSG_ACTIONS oder CONV_ACTIONS dazu:
+// {label, run(ziel), show(ziel)?, danger?}.
+const KEBAB = '<circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>';
+let CTX_FROM = null;
+function ctxButton(title, actions, target){
+  const b = el("button", "ctxbtn"); b.type = "button"; b.title = title; b.setAttribute("aria-label", title);
+  b.setAttribute("aria-haspopup", "menu"); b.setAttribute("aria-expanded", "false");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("fill", "currentColor"); svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = KEBAB; b.appendChild(svg);
+  b.onclick = ev => { ev.stopPropagation(); if (CTX_FROM === b) closeCtx(); else openCtx(b, actions, target); };
+  return b;
+}
+function openCtx(btn, actions, target){
+  closeCtx();
+  const box = $("ctx"); box.textContent = "";
+  for (const a of actions) {
+    if (a.show && !a.show(target)) continue;
+    const it = el("button", a.danger ? "danger" : "", a.label); it.type = "button"; it.setAttribute("role", "menuitem");
+    it.onclick = ev => { ev.stopPropagation(); closeCtx(); a.run(target); };
+    box.appendChild(it);
+  }
+  if (!box.children.length) return;
+  box.hidden = false; CTX_FROM = btn; btn.setAttribute("aria-expanded", "true");
+  const r = btn.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
+  box.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
+  box.style.top = (r.bottom + h + 8 > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + "px";
+  box.firstChild.focus();
+}
+function closeCtx(){
+  if (CTX_FROM) CTX_FROM.setAttribute("aria-expanded", "false");
+  CTX_FROM = null; $("ctx").hidden = true;
+}
+document.addEventListener("click", ev => { if (CTX_FROM && !$("ctx").contains(ev.target)) closeCtx(); });
+document.addEventListener("keydown", ev => {
+  if (!CTX_FROM) return;
+  if (ev.key === "Escape") { const b = CTX_FROM; closeCtx(); b.focus(); return; }
+  if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+    const items = [...$("ctx").children], i = items.indexOf(document.activeElement);
+    ev.preventDefault(); items[(i + (ev.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
+  }
+});
+addEventListener("resize", closeCtx);
+document.addEventListener("scroll", closeCtx, true);
+let TOAST_T = 0;
+function toast(text){
+  const t = $("toast"); t.textContent = text; t.hidden = false;
+  clearTimeout(TOAST_T); TOAST_T = setTimeout(() => { t.hidden = true; }, 1800);
+}
+// Kopieren: als formatierter Text (HTML) und als Klartext (bei Antworten der Markdown-Quelltext);
+// ohne ClipboardItem nur Klartext, ohne Zwischenablage-Schnittstelle der alte Weg über eine Auswahl.
+async function copyText(plain, html){
+  const ways = [];
+  if (html && window.ClipboardItem && navigator.clipboard && navigator.clipboard.write)
+    ways.push(() => navigator.clipboard.write([new ClipboardItem({"text/plain": new Blob([plain], {type: "text/plain"}),
+                                                                   "text/html": new Blob([html], {type: "text/html"})})]));
+  if (navigator.clipboard && navigator.clipboard.writeText) ways.push(() => navigator.clipboard.writeText(plain));
+  ways.push(async () => {
+    const ta = el("textarea"); ta.value = plain; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand("copy"); } finally { ta.remove(); }
+    if (!ok) throw new Error("copy");
+  });
+  for (const w of ways) {
+    try { await w(); toast("In die Zwischenablage kopiert"); return; } catch (e) { /* nächster Weg */ }
+  }
+  toast("Kopieren ging nicht — der Browser erlaubt es hier nicht.");
+}
+const MSG_ACTIONS = [
+  {label: "Kopieren", run: t => copyText(t.text, t.html)},
+];
+const CONV_ACTIONS = [
+  {label: "Umbenennen", run: c => renameConv(c.id, c.title)},
+  {label: "Löschen", danger: true, run: c => deleteConv(c.id, c.title)},
+];
+function withCtx(d, text, html){
+  d.classList.add("has-ctx");
+  d.appendChild(ctxButton("Funktionen dieser Nachricht", MSG_ACTIONS, {text, html}));
+  return d;
 }
 function mdEl(text){ const d = el("div", "msg assistant md"); d.innerHTML = window.ChatMarkdown.render(text); return d; }
 async function api(method, path, body){
@@ -966,7 +1069,8 @@ const countOf = n => n.convs ? n.convs.length : n.children.reduce((s, x) => s + 
 function isOpen(key, dflt, q){ return q ? true : key in OPEN ? OPEN[key] : dflt; }
 function flip(key, now){ OPEN[key] = !now; keep("chat.tree", OPEN); renderSide(); }
 function convBtn(c, small, depth){
-  const b = el("button", "conv" + (C && C.id === c.id ? " on" : "")); b.type = "button";
+  const on = !!(C && C.id === c.id), row = el("div", "citem" + (on ? " on" : ""));
+  const b = el("button", "conv"); b.type = "button";
   b.style.paddingLeft = (1.6 + (depth - 1) * .8) + "rem";
   const dot = CONVDOT[c.id];
   if (dot) b.appendChild(el("span", "dot " + dot.color));
@@ -974,7 +1078,9 @@ function convBtn(c, small, depth){
   b.appendChild(el("small", "", small(c)));
   b.title = c.title + " — " + titleOf(c) + (dot ? " · Vorgang " + dot.number + ": " + dot.label + " (" + DOTWORD[dot.color] + ")" : "");
   b.onclick = () => { closeDrawer(); openConv(c.id); };
-  return b;
+  if (on) b.setAttribute("aria-current", "true");
+  row.append(b, ctxButton("Funktionen: " + c.title, CONV_ACTIONS, c));
+  return row;
 }
 function drawNodes(box, nodes, path, depth, small, q){
   for (const n of nodes) {
@@ -1066,9 +1172,11 @@ function msgNodes(m, i){
   if (m.role === "user") {
     const d = el("div", "msg user");
     if (m.command) d.appendChild(el("span", "cmd", "/" + m.command));
-    d.appendChild(document.createTextNode(m.content)); out.push(d);
+    d.appendChild(document.createTextNode(m.content));
+    out.push(withCtx(d, (m.command ? "/" + m.command + " " : "") + m.content, null));
   } else if (m.role === "assistant" && m.content) {
-    out.push(mdEl(m.content));
+    const d = mdEl(m.content);
+    out.push(withCtx(d, m.content, d.innerHTML));
     if (m.rate && typeof i === "number") out.push(rateRow(i));
     else if (FEEDBACK && typeof i === "number" && C && !m.calls) out.push(sadOnly(i));
     for (const k of (C && C.cases || []).filter(x => x.index === i)) out.push(caseMark(k));
@@ -1397,20 +1505,26 @@ $("rateconv").onclick = () => {
   const box = $("ratebox"); box.textContent = ""; box.appendChild(rateRow(null)); $("ratedlg").showModal();
 };
 $("rateclose").onclick = () => $("ratedlg").close();
-$("ren").onclick = async () => {
-  if (!C) return;
-  const t = prompt("Neuer Titel für dieses Gespräch:", C.title); if (!t) return;
-  const r = await api("POST", "api/conv/" + C.id + "/rename", {title: t});
-  if (r.error) { render(el("div", "err", r.error)); return; }
-  C = r; await refreshState(); render();
-};
-$("del").onclick = async () => {
-  if (!C || !confirm("Gespräch „" + C.title + "“ löschen? Das lässt sich nicht rückgängig machen.")) return;
-  const r = await api("POST", "api/conv/" + C.id + "/delete", {});
-  if (r.error) { render(el("div", "err", r.error)); return; }
-  C = null; SETUP = null; await refreshState();
+// 0.17.0: für jedes Gespräch -- aus dem Menü oben (das offene) und aus der Leiste (jedes)
+async function renameConv(id, title){
+  const t = prompt("Neuer Titel für dieses Gespräch:", title); if (!t) return;
+  const r = await api("POST", "api/conv/" + id + "/rename", {title: t});
+  if (r.error) { if (C && C.id === id) render(el("div", "err", r.error)); else toast(r.error); return; }
+  if (C && C.id === id) C = r;
+  await refreshState(); if (C && C.id === id) render();
+}
+async function deleteConv(id, title){
+  if (!confirm("Gespräch „" + title + "“ löschen? Das lässt sich nicht rückgängig machen.")) return;
+  const r = await api("POST", "api/conv/" + id + "/delete", {});
+  if (r.error) { if (C && C.id === id) render(el("div", "err", r.error)); else toast(r.error); return; }
+  const wasOpen = !!(C && C.id === id);
+  if (wasOpen) { C = null; SETUP = null; }
+  await refreshState();
+  if (!wasOpen) { toast("Gespräch gelöscht"); return; }
   if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
-};
+}
+$("ren").onclick = () => { if (C) renameConv(C.id, C.title); };
+$("del").onclick = () => { if (C) deleteConv(C.id, C.title); };
 $("pick").onchange = () => { if (!C) { render(); showCommands(); loadLight(); } };
 $("q").addEventListener("input", renderSide);
 

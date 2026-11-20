@@ -1273,6 +1273,19 @@ check("0.17.0: schmal: Pflege (Neu, Export, Import, Ändern, Löschen, Auswertun
       and pg.count('el("button", "edit", "Auswertung")') == 2
       and 'el("button", "primary", "Neues Gespräch")' in pg, None)
 
+check("0.17.0: Kontextmenü: ein Symbol an jeder Nachricht (Kopieren) und jedem Gespräch der Leiste "
+      "(Umbenennen, Löschen); erweiterbar über MSG_ACTIONS / CONV_ACTIONS",
+      "function ctxButton(" in pg and 'const MSG_ACTIONS = [\n  {label: "Kopieren"'.replace("\n", "\r\n" if "\r\n" in pg else "\n") in pg
+      and "const CONV_ACTIONS = [" in pg and 'label: "Umbenennen", run: c => renameConv(c.id, c.title)' in pg
+      and 'label: "Löschen", danger: true, run: c => deleteConv(c.id, c.title)' in pg
+      and 'row.append(b, ctxButton("Funktionen: " + c.title, CONV_ACTIONS, c));' in pg
+      and pg.count("out.push(withCtx(d, ") == 2 and 'id="ctx"' in pg, None)
+check("0.17.0: Kopieren: formatiert und Klartext, sonst Klartext, sonst Auswahl -- und sagt, wenn es nicht geht",
+      "new ClipboardItem(" in pg and "navigator.clipboard.writeText(plain)" in pg
+      and 'document.execCommand("copy")' in pg and "Kopieren ging nicht" in pg, None)
+check("0.17.0: Löschen aus der Leiste trifft auch ein Gespräch, das nicht offen ist (die offene bleibt)",
+      "async function deleteConv(id, title)" in pg and 'if (!wasOpen) { toast("Gespräch gelöscht"); return; }' in pg
+      and '$("del").onclick = () => { if (C) deleteConv(C.id, C.title); };' in pg, None)
 srv.shutdown()
 fake.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)
