@@ -3,7 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Chat</title>
+<title>__TITLE__</title>
+<link rel="icon" href="static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="static/icon-180.png">
+<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">
+<meta name="apple-mobile-web-app-title" content="__TITLE__">
+<meta name="application-name" content="__TITLE__">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1d4ed8">
 <style>
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1f2937;--muted:#6b7280;--line:#e5e7eb;--me:#e8f0fe;
 --accent:#1d4ed8;--accentink:#fff;--warn:#92400e;--warnbg:#fef3c7;--err:#b91c1c;--tool:#f3f4f6;--pat:rgba(17,24,39,.07);
@@ -42,6 +50,18 @@ background:none;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-sp
 .conv.on,.conv:hover{background:var(--me)}
 .conv small{color:var(--muted);margin-left:.3rem}
 .empty{padding:.6rem .4rem;font-size:.9rem}
+/* 0.17.0: Obergruppen mit Symbol (Kalender, Assistenten, ...), darunter beliebig tief */
+.tree-h{display:flex;width:100%;align-items:center;gap:.45rem;border:0;background:none;border-radius:.4rem;
+padding:.55rem .4rem .35rem;font-size:.82rem;font-weight:600;color:var(--ink)}
+.tree-h:hover,.grp-h:hover{background:var(--me)}
+.tree-h svg{width:1.05rem;height:1.05rem;flex:none;color:var(--accent)}
+.tree-h .n,.grp-h .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:.75rem}
+.tree-h .chev,.grp-h .chev{width:.8rem;flex:none;color:var(--muted);display:inline-flex;justify-content:center}
+.chev::before{content:"";width:.36rem;height:.36rem;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;
+transform:rotate(-45deg);transition:transform .15s}
+[aria-expanded=true]>.chev::before{transform:rotate(45deg) translate(-1px,-1px)}
+#convs .conv{font-size:.92rem;padding-top:.38rem;padding-bottom:.38rem}
+.grp-h{text-transform:none;letter-spacing:0;font-size:.82rem;padding:.35rem .4rem;border-radius:.4rem}
 .sfoot{border-top:1px solid var(--line);padding:.4rem .5rem .6rem;display:flex;flex-direction:column;gap:.1rem}
 .sfoot button{text-align:left;border:0;background:none;padding:.45rem .5rem}
 .sfoot button:hover,.sfoot button.on{background:var(--me)}
@@ -227,20 +247,21 @@ dialog input,dialog textarea,dialog select{width:100%}
   body.side-on #scrim{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:25}
   #log{padding:.8rem .6rem}
   .crow .note{display:none}
+  /* 0.17.0: schmal nur suchen und ein Gespräch beginnen -- Pflege am großen Bildschirm */
+  .edit{display:none!important}
 }
 </style>
 </head>
 <body>
 <aside id="side" aria-label="Gespräche">
-  <div class="shead"><b>Chat</b><button class="icon" id="sclose" type="button" title="Leiste einklappen" aria-label="Leiste einklappen">«</button></div>
+  <div class="shead"><b>__TITLE__</b><button class="icon" id="sclose" type="button" title="Leiste einklappen" aria-label="Leiste einklappen">«</button></div>
   <div class="sact">
-    <button id="new" class="primary" type="button">+ Neues Gespräch</button>
     <input id="q" type="search" placeholder="Gespräche durchsuchen" aria-label="Gespräche durchsuchen">
   </div>
   <div id="convs"></div>
   <div class="sfoot">
-    <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
     <button id="manage" type="button">Assistenten</button>
+    <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
     <button id="nset" type="button">Einstellungen</button>
     <div class="muted" id="who"></div>
   </div>
@@ -279,12 +300,12 @@ dialog input,dialog textarea,dialog select{width:100%}
   <section class="view" id="asstview" hidden>
     <div class="atool">
       <input type="search" id="aq" placeholder="Assistenten durchsuchen" aria-label="Assistenten durchsuchen">
-      <select id="ascope" aria-label="Filter">
+      <select id="ascope" aria-label="Filter" class="edit">
         <option value="all">alle</option><option value="mine">die ich ändern darf</option>
         <option value="private">privat</option><option value="context">Team</option><option value="tenant">Mandant</option></select>
-      <button class="primary" id="anewbtn" type="button">+ Neuer Assistent</button>
-      <a id="aexp" href="api/assistants/export" download="assistenten.json">Exportieren</a>
-      <label class="imp">Importieren <input type="file" id="aimp" accept="application/json" hidden></label>
+      <button class="primary edit" id="anewbtn" type="button">+ Neuer Assistent</button>
+      <a id="aexp" class="edit" href="api/assistants/export" download="assistenten.json">Exportieren</a>
+      <label class="imp edit">Importieren <input type="file" id="aimp" accept="application/json" hidden></label>
     </div>
     <p class="err" id="alisterr" style="margin:.5rem 1rem 0"></p>
     <div class="agrid" id="alist"></div>
@@ -368,8 +389,6 @@ dialog input,dialog textarea,dialog select{width:100%}
     <button type="button" data-v="normal">normal</button><button type="button" data-v="compact">kompakt</button></div>
   <label>Schriftgröße</label><div class="seg" data-k="size">
     <button type="button" data-v="normal">normal</button><button type="button" data-v="large">groß</button></div>
-  <label>Gespräche gruppieren</label><div class="seg" data-k="group">
-    <button type="button" data-v="assistant">nach Assistent</button><button type="button" data-v="time">nach Zeit</button><button type="button" data-v="none">nicht</button></div>
   <label>Werkzeugaufrufe</label><div class="seg" data-k="calls">
     <button type="button" data-v="show">zeigen</button><button type="button" data-v="hide">ausblenden</button></div>
   <p class="muted" style="font-size:.8rem">Ausgeblendet bleiben Freigaben und Ansichten der Werkzeuge sichtbar &mdash; etwa für Aufzeichnungen und Schulungen.</p>
@@ -419,10 +438,13 @@ function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.class
 const narrow = () => matchMedia("(max-width:800px)").matches;
 
 // ---- Einstellungen: nur in diesem Browser (localStorage); ohne Speicher gelten die Vorgaben.
-const SET = {theme: "system", bg: "none", density: "normal", size: "normal", group: "assistant", calls: "show"};
+const SET = {theme: "system", bg: "none", density: "normal", size: "normal", calls: "show"};
 function load(k, d){ try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
 function keep(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 Object.assign(SET, load("chat.settings", {}));
+// 0.17.0: auf- und zugeklappte Knoten des Baums; was nicht drinsteht, hat seine Vorgabe.
+// chat.fold (bis 0.16) kennt die zugeklappten Assistenten-Gruppen -- sie bleiben zu.
+const OPEN = load("chat.tree", {});
 const FOLD = new Set(load("chat.fold", []));
 let SIDE_OFF = !!load("chat.sideoff", false);
 const isDark = () => SET.theme === "dark" || (SET.theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
@@ -435,7 +457,6 @@ function applySet(){
 }
 function setOne(k, v){
   const was = isDark(); SET[k] = v; keep("chat.settings", SET); applySet();
-  if (k === "group") renderSide();
   if (was !== isDark()) rethemeMermaid();
 }
 applySet();
@@ -896,17 +917,76 @@ function toggleSide(force){
 document.body.classList.toggle("side-off", SIDE_OFF);
 function closeDrawer(){ if (narrow()) document.body.classList.remove("side-on"); }
 
-function timeGroup(iso){
-  const d = new Date(iso); if (isNaN(d)) return "Älter";
-  const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (d >= today) return "Heute";
-  const days = (today - d) / 86400000;
-  return days <= 1 ? "Gestern" : days <= 7 ? "Letzte 7 Tage" : days <= 30 ? "Letzte 30 Tage" : "Älter";
-}
 function when(iso){
   const d = new Date(iso); if (isNaN(d)) return "";
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString("de-DE", {hour: "2-digit", minute: "2-digit"})
                                                         : d.toLocaleDateString("de-DE", {day: "2-digit", month: "2-digit"});
+}
+// 0.17.0: Symbole der Obergruppen -- einfache Linien in der Akzentfarbe. Eine neue
+// Obergruppe bringt ihr Symbol hier mit.
+const ICON = {
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  assistants: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1M15 13v1M9.5 17h5"/><circle cx="12" cy="3.5" r=".8"/>',
+};
+function icon(name){
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8"); svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true"); svg.innerHTML = ICON[name] || ""; return svg;
+}
+const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const titleOf = c => (assistant(c.assistant) || {}).title || "Assistent nicht verfügbar";
+// Obergruppen der Leiste, von oben nach unten. Jede liefert Knoten: {key, label, children}
+// oder {key, label, convs}; „open“ ist die Vorgabe, solange niemand geklickt hat.
+const TREES = [
+  {id: "calendar", title: "Kalender", icon: "calendar", open: true, small: titleOf,
+   // Jahr und Monat, sobald es Gespräche gibt -- nach Beginn des Gesprächs, sonst letzter Änderung
+   nodes(list){
+     const years = new Map(), now = new Date();
+     for (const c of list) {
+       const d = new Date(c.created || c.updated);
+       if (isNaN(d)) continue;
+       const y = d.getFullYear(), m = d.getMonth();
+       if (!years.has(y)) years.set(y, new Map());
+       const ms = years.get(y); if (!ms.has(m)) ms.set(m, []); ms.get(m).push(c);
+     }
+     return [...years.keys()].sort((a, b) => b - a).map(y => ({
+       key: String(y), label: String(y), open: y === now.getFullYear(),
+       children: [...years.get(y).keys()].sort((a, b) => b - a).map(m => ({
+         key: y + "-" + (m + 1), label: MONTHS[m], open: false, convs: years.get(y).get(m)}))}));
+   }},
+  {id: "assistants", title: "Assistenten", icon: "assistants", open: true, always: true, small: c => when(c.updated),
+   nodes(list){
+     const g = new Map();
+     for (const c of list) { const k = titleOf(c); if (!g.has(k)) g.set(k, []); g.get(k).push(c); }
+     return [...g].map(([k, cs]) => ({key: k, label: k, open: !FOLD.has("assistant:" + k), convs: cs}));
+   }},
+];
+const countOf = n => n.convs ? n.convs.length : n.children.reduce((s, x) => s + countOf(x), 0);
+function isOpen(key, dflt, q){ return q ? true : key in OPEN ? OPEN[key] : dflt; }
+function flip(key, now){ OPEN[key] = !now; keep("chat.tree", OPEN); renderSide(); }
+function convBtn(c, small, depth){
+  const b = el("button", "conv" + (C && C.id === c.id ? " on" : "")); b.type = "button";
+  b.style.paddingLeft = (1.6 + (depth - 1) * .8) + "rem";
+  const dot = CONVDOT[c.id];
+  if (dot) b.appendChild(el("span", "dot " + dot.color));
+  b.appendChild(document.createTextNode(c.title + " "));
+  b.appendChild(el("small", "", small(c)));
+  b.title = c.title + " — " + titleOf(c) + (dot ? " · Vorgang " + dot.number + ": " + dot.label + " (" + DOTWORD[dot.color] + ")" : "");
+  b.onclick = () => { closeDrawer(); openConv(c.id); };
+  return b;
+}
+function drawNodes(box, nodes, path, depth, small, q){
+  for (const n of nodes) {
+    const key = path + "/" + n.key, open = isOpen(key, n.open, q);
+    const h = el("button", "grp-h"); h.type = "button"; h.setAttribute("aria-expanded", String(open));
+    h.style.paddingLeft = (.4 + depth * .8) + "rem";
+    h.append(el("span", "chev"), el("span", "", n.label), el("span", "n", String(countOf(n))));
+    h.onclick = () => flip(key, open); box.appendChild(h);
+    if (!open) continue;
+    if (n.children) drawNodes(box, n.children, key, depth + 1, small, q);
+    else for (const c of n.convs) box.appendChild(convBtn(c, small, depth + 1));
+  }
 }
 function renderSide(){
   const pick = $("pick"); const was = pick.value; pick.textContent = "";
@@ -914,37 +994,22 @@ function renderSide(){
   if (C && assistant(C.assistant)) pick.value = C.assistant; else if (was && assistant(was)) pick.value = was;
   pick.disabled = !!C;
   pick.title = C ? "Der Assistent eines Gesprächs bleibt; für einen anderen ein neues Gespräch beginnen." : "";
-  $("new").disabled = !S.assistants.length;
   const q = $("q").value.trim().toLowerCase();
-  const titleOf = c => (assistant(c.assistant) || {}).title || "Assistent nicht verfügbar";
   const list = S.conversations.filter(c => !q || (c.title || "").toLowerCase().includes(q) || titleOf(c).toLowerCase().includes(q))
     .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")));
-  const groups = new Map();
-  for (const c of list) {
-    const k = SET.group === "time" ? timeGroup(c.updated) : SET.group === "assistant" ? titleOf(c) : "";
-    if (!groups.has(k)) groups.set(k, []); groups.get(k).push(c);
-  }
   const box = $("convs"); box.textContent = "";
-  for (const [k, cs] of groups) {
-    const key = SET.group + ":" + k, folded = FOLD.has(key) && !q;
-    if (k) {
-      const h = el("button", "grp-h"); h.type = "button"; h.setAttribute("aria-expanded", String(!folded));
-      h.append(el("span", "", (folded ? "▸ " : "▾ ") + k), el("span", "n", String(cs.length)));
-      h.onclick = () => { if (FOLD.has(key)) FOLD.delete(key); else FOLD.add(key); keep("chat.fold", [...FOLD]); renderSide(); };
-      box.appendChild(h);
-    }
-    if (folded) continue;
-    for (const c of cs) {
-      const b = el("button", "conv" + (C && C.id === c.id ? " on" : "")); b.type = "button";
-      const dot = CONVDOT[c.id];
-      if (dot) b.appendChild(el("span", "dot " + dot.color));
-      b.appendChild(document.createTextNode(c.title + " "));
-      b.appendChild(el("small", "", SET.group === "assistant" ? when(c.updated) : titleOf(c)));
-      b.title = c.title + " — " + titleOf(c) + (dot ? " · Vorgang " + dot.number + ": " + dot.label + " (" + DOTWORD[dot.color] + ")" : "");
-      b.onclick = () => { closeDrawer(); openConv(c.id); }; box.appendChild(b);
-    }
+  for (const t of TREES) {
+    const nodes = t.nodes(list);
+    if (!nodes.length && !t.always) continue;           // Kalender erst, wenn es Gespräche gibt
+    const key = "t:" + t.id, open = isOpen(key, t.open, q);
+    const h = el("button", "tree-h"); h.type = "button"; h.setAttribute("aria-expanded", String(open));
+    h.append(el("span", "chev"), icon(t.icon), el("span", "", t.title));
+    if (nodes.length) h.appendChild(el("span", "n", String(nodes.reduce((s, x) => s + countOf(x), 0))));
+    h.onclick = () => flip(key, open); box.appendChild(h);
+    if (!open) continue;
+    drawNodes(box, nodes, key, 1, t.small, q);
+    if (!nodes.length) box.appendChild(el("div", "muted empty", q ? "Kein Gespräch passt." : "Noch keine Gespräche."));
   }
-  if (!list.length) box.appendChild(el("div", "muted empty", q ? "Kein Gespräch passt." : "Noch keine Gespräche."));
 }
 
 // Neu zeichnen, ohne Ansichten neu zu laden: Nachrichten werden nur angehängt, solange
@@ -1243,11 +1308,11 @@ async function loadCommands(){
 // Befehle des Chats selbst -- laufen im Browser, gehen nie ans Modell.
 // Ein Prompt der Sicht mit demselben Namen geht vor.
 const OWN = [
-  {name: "neu", description: "Neues Gespräch mit dem gewählten Assistenten", run: () => $("new").click()},
+  {name: "neu", description: "Neues Gespräch mit dem gewählten Assistenten", run: () => startDraft($("pick").value)},
   {name: "pruefen", description: "Einrichtung prüfen", run: () => $("chk").click()},
   {name: "umbenennen", description: "Dieses Gespräch umbenennen", run: () => $("ren").click()},
-  {name: "assistenten", description: "Assistenten anlegen und ändern", run: () => $("manage").click()},
-  {name: "einstellungen", description: "Darstellung, Hintergrund, Gruppen", run: () => $("nset").click()},
+  {name: "assistenten", description: "Assistenten: neues Gespräch, anlegen und ändern", run: () => $("manage").click()},
+  {name: "einstellungen", description: "Darstellung, Hintergrund, Werkzeugaufrufe", run: () => $("nset").click()},
 ];
 const ownCmd = name => CMDS.some(c => c.name === name) ? null : OWN.find(o => o.name === name);
 function cmdMatches(){
@@ -1346,7 +1411,6 @@ $("del").onclick = async () => {
   C = null; SETUP = null; await refreshState();
   if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
 };
-$("new").onclick = () => startDraft($("pick").value);
 $("pick").onchange = () => { if (!C) { render(); showCommands(); loadLight(); } };
 $("q").addEventListener("input", renderSide);
 
@@ -1484,7 +1548,7 @@ function renderAssistants(){
     if (g) card.appendChild(el("p", "", g.length > 140 ? g.slice(0, 140) + " …" : g));
     card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · Sicht " + a.view));
     const acts = el("div", "acts");
-    const go = el("button", "primary", "Gespräch beginnen"); go.type = "button";
+    const go = el("button", "primary", "Neues Gespräch"); go.type = "button";
     go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive"; acts.appendChild(go);
     // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
     const r = READY[a.id];
@@ -1496,17 +1560,17 @@ function renderAssistants(){
       m.appendChild(lk); card.insertBefore(m, card.children[2] || null);
     }
     if (a.manage) {
-      const e = el("button", "", "Ändern"); e.type = "button";
+      const e = el("button", "edit", "Ändern"); e.type = "button";
       e.onclick = async () => { fill(await api("GET", "api/assistants/" + a.id)); $("dlg").showModal(); };
-      const d = el("button", "", "Löschen"); d.type = "button";
+      const d = el("button", "edit", "Löschen"); d.type = "button";
       d.onclick = async () => { if (!confirm("Assistent " + a.title + " löschen?")) return;
         const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
         $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
       acts.append(e, d);
       if (a.origin === "gateway") {
-        const ev = el("button", "", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
+        const ev = el("button", "edit", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
         // 0.9.0: deaktivieren heißt -- nicht mehr angeboten, die Revisionen bleiben.
-        const t = el("button", "", a.state === "inactive" ? "Aktivieren" : "Deaktivieren"); t.type = "button";
+        const t = el("button", "edit", a.state === "inactive" ? "Aktivieren" : "Deaktivieren"); t.type = "button";
         t.onclick = async () => {
           const r = await api("POST", "api/assistants/" + a.id + "/state", {state: a.state === "inactive" ? "active" : "inactive"});
           $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
@@ -1514,15 +1578,16 @@ function renderAssistants(){
       }
     }
     if (!a.manage && S.tenant_admin && a.origin === "gateway") {
-      const ev = el("button", "", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
+      const ev = el("button", "edit", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
     }
     card.appendChild(acts); box.appendChild(card);
   }
-  if (!list.length) box.appendChild(el("p", "muted", S.assistants.length ? "Kein Assistent passt." : "Noch kein Assistent. Lege mit „Neuer Assistent“ einen an."));
+  if (!list.length) box.appendChild(el("p", "muted", S.assistants.length ? "Kein Assistent passt." :
+    narrow() ? "Für dich ist noch kein Assistent sichtbar." : "Noch kein Assistent. Lege mit „Neuer Assistent“ einen an."));
   if (!S.teams_known) box.appendChild(el("p", "muted", "Deine Team-Berechtigungen sind gerade nicht lesbar — Team-Assistenten fehlen in der Liste."));
   // 0.9.0 (RFC-0097 §2.2): die alte Datei des Chats ins MCP-Gateway übernehmen.
   if (S.migration) {
-    const m = el("div", "acard");
+    const m = el("div", "acard edit");
     m.appendChild(el("h3", "", S.migration + (S.migration === 1 ? " Assistent liegt" : " Assistenten liegen") + " noch in diesem Chat"));
     m.appendChild(el("p", "", "Das MCP-Gateway kann sie mit Revisionen führen. Übernehmen behält Besitzer und Sichtbarkeit; die Datei des Chats wird umbenannt, nicht gelöscht. Bis dahin bleibt alles wie bisher."));
     const b = el("button", "primary", "Ins MCP-Gateway übernehmen"); b.type = "button";

@@ -1224,6 +1224,55 @@ st, _ct, html = raw_get("/")
 check("0.16.0: die Seite fragt „Einrichtung prüfen“ auch, wenn das Modell fehlt (S.model)",
       "!S.model" in html.decode("utf-8"))
 
+# ------------------------------------------------ 0.17.0: Leiste als Baum, Name und Symbol
+_t0 = app.TITLE
+app.TITLE = 'Team <Chat> & "Co"'
+try:
+    st, ct, body = raw_get("/")
+    pg = body.decode("utf-8")
+    st2, ct2, mf = raw_get("/manifest.webmanifest")
+finally:
+    app.TITLE = _t0
+check("0.17.0: CHAT_TITLE steht maskiert im Reiter, auf dem Homescreen und im Kopf der Leiste",
+      "<title>Team &lt;Chat&gt; &amp; &quot;Co&quot;</title>" in pg
+      and 'name="apple-mobile-web-app-title" content="Team &lt;Chat&gt; &amp; &quot;Co&quot;"' in pg
+      and "<b>Team &lt;Chat&gt; &amp; &quot;Co&quot;</b>" in pg and "__TITLE__" not in pg, None)
+_m = json.loads(mf.decode("utf-8")) if st2 == 200 else {}
+check("0.17.0: das Web-App-Manifest nennt denselben Namen und die Symbole",
+      st2 == 200 and "manifest+json" in ct2 and _m.get("name") == 'Team <Chat> & "Co"'
+      and _m.get("short_name") == _m.get("name") and _m.get("start_url") == "./"
+      and [i["src"] for i in _m["icons"]] == ["static/icon-192.png", "static/icon-512.png", "static/favicon.svg"], (st2, _m))
+_ok = []
+for _n, _ty, _magic in (("favicon.svg", "image/svg+xml", b"<svg"), ("icon-180.png", "image/png", b"\x89PNG"),
+                        ("icon-192.png", "image/png", b"\x89PNG"), ("icon-512.png", "image/png", b"\x89PNG")):
+    st, ct, body = raw_get("/static/" + _n)
+    _ok.append(st == 200 and ct == _ty and body.startswith(_magic))
+check("0.17.0: Favicon und Homescreen-Symbole werden ausgeliefert", all(_ok), _ok)
+st, ct, body = raw_get("/static/../app.py")
+check("0.17.0: KÖDER: kein Weg aus static hinaus", st != 200 or b"VERSION" not in body, st)
+check("0.17.0: Vorgabe-Name ist „Chat“", app.TITLE == "Chat" or bool(os.environ.get("CHAT_TITLE")), app.TITLE)
+st, s17 = req("GET", "/api/state")
+check("0.17.0: die Gesprächsliste nennt auch den Beginn (für den Kalender)",
+      s17["conversations"] and all("created" in c for c in s17["conversations"])
+      and all(c["created"] for c in s17["conversations"]), s17["conversations"][:2])
+st, ct, body = raw_get("/")
+pg = body.decode("utf-8")
+check("0.17.0: Leiste: Obergruppen Kalender (Jahr, Monat) über Assistenten, mit Symbolen",
+      "const TREES = [" in pg and pg.index('id: "calendar"') < pg.index('id: "assistants"')
+      and "calendar: '<rect" in pg and "assistants: '<rect" in pg and "MONTHS[m]" in pg
+      and "if (!nodes.length && !t.always) continue;" in pg, None)
+check("0.17.0: kein Knopf „Neues Gespräch“ in der Leiste; Vorgänge zwischen Assistenten und Einstellungen",
+      'id="new"' not in pg and '$("new")' not in pg
+      and pg.index('id="manage"') < pg.index('id="casesbtn"') < pg.index('id="nset"'), None)
+check("0.17.0: Gruppieren-Einstellung entfällt, /neu beginnt ohne den alten Knopf",
+      'data-k="group"' not in pg and 'run: () => startDraft($("pick").value)' in pg, None)
+check("0.17.0: schmal: Pflege (Neu, Export, Import, Ändern, Löschen, Auswertung) aus, Karte nur „Neues Gespräch“",
+      ".edit{display:none!important}" in pg and 'class="primary edit" id="anewbtn"' in pg
+      and 'id="aexp" class="edit"' in pg and 'class="imp edit"' in pg
+      and 'el("button", "edit", "Ändern")' in pg and 'el("button", "edit", "Löschen")' in pg
+      and pg.count('el("button", "edit", "Auswertung")') == 2
+      and 'el("button", "primary", "Neues Gespräch")' in pg, None)
+
 srv.shutdown()
 fake.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)

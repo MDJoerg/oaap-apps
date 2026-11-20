@@ -47,7 +47,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -186,7 +186,8 @@ def list_convs(person):
             c = load_conv(person, n[:-5])
             if c:
                 out.append({"id": c["id"], "title": c.get("title") or "Neues Gespräch",
-                            "assistant": c.get("assistant"), "updated": c.get("updated", "")})
+                            "assistant": c.get("assistant"), "updated": c.get("updated", ""),
+                            "created": c.get("created", "")})
     return sorted(out, key=lambda c: c["updated"], reverse=True)
 
 
@@ -601,7 +602,31 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # 0.13.0: die Darstellung liegt in static/md, Kopie aus lib/mdview (check-shared.py).
 STATIC = {"md/markdown.js": "application/javascript; charset=utf-8",
           "md/view.js": "application/javascript; charset=utf-8",
-          "md/mermaid.min.js": "application/javascript; charset=utf-8"}
+          "md/mermaid.min.js": "application/javascript; charset=utf-8",
+          # 0.17.0: Symbol im Reiter und auf dem Homescreen (iOS braucht PNG ohne Transparenz)
+          "favicon.svg": "image/svg+xml", "icon-180.png": "image/png",
+          "icon-192.png": "image/png", "icon-512.png": "image/png"}
+# 0.17.0: der Name dieses Chats -- Titel des Reiters, Kopf der Leiste und Name auf dem
+# Homescreen (Web-App-Manifest, apple-mobile-web-app-title). Vorgabe „Chat“.
+TITLE = " ".join((os.environ.get("CHAT_TITLE") or "").split())[:40] or "Chat"
+
+
+def page_html():
+    with open(PAGE_FILE, encoding="utf-8") as f:
+        return f.read().replace("__TITLE__", html_escape(TITLE))
+
+
+def html_escape(t):
+    return (t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&#39;"))
+
+
+def web_manifest():
+    return {"name": TITLE, "short_name": TITLE, "start_url": "./", "scope": "./",
+            "display": "standalone", "background_color": "#f7f7f5", "theme_color": "#1d4ed8",
+            "icons": [{"src": "static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                      {"src": "static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                      {"src": "static/favicon.svg", "sizes": "any", "type": "image/svg+xml"}]}
 
 
 def own_instance_guess():
@@ -1285,8 +1310,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self.send(200, "text/plain", "ok")
         if path == "/":
-            with open(PAGE_FILE, encoding="utf-8") as f:
-                return self.send(200, "text/html; charset=utf-8", f.read())
+            return self.send(200, "text/html; charset=utf-8", page_html())
+        if path == "/manifest.webmanifest":
+            return self.send(200, "application/manifest+json; charset=utf-8",
+                             json.dumps(web_manifest(), ensure_ascii=False))
         if path == "/ui-sandbox":
             # Der Sandbox-Proxy (RFC-0075 D6) -- auf der zweiten Herkunft ohne Person.
             # Er spricht nur mit den eigenen Adressen dieser Instanz.

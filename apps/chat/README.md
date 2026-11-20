@@ -321,6 +321,30 @@ RFC-0097 Stufe 2 und RFC-0101 Stufe 4.
   `assistant@rev` und die Nummer. Das Gateway zählt sie, ohne die Nummer
   zu speichern. Scheitert das, bleibt der Vorgang trotzdem.
 
+## Leiste als Baum, Name und Symbol (0.17.0)
+
+- **Obergruppen mit Symbol.** Die Leiste zeigt oben **Kalender** und darunter
+  **Assistenten**. Der Kalender gliedert nach Jahr und Monat (Beginn des
+  Gesprächs) und erscheint erst, wenn es Gespräche gibt; das laufende Jahr ist
+  aufgeklappt, die Monate sind zu. Unter Assistenten steht, was bis 0.16 die
+  Gruppierung „nach Assistent“ war. Weitere Obergruppen kommen als Eintrag in
+  `TREES` in `page.html`, mit ihrem Symbol in `ICON` (Linien, 24er Raster).
+  Auf- und Zuklappen merkt sich der Browser. Die Einstellung „Gespräche
+  gruppieren“ entfällt.
+- **Neues Gespräch über die Assistenten.** Der Knopf in der Leiste entfällt;
+  „Neues Gespräch“ steht auf jeder Karte der Seite Assistenten (und `/neu`
+  bleibt). Unten in der Leiste: Assistenten, Vorgänge, Einstellungen.
+- **Schmal (bis 800 px) nur benutzen.** Die Seite Assistenten zeigt dort nur
+  die Suche und auf jeder Karte „Neues Gespräch“ – Neu, Filter, Export,
+  Import, Ändern, Löschen, Auswertung und Aktivieren bleiben dem großen
+  Bildschirm.
+- **Name und Symbol.** `CHAT_TITLE` (Vorgabe „Chat“) ist der Titel im Reiter,
+  der Kopf der Leiste und der Name unter dem Symbol auf dem Homescreen
+  (`apple-mobile-web-app-title`, `manifest.webmanifest`). Favicon als SVG,
+  Homescreen-Symbole als PNG (180 für iOS ohne Transparenz, 192 und 512).
+  Das Manifest wird mit Anmeldung geholt (`crossorigin="use-credentials"`),
+  weil die Plattform vor jeder Route anmeldet.
+
 ## KI-Gateway ohne Schlüssel (0.16.0, RFC-0104 §4)
 
 Der Chat braucht keine Destination `ki` mehr. Er erklärt im Manifest
