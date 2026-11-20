@@ -601,7 +601,7 @@ ok("0.10.0: ein interner Kommentar der Bearbeitenden beendet die Rückfrage nich
 ok("0.10.0: Unterstatus haben dieselben Wege wie „in Arbeit“",
    store.NEXT["new"][:7] == ("triage", "in_progress", "clarify_internal", "clarify_external", "waiting_test",
                              "waiting_reporter", "waiting_approval") and "answered" in store.NEXT["clarify_external"]
-   and store.NEXT["in_progress"][:5] == store.SUBSTATUS
+   and store.NEXT["in_progress"][:len(store.SUBSTATUS)] == store.SUBSTATUS
    and all(x in store.OPEN for x in store.SUBSTATUS), store.NEXT["new"])
 # verschieben leert „verantwortlich“, die Zuweisung bleibt
 post(TA, "move", "queue=jira")

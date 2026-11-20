@@ -232,6 +232,18 @@ nur, wo er verantwortlich ist.
   - Danach steht der Vorgang wieder auf „in Arbeit“, und der Spezialist ist dran. Er
     führt genau den freigegebenen Aufruf aus.
   - „Wartet auf Freigabe“ steht nicht im Statusformular.
+- **Rückfragen (seit 0.15.0, Stufe 3):** Wer verantwortlich ist (ein Spezialist oder ein
+  Mensch) oder den Bereich bearbeitet, kann einen anderen Spezialisten oder einen
+  Zuständigen des Bereichs fragen.
+  - Die Frage und die Antwort sind intern. Der Vorgang steht so lange auf **wartet auf
+    Rückmeldung**; der Status kehrt von selbst zurück, wenn alle Rückfragen beantwortet sind.
+  - Die Befragten lesen den Vorgang, solange er offen ist, und antworten genau einmal. Sie
+    werden nie verantwortlich, ändern keinen Status und schreiben sonst nichts.
+  - Ein befragter Mensch findet den Vorgang unter „Meine“ und antwortet auf der Seite.
+  - Grenzen: höchstens 3 Rückfragen an Spezialisten je Vorgang; nach 2 Antworten von
+    Spezialisten auf Spezialisten in Folge ist ein Mensch dran.
+  - Ob jemand ein Spezialist ist, merkt sich die App, wenn er die Tür der Spezialisten
+    benutzt (`/api/spez/turn`).
 
 ## MCP-Tür (seit 0.4.0, RFC-0073/RFC-0074)
 

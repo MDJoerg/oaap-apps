@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import runner
 from store import Refused, Store, import_assistant
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("SPEZ_DATA_DIR", "/data")
 
@@ -36,7 +36,8 @@ LIMITS = {"max_steps": env_int("SPEZ_MAX_STEPS", 20, 1, 100),
 STORE = None
 STATUS = {}             # je Spezialist: letzter Abruf, Fehler (nur im Speicher)
 RUNNING = set()
-REASON = {"needs_approval": "wartet auf Freigabe", "done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
+REASON = {"waiting_consult": "wartet auf Rückmeldung", "answered": "Rückfrage beantwortet",
+          "not_asked": "Rückfrage nicht mehr offen", "needs_approval": "wartet auf Freigabe", "done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
           "error": "Fehler, zurückgegeben", "not_mine": "nicht mehr verantwortlich",
           "stopped_before": "schon angehalten", "runs": "Läufe je Vorgang erreicht, zurückgegeben"}
 esc = html.escape
@@ -68,6 +69,17 @@ def poll_once(store=None, make=None, log=print):
                 fresh = store.get(s["id"])
                 if not fresh or not fresh["active"]:
                     break
+                if item.get("consult"):
+                    # §6: eine Rückfrage an diesen Spezialisten -- ein Lauf, eine Antwort
+                    run = runner.Run(s, cases, tools, model, log=log)
+                    RUNNING.add((s["id"], item["number"]))
+                    store.run_start(run.id, s["id"], item["number"])
+                    try:
+                        why = run.consult(item["number"], item["consult"])
+                    finally:
+                        RUNNING.discard((s["id"], item["number"]))
+                    store.run_end(run.id, why, run.steps)
+                    continue
                 if item.get("runs", 0) >= s["max_runs"]:
                     cases.entry(item["number"], "end", f"Grenze: {s['max_runs']} Läufe an diesem Vorgang. "
                                 "Zurück an die Zuständigen.", reason="limit", assistant=s["assistant"])
@@ -176,6 +188,8 @@ def spec_form(s, msg=""):
 <div><label>Minuten je Lauf (höchstens {LIMITS['max_minutes']})</label><input name=max_minutes type=number min=1 max={LIMITS['max_minutes']} value='{v("max_minutes", LIMITS["max_minutes"])}'></div>
 <div><label>Läufe je Vorgang (höchstens {LIMITS['max_runs']})</label><input name=max_runs type=number min=1 max={LIMITS['max_runs']} value='{v("max_runs", LIMITS["max_runs"])}'></div></div>
 <label style='display:flex;gap:.4rem;align-items:center;color:#1f2937'><input type=checkbox name=public value=1 style='width:auto'{' checked' if s.get('public') else ''}> darf Antworten an die meldende Person entwerfen (ein Mensch veröffentlicht sie)</label>
+<label>Werkzeuge ohne Freigabe (nur der tenant_admin; Namen durch Leerzeichen getrennt{(', aufgehoben von ' + v("lifted_by")) if s.get("lifted_by") else ''})</label>
+<input name=no_approval value='{v("no_approval")}' placeholder='leer: jedes ändernde Werkzeug braucht die Freigabe eines Menschen'>
 <label style='display:flex;gap:.4rem;align-items:center;color:#1f2937'><input type=checkbox name=active value=1 style='width:auto'{' checked' if s.get('active') else ''}> aktiv -- arbeitet Vorgänge im Hintergrund</label>
 <p><button>Speichern</button></p></form>
 <form method=post action='uebernehmen' class=card><h2 style='margin-top:0'>Aus dem Export eines Assistenten übernehmen</h2>
@@ -264,9 +278,10 @@ class Handler(BaseHTTPRequestHandler):
                          f"<div class=muted>Assistent <code>{esc(s['assistant'])}</code> · Modell <code>{esc(s['model'])}</code>"
                          f" · Agent <code>{esc(s['uid'] or '–')}</code> · Schlüssel: {keys or 'keiner'}</div>{err}{acts}</div>")
         body = (msg + "<p>Ein Spezialist ist ein KI-Assistent mit eigenem Agenten. Er bearbeitet Vorgänge "
-                "seiner Bereiche im Hintergrund, schreibt jeden Schritt <b>intern</b> in den Vorgang, ruft nur "
-                "lesende Werkzeuge seiner Sicht und gibt am Ende an die Zuständigen zurück. Die meldende Person "
-                "sieht davon nichts.</p>"
+                "seiner Bereiche im Hintergrund und schreibt jeden Schritt <b>intern</b> in den Vorgang. Was etwas "
+                "ändert, legt er einem Menschen zur Freigabe vor. Kommt er nicht weiter, fragt er einen anderen "
+                "Spezialisten oder einen Menschen des Bereichs; am Ende gibt er an die Zuständigen zurück. "
+                "Die meldende Person sieht davon nichts.</p>"
                 + ("".join(cards) or "<p class=muted>Noch kein Spezialist.</p>"))
         if man:
             body += "<p><a href='neu'>Neuer Spezialist</a></p>"
@@ -306,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/speichern":
                 if f.get("id"):
                     f["id"] = int(f["id"])
-                STORE.save(f, actor, LIMITS)
+                STORE.save(f, actor, LIMITS, may_lift="tenant_admin" in roles)
                 return self.redirect("./" if not f.get("id") else f"s/{f['id']}")
             if p == "/uebernehmen":
                 return self.send(200, page("Neuer Spezialist", spec_form(import_assistant(f.get("export", "")),

@@ -58,7 +58,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -741,6 +741,8 @@ class Handler(BaseHTTPRequestHandler):
     def spez_get(self, who, rest):
         try:
             if rest == "turn":
+                # 0.15.0: wer diese Tür benutzt, ist ein Spezialist (Grenzen der Rückfragen, Auswahl)
+                self.store.mark_specialist(who.id)
                 return self.json(200, {"uid": who.id, "cases": self.store.turn(who.id)})
             if rest.startswith("case/"):
                 c = self.spez_case(who, rest[5:])
@@ -754,6 +756,13 @@ class Handler(BaseHTTPRequestHandler):
                     "fields": tech.get("fields") or {}, "subkind": tech.get("subkind") or "",
                     "responsible": c["responsible"], "mine": c["responsible"] == who.id,
                     "stopped": bool(c.get("spec_stop")),
+                    # 0.15.0 (§6): offene Rückfragen an mich, und wen ich fragen kann (nur verantwortlich)
+                    "consults_open": [{"seq": k["seq"], "asked_by": self.store.person_name(k["asked_by"]),
+                                       "question": next((e["text"] for e in c["entries"] if e["seq"] == k["seq"]), "")}
+                                      for k in c["consults"] if k["target"] == who.id and not k["answered"]],
+                    "consultable": ([{"name": p["name"], "specialist": p["specialist"]}
+                                     for p in self.store.consultable(c, who.id)]
+                                    if c["responsible"] == who.id else []),
                     "entries": [{"seq": e["seq"], "at": e["at"], "by": e["actor_name"],
                                  "by_me": e["actor"] == who.id, "type": e["type"], "text": e["text"],
                                  "internal": bool(e.get("internal")),
@@ -761,7 +770,10 @@ class Handler(BaseHTTPRequestHandler):
                                                                            "arguments", "sha256", "plan")
                                               if e["data"].get(k) is not None}} if e["type"] == "spec" else {}),
                                  **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind")}}
-                                    if e["type"] == "approval" else {})}
+                                    if e["type"] == "approval" else {}),
+                                 **({"consult": {k: e["data"].get(k) for k in ("to_name", "specialist", "consult")
+                                                 if e["data"].get(k) is not None}}
+                                    if e["type"] in ("consult", "consult_answer") else {})}
                                 for e in c["entries"]]})
         except Refused as e:
             return self.json(404, {"error": str(e)})
@@ -777,13 +789,32 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.json(400, {"error": "Kein JSON-Objekt."})
         parts = rest.split("/")
-        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back"):
+        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back", "consult", "answer"):
             return self.json(404, {"error": "unbekannt"})
         try:
             c = self.spez_case(who, parts[1])
+            meta = {k: str(doc.get(k)) for k in ("run", "assistant") if doc.get(k) is not None}
+            if parts[2] == "consult":
+                # 0.15.0 (§6): der Verantwortliche fragt -- nach Name, aus `consultable`
+                name = str(doc.get("to") or "").strip()
+                hit = [p for p in self.store.consultable(c, who.id) if p["name"] == name or p["uid"] == name]
+                if len(hit) != 1:
+                    raise Refused(f"„{name}“ kann hier nicht gefragt werden. Möglich: "
+                                  + (", ".join(p["name"] for p in self.store.consultable(c, who.id)) or "niemand"))
+                seq = self.store.consult(c, who.id, who.name, hit[0]["uid"], doc.get("text", ""), meta)
+                return self.json(200, {"ok": True, "consult": seq, "to": hit[0]["name"],
+                                       "specialist": hit[0]["specialist"]})
+            if parts[2] == "answer":
+                try:
+                    seq = int(doc.get("consult") or 0)
+                except (TypeError, ValueError):
+                    raise Refused("Unbekannte Rückfrage.")
+                self.store.answer_consult(c, who.id, who.name, seq, doc.get("text", ""), meta)
+                return self.json(200, {"ok": True})
             if parts[2] == "entry":
                 data = {k: doc.get(k) for k in ("run", "assistant", "tool", "arguments", "ms", "call_id",
-                                                "reason", "steps", "plan", "approved_by") if doc.get(k) is not None}
+                                                "reason", "steps", "plan", "approved_by", "lifted_by")
+                        if doc.get(k) is not None}
                 self.store.spec_entry(c, who.id, who.name, doc.get("kind", ""), doc.get("text", ""), data)
                 return self.json(200, {"ok": True})
             self.store.give_back(c, who.id, who.name, doc.get("reason", ""), str(doc.get("run") or ""))
@@ -1225,10 +1256,13 @@ Betreff und Text.</p>
             return r.get(k) or ""
 
         out = list(rows.values())
+        # 0.15.0 (RFC-0105 §6): offene Rückfragen an mich gehören zu „meine“ und „an mich“
+        asked = {r["id"] for r in self.store.listing(person=who.id, open_only=True)
+                 if who.id not in (r["responsible"], r["assignee"])}
         if view == "mine":
-            out = [r for r in out if who.id in (r["reporter"], r["responsible"], r["assignee"])]
+            out = [r for r in out if who.id in (r["reporter"], r["responsible"], r["assignee"]) or r["id"] in asked]
         elif view == "assigned":
-            out = [r for r in out if who.id in (r["responsible"], r["assignee"])]
+            out = [r for r in out if who.id in (r["responsible"], r["assignee"]) or r["id"] in asked]
         if queue:
             out = [r for r in out if r["queue"] == queue]
         if status == "open":
@@ -1445,6 +1479,8 @@ Betreff und Text.</p>
         ent, ent_int = [], []
         names = {p["uid"]: p["name"] for p in self.store.people()}
         decided = {e["data"].get("plan"): e for e in c["entries"] if e["type"] == "approval"}
+        specs = self.store.specialists()
+        consults = {k["seq"]: k for k in c.get("consults") or []}
         for e in visible_entries(who, c):
             # 0.11.0 (D6): Öffentliches im Reiter „Verlauf“, Internes im Reiter „Intern“
             box = ent_int if e.get("internal") else ent
@@ -1506,6 +1542,25 @@ Betreff und Text.</p>
                            f"{'Entwurf' if d.get('kind') == 'draft' else 'geplanten Aufruf'}"
                            f"{(' – ' + esc(e['text'])) if e['text'] else ''}</div></div>")
                 continue
+            elif e["type"] in ("consult", "consult_answer"):
+                # 0.15.0 (§6): Rückfrage und Antwort -- intern
+                ai = " <span class=pill>KI</span>" if e["actor"] in specs else ""
+                if e["type"] == "consult":
+                    k = consults.get(e["seq"]) or {}
+                    head = (f"fragt {esc(d.get('to_name') or '')}"
+                            + (" <span class=pill>KI</span>" if d.get("specialist") else "")
+                            + (" · beantwortet" if k.get("answered") else " · <b>offen</b>"))
+                    form_ = ""
+                    if k and not k["answered"] and k["target"] == who.id and c["status"] not in ("closed", "rejected"):
+                        form_ = (f"<form method=post action='/v/{quote(c['number'])}/rat'>"
+                                 f"<input type=hidden name=seq value='{e['seq']}'>"
+                                 f"<textarea name=text maxlength=10000 required placeholder='Deine Antwort (intern)'></textarea>"
+                                 f"<p><button>Antworten</button></p></form>")
+                else:
+                    head = "antwortet auf die Rückfrage"
+                box.append(f"<div class=card style='background:#f0fdf4'><div class=muted>{when} · {who_}{ai} · {head}</div>"
+                           f"<div class=body data-md>{esc(e['text'])}</div>{form_ if e['type'] == 'consult' else ''}</div>")
+                continue
             elif e["type"] == "spec_stop":
                 box.append(f"<div class=card><div class=muted>{when} · {who_} · Spezialist "
                            f"{'angehalten' if d.get('on') else 'wieder zugelassen'}</div></div>")
@@ -1533,6 +1588,17 @@ Betreff und Text.</p>
                       f"<input type=hidden name=on value='{1 if on else 0}'>"
                       f"<button>{'Spezialist anhalten' if on else 'Spezialist wieder zulassen'}</button></form>"
                       f"<span class=muted> {'Der Lauf endet nach dem laufenden Schritt; danach arbeitet hier kein Spezialist, bis ihn jemand wieder zulässt.' if on else 'An diesem Vorgang ist der Spezialist angehalten.'}</span></div>")
+        # 0.15.0 (§6): eine Rückfrage stellen -- wer verantwortlich ist oder den Bereich bearbeitet
+        if (who.may("triage", c["queue"]) or c.get("responsible") == who.id) and c["status"] not in ("closed", "rejected"):
+            pool = self.store.consultable(c, who.id)
+            if pool:
+                opts = "".join(f"<option value='{esc(p['uid'])}'>{esc(p['name'])}{' (KI)' if p['specialist'] else ''}</option>"
+                               for p in pool)
+                forms += (f"<div class=card><form method=post action='{base}/rueckfrage'>"
+                          f"<label>Rückfrage an</label><select name=uid>{opts}</select>"
+                          f"<label>Frage (intern; die Befragten antworten einmal und werden nicht verantwortlich)</label>"
+                          f"<textarea name=text maxlength=10000 required></textarea>"
+                          f"<p><button>Rückfrage stellen</button></p></form></div>")
         if c["reporter"] == who.id and c["status"] == "answered":
             # 0.9.0 (RFC-0103 D10): abnehmen oder wieder öffnen -- dieselben Regeln wie im Chat
             forms += (f"<div class=card><h2 style='margin-top:0'>Passt die Lösung?</h2>"
@@ -1726,6 +1792,18 @@ Betreff und Text.</p>
             except ValueError:
                 raise Refused("Unbekannter Schritt.")
             self.store.decide(c, seq, f.get("ok") == "1", who.id, who.name, f.get("text", ""))
+        elif action == "rueckfrage":
+            # 0.15.0 (§6): wer verantwortlich ist oder den Bereich bearbeitet
+            handler = who.may("triage", c["queue"])
+            if not handler and c.get("responsible") != who.id:
+                raise Refused("Rückfragen stellt, wer verantwortlich ist oder den Bereich bearbeitet.")
+            self.store.consult(c, who.id, who.name, f.get("uid", ""), f.get("text", ""), as_handler=handler)
+        elif action == "rat":
+            try:
+                seq = int(f.get("seq") or 0)
+            except ValueError:
+                raise Refused("Unbekannte Rückfrage.")
+            self.store.answer_consult(c, who.id, who.name, seq, f.get("text", ""))
         elif action == "spezstop":
             if not who.may("triage", c["queue"]):
                 raise Refused("Anhalten darf, wer den Bereich bearbeitet.")

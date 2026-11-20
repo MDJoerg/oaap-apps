@@ -38,10 +38,13 @@ STATUS_LABEL = {"new": "neu", "triage": "Klärung", "in_progress": "in Arbeit",
                 "clarify_internal": "in Klärung intern", "clarify_external": "in Klärung extern",
                 "waiting_test": "wartet auf Test", "waiting_reporter": "Rückfrage an die Meldende",
                 # 0.14.0 (RFC-0105 D6): ein Spezialist wartet auf die Freigabe eines Menschen
-                "waiting_approval": "wartet auf Freigabe"}
+                "waiting_approval": "wartet auf Freigabe",
+                # 0.15.0 (RFC-0105 D6/D7): eine Rückfrage an einen Spezialisten oder Menschen ist offen
+                "waiting_consult": "wartet auf Rückmeldung"}
 # 0.10.0: dieselben Übergänge wie `in_progress`. Fest, nicht je Mandant: Auswertungen,
 # die MCP-Tür und der Chat brauchen Wörter, die sie kennen.
-SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter", "waiting_approval")
+SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter", "waiting_approval",
+             "waiting_consult")
 
 # RFC-0061 §4. `voting` (§7) kommt mit seiner Stufe. `handed_over` (§5)
 # steht hier, damit die Regel EINE Tabelle bleibt; erreicht wird es nur
@@ -57,7 +60,13 @@ NEXT = {
     "handed_over": ("in_progress", "answered", "rejected"),
 }
 # 0.14.0: „wartet auf Freigabe“ setzt nur ein Plan des Spezialisten, nie das Statusformular
-MANUAL_EXCLUDED = ("handed_over", "waiting_approval")
+# 0.15.0: „wartet auf Rückmeldung“ setzt nur eine Rückfrage
+MANUAL_EXCLUDED = ("handed_over", "waiting_approval", "waiting_consult")
+
+# 0.15.0 (RFC-0105 §5): Rückfragen an Spezialisten je Vorgang; Antworten von Spezialisten auf
+# Spezialisten in Folge, danach ist ein Mensch dran
+CONSULT_SPECIALISTS_MAX = 3
+SPEC_TO_SPEC_IN_ROW = 2
 
 
 def _with_substatus(nxt):
@@ -268,6 +277,12 @@ class Store:
             # 0.13.0: Erstbearbeitung eines Bereichs durch einen Spezialisten (uid, leer = keiner)
             if "first_responder" not in {r[1] for r in self.db.execute("PRAGMA table_info(queues)")}:
                 self.db.execute("ALTER TABLE queues ADD COLUMN first_responder TEXT NOT NULL DEFAULT ''")
+            # 0.15.0 (RFC-0105 §6): Rückfragen -- eine Frage, eine Antwort; seq ist der Eintrag der Frage
+            self.db.execute("CREATE TABLE IF NOT EXISTS consults (seq INTEGER PRIMARY KEY, case_id TEXT NOT NULL, "
+                            "asked_by TEXT NOT NULL, asked_by_specialist INTEGER NOT NULL, target TEXT NOT NULL, "
+                            "target_name TEXT NOT NULL, specialist INTEGER NOT NULL, at TEXT NOT NULL, "
+                            "answer_seq INTEGER NOT NULL DEFAULT 0, answered TEXT NOT NULL DEFAULT '')")
+            self.db.execute("CREATE INDEX IF NOT EXISTS consults_target ON consults(target, answered)")
             # 0.10.0 (D3): wer je verantwortlich oder zugewiesen war, liest weiter
             self.db.execute("CREATE TABLE IF NOT EXISTS involved (case_id TEXT NOT NULL, "
                             "uid TEXT NOT NULL, role TEXT NOT NULL, since TEXT NOT NULL, "
@@ -323,6 +338,10 @@ class Store:
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, queue TEXT NOT NULL,
                 actor TEXT NOT NULL, action TEXT NOT NULL, uid TEXT NOT NULL, kind TEXT NOT NULL DEFAULT '');
             """)
+            # 0.15.0 (RFC-0105 Stufe 3): wer die Tür der Spezialisten benutzt, ist ein Spezialist --
+            # für die Grenzen der Rückfragen und die Auswahl, wen man fragen kann
+            if "specialist" not in {r[1] for r in self.db.execute("PRAGMA table_info(people)")}:
+                self.db.execute("ALTER TABLE people ADD COLUMN specialist INTEGER NOT NULL DEFAULT 0")
 
     def see_person(self, uid, name, username=""):
         """Wer die App öffnet, steht danach in der Auswahl für Zuständige."""
@@ -333,6 +352,14 @@ class Store:
                 "INSERT INTO people (uid, name, username, seen) VALUES (?,?,?,?) "
                 "ON CONFLICT(uid) DO UPDATE SET name=excluded.name, username=excluded.username, "
                 "seen=excluded.seen", (uid, _clip(name, 120), _clip(username, 120), _now()))
+
+    def mark_specialist(self, uid):
+        with self.lock, self.db:
+            self.db.execute("UPDATE people SET specialist=1 WHERE uid=? AND specialist=0", (uid,))
+
+    def specialists(self):
+        with self.lock:
+            return {r["uid"] for r in self.db.execute("SELECT uid FROM people WHERE specialist=1")}
 
     def people(self):
         with self.lock:
@@ -531,8 +558,12 @@ class Store:
             c["observers"] = [o["queue"] for o in self.db.execute(
                 "SELECT queue FROM observers WHERE case_id=? ORDER BY queue", (c["id"],))]
             # 0.10.0 (D3): alle, die je verantwortlich oder zugewiesen waren
+            # 0.15.0 (§6): Befragte nur, solange der Vorgang offen ist
             c["involved"] = sorted({r["uid"] for r in self.db.execute(
-                "SELECT uid FROM involved WHERE case_id=?", (c["id"],))})
+                "SELECT uid, role FROM involved WHERE case_id=?", (c["id"],))
+                if r["role"] != "consulted" or c["status"] not in ENDED})
+            c["consults"] = [dict(r) for r in self.db.execute(
+                "SELECT * FROM consults WHERE case_id=? ORDER BY seq", (c["id"],))]
         return c
 
     def listing(self, *, queues=(), reporter=None, open_only=True, person=None, involved=None):
@@ -550,8 +581,10 @@ class Store:
             args.append(reporter)
         if person:
             # 0.10.0 (D3): jetzt verantwortlich oder zugewiesen
-            conds.append("responsible=? OR assignee=?")
-            args += [person, person]
+            # 0.15.0 (§6): und offene Rückfragen an mich
+            conds.append("responsible=? OR assignee=? OR id IN (SELECT case_id FROM consults "
+                         "WHERE target=? AND answered='')")
+            args += [person, person, person]
         if involved:
             # 0.11.0 (RFC-0103 D6): wer je beteiligt war, findet den Vorgang in der Übersicht
             conds.append("id IN (SELECT case_id FROM involved WHERE uid=?)")
@@ -744,6 +777,14 @@ class Store:
                 out.append({"number": c["number"], "title": c["title"], "status": c["status"],
                             "queue": c["queue"], "updated": c["updated"], "runs": runs,
                             "last": dict(last) if last else None})
+            # 0.15.0 (§3.4/§6): offene Rückfragen an uid -- je eine, mit der Frage
+            for r in self.db.execute(
+                    f"SELECT k.seq, k.asked_by, c.number, c.title, c.status, c.queue, c.updated FROM consults k "
+                    f"JOIN cases c ON c.id = k.case_id WHERE k.target=? AND k.answered='' AND c.spec_stop=0 "
+                    f"AND c.status IN ({','.join('?' * len(OPEN))}) ORDER BY k.seq LIMIT 50",
+                    [uid] + list(OPEN)).fetchall():
+                out.append({"number": r["number"], "title": r["title"], "status": r["status"],
+                            "queue": r["queue"], "updated": r["updated"], "consult": r["seq"]})
         return out
 
     def spec_entry(self, c, uid, name, kind, text, data):
@@ -829,6 +870,113 @@ class Store:
                 self.db.execute("UPDATE cases SET status=? WHERE id=?", (new, c["id"]))
                 self._entry(c["id"], uid, name, "status", "",
                             {"from": r["status"], "to": new}, internal=True)
+
+    # --------------------------------------- Rückfragen (0.15.0, RFC-0105 Stufe 3, §6)
+    def consultable(self, c, asker):
+        """Wen man an diesem Vorgang fragen kann: die Zuständigen des Bereichs und alle
+        Spezialisten -- nicht sich selbst, nicht die meldende Person."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT p.uid, p.name, p.specialist FROM people p WHERE p.specialist=1 OR p.uid IN "
+                "(SELECT uid FROM queue_members WHERE queue=?) ORDER BY p.specialist, p.name",
+                (c["queue"],)).fetchall()
+        return [{"uid": r["uid"], "name": r["name"], "specialist": bool(r["specialist"])}
+                for r in rows if r["uid"] not in (asker, c["reporter"])]
+
+    def consult(self, c, asker, asker_name, target, text, data=None, as_handler=False):
+        """Eine Rückfrage (§6): eine Frage, eine Antwort; die Befragten werden nie verantwortlich.
+        Fragen darf, wer verantwortlich ist -- ein Mensch des Bereichs auch sonst (`as_handler`,
+        das prüft der Aufrufer). Grenzen (§5): höchstens CONSULT_SPECIALISTS_MAX Rückfragen an
+        Spezialisten je Vorgang, und nach SPEC_TO_SPEC_IN_ROW Antworten von Spezialisten auf
+        Spezialisten ist ein Mensch dran."""
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Eine Rückfrage ohne Frage wird nicht gespeichert.")
+        if len(text) > BODY_MAX:
+            raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
+        target = (target or "").strip()
+        data = {k: v for k, v in (data or {}).items() if k in ("run", "assistant") and isinstance(v, str)}
+        with self.lock, self.db:
+            r = self.db.execute("SELECT responsible, spec_stop, status, reporter, queue FROM cases WHERE id=?",
+                                (c["id"],)).fetchone()
+            if not r or r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            if r["responsible"] != asker and not as_handler:
+                raise Refused("Rückfragen stellt, wer verantwortlich ist.")
+            specs = {x["uid"] for x in self.db.execute("SELECT uid FROM people WHERE specialist=1")}
+            if asker in specs and r["spec_stop"]:
+                raise Refused("An diesem Vorgang ist der Spezialist angehalten.")
+            p = self.db.execute("SELECT name FROM people WHERE uid=?", (target,)).fetchone()
+            member = self.db.execute("SELECT 1 FROM queue_members WHERE queue=? AND uid=?",
+                                     (r["queue"], target)).fetchone()
+            if not p or target in (asker, r["reporter"]) or not (target in specs or member):
+                raise Refused("Fragen kann man die Zuständigen des Bereichs und die Spezialisten.")
+            if self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND target=? AND answered=''",
+                               (c["id"], target)).fetchone():
+                raise Refused(f"An {p['name']} ist schon eine Rückfrage offen.")
+            if target in specs:
+                n = self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND specialist=1",
+                                    (c["id"],)).fetchone()[0]
+                if n >= CONSULT_SPECIALISTS_MAX:
+                    raise Refused(f"An diesem Vorgang gab es schon {n} Rückfragen an Spezialisten. "
+                                  "Weitere Rückfragen gehen an Menschen des Bereichs.")
+                if asker in specs and self._spec_to_spec_in_row(c["id"], specs) >= SPEC_TO_SPEC_IN_ROW:
+                    raise Refused(f"{SPEC_TO_SPEC_IN_ROW} Antworten von Spezialisten in Folge; "
+                                  "jetzt ist ein Mensch dran.")
+            data.update({"to": target, "to_name": p["name"], "specialist": target in specs})
+            self._entry(c["id"], asker, asker_name, "consult", text, data, internal=True)
+            seq = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.db.execute("INSERT INTO consults (seq, case_id, asked_by, asked_by_specialist, target, "
+                            "target_name, specialist, at) VALUES (?,?,?,?,?,?,?,?)",
+                            (seq, c["id"], asker, 1 if asker in specs else 0, target, p["name"],
+                             1 if target in specs else 0, _now()))
+            self.db.execute("INSERT OR IGNORE INTO involved VALUES (?,?,?,?)", (c["id"], target, "consulted", _now()))
+            if "waiting_consult" in NEXT.get(r["status"], ()):
+                self.db.execute("UPDATE cases SET status='waiting_consult' WHERE id=?", (c["id"],))
+                self._entry(c["id"], asker, asker_name, "status", "",
+                            {"from": r["status"], "to": "waiting_consult"}, internal=True)
+        return seq
+
+    def _spec_to_spec_in_row(self, cid, specs):
+        """Beantwortete Rückfragen Spezialist → Spezialist seit dem letzten Eintrag eines Menschen."""
+        last_human = 0
+        for e in self.db.execute("SELECT seq, actor FROM entries WHERE case_id=? ORDER BY seq DESC", (cid,)):
+            if e["actor"] not in specs and e["actor"] != "system":
+                last_human = e["seq"]
+                break
+        return self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND asked_by_specialist=1 "
+                               "AND specialist=1 AND answered!='' AND answer_seq > ?",
+                               (cid, last_human)).fetchone()[0]
+
+    def answer_consult(self, c, uid, name, seq, text, data=None):
+        """Die eine Antwort auf eine Rückfrage, intern. Nur die befragte Person, nur einmal.
+        Sind danach keine Rückfragen mehr offen, ist der Vorgang wieder „in Arbeit“, und wer
+        verantwortlich ist, ist wieder dran (§3.3)."""
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Eine leere Antwort wird nicht gespeichert.")
+        if len(text) > BODY_MAX:
+            text = text[:BODY_MAX - 1] + "…"
+        data = {k: v for k, v in (data or {}).items() if k in ("run", "assistant") and isinstance(v, str)}
+        with self.lock, self.db:
+            k = self.db.execute("SELECT * FROM consults WHERE seq=? AND case_id=?", (seq, c["id"])).fetchone()
+            if not k or k["target"] != uid:
+                raise Refused("Diese Rückfrage ging nicht an dich.")
+            if k["answered"]:
+                raise Refused("Diese Rückfrage ist schon beantwortet.")
+            r = self.db.execute("SELECT status FROM cases WHERE id=?", (c["id"],)).fetchone()
+            if r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            data["consult"] = seq
+            self._entry(c["id"], uid, name, "consult_answer", text, data, internal=True)
+            aseq = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.db.execute("UPDATE consults SET answer_seq=?, answered=? WHERE seq=?", (aseq, _now(), seq))
+            still = self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND answered=''", (c["id"],)).fetchone()
+            if not still and r["status"] == "waiting_consult":
+                # der Status kehrt von selbst zurück -- die Befragten ändern ihn nie (§6)
+                self.db.execute("UPDATE cases SET status='in_progress' WHERE id=?", (c["id"],))
+                self._entry(c["id"], "system", "Automatisch", "status", "Die Rückfragen sind beantwortet.",
+                            {"from": "waiting_consult", "to": "in_progress"}, internal=True)
 
     def set_spec_stop(self, c, on, actor, actor_name):
         """§5: ein Mensch hält den Spezialisten an diesem Vorgang an (oder lässt ihn wieder zu)."""

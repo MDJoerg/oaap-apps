@@ -1,6 +1,6 @@
 # Spezialisten
 
-KI-Spezialisten bearbeiten Vorgänge im Hintergrund (RFC-0105 Stufe 1).
+KI-Spezialisten bearbeiten Vorgänge im Hintergrund (RFC-0105 Stufen 1–3).
 
 Ein **Spezialist** ist eine festgehaltene Assistenten-Revision (`analyse@3`) mit einem
 **eigenen Agenten** (RFC-0067). Er handelt mit eigenen, engen Rechten, nicht mit denen
@@ -46,7 +46,21 @@ jemand wieder zulässt.
   zusätzlich `antwort_entwurf`. Der Entwurf wird erst öffentlich, wenn ein Mensch ihn
   veröffentlicht.
 
-Andere Spezialisten oder Menschen fragen kommt mit Stufe 3.
+**Rückfragen (seit 0.3.0, Stufe 3):**
+- Kommt der Lauf nicht weiter, bekommt das Modell das Werkzeug `rueckfrage` mit den Namen,
+  die es fragen kann: die anderen Spezialisten und die Zuständigen des Bereichs.
+- Der Lauf endet dann mit „wartet auf Rückmeldung“. Die Antwort weckt ihn wieder.
+- Ein **befragter** Spezialist liest den Vorgang, bekommt nur die lesenden Werkzeuge seiner
+  Sicht und schreibt genau eine Antwort. Er wird nie verantwortlich.
+- Die Grenzen hält Vorgänge: 3 Rückfragen an Spezialisten je Vorgang, danach nur noch an
+  Menschen; nach 2 Antworten von Spezialisten auf Spezialisten in Folge ist ein Mensch dran.
+  Das Modell erfährt den Grund und kann einen Menschen fragen.
+
+**Freigabe je Werkzeug aufheben (D4):**
+- Im Feld „Werkzeuge ohne Freigabe“ trägt der `tenant_admin` Werkzeuge ein, die dieser
+  Spezialist ohne Plan aufrufen darf. Ein `admin` ohne `tenant_admin` kann das nicht.
+- Die Änderung steht unter „Änderungen“. Der Aufruf trägt am Gateway
+  `X-OAAP-Approved-By: Dauerfreigabe <Person>` und im Vorgang „aufgehoben von <Person>“.
 
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 

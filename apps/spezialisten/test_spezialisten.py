@@ -41,6 +41,7 @@ def ok(label, cond, detail=""):
 
 
 AGENT_KEY, MCP_KEY, AI_KEY = "oaapk_agent_geheim123", "gw_sicht_geheim456", "ai_geheim789"
+AGENT2_KEY = "oaapk_agent_basis_geheim321"        # Stufe 3: ein zweiter Spezialist
 
 # ------------------------------------------------------------ Vorgänge im eigenen Prozess
 BOOT = textwrap.dedent(f"""
@@ -50,7 +51,10 @@ BOOT = textwrap.dedent(f"""
     import app, store
     from http.server import ThreadingHTTPServer
     GR = {{"spez": [{{"object": "case", "activities": ["read", "comment", "triage", "move", "close"],
-                     "fields": {{"queue": ["analyse"]}}}}]}}
+                     "fields": {{"queue": ["analyse"]}}}}],
+          "basis": [{{"object": "case", "activities": ["read", "comment", "triage"],
+                      "fields": {{"queue": ["basis"]}}}}]}}
+    AG = {{"Bearer {AGENT_KEY}": ("spez", "Analyse%20(KI)"), "Bearer {AGENT2_KEY}": ("basis", "Basis-Check%20(KI)")}}
     class Authz:
         url = "http://fake"
         def grants(self, uid): return GR.get(uid, [])
@@ -64,11 +68,12 @@ BOOT = textwrap.dedent(f"""
             if a:
                 for k in ("X-OAAP-User-Id", "X-OAAP-Roles", "X-OAAP-Display-Name", "X-OAAP-User"):
                     del self.headers[k]
-                if a != "Bearer {AGENT_KEY}":
+                if a not in AG:
                     self.send_response(303); self.send_header("Location", "/auth/login")
                     self.send_header("Content-Length", "0"); self.end_headers(); return False
-                self.headers["X-OAAP-User-Id"] = "spez"; self.headers["X-OAAP-Roles"] = "user"
-                self.headers["X-OAAP-Display-Name"] = "Analyse%20(KI)"; self.headers["X-OAAP-User"] = "spez"
+                uid, nm = AG[a]
+                self.headers["X-OAAP-User-Id"] = uid; self.headers["X-OAAP-Roles"] = "user"
+                self.headers["X-OAAP-Display-Name"] = nm; self.headers["X-OAAP-User"] = uid
             return True
         def log_message(self, *a): pass
     s = ThreadingHTTPServer(("127.0.0.1", 0), H)
@@ -440,6 +445,112 @@ try:
     st, page = vg_call("GET", f"/v/{n9}", MEL)
     ok("S2: nach der Freigabe sieht die Meldende die Antwort", "Menü X" in page, "")
     S.save(dict(base, id=sid, active="1"), "chef", LIM)
+
+    # ------------------------------------------------------------ Stufe 3: Rückfragen (§6) und D4
+    S.save(dict(base, id=sid, active="1", max_runs="6"), "chef", LIM)    # vier Läufe an einem Vorgang
+    sid2 = S.save(dict(base, name="Basis-Check (KI)", assistant="basis@1", system="Prüfe Sperren und Jobs.",
+                       agent_key=AGENT2_KEY, mcp_key=MCP_KEY, ai_key=AI_KEY, active="1"), "chef", LIM)
+    SCRIPT["plan"] = []
+    app.poll_once(log=lambda *a: None)
+    ok("S3: der zweite Spezialist meldet sich an", S.get(sid2)["uid"] == "basis", S.get(sid2))
+    vg_call("GET", "/", ("bea", "user"))
+    vg_call("POST", "/bereiche/mitglied", ADMIN, {"queue": "analyse", "uid": "bea", "kind": "handler"}, form=True)
+    n10 = report("Job ZJOB hängt", "Seit gestern hängt ZJOB.")
+    SCRIPT["plan"] = [("tool", "find_dumps", {"report": "ZJOB"}, "Erst die Dumps."),
+                      ("tool", "rueckfrage", {"an": "Basis-Check (KI)", "frage": "Hängt ZJOB an einer Sperre?"}),
+                      # der befragte Spezialist, im selben Durchgang:
+                      ("tool", "find_dumps", {"report": "ZJOB"}),
+                      ("tool", "file_solution", {"text": "Sperre lösen"}),
+                      ("text", "Ja: Sperreintrag von RFCUSER auf ZJOB.")]
+    SEEN.clear(); CALLS.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n10)
+    offered_a = [t["function"]["name"] for t in SEEN[1]["tools"]]
+    offered_b = [t["function"]["name"] for t in SEEN[2]["tools"]]
+    ok("S3: der Verantwortliche bekommt „rueckfrage“ mit den Namen, die er fragen kann",
+       "rueckfrage" in offered_a and "Basis-Check (KI) (Spezialist)" in json.dumps(SEEN[1]["tools"], ensure_ascii=False),
+       offered_a)
+    ends = [e for e in c["entries"] if e["type"] == "spec" and e["step"]["kind"] == "end"]
+    ok("S3: der Lauf endet mit „wartet auf Rückmeldung“",
+       ends and ends[-1]["step"].get("reason") == "waiting_consult", [e["step"] for e in ends])
+    ok("S3: der Befragte bekommt nur lesende Werkzeuge -- keine Rückfrage, kein Entwurf, nichts Änderndes",
+       offered_b == ["find_dumps"], offered_b)
+    ok("S3: der Befragte bekommt den Rahmen für den Rat und die Frage als Daten",
+       "um Rat" in SEEN[2]["messages"][0]["content"] and "<rueckfrage" in SEEN[2]["messages"][1]["content"]
+       and "Hängt ZJOB an einer Sperre?" in SEEN[2]["messages"][1]["content"], SEEN[2]["messages"][1]["content"][-300:])
+    ok("S3: KÖDER: ein änderndes Werkzeug im Rat läuft nie (auch nicht als Plan)",
+       not [x for x in CALLS if x["name"] == "file_solution"]
+       and not [e for e in c["entries"] if e["type"] == "spec" and e["step"]["kind"] == "plan"], CALLS)
+    ans = [e for e in c["entries"] if e["type"] == "consult_answer"]
+    ok("S3: genau eine Antwort des Befragten, intern, mit dem, was er geprüft hat",
+       len(ans) == 1 and ans[0]["internal"] and "RFCUSER" in ans[0]["text"] and "geprüft mit: find_dumps" in ans[0]["text"]
+       and ans[0]["by"] == "Basis-Check (KI)", ans)
+    ok("S3: nach der Antwort ist der Vorgang wieder „in Arbeit“, verantwortlich bleibt der Fragende",
+       c["status"] == "in_progress" and c["responsible"] == "spez", (c["status"], c["responsible"]))
+    ok("S3: KÖDER: der Befragte hat nichts außer seiner Antwort geschrieben",
+       not [e for e in c["entries"] if e["by"] == "Basis-Check (KI)" and e["type"] != "consult_answer"],
+       [(e["type"], e["by"]) for e in c["entries"]])
+    ok("S3: Läufe in der App: wartet auf Rückmeldung / Rückfrage beantwortet",
+       {r["reason"] for r in S.runs() if r["case_number"] == n10} == {"waiting_consult", "answered"}, S.runs()[:3])
+
+    SCRIPT["plan"] = [("tool", "rueckfrage", {"an": "Basis-Check (KI)", "frage": "Seit wann?"}),
+                      ("text", "Seit gestern 17 Uhr.")]
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    ok("S3: der Verantwortliche liest die Antwort im Verlauf, bevor er weiterfragt",
+       "Antwort auf Rückfrage" in SEEN[0]["messages"][1]["content"] and "RFCUSER" in SEEN[0]["messages"][1]["content"],
+       SEEN[0]["messages"][1]["content"][-400:])
+    SCRIPT["plan"] = [("tool", "rueckfrage", {"an": "Basis-Check (KI)", "frage": "Und sonst?"}),
+                      ("tool", "rueckfrage", {"an": "bea", "frage": "Darf ich die Sperre lösen lassen?"})]
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n10)
+    ok("S3: KÖDER: die dritte Rückfrage Spezialist → Spezialist in Folge wird abgelehnt; das Modell erfährt warum",
+       "Mensch" in SEEN[1]["messages"][-1]["content"] and len([e for e in c["entries"] if e["type"] == "consult"]) == 3,
+       SEEN[1]["messages"][-1])
+    kb = [e for e in c["entries"] if e["type"] == "consult"][-1]
+    ok("S3: der Lauf fragt stattdessen einen Menschen des Bereichs", c["status"] == "waiting_consult"
+       and kb["consult"]["specialist"] is False, (c["status"], kb))
+    SCRIPT["plan"] = [("text", "sollte nicht kommen")]
+    app.poll_once(log=lambda *a: None)
+    ok("S3: solange der Mensch nicht geantwortet hat, läuft nichts", SCRIPT["plan"] == [("text", "sollte nicht kommen")], "")
+    st, _ = vg_call("POST", f"/v/{n10}/rat", ("bea", "user"), {"seq": kb["seq"], "text": "Ja, per Ticket an Basis."},
+                    form=True)
+    SCRIPT["plan"] = [("text", "Ursache: Sperre von RFCUSER seit gestern 17 Uhr. Bea gibt das Lösen per Ticket frei.")]
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n10)
+    ok("S3: zwei Spezialisten und ein Mensch: der Verantwortliche schließt mit allen Antworten ab und gibt zurück",
+       st in (302, 303) and "per Ticket" in SEEN[0]["messages"][1]["content"] and c["responsible"] == ""
+       and any(e["type"] == "spec" and "Bea gibt" in e["text"] for e in c["entries"]), (st, c["responsible"]))
+    ok("S3: KÖDER: der befragte Spezialist war nie verantwortlich",
+       not [e for e in c["entries"] if e["type"] == "role" and "Basis" in e["text"]], "")
+    st, page = vg_call("GET", f"/v/{n10}", MEL)
+    ok("S3: KÖDER: die Meldende sieht keine Rückfrage und keine Antwort",
+       "RFCUSER" not in page and "Darf ich die Sperre" not in page and "per Ticket" not in page, "")
+
+    # D4: Freigabe je Werkzeug aufheben -- nur der tenant_admin
+    try:
+        S.save(dict(base, id=sid, active="1", no_approval="file_solution"), "keyadmin", LIM, may_lift=False)
+        ok("D4: KÖDER: ohne tenant_admin wird die Freigabe nicht aufgehoben", False)
+    except store.Refused:
+        ok("D4: KÖDER: ohne tenant_admin wird die Freigabe nicht aufgehoben", not S.get(sid)["no_approval"], "")
+    S.save(dict(base, id=sid, active="1", no_approval="file_solution"), "chef", LIM, may_lift=True)
+    ok("D4: tenant_admin hebt die Freigabe für file_solution auf -- protokolliert",
+       S.get(sid)["no_approval"] == "file_solution" and S.get(sid)["lifted_by"] == "chef"
+       and any("Freigabe aufgehoben" in a["what"] for a in S.audit()[:2]), S.audit()[:2])
+    n11 = report("Lösung direkt", "x")
+    SCRIPT["plan"] = [("tool", "file_solution", {"text": "direkt"}, "Ablegen."), ("text", "Abgelegt.")]
+    CALLS.clear(); SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    exe = [x for x in CALLS if x["name"] == "file_solution"]
+    t11 = [e for e in steps_of(n11) if e["step"]["kind"] == "tool"]
+    ok("D4: das Werkzeug läuft ohne Plan, das Gateway sieht die Person, die aufgehoben hat",
+       len(exe) == 1 and exe[0]["confirmed"] == "yes" and exe[0]["approved_by"] == "Dauerfreigabe chef"
+       and not [e for e in steps_of(n11) if e["step"]["kind"] == "plan"]
+       and t11 and "aufgehoben von chef" in t11[0]["text"], (CALLS, [e["text"] for e in t11]))
+    S.save(dict(base, id=sid, active="1", no_approval=""), "chef", LIM, may_lift=True)
+    ok("D4: wieder zurückgenommen", S.get(sid)["no_approval"] == "" and S.get(sid)["lifted_by"] == "", S.get(sid))
 
     # ------------------------------------------------------------ 8. die Seite
     srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)

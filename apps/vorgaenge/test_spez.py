@@ -262,5 +262,112 @@ st, page = call("GET", f"/v/{N3}", ADMIN)
 ok("KÖDER: „wartet auf Freigabe“ steht nicht im Statusformular",
    "value=waiting_approval" not in page and "value='waiting_approval'" not in page, "")
 
+
+# ================================================= 0.15.0 (RFC-0105 Stufe 3): Rückfragen
+GRANTS["basis"] = [{"object": "case", "activities": ["read", "comment", "triage"], "fields": {"queue": ["basis"]}}]
+S.add_queue("basis", "Basis")
+SPEZ2 = ("basis", "user", "Basis-Check (KI)")
+call("GET", "/api/spez/turn", SPEZ2)
+call("GET", "/", ("bea", "user"))
+S.set_member("analyse", "bea", "handler", "chef")
+c4 = S.create(kind="bug", title="Job hängt", body="Der Job ZJOB hängt seit gestern.", reporter="mel",
+              reporter_name="Melanie", queue="analyse")
+N4 = c4["number"]
+st, d = call("GET", f"/api/spez/case/{N4}", SPEZ)
+names = {p["name"]: p["specialist"] for p in d["consultable"]}
+ok("wen der Verantwortliche fragen kann: Spezialisten (KI) und Zuständige -- nicht sich, nicht die Meldende",
+   names.get("Basis-Check (KI)") is True and names.get("Bea") is False and "Melanie" not in names
+   and "Analyse (KI)" not in names, names)
+st, d = call("GET", f"/api/spez/case/{N4}", SPEZ2)
+ok("KÖDER: ein Spezialist eines anderen Bereichs liest den Vorgang ohne Rückfrage nicht", st == 404, st)
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Melanie", "text": "?"})
+ok("KÖDER: die Meldende ist keine Rückfrage", st == 409, (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ,
+             {"to": "Basis-Check (KI)", "text": "Hängt der Job am Sperreintrag?", "run": "k1", "assistant": "analyse@3"})
+c = S.get(N4)
+K1 = d.get("consult")
+ok("Rückfrage an einen Spezialisten: Status „wartet auf Rückmeldung“, intern, Befragter beteiligt",
+   st == 200 and c["status"] == "waiting_consult" and "basis" in c["involved"]
+   and any(e["type"] == "consult" and e["internal"] and e["seq"] == K1 for e in c["entries"]), (st, d, c["status"]))
+st, d = call("GET", "/api/spez/turn", SPEZ2)
+ok("der Befragte ist an der Reihe, mit der Rückfrage", any(x["number"] == N4 and x.get("consult") == K1
+                                                           for x in d["cases"]), d)
+st, d = call("GET", "/api/spez/turn", SPEZ)
+ok("der Fragende ist nicht dran, solange die Rückfrage offen ist",
+   all(x["last"]["actor"] == "spez" for x in d["cases"] if x["number"] == N4), d)
+st, d = call("GET", f"/api/spez/case/{N4}", SPEZ2)
+ok("der Befragte liest den Vorgang: die offene Frage an ihn, mine=false, niemand zu fragen",
+   st == 200 and not d["mine"] and d["consults_open"] == [{"seq": K1, "asked_by": "Analyse (KI)",
+                                                           "question": "Hängt der Job am Sperreintrag?"}]
+   and d["consultable"] == [], d)
+for kind in ("note", "plan", "end"):
+    st, d = call("POST", f"/api/spez/case/{N4}/entry", SPEZ2, {"kind": kind, "text": "x", "tool": "t"})
+    ok(f"KÖDER: der Befragte schreibt keinen Schritt ({kind})", st == 409, (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/give-back", SPEZ2, {"reason": "x"})
+ok("KÖDER: der Befragte gibt nicht zurück", st == 409, (st, d))
+st, _ = form(f"/v/{N4}/status", SPEZ2, {"status": "answered", "text": "erledigt"})
+ok("KÖDER: der Befragte ändert den Status nicht", st == 400 and S.get(N4)["status"] == "waiting_consult", st)
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ2, {"to": "Bea", "text": "weiter?"})
+ok("KÖDER: der Befragte fragt nicht weiter", st == 409, (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Basis-Check (KI)", "text": "nochmal"})
+ok("KÖDER: an denselben nicht zweimal offen", st == 409, (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/answer", SPEZ, {"consult": K1, "text": "ich antworte mir selbst"})
+ok("KÖDER: nur der Befragte antwortet", st == 409, (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/answer", SPEZ2, {"consult": K1, "text": "Ja, Sperre von RFCUSER.",
+                                                            "run": "b1", "assistant": "basis@1"})
+c = S.get(N4)
+ok("die Antwort: intern, Status zurück in Arbeit, Rückfrage beantwortet",
+   st == 200 and c["status"] == "in_progress" and c["consults"][0]["answered"]
+   and any(e["type"] == "consult_answer" and e["internal"] and e["data"]["consult"] == K1 for e in c["entries"]),
+   (st, d, c["status"]))
+st, d = call("POST", f"/api/spez/case/{N4}/answer", SPEZ2, {"consult": K1, "text": "noch was"})
+ok("KÖDER: genau eine Antwort", st == 409, (st, d))
+st, d = call("GET", "/api/spez/turn", SPEZ)
+ok("nach der Antwort ist der Verantwortliche wieder dran",
+   any(x["number"] == N4 and x["last"]["actor"] != "spez" for x in d["cases"]), d)
+st, d = call("GET", f"/api/spez/case/{N4}", SPEZ)
+ok("der Verantwortliche liest Frage und Antwort",
+   any(e["type"] == "consult" and e["consult"]["to_name"] == "Basis-Check (KI)" for e in d["entries"])
+   and any(e["type"] == "consult_answer" and e["consult"]["consult"] == K1 and "RFCUSER" in e["text"]
+           for e in d["entries"]), d)
+st, page = call("GET", f"/v/{N4}", ("mel", "user"))
+ok("KÖDER: die Meldende sieht weder Frage noch Antwort", "Sperreintrag" not in page and "RFCUSER" not in page, "")
+st, page = call("GET", f"/v/{N4}", ADMIN)
+ok("Bearbeitende sehen Rückfrage und Antwort, und können selbst fragen",
+   "fragt Basis-Check (KI)" in page and "antwortet auf die Rückfrage" in page and "Rückfrage stellen" in page
+   and "value=waiting_consult" not in page and "value='waiting_consult'" not in page, "")
+
+# --- Grenzen (§5)
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Basis-Check (KI)", "text": "Und RFCUSER2?"})
+call("POST", f"/api/spez/case/{N4}/answer", SPEZ2, {"consult": d["consult"], "text": "auch gesperrt"})
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Basis-Check (KI)", "text": "Und RFCUSER3?"})
+ok("KÖDER: nach zwei Antworten Spezialist → Spezialist in Folge ist ein Mensch dran",
+   st == 409 and "Mensch" in d.get("error", ""), (st, d))
+st, _ = form(f"/v/{N4}/rueckfrage", ADMIN, {"uid": "basis", "text": "Seit wann gesperrt?"})
+c = S.get(N4)
+ok("ein Mensch des Bereichs fragt den Spezialisten selbst (dritte Rückfrage an Spezialisten)",
+   st in (302, 303) and len(c["consults"]) == 3 and c["status"] == "waiting_consult", (st, c["status"]))
+call("POST", f"/api/spez/case/{N4}/answer", SPEZ2, {"consult": c["consults"][-1]["seq"], "text": "seit gestern 17 Uhr"})
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Basis-Check (KI)", "text": "Noch eine?"})
+ok("KÖDER: die vierte Rückfrage an Spezialisten geht nicht -- an Menschen schon",
+   st == 409 and "Menschen" in d.get("error", ""), (st, d))
+st, d = call("POST", f"/api/spez/case/{N4}/consult", SPEZ, {"to": "Bea", "text": "Darf ich die Sperre lösen lassen?"})
+KB = d.get("consult")
+ok("Rückfrage an einen Menschen des Bereichs", st == 200 and S.get(N4)["status"] == "waiting_consult", (st, d))
+st, page = call("GET", "/?view=mine", ("bea", "user"))
+ok("die Befragte findet den Vorgang unter „Meine“", N4 in page, "")
+st, page = call("GET", f"/v/{N4}", ("bea", "user"))
+ok("die Befragte sieht die Frage mit „Antworten“", "Darf ich die Sperre" in page and "/rat" in page, "")
+st, _ = form(f"/v/{N4}/rat", ("dora", "user"), {"seq": KB, "text": "ich nicht"})
+ok("KÖDER: wer nicht gefragt ist, antwortet nicht", st in (400, 404), st)
+st, _ = form(f"/v/{N4}/rat", ("bea", "user"), {"seq": KB, "text": "Ja, mit Ticket an Basis."})
+c = S.get(N4)
+ok("die Befragte antwortet über die Seite: Status zurück in Arbeit", st in (302, 303) and c["status"] == "in_progress"
+   and all(k["answered"] for k in c["consults"]), (st, c["status"]))
+S.set_status(S.get(N4), "chef", "Chef", "answered")
+S.set_status(S.get(N4), "chef", "Chef", "closed")
+st, d = call("GET", f"/api/spez/case/{N4}", SPEZ2)
+ok("nach dem Schließen liest der befragte Spezialist nicht mehr", st == 404, st)
+
 print("ALLE PASS" if not fails else f"{fails} FAIL")
 sys.exit(1 if fails else 0)
