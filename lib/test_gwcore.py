@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from gwcore import charts, context, ledger, report, vault  # noqa: E402
+from gwcore import charts, context, fill, ledger, report, vault  # noqa: E402
 
 ok = fail = 0
 TMP = tempfile.mkdtemp(prefix="gwcore-")
@@ -127,6 +127,21 @@ check("Balken mit der Bezeichnung der App", 'aria-label="Aufrufe je Tag"' in svg
 check("Tabelle darunter nennt die Werkzeuge", "read_class" in svg and "search" in svg)
 check("Ausgänge mit der Bedeutung der App",
       "refused" in C.outcome_list(R.usage(db, "2026-11-01", "2026-11-03", ["outcome"], now=NOW)))
+
+print("\n-- Vorlagen füllen (RFC-0107 D2)")
+tree = {"{name}": {"url": "{url}/x", "port": "{port}", "weg": "{weg}", "leer": {"a": "{weg}"}},
+        "liste": ["{weg}", "fest"]}
+out = fill.fill(tree, {"name": "s", "url": "https://g"}, {"port": 33418, "weg": fill.OMIT})
+check("Text im Schlüssel und im Wert, ganzer Wert als Zahl, OMIT fällt weg, leeres Objekt auch",
+      out == {"s": {"url": "https://g/x", "port": 33418}, "liste": ["fest"]}, out)
+for bad, word in (({"a": "{gibts_nicht}"}, "unbekannter"), ({"a": "Port {port}"}, "ganzer Wert")):
+    try:
+        fill.check_names(bad, ("name", "url"), ("port",), "t")
+        check(f"abgewiesen: {word}", False)
+    except fill.TemplateError as exc:
+        check(f"abgewiesen: {word}", word in str(exc), exc)
+check("Großbuchstaben sind kein Platzhalter (${OAAP_MCP_KEY} bleibt stehen)",
+      fill.fill("Bearer ${OAAP_MCP_KEY}", {}, {}) == "Bearer ${OAAP_MCP_KEY}")
 
 db.close()
 shutil.rmtree(TMP, ignore_errors=True)

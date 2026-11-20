@@ -81,8 +81,8 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.3.3   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.1.3   |
 | [Keycloak](apps/keycloak/)         | Anmeldedienst (OIDC), ein Realm je Mandant — RFC-0041      | 0.1.7   |
-| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.11.0   |
-| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch | 0.27.0   |
+| [KI-Gateway](apps/ai-gateway/)     | OpenAI-kompatibler Endpunkt: Aliasse, API-Keys, Verbrauch  | 0.11.1   |
+| [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch, Vorlagen für Werkzeuge | 0.28.0   |
 | [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.16.0   |
 | [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code | 0.4.2   |
 | [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.4.1   |

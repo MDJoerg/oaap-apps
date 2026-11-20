@@ -697,6 +697,48 @@ erklärt `setup: {path: /oaap/setup}`.
 - **Keine Geheimnisse:** Ein Feld `key`, `token`, `secret`, `password`
   oder `credentials` (auch verschachtelt) ergibt `refused`.
 
+## Vorlagen für Werkzeuge (0.28, RFC-0107)
+
+Reiter **„Vorlagen“**: die Datei, mit der ein Werkzeug Sichten dieses Gateways benutzt.
+
+1. **Werkzeug wählen:** Claude Code (`.mcp.json`), VS Code (Copilots eigenes Format, ebenfalls
+   `.mcp.json`) oder opencode (`opencode.jsonc`, Form „V2“ mit `mcp.servers`).
+2. **Sichten wählen:** aus einem Schlüssel (dessen Sichten, nach derselben Regel wie ein Aufruf;
+   was die Ampel des Schlüssels nicht erlaubt, steht als „ausgelassen“ mit Grund da) oder von
+   Hand, je Sicht mit dem Zugang „Schlüssel“ oder „Anmeldung“.
+3. **Kopieren oder herunterladen.** Darunter, wohin die Datei gehört und was vorher zu tun ist.
+
+- **Nie ein Schlüsselwert in einer Datei.** Statt des Schlüssels steht die Umgebungsvariable
+  `OAAP_MCP_KEY` da (`${OAAP_MCP_KEY}`, bei opencode `{env:OAAP_MCP_KEY}`). Den Wert zeigt nur der
+  Kasten direkt nach dem Ausstellen, einmal, im `claude mcp add`-Befehl; der Kasten verweist auf
+  die Vorlagen dieses Schlüssels.
+- **Anmeldung:** Client-ID (`MCPGW_SIGNIN_CLIENT`) und Rücksprung-Port 33418. Ohne eingerichtete
+  Anmeldung gibt es dafür keine Datei. **VS Code** bekommt vorerst nur den Schlüsselweg: Welche
+  Rücksprung-Adresse VS Code schickt, ist nicht dokumentiert; der Realm nimmt nur
+  `http://localhost:33418/callback`. Erst messen.
+- Die Vorlagen sind Daten (`templates/*.json`), jede mit dem Datum, an dem ihr Format geprüft
+  wurde. Gefüllt wird mit `gwcore.fill`, derselben Maschine wie im KI-Gateway.
+- Der Reiter „Anmeldung“ zeigt seine `.mcp.json` jetzt aus der Vorlage „Claude Code“.
+
+**Selbstbedienung:**
+
+```bash
+curl -H "Authorization: Bearer $OAAP_MCP_KEY" \
+  "https://<gateway>/mcp/_client-config?target=claude-code" -o .mcp.json
+```
+
+Ziele: `claude-code`, `vscode`, `opencode`. Ein falscher oder widerrufener Schlüssel bekommt
+dieselbe `401` wie überall; ein unbekanntes Ziel `400` mit der Liste; ein Schlüssel ohne Sicht,
+die ein Werkzeug erreicht, `409` mit den Gründen. Der Abruf steht in der Prüfspur
+(`client.config`), nicht im Verbrauch.
+
+Auf **`/me`** steht „In meinem Werkzeug einrichten“: die Sichten mit Anmeldung, die ein
+Zugangsprofil öffnet, und die Datei für Claude Code oder opencode (`/me/client-config?target=`).
+Die Gruppen der Person im Realm kennt das Gateway dort nicht (die Plattform gibt Apps keine
+Gruppen); bei einem Profil für bestimmte Gruppen steht deshalb „ob du dazugehörst, entscheidet
+die Anmeldung“. Fehlt bei einem Server mit Verfahren U der eigene Zugang, steht „erst Zugang
+hinterlegen“.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

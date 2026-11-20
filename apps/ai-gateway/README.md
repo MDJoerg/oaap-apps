@@ -574,6 +574,8 @@ RFC-0104 §8).
 
 ## Eigenschaften der Modelle und Vorlagen für Clients (0.11.0, RFC-0106)
 
+Seit 0.11.1 füllt `gwcore.fill` die Vorlagen -- dieselbe Maschine wie im MCP-Gateway (RFC-0107 D2). Sichtbar ändert sich nichts.
+
 **Eigenschaften.** Je Modellname vier Angaben: Werkzeuge (`tools`), Bilder
 (`vision`), Kontextfenster (`context`, Ein- und Ausgabe zusammen) und
 größte Ausgabe (`output`). Gespeichert wird je Ziel (Quelle + Modell der

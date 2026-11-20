@@ -1,0 +1,18 @@
+{
+  "target": "vscode",
+  "title": "VS Code (Copilot)",
+  "format": "Copilots eigenes Format: .mcp.json oder ~/.copilot/mcp-config.json mit mcpServers, type http, headers mit ${NAME} aus der Umgebung, laut VS-Code-Dokumentation (MCP servers, MCP configuration reference) vom 18.11.2026. Das Editor-Format .vscode/mcp.json wird laut derselben Doku im Februar 2027 eingestellt.",
+  "checked": "2026-11-20",
+  "file": ".mcp.json",
+  "where": "Als .mcp.json in den geöffneten Ordner legen oder die Einträge in ~/.copilot/mcp-config.json übernehmen (gilt dann für dich in allen Ordnern).",
+  "ways": ["key"],
+  "document": {"mcpServers": "{servers}"},
+  "servers_as": "map",
+  "entry": {
+    "key": {"type": "http", "url": "{url}", "headers": {"Authorization": "Bearer ${OAAP_MCP_KEY}"},
+            "tools": ["*"]}
+  },
+  "notes": {
+    "key": "VS Code liest den Schlüssel aus der Umgebungsvariable OAAP_MCP_KEY; starte VS Code aus einer Umgebung, in der sie gesetzt ist. Die Datei selbst enthält ihn nicht. Eine Anmeldung im Realm bietet diese Vorlage noch nicht an: Welche Rücksprung-Adresse VS Code benutzt, ist nicht dokumentiert und noch nicht gemessen (RFC-0107 D5)."
+  }
+}

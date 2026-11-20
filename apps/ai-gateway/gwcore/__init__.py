@@ -12,6 +12,7 @@ Abfragen, die sich widersprechen.
 - `ledger`  — Schlüssel ausstellen/finden/widerrufen, Prüfspur, Rate
 - `report`  — die eine Abfrage, Zeiträume, CSV
 - `charts`  — SVG-Grafiken aus genau dieser Abfrage
+- `fill`    — Vorlagen für Clients füllen (RFC-0106, RFC-0107 D2)
 
 **Diese Dateien sind Kopien.** Die Quelle liegt in `oaap-apps/lib/gwcore/`;
 eine App wird nur aus ihrem eigenen Ordner gebaut und sieht `lib/` nicht.

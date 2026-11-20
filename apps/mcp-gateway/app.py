@@ -53,6 +53,7 @@ import argcheck
 import assistants as arules
 CASE_NUMBER_RE = __import__("re").compile(r"^V-\d{4}-\d{4,6}$")
 import books
+import clientfiles
 import compose
 import guard
 import signin
@@ -62,7 +63,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.27.0"
+VERSION = "0.28.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -531,6 +532,7 @@ def platform_act(person):
 USER_ASSERTION = "X-OAAP-User-Assertion"
 VIEWS_PATH = "/mcp/_views"            # 0.14.0: Suchhilfe des Chats
 READINESS_PATH = "/mcp/_readiness"    # 0.17.0: Bereitschaft je Sicht für den Chat (RFC-0095 §5)
+CLIENT_CONFIG_PATH = "/mcp/_client-config"  # 0.28.0: Datei für die Sichten eines Schlüssels (RFC-0107)
 ASSISTANTS_PATH = "/mcp/_assistants"  # 0.22.0: Assistenten mit Revisionen (RFC-0097 Stufe 1)
 # Fachliche Berechtigungen (RFC-0045) für Team-Assistenten: das Gateway erklärt das
 # Objekt `assistant` selbst (Manifest), die Plattform gibt ihm dafür OAAP_AUTHZ_*.
@@ -1126,6 +1128,7 @@ TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
         ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
         ("auswertung", "auswertung", "Auswertung"),
         ("assistenten", "assistenten", "Assistenten"),
+        ("vorlagen", "vorlagen", "Vorlagen"),          # 0.28.0, RFC-0107
         # 0.15.2: die eigene Seite auch für die Verwaltung erreichbar -- die
         # Kachel führt eine Admin-Person auf die Verwaltung, nicht auf /me.
         ("me", "me", "Meine Aufrufe"))
@@ -1647,7 +1650,7 @@ Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.<
 <p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
 Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
 <p class="hint">{esc(doc["note"])}</p></div>
-{me_credentials_card(uid, notice)}'''
+{me_credentials_card(uid, notice)}{me_templates_card(uid)}'''
     return f"""<!doctype html><html lang="de"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Meine Werkzeuge — OAAP MCP-Gateway</title>
@@ -1704,7 +1707,10 @@ def admin_page(user, roles, host, notice="", secret=None, tab="start"):
         parts.append(f'''<div class="card secretbox"><h2>Schlüssel „{esc(secret["label"])}“</h2>
 <p><b>Nur jetzt sichtbar.</b> Gespeichert ist nur ein Hash; wer den Wert verliert, bekommt einen neuen.</p>
 <pre>{esc(secret["value"])}</pre><p class="hint">Zum Beispiel für Claude Code:</p>
-<pre>{esc(cmd)}</pre></div>''')
+<pre>{esc(cmd)}</pre>
+<p class="hint">Eine Datei für Claude Code, VS Code oder opencode, ohne den Wert (er steht dort als
+Umgebungsvariable <code>{clientfiles.KEY_VAR}</code>):
+<a href="vorlagen?key={quote(secret.get("id", ""))}">Vorlagen für diesen Schlüssel</a>.</p></div>''')
     if not VAULT.usable(MASTER) and tab in ("start", "server"):
         parts.append('<div class="card attention"><p><b>MCPGW_MASTER_KEY fehlt.</b> Server ohne '
                      'Zugangsdaten und Server hinter einer Destination lassen sich pflegen; eigene '
@@ -1750,17 +1756,218 @@ Gruppen im Token; ohne passendes Profil gibt es 403.</p>
 „Authenticate“. <b>Nicht</b> über den Dialog in <code>/mcp</code> eintragen: der kennt keine
 Client-ID, Claude Code versucht dann, sich selbst beim Realm zu registrieren, und der Realm lehnt
 das ab (gemessen am 07.11.).</p>
-<pre>{esc(mcp_json)}</pre>{settings_table()}</div>'''
+<pre>{esc(mcp_json)}</pre>
+<p class="hint">Dieselbe Datei für opencode und zum Herunterladen: <a href="vorlagen?{"&amp;".join(
+        "pick=" + quote(v + ":signin") for v in views)}">Vorlagen</a>.</p>{settings_table()}</div>'''
 
 
 def mcp_json_text(host, views):
-    """Dieselbe Angabe wie `claude mcp add ... --client-id --callback-port`, als Datei."""
+    """Dieselbe Angabe wie `claude mcp add ... --client-id --callback-port`, als Datei.
+    Seit 0.28.0 aus der Vorlage „Claude Code“ (RFC-0107 §2.5): eine Erzeugung, nicht zwei."""
     if not views:
         return "{}"
-    servers = {v: {"type": "http", "url": endpoint(host, v),
-                   "oauth": {"clientId": SIGNIN_CLIENT or "<client>", "callbackPort": CALLBACK_PORT}}
-               for v in views}
-    return json.dumps({"mcpServers": servers}, indent=2, ensure_ascii=False)
+    picks = [{"name": v, "url": endpoint(host, v), "way": "signin"} for v in views]
+    return clientfiles.render(TEMPLATES["claude-code"], picks, host, SIGNIN_CLIENT or "<client>",
+                              CALLBACK_PORT, REDIRECT_URI).rstrip("\n")
+
+
+# ------------------------------------------------------------------ Vorlagen (0.28.0, RFC-0107)
+
+TEMPLATES = clientfiles.load()        # eine fehlerhafte Vorlage hält den Start an
+REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback"
+
+
+def personal_servers_of(view):
+    out = []
+    for name in books.view_servers(DB, view):
+        srow = books.server_row(DB, name)
+        if srow and srow["auth_kind"] == "personal":
+            out.append(name)
+    return out
+
+
+def pick_problems(tpl, picks):
+    """Was gegen diese Auswahl spricht, als Sätze; leer = die Datei wird gebaut."""
+    out, seen = [], set()
+    if not picks:
+        out.append("Keine Sicht gewählt.")
+    for p in picks:
+        vrow = books.view_row(DB, p["name"])
+        if not vrow:
+            out.append(f"Die Sicht „{p['name']}“ gibt es nicht.")
+            continue
+        if p["name"] in seen:
+            out.append(f"Die Sicht „{p['name']}“ ist zweimal gewählt; ein Werkzeug kennt jeden "
+                       "Namen nur einmal.")
+            continue
+        seen.add(p["name"])
+        way = WAY_NAMES.get(p["way"], p["way"])
+        if p["way"] not in books.view_ways(vrow):
+            out.append(f"Die Sicht „{p['name']}“ hat den Zugang {way} nicht.")
+        elif p["way"] not in tpl["ways"]:
+            out.append(f"Die Vorlage {tpl['title']} bietet den Zugang {way} noch nicht an.")
+        elif p["way"] == "signin" and not (ISSUER and SIGNIN_CLIENT):
+            out.append("Die Anmeldung von Personen ist nicht eingerichtet (Issuer oder Client für "
+                       "Personen fehlt); ohne Client-ID gibt es keine Datei für den Zugang "
+                       "„Anmeldung“.")
+    return out
+
+
+def client_file(host, target, picks):
+    """(text, probleme, hinweise) -- text ist None, wenn etwas dagegen spricht. Nie ein
+    Schlüsselwert: es gibt keinen Platzhalter dafür (D3)."""
+    tpl = TEMPLATES.get(target)
+    if not tpl:
+        return None, [f"Ein Werkzeug „{target}“ kennt das Gateway nicht."], []
+    picks = [dict(p, url=endpoint(host, p["name"])) for p in picks]
+    problems = pick_problems(tpl, picks)
+    if problems:
+        return None, problems, []
+    text = clientfiles.render(tpl, picks, host, SIGNIN_CLIENT, CALLBACK_PORT, REDIRECT_URI)
+    hints = clientfiles.notes(tpl, picks)
+    for p in picks:
+        if p["way"] != "signin":
+            continue
+        for name in personal_servers_of(p["name"]):
+            hints.append(f"In der Sicht {p['name']} braucht der Server {name} deinen eigenen "
+                         f"Zugang: erst auf „Meine Werkzeuge“ ({me_url() or 'me'}) hinterlegen.")
+    return text, [], hints
+
+
+def key_picks(key_id):
+    """(schlüsselzeile, auswahl, ausgelassen) -- die Sichten eines Schlüssels auf dem Weg `key`,
+    nach derselben Regel wie ein Aufruf (`why_not`). Ausgelassen = [(sicht, grund)]."""
+    row = DB.execute("SELECT * FROM keys WHERE id=?", (key_id,)).fetchone() if key_id else None
+    if not row or row["kind"] != "key" or row["revoked"]:
+        return None, [], []
+    picks, skipped = [], []
+    for v in books.key_views(row):
+        reason = why_not(row, books.view_row(DB, v), "key")
+        if reason:
+            skipped.append((v, reason))
+        else:
+            picks.append({"name": v, "way": "key"})
+    return row, picks, skipped
+
+
+def parse_picks(values):
+    out = []
+    for raw in values:
+        name, _, way = raw.rpartition(":")
+        if name and way in clientfiles.WAYS:
+            out.append({"name": name, "way": way})
+    return out
+
+
+def templates_page(user, roles, host, pairs):
+    """Reiter „Vorlagen“ (RFC-0107 §2.1): Werkzeug, Sichten aus einem Schlüssel oder von Hand."""
+    query = dict(pairs)
+    target = query.get("target") or "claude-code"
+    key_id = query.get("key", "")
+    picks = parse_picks([v for k, v in pairs if k == "pick"])
+    skipped, key_row = [], None
+    if key_id and not picks:
+        key_row, picks, skipped = key_picks(key_id)
+    result = ""
+    if picks or key_id:
+        text, problems, hints = client_file(host, target, picks)
+        tpl = TEMPLATES.get(target, {})
+        lost = "".join(f"<li>Sicht {esc(v)} ausgelassen: {esc(r)}</li>" for v, r in skipped)
+        if key_id and key_row is None:
+            problems = ["Diesen Schlüssel gibt es nicht (mehr), oder er ist widerrufen."]
+            text = None
+        if text is None:
+            result = ('<div class="card attention"><h2>Keine Datei</h2><ul>'
+                      + "".join(f"<li>{esc(p)}</li>" for p in problems) + lost + "</ul></div>")
+        else:
+            qs = "&amp;".join([f"target={quote(target)}"]
+                              + ([f"key={quote(key_id)}"] if key_row is not None and
+                                 not [k for k, _v in pairs if k == "pick"] else
+                                 [f"pick={quote(p['name'] + ':' + p['way'])}" for p in picks]))
+            result = (f'<div class="card"><h2>{esc(tpl["title"])}: <code>{esc(tpl["file"])}</code></h2>'
+                      f'<pre>{esc(text)}</pre>'
+                      f'<p><a class="button" href="vorlagen?{qs}&amp;laden=1">Herunterladen</a></p>'
+                      f'<p class="hint">{esc(tpl["where"])}</p><ul>'
+                      + "".join(f"<li>{esc(h)}</li>" for h in hints) + lost
+                      + f'</ul><p class="hint">Format: {esc(tpl["format"])} (geprüft am '
+                      f'{esc(tpl["checked"])}). Die Formate der Werkzeuge ändern sich; passt eine '
+                      'Datei nicht mehr, bitte melden.</p></div>')
+    keys = [k for k in DB.execute("SELECT * FROM keys WHERE kind='key' AND revoked='' "
+                                  "ORDER BY label")]
+    key_opts = '<option value="">— von Hand wählen —</option>' + "".join(
+        f'<option value="{esc(k["id"])}"{" selected" if k["id"] == key_id else ""}>'
+        f'{esc(k["label"])} ({esc(", ".join(books.key_views(k)) or "keine Sicht")})</option>'
+        for k in keys)
+    tpl_opts = "".join(f'<option value="{esc(t)}"{" selected" if t == target else ""}>'
+                       f'{esc(v["title"])}</option>' for t, v in sorted(TEMPLATES.items()))
+    chosen = {(p["name"], p["way"]) for p in picks} if not key_id else set()
+    rows, blocked = [], []
+    for v in books.views(DB):
+        ways = [w for w in books.view_ways(v) if w in clientfiles.WAYS]
+        if not ways:
+            blocked.append(v["name"])
+            continue
+        boxes = " ".join(
+            f'<label><input type="checkbox" name="pick" value="{esc(v["name"] + ":" + w)}"'
+            f'{" checked" if (v["name"], w) in chosen else ""}> {esc(books._WAY_WORD[w])}</label>'
+            for w in ways)
+        rows.append(f'<tr><td>{esc(v["name"])}</td><td>{boxes}</td></tr>')
+    note = (f'<p class="hint">Ohne Datei: {esc(", ".join(blocked))} -- diese Sichten nehmen nur '
+            'Personen aus einem Chat (Zugang „Plattform“); ein Werkzeug erreicht sie nicht.</p>'
+            if blocked else "")
+    form = f'''<div class="card"><h2>Vorlagen für Werkzeuge</h2>
+<p class="hint">Die Datei, mit der ein Werkzeug Sichten dieses Gateways benutzt. Statt eines
+Schlüssels steht dort immer die Umgebungsvariable <code>{clientfiles.KEY_VAR}</code>, nie ein Wert;
+bei „Anmeldung“ die Client-ID und der Rücksprung-Port. Wer seinen Schlüssel hat, holt die Datei
+auch selbst: <code>GET /mcp/_client-config?target=…</code> mit dem Schlüssel.</p>
+<form method="get" action="vorlagen">
+<div><label>Werkzeug</label><select name="target">{tpl_opts}</select></div>
+<div><label>Sichten eines Schlüssels</label><select name="key">{key_opts}</select></div>
+<p class="hint">… oder von Hand (dann den Schlüssel leer lassen):</p>
+<div class="scroll"><table><tr><th>Sicht</th><th>Zugang</th></tr>
+{"".join(rows) or '<tr><td colspan=2 class=muted>Noch keine Sicht.</td></tr>'}</table></div>
+{note}<p><button>Datei bauen</button></p></form></div>'''
+    return page("Vorlagen", form + result, user, roles, "vorlagen")
+
+
+def signin_offer(uid):
+    """Für /me (RFC-0107 §3.2): Sichten mit Anmeldung, die ein Zugangsprofil öffnet. Die Gruppen
+    der Person im Realm kennt das Gateway hier nicht (die Plattform gibt Apps keine Gruppen,
+    `oaap.core.identity` §2) -- ob sie dazugehört, entscheidet die Anmeldung. [(sicht, für_alle,
+    fehlende_zugänge)]"""
+    if not (ISSUER and SIGNIN_CLIENT):
+        return []
+    profiles = list(DB.execute("SELECT * FROM keys WHERE kind='profile' AND revoked=''"))
+    out = []
+    for v in books.views(DB):
+        if "signin" not in books.view_ways(v):
+            continue
+        mine = [p for p in profiles if v["name"] in books.key_views(p)]
+        if not mine:
+            continue
+        everyone = any("*" in books.profile_groups(p) for p in mine)
+        missing = [s for s in personal_servers_of(v["name"])
+                   if books.personal_row(DB, "platform", uid, s) is None]
+        out.append((v["name"], everyone, missing))
+    return out
+
+
+def me_templates_card(uid):
+    offer = signin_offer(uid)
+    if not offer:
+        return ""
+    targets = [(t, v) for t, v in sorted(TEMPLATES.items()) if "signin" in v["ways"]]
+    rows = "".join(
+        f'<tr><td>{esc(name)}</td><td>{"alle mit Anmeldung" if everyone else "bestimmte Gruppen -- ob du dazugehörst, entscheidet die Anmeldung"}</td>'
+        f'<td>{("erst Zugang hinterlegen: " + esc(", ".join(missing))) if missing else "—"}</td></tr>'
+        for name, everyone, missing in offer)
+    links = " · ".join(f'<a href="me/client-config?target={quote(t)}">{esc(v["title"])}</a>'
+                       for t, v in targets)
+    return f'''<div class="card"><h2>In meinem Werkzeug einrichten</h2>
+<p class="hint">Diese Sichten nehmen eine Anmeldung bei deinem Mandanten. Die Datei enthält kein
+Geheimnis: Das Werkzeug öffnet beim ersten Aufruf die Anmeldung im Browser.</p>
+<div class="scroll"><table><tr><th>Sicht</th><th>Für wen</th><th>Vorher</th></tr>{rows}</table></div>
+<p>Datei herunterladen: {links}</p></div>'''
 
 
 FROM_WORDS = {"hand": "von Hand", "platform": "von der Plattform", "": "leer"}
@@ -3392,6 +3599,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == READINESS_PATH:
             self.readiness_for_carried()
             return
+        if path == CLIENT_CONFIG_PATH:
+            self.client_config_for_key()
+            return
         if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
             self.assistants_get(path)
             return
@@ -3423,6 +3633,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, assistants_page(user, roles, self.page_who(), query))
         elif path == "/assistenten/export":
             self.assistant_export_download(query)
+        elif path == "/vorlagen":
+            pairs = parse_qsl(self.path.partition("?")[2], keep_blank_values=True)
+            if query.get("laden") == "1":
+                target = query.get("target") or "claude-code"
+                picks = parse_picks([v for k, v in pairs if k == "pick"])
+                if query.get("key") and not picks:
+                    _row, picks, _s = key_picks(query["key"])
+                text, problems, _h = client_file(host, target, picks)
+                if text is None:
+                    self.send_html(409, page("Keine Datei", '<div class="card attention"><p>'
+                                             + esc(" ".join(problems)) + "</p></div>", user, roles,
+                                             "vorlagen"))
+                else:
+                    self.send_file(text, TEMPLATES[target]["file"])
+            else:
+                self.send_html(200, templates_page(user, roles, host, pairs))
         else:
             self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start")))
 
@@ -3444,8 +3670,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, me_doc(uid, query, also) if path == "/me/v1/calls"
                            else me_readiness(uid))
             return
+        if path == "/me/client-config":
+            self.me_client_config(uid, query)
+            return
         if path != "/me":
-            self.send_json(404, {"error": "Bekannt sind /me, /me/v1/calls und /me/v1/readiness."})
+            self.send_json(404, {"error": "Bekannt sind /me, /me/v1/calls, /me/v1/readiness und "
+                                          "/me/client-config."})
             return
         if not uid:
             self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Diese Seite zeigt deine '
@@ -3453,6 +3683,65 @@ class Handler(BaseHTTPRequestHandler):
                                      '</p></div>', "", ""))
             return
         self.send_html(200, me_page(self.identity()[0], uid, query, self.is_admin(), also=also))
+
+    def send_file(self, text, filename):
+        """Eine Datei zum Speichern: als Anhang, nie zwischengespeichert (RFC-0107)."""
+        self.send_bytes(200, "application/json; charset=utf-8", text.encode("utf-8"),
+                        [("Content-Disposition", f'attachment; filename="{filename}"'),
+                         ("Cache-Control", "no-store")])
+
+    def me_client_config(self, uid, query):
+        """GET /me/client-config?target= (RFC-0107 §3.2): die Datei für die Sichten mit
+        Anmeldung, die ein Zugangsprofil öffnet -- Weg `signin`, kein Geheimnis darin."""
+        if not uid:
+            self.send_json(403, {"error": "Nur über die Plattform angemeldet: Es fehlt die "
+                                          "Kennung der Person."})
+            return
+        target = query.get("target", "")
+        tpl = TEMPLATES.get(target)
+        if not tpl or "signin" not in tpl["ways"]:
+            self.send_json(400, {"error": "Dieses Werkzeug bietet die Anmeldung nicht an.",
+                                 "targets": sorted(t for t, v in TEMPLATES.items()
+                                                   if "signin" in v["ways"])})
+            return
+        picks = [{"name": name, "way": "signin"} for name, _e, _m in signin_offer(uid)]
+        text, problems, _hints = client_file(self.headers.get("Host", "<gateway>"), target, picks)
+        if text is None:
+            self.send_json(409, {"error": " ".join(problems)})
+            return
+        books.log(DB, f"person:{uid}", "client.config", target, f"{len(picks)} Sichten, Anmeldung")
+        self.send_file(text, tpl["file"])
+
+    def client_config_for_key(self):
+        """GET /mcp/_client-config?target= mit dem Schlüssel (RFC-0107 §3.1): die Datei für
+        dessen Sichten. Ein falscher oder widerrufener Schlüssel bekommt dieselbe 401 wie
+        überall unter /mcp. Kein Aufruf eines Servers: Prüfspur, keine Messzeile."""
+        addr = self.client_addr()
+        if failing_hard(addr):
+            self.send_json(429, {"error": "Zu viele Fehlversuche."}, [("Retry-After", "60")])
+            return
+        header = self.headers.get("Authorization", "")
+        value = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        key = books.find(DB, value)
+        if not key or key["revoked"] or key["kind"] != "key":
+            note_failure(addr)
+            self.deny()
+            return
+        query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+        target = query.get("target", "")
+        if target not in TEMPLATES:
+            self.send_json(400, {"error": f"Ein Werkzeug „{target[:40]}“ kennt das Gateway nicht.",
+                                 "targets": sorted(TEMPLATES)})
+            return
+        _row, picks, skipped = key_picks(key["id"])
+        text, problems, _hints = client_file(self.headers.get("Host", "<gateway>"), target, picks)
+        if text is None:
+            self.send_json(409, {"error": " ".join(problems),
+                                 "skipped": [{"view": v, "why": r} for v, r in skipped]})
+            return
+        books.log(DB, f"key:{key['label']}", "client.config", target,
+                  f"{len(picks)} Sichten" + (f", {len(skipped)} ausgelassen" if skipped else ""))
+        self.send_file(text, TEMPLATES[target]["file"])
 
     def realm_subject(self, uid):
         """D2 (0.17): die Kennung dieser Person im Realm des Gateways, wenn die Plattform sie
@@ -3624,7 +3913,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/issue":
                 views = [v.strip() for v in form.get("views", "").split(",") if v.strip()]
                 kind = form.get("kind", "key")
-                value, _ = books.issue(
+                value, kid = books.issue(
                     DB, form.get("label", ""), user, views=views,
                     max_effect=form.get("max_effect", "read"), ceiling=form.get("ceiling", "yellow"),
                     budget_calls=_int(form.get("budget")), rate_per_min=_int(form.get("rate")),
@@ -3633,7 +3922,8 @@ class Handler(BaseHTTPRequestHandler):
                 if kind == "profile":
                     notice = f"Zugangsprofil „{form.get('label', '')}“ angelegt."   # Wert verworfen
                 else:
-                    secret = {"label": form.get("label", ""), "value": value, "views": views}
+                    secret = {"label": form.get("label", ""), "value": value, "views": views,
+                              "id": kid}
             elif path == "/revoke":
                 label = form.get("label", "")
                 notice = (f"Schlüssel „{label}“ widerrufen — ab sofort abgelehnt."

@@ -1,0 +1,22 @@
+{
+  "target": "opencode",
+  "title": "opencode",
+  "format": "opencode.jsonc „V2“ mit mcp.servers, type remote, oauth false und headers mit {env:…}, oder oauth mit client_id, callback_port, redirect_uri, laut opencode-Dokumentation (MCP servers), gelesen am 20.11.2026",
+  "checked": "2026-11-20",
+  "file": "opencode.jsonc",
+  "where": "Als opencode.jsonc ins Projekt oder in die globale Konfiguration von opencode legen; gibt es die Datei schon, die Einträge unter mcp.servers ergänzen.",
+  "ways": ["key", "signin"],
+  "document": {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": "{servers}"}},
+  "servers_as": "map",
+  "entry": {
+    "key": {"type": "remote", "url": "{url}", "oauth": false,
+            "headers": {"Authorization": "Bearer {env:OAAP_MCP_KEY}"}},
+    "signin": {"type": "remote", "url": "{url}",
+               "oauth": {"client_id": "{client_id}", "callback_port": "{callback_port}",
+                         "redirect_uri": "{redirect_uri}"}}
+  },
+  "notes": {
+    "key": "opencode liest den Schlüssel aus der Umgebungsvariable OAAP_MCP_KEY. Setze sie vor dem Start; die Datei selbst enthält ihn nicht.",
+    "signin": "Einmal anmelden mit opencode mcp auth und dem Namen der Sicht: Der Browser öffnet die Anmeldung deines Mandanten."
+  }
+}

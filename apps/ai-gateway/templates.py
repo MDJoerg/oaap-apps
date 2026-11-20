@@ -18,96 +18,49 @@ und die Seite sagt, welche Angaben fehlten. Geraten wird nichts (D3).
 Der Schlüssel steht nie im Ergebnis (D9): Die Vorlage selbst trägt den
 Platzhalter des Werkzeugs (`${input:…}`, eine Umgebungsvariable), und es gibt
 keinen Platzhalter, in den ein Schlüssel passen würde.
+
+Seit 0.11.1 füllt `gwcore.fill` (RFC-0107 D2) -- dieselbe Maschine wie im
+MCP-Gateway. Hier steht nur, was die Namen im KI-Gateway bedeuten.
 """
 import json
 import os
-import re
 
 import props
+from gwcore.fill import OMIT, TemplateError, check_names, dump, fill, load_dir, require  # noqa: F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIR = os.path.join(HERE, "templates")
 REQUIRED = ("target", "title", "format", "checked", "file", "where", "key_hint", "document",
             "model", "models_as")
 TEXT_NAMES = ("gateway", "url", "id", "name")
-WHOLE = re.compile(r"^\{(tools|vision|context|output|models)\}$")
-ANY = re.compile(r"\{([a-z_]+)\}")
-OMIT = object()
-
-
-class TemplateError(ValueError):
-    pass
+WHOLE_NAMES = ("tools", "vision", "context", "output", "models")
 
 
 def _check(tpl, where):
-    missing = [k for k in REQUIRED if k not in tpl]
-    if missing:
-        raise TemplateError(f"{where}: es fehlt {', '.join(missing)}")
+    require(tpl, REQUIRED, where)
     if tpl["models_as"] not in ("list", "map"):
         raise TemplateError(f"{where}: models_as ist list oder map")
-
-    def walk(node):
-        if isinstance(node, dict):
-            for k, v in node.items():
-                walk(k)
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-        elif isinstance(node, str):
-            for name in ANY.findall(node):
-                if name in TEXT_NAMES:
-                    continue
-                if not WHOLE.match(node):
-                    raise TemplateError(f"{where}: {{{name}}} nur als ganzer Wert")
-    walk(tpl["document"])
-    walk(tpl["model"])
+    check_names(tpl["document"], TEXT_NAMES, WHOLE_NAMES, where)
+    check_names(tpl["model"], TEXT_NAMES, WHOLE_NAMES, where)
     if json.dumps(tpl["document"]).count('"{models}"') != 1:
         raise TemplateError(f"{where}: {{models}} genau einmal im Dokument")
 
 
 def load(directory=DIR):
     """{ziel: vorlage} — eine fehlerhafte Datei ist ein Fehler beim Start, kein stilles Fehlen."""
+    return load_dir(directory, _check)
+
+
+def _whole(tpl, values):
     out = {}
-    for fn in sorted(os.listdir(directory)):
-        if not fn.endswith(".json"):
+    for name in props.PROPS:
+        value = values.get(name, "")
+        if value == "":
+            out[name] = OMIT
             continue
-        with open(os.path.join(directory, fn), encoding="utf-8") as fh:
-            tpl = json.load(fh)
-        _check(tpl, fn)
-        out[tpl["target"]] = tpl
+        mapped = tpl.get("values", {}).get(name, {})
+        out[name] = mapped[value] if value in mapped else props.typed(name, value)
     return out
-
-
-def _fill(node, ctx, tpl):
-    if isinstance(node, dict):
-        out = {}
-        for k, v in node.items():
-            r = _fill(v, ctx, tpl)
-            if r is OMIT or (isinstance(r, dict) and not r and v):
-                continue
-            out[_text(k, ctx)] = r
-        return out
-    if isinstance(node, list):
-        return [r for r in (_fill(v, ctx, tpl) for v in node) if r is not OMIT]
-    if isinstance(node, str):
-        m = WHOLE.match(node)
-        if m:
-            name = m.group(1)
-            if name == "models":
-                return ctx["models"]
-            value = ctx["props"].get(name, "")
-            if value == "":
-                return OMIT
-            mapped = tpl.get("values", {}).get(name, {})
-            return mapped[value] if value in mapped else props.typed(name, value)
-        return _text(node, ctx)
-    return node
-
-
-def _text(s, ctx):
-    return ANY.sub(lambda m: str(ctx.get(m.group(1), m.group(0)))
-                   if m.group(1) in TEXT_NAMES else m.group(0), s)
 
 
 def render(tpl, models, url, gateway):
@@ -117,14 +70,12 @@ def render(tpl, models, url, gateway):
     """
     blocks, missing = [], {}
     for m in models:
-        ctx = {"gateway": gateway, "url": url, "id": m["id"], "name": m["id"],
-               "props": m["props"]}
-        blocks.append((m["id"], _fill(tpl["model"], ctx, tpl)))
+        texts = {"gateway": gateway, "url": url, "id": m["id"], "name": m["id"]}
+        blocks.append((m["id"], fill(tpl["model"], texts, _whole(tpl, m["props"]))))
         gone = [p for p in props.PROPS if m["props"].get(p, "") == ""]
         if gone:
             missing[m["id"]] = gone
     built = ([b for _i, b in blocks] if tpl["models_as"] == "list"
              else {i: b for i, b in blocks})
-    doc = _fill(tpl["document"], {"gateway": gateway, "url": url, "models": built, "props": {}},
-                tpl)
-    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n", missing
+    doc = fill(tpl["document"], {"gateway": gateway, "url": url}, {"models": built})
+    return dump(doc), missing

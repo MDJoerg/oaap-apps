@@ -1,0 +1,20 @@
+{
+  "target": "claude-code",
+  "title": "Claude Code",
+  "format": ".mcp.json mit mcpServers, type http, headers und oauth (clientId, callbackPort), laut Claude-Code-Dokumentation (MCP), gelesen am 20.11.2026",
+  "checked": "2026-11-20",
+  "file": ".mcp.json",
+  "where": "Als .mcp.json in den Projektordner legen (gilt für alle, die den Ordner öffnen); gibt es die Datei schon, die Einträge unter mcpServers ergänzen. Im Terminal geht dasselbe mit claude mcp add.",
+  "ways": ["key", "signin"],
+  "document": {"mcpServers": "{servers}"},
+  "servers_as": "map",
+  "entry": {
+    "key": {"type": "http", "url": "{url}", "headers": {"Authorization": "Bearer ${OAAP_MCP_KEY}"}},
+    "signin": {"type": "http", "url": "{url}",
+               "oauth": {"clientId": "{client_id}", "callbackPort": "{callback_port}"}}
+  },
+  "notes": {
+    "key": "Claude Code liest den Schlüssel aus der Umgebungsvariable OAAP_MCP_KEY. Setze sie vor dem Start, zum Beispiel in deiner Shell; der Wert ist dein Schlüssel für dieses Gateway. Die Datei selbst enthält ihn nicht.",
+    "signin": "In /mcp die Sicht wählen und „Authenticate“: Der Browser öffnet die Anmeldung deines Mandanten. Nicht über den Dialog in /mcp eintragen, der kennt keine Client-ID."
+  }
+}
