@@ -45,7 +45,7 @@ SECRET_FIELDS = {"key", "token", "secret", "password", "credentials", "credentia
 
 FIELDS = {"supplier": {"url", "light"},
           "alias": {"supplier", "model"},
-          "client": {"aliases", "ceiling", "personal_data"}}
+          "client": {"aliases", "ceiling", "personal_data", "tenant"}}
 
 ACTOR_CHARS = re.compile(r"[^\w.@:+-]")
 
@@ -139,8 +139,18 @@ def wish(item):
         return None, f"ceiling kennt nur {', '.join(supply.LIGHT_RANK)}."
     if not isinstance(pbd, bool):
         return None, "personal_data ist true oder false."
-    return {"aliases": ",".join(sorted({n.strip() for n in names})), "ceiling": ceiling,
-            "personal_data": 1 if pbd else 0}, ""
+    norm = {"aliases": ",".join(sorted({n.strip() for n in names})), "ceiling": ceiling,
+            "personal_data": 1 if pbd else 0}
+    # 0.10.1: der Kontext „Mandant“ der Freigabe -- ohne ihn stand in jeder
+    # Messzeile des Chats `default` (kit1 auf oaapx01, 2026-11-19). Nur
+    # verglichen, wenn gesetzt: eine Freigabe von vor 0.10.1 bleibt gleich.
+    if "tenant" in item:
+        tenant = item["tenant"]
+        if not isinstance(tenant, str) or not tenant.strip() \
+                or len(tenant) > store.MAX_TEXT or any(ord(c) < 32 for c in tenant):
+            return None, f"tenant ist nicht leerer Text bis {store.MAX_TEXT} Zeichen."
+        norm["tenant"] = tenant.strip()
+    return norm, ""
 
 
 def digest(kind, ident, norm):
@@ -150,7 +160,8 @@ def digest(kind, ident, norm):
 
 
 FIELD_DE = {"url": "Adresse", "light": "Ampel", "targets": "Ziel", "order_listed": "Reihenfolge",
-            "aliases": "Modellnamen", "ceiling": "Obergrenze", "personal_data": "pbD-Freigabe"}
+            "aliases": "Modellnamen", "ceiling": "Obergrenze", "personal_data": "pbD-Freigabe",
+            "tenant": "Mandant"}
 
 
 def differences(want, have):
@@ -196,6 +207,8 @@ class Door:
             return None, f"Die Freigabe „{ident}“ ist widerrufen.", row
         have = {"aliases": ",".join(sorted(a for a in (row["aliases"] or "").split(",") if a)),
                 "ceiling": row["ceiling"], "personal_data": int(row["personal_data"])}
+        if (row["tenant"] or "default") != "default":
+            have["tenant"] = row["tenant"]
         return have, "", row
 
     def remembered(self, kind, ident):
@@ -301,7 +314,7 @@ class Door:
             else:
                 names = [n for n in norm["aliases"].split(",") if n]
                 store.grant(self.db, ident, actor, names, norm["ceiling"],
-                            bool(norm["personal_data"]))
+                            bool(norm["personal_data"]), tenant=norm.get("tenant", ""))
         except ValueError as exc:
             return out("refused", str(exc))
         if kind in ("supplier", "alias"):

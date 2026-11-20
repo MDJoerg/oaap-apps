@@ -208,7 +208,7 @@ def find(db, value):
 CLIENT_DIGEST = "client:"
 
 
-def grant(db, label, actor, aliases=(), ceiling="yellow", personal_data=False):
+def grant(db, label, actor, aliases=(), ceiling="yellow", personal_data=False, tenant=""):
     """Die Freigabe für einen Chat (RFC-0104 §4): eine Zeile der Art `client` in `keys`.
 
     Etikett = Name der Chat-Instanz. Es gibt keinen Wert, der zu ihr passt --
@@ -223,13 +223,14 @@ def grant(db, label, actor, aliases=(), ceiling="yellow", personal_data=False):
         raise ValueError(f"Das Etikett {label!r} ist schon vergeben.")
     key_id = secrets.token_hex(6)
     names = ",".join(sorted(dict.fromkeys(a for a in aliases if a)))
-    db.execute("INSERT INTO keys (id,label,digest,created,aliases,ceiling,personal_data,kind) "
-               "VALUES (?,?,?,?,?,?,?,'client')",
+    db.execute("INSERT INTO keys (id,label,digest,created,aliases,ceiling,personal_data,kind,"
+               "tenant) VALUES (?,?,?,?,?,?,?,'client',?)",
                (key_id, label, CLIENT_DIGEST + label, now(), names, ceiling or "yellow",
-                1 if personal_data else 0))
+                1 if personal_data else 0, (tenant or "").strip() or "default"))
     log(db, actor, "client.grant", label,
         f"aliases={names or 'alle'} bis={ceiling or 'yellow'} "
-        f"pbd={'freigegeben' if personal_data else 'nein'}")
+        f"pbd={'freigegeben' if personal_data else 'nein'}"
+        + (f" mandant={tenant.strip()}" if (tenant or "").strip() else ""))
     db.commit()
     return key_id
 

@@ -526,7 +526,7 @@ Umgebung, ist jeder Aufruf `403`.
 | --- | --- | --- |
 | `supplier` | `{"id": <name>, "url": "https://…/v1", "light"}` — **ohne** Zugangsdaten | Zugangsdaten gespeichert **und** der Verbindungstest der Seite antwortet jetzt mit 2xx |
 | `alias` | `{"id": <modellname>, "supplier", "model"}` — genau ein Ziel | der Modellname ist routbar |
-| `client` | `{"id": <chat-instanz>, "aliases": [...], "ceiling", "personal_data"}` — die Freigabe | nicht widerrufen, nicht abgelaufen |
+| `client` | `{"id": <chat-instanz>, "aliases": [...], "ceiling", "personal_data", "tenant"}` — die Freigabe; `tenant` (seit 0.10.1, optional) ist ihr Kontext „Mandant“ und steht damit in jeder Messzeile des Chats, ohne ihn `default` | nicht widerrufen, nicht abgelaufen |
 
 - `GET` nennt die Arten, `GET ?kind=&id=` den Zustand (`present`/`absent`,
   `ready`, `note`). `POST {"v": 1, "dry": …, "items": [...]}` legt an;

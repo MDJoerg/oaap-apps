@@ -479,6 +479,43 @@ check("Modellname, auf den eine gültige Freigabe beschränkt ist: conflict",
 spur = [(r["actor"], r["action"]) for r in store.audit(app.DB, 200)]
 check("Prüfspur: setup.remove mit dem Auslöser", ("setup:anna", "setup.remove") in spur)
 
+print("\n-- 0.10.1: der Mandant der Freigabe steht in jeder Messzeile")
+status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat8",
+                                       "aliases": ["standard"]}]})
+check("ohne tenant bleibt die Freigabe `default` wie vor 0.10.1",
+      results(doc) == ["made"] and app.DB.execute(
+          "SELECT tenant FROM keys WHERE label='kit-chat8'").fetchone()["tenant"] == "default",
+      doc)
+status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat8",
+                                       "aliases": ["standard"]}]})
+check("dieselbe Freigabe ohne tenant noch einmal: present", results(doc) == ["present"], doc)
+status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat6",
+                                       "aliases": ["standard"], "tenant": "kit1"}]})
+check("Freigabe mit tenant: made", results(doc) == ["made"], doc)
+g6 = app.DB.execute("SELECT * FROM keys WHERE label='kit-chat6'").fetchone()
+check("tenant steht an der Freigabe", g6 is not None and g6["tenant"] == "kit1",
+      dict(g6) if g6 else None)
+before = last_usage_id()
+status, _body = via("/v1/chat/completions", client="kit-chat6",
+                    body={"model": "standard", "messages": []})
+row = wait_new_usage(before)
+check("Messzeile über die Freigabe trägt ctx_tenant kit1",
+      status == 200 and row is not None and row["ctx_tenant"] == "kit1",
+      (status, dict(row) if row else None))
+status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat6",
+                                       "aliases": ["standard"], "tenant": "kit1"}]})
+check("gleicher Wunsch noch einmal: present", results(doc) == ["present"], doc)
+status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat6",
+                                       "aliases": ["standard"], "tenant": "anders"}]})
+check("anderer Mandant: conflict mit Feldnamen",
+      results(doc) == ["conflict"] and "Mandant" in doc["results"][0]["note"], doc)
+for bad in ("", "x" * 500, 7):
+    status, doc = door({"v": 1, "items": [{"kind": "client", "id": "kit-chat7",
+                                           "aliases": ["standard"], "tenant": bad}]})
+    check(f"tenant {str(bad)[:8]!r}: refused", results(doc) == ["refused"], doc)
+status, doc = door({"v": 1, "remove": [{"kind": "client", "id": "kit-chat6"}]})
+check("eine Freigabe mit Mandant lässt sich zurückbauen", results(doc) == ["removed"], doc)
+
 print("\n-- Identitäts-Kopfzeilen zählen auf der Tür nicht")
 status, doc = door({"v": 1, "items": [SUPPLIER]},
                    extra={"X-OAAP-User": "eva", "X-OAAP-Roles": "user"})
