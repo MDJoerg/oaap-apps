@@ -211,6 +211,48 @@ CREATE TABLE IF NOT EXISTS setup_made (
 );
 """
 
+# 0.32 (RFC-0114 Stufe 1): die Systemlandschaft -- Zielsysteme, welcher Server zu
+# welchem System reicht, die Systeme einer Multi-System-Sicht und die eigenen
+# Freigaben je System für abweichende Einträge. Die Regeln stehen in landscape.py.
+LANDSCAPE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS systems (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  role        TEXT NOT NULL DEFAULT 'other',
+  active      INTEGER NOT NULL DEFAULT 1,
+  kind        TEXT NOT NULL DEFAULT '',
+  facts       TEXT NOT NULL DEFAULT '{}',
+  light       TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  created     TEXT NOT NULL,
+  updated     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS system_servers (
+  server  TEXT PRIMARY KEY,
+  system  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS view_systems (
+  view    TEXT NOT NULL,
+  system  TEXT NOT NULL,
+  added_by TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (view, system)
+);
+CREATE TABLE IF NOT EXISTS system_items (
+  view         TEXT NOT NULL,
+  system       TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  server       TEXT NOT NULL,
+  approved_fp  TEXT NOT NULL,
+  approved_doc TEXT NOT NULL,
+  approved_by  TEXT NOT NULL,
+  approved_at  TEXT NOT NULL,
+  PRIMARY KEY (view, system, kind, name)
+);
+"""
+SCHEMA = SCHEMA + LANDSCAPE_SCHEMA
+
 # Rückfragen vom Server an den Client, je Sicht (Spec §6.1). Eine Sicht aus
 # 0.1 bekommt beim Nachziehen „alles ablehnen“ — so hat sie sich bisher
 # verhalten, und ein Update soll das nicht still ändern. Neue Sichten
@@ -265,6 +307,10 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 0.22 (RFC-0097 Stufe 1): die Revision des Assistenten, die sprach
     # (X-OAAP-Assistant: <id>@<rev>), 0 = ohne Angabe.
     ("usage", "assistant_rev", "INTEGER NOT NULL DEFAULT 0"),
+    # 0.32 (RFC-0114): das Referenzsystem einer Multi-System-Sicht ('' = gewöhnliche
+    # Sicht) und das Zielsystem eines Aufrufs in der Messzeile.
+    ("views", "reference", "TEXT NOT NULL DEFAULT ''"),
+    ("usage", "system", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -744,6 +790,7 @@ def delete_server(db, actor, name):
     used = [r["view"] for r in db.execute("SELECT DISTINCT view FROM items WHERE server=?", (name,))]
     if used:
         raise ValueError(f"Server „{name}“ steht noch in Sichten: {', '.join(used)}.")
+    db.execute("DELETE FROM system_servers WHERE server=?", (name,))   # 0.32
     db.execute("DELETE FROM servers WHERE name=?", (name,))
     db.execute("DELETE FROM catalog WHERE server=?", (name,))
     gone = db.execute("DELETE FROM personal_credentials WHERE server=?", (name,)).rowcount
@@ -984,6 +1031,8 @@ def delete_view(db, actor, name):
     if users:
         raise ValueError(f"Gültige Schlüssel nennen die Sicht noch: {', '.join(users)}.")
     db.execute("DELETE FROM items WHERE view=?", (name,))
+    db.execute("DELETE FROM view_systems WHERE view=?", (name,))   # 0.32
+    db.execute("DELETE FROM system_items WHERE view=?", (name,))
     db.execute("DELETE FROM views WHERE name=?", (name,))
     log(db, actor, "view.delete", name)
     db.commit()
@@ -1096,7 +1145,13 @@ def view_servers(db, view):
 
 
 def view_light(db, view):
-    """Die Ampel einer Sicht ist die ihres schlechtesten Servers (RFC-0065 §9.3)."""
+    """Die Ampel einer Sicht ist die ihres schlechtesten Servers (RFC-0065 §9.3).
+    0.32: eine Multi-System-Sicht öffnet mit der Ampel ihres harmlosesten aktiven
+    Systems; jeder Aufruf prüft die Ampel seines Systems (RFC-0114 §4.4)."""
+    vrow = view_row(db, view)
+    if vrow is not None and "reference" in vrow.keys() and vrow["reference"]:
+        import landscape
+        return landscape.view_light(db, view)
     worst = "green"
     for name in view_servers(db, view):
         srow = server_row(db, name)
@@ -1157,6 +1212,17 @@ def ui_uri(item):
 
 def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     """Legt einen Eintrag in eine Sicht. Hält den Text fest. Ein belegter Name wird abgewiesen."""
+    vrow_ = view_row(db, view)
+    if vrow_ is not None and "reference" in vrow_.keys() and vrow_["reference"]:
+        # 0.32 (RFC-0114): eine Multi-System-Sicht wird am Referenzsystem ausgeprägt
+        import landscape
+        if server not in landscape.servers_of(db, vrow_["reference"]):
+            raise ValueError(f"„{view}“ ist eine Multi-System-Sicht: Einträge kommen von Servern "
+                             f"des Referenzsystems „{vrow_['reference']}“; andere Systeme werden "
+                             "der Sicht zugeordnet, nicht ihre Einträge.")
+        if (name or source) == landscape.SYSTEM_TOOL and kind == "tool":
+            raise ValueError(f"„{landscape.SYSTEM_TOOL}“ gehört in einer Multi-System-Sicht dem "
+                             "Gateway -- bitte einen anderen Namen.")
     import argcheck
     import compose
     if not view_row(db, view):
@@ -1341,7 +1407,7 @@ def remove_item(db, actor, view, kind, name):
 # ------------------------------------------------------------------ Messung
 
 def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes_up, bytes_down,
-           person=None, procedure="T", status=0, door="", light=""):
+           person=None, procedure="T", status=0, door="", light="", system=""):
     """Eine Messzeile je Aufruf. `key` ist die Schlüsselzeile vom Beginn der Anfrage.
 
     `name`/`source` sind Namen in der Sicht und beim Server — bei einer
@@ -1355,6 +1421,9 @@ def record(db, key, view, kind, name, server, source, outcome, reason, ms, bytes
               (person or {}).get("iss", ""), int(status or 0),
               door if door in DOORS else "",
               light if light in LIGHT_RANK else ""] + context.snapshot_values(key)
+    if system:
+        cols.append("system")
+        values.append(str(system)[:48])
     if (person or {}).get("client"):
         cols += ["client", "assistant", "confirmed", "assistant_rev"]
         values += [person["client"], person.get("assistant", ""), person.get("confirmed", ""),

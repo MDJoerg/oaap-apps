@@ -166,7 +166,7 @@ print("--- Form")
 st, doc = call("GET")
 ok("GET: die Arten, die das Gateway einrichten kann",
    st == 200 and doc == {"v": 1, "kinds": ["refresh", "server_light", "view", "profile", "assistant",
-                                     "server"]},
+                                     "server", "system"]},
    (st, doc))
 st, doc = call("POST", body=b"kein json")
 ok("kaputter Körper: 400", st == 400, (st, doc))

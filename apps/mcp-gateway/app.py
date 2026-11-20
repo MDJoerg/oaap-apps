@@ -56,6 +56,7 @@ import books
 import clientfiles
 import compose
 import guard
+import landscape
 import signin
 import upstream
 from gwcore import charts as gcharts
@@ -63,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.31.0"
+VERSION = "0.32.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -907,6 +908,20 @@ def visible_items(vrow, key, kind):
     return out
 
 
+def multi_tools(vrow, key, version, asked):
+    """0.32 (RFC-0114 §4.2): die Werkzeuge einer Multi-System-Sicht -- jedes einmal,
+    mit dem Pflichtargument `system` (nur Systeme, auf denen es jetzt geht), und das
+    Werkzeug `systeme` des Gateways. Ein Werkzeug ohne nutzbares System fehlt."""
+    rank = landscape.ceiling_rank(key["ceiling"], asked)
+    out = []
+    for _n, item in sorted(visible_items(vrow, key, "tool").items()):
+        choices = landscape.usable(DB, vrow["name"], item, rank)
+        if choices:
+            out.append(landscape.shaped_tool(compose.shaped("tool", item, version), choices))
+    out.append(landscape.system_tool(version))
+    return out
+
+
 def refusal(vrow, kind, name):
     """Warum ein Eintrag nicht sichtbar ist: (Grund, Code, Satz). Nennt nie den Server."""
     word = compose.KIND_WORDS[kind]
@@ -1124,7 +1139,9 @@ LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
 
 
 TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
-        ("sichten", "./?tab=sichten", "Sichten"), ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
+        ("sichten", "./?tab=sichten", "Sichten"),
+        ("systeme", "./?tab=systeme", "Systemlandschaft"),          # 0.32, RFC-0114
+        ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
         ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
         ("auswertung", "auswertung", "Auswertung"),
         ("assistenten", "assistenten", "Assistenten"),
@@ -1689,7 +1706,8 @@ Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
 
 
 TAB_PAGES = lambda: {"start": ("Übersicht", start_tab), "server": ("Server", servers_tab),
-             "sichten": ("Sichten", views_tab), "zugaenge": ("Schlüssel und Profile", keys_tab),
+             "sichten": ("Sichten", views_tab), "systeme": ("Systemlandschaft", systems_tab),
+             "zugaenge": ("Schlüssel und Profile", keys_tab),
              "anmeldung": ("Anmeldung", signin_card), "aufrufe": ("Aufrufe und Prüfspur", calls_tab)}
 
 
@@ -2337,6 +2355,123 @@ es ist; die Freigaben gehen in beiden Fällen mit (derselbe festgehaltene Text).
 <div><button>Ausführen</button></div></form></div>'''
 
 
+# ------------------------------------------------- Systemlandschaft (RFC-0114)
+
+def systems_tab(host):
+    """Die Zielsysteme dieses Gateways: Titel, Rolle, aktiv, Art, Angaben, Server, Ampel."""
+    rows = []
+    for s in landscape.systems(DB):
+        facts = ", ".join(f"{k}={v}" for k, v in sorted(landscape.facts_of(s).items()))
+        light = landscape.system_light(DB, s)
+        rows.append(f'<tr><td><code>{esc(s["id"])}</code><br>{esc(s["title"])}</td>'
+                    f'<td>{esc(landscape.ROLE_WORDS.get(s["role"], s["role"]))}</td>'
+                    f'<td>{"aktiv" if s["active"] else "abgeschaltet"}</td><td>{esc(s["kind"] or "—")}</td>'
+                    f'<td class="muted">{esc(facts or "—")}</td>'
+                    f'<td>{esc(", ".join(landscape.servers_of(DB, s["id"])) or "—")}</td>'
+                    f'<td>{badge(light, light)}</td>'
+                    f'<td><details><summary>Ändern</summary>{system_form(s)}'
+                    f'<form method="post" action="system-delete"><input type="hidden" name="id" '
+                    f'value="{esc(s["id"])}"><button class="quiet">Löschen</button></form></details></td></tr>')
+    return f"""<div class="card"><h1>Systemlandschaft</h1>
+<p class="hint">Ein Zielsystem ist, wohin ein Werkzeug über einen MCP-Server reicht -- ein SAP-System, eine
+Jira-Seite, ein Wiki. Eine <b>Multi-System-Sicht</b> wird einmal an einem Referenzsystem ausgeprägt und für
+weitere Systeme angeboten; im Chat steht jedes Werkzeug einmal, mit dem Argument <code>system</code>.
+Die Liste hält nie eine Adresse oder einen Zugang. Die Ampel kommt aus der Rolle (Produktion: gelb),
+wenn keine gesetzt ist, und ist nie lockerer als ein Server des Systems (RFC-0114).</p>
+<div class="scroll"><table><tr><th>System</th><th>Rolle</th><th>Zustand</th><th>Art</th><th>Angaben</th>
+<th>Server</th><th>Ampel</th><th></th></tr>{"".join(rows) or '<tr><td colspan=8 class=muted>Noch kein Zielsystem.</td></tr>'}</table></div></div>
+<div class="card"><h2>Zielsystem anlegen</h2>{system_form(None)}</div>"""
+
+
+def system_form(s):
+    servers = [r["name"] for r in books.servers(DB)]
+    mine = set(landscape.servers_of(DB, s["id"])) if s else set()
+    boxes = "".join(
+        f'<label class="checkline"><input type="checkbox" name="servers" value="{esc(n)}"'
+        f'{" checked" if n in mine else ""}> {esc(n)}'
+        + (f' <span class="muted">(gehört zu {esc(landscape.system_of_server(DB, n))})</span>'
+           if landscape.system_of_server(DB, n) not in ("", s["id"] if s else "") else "")
+        + "</label>" for n in servers)
+    facts = ", ".join(f"{k}={v}" for k, v in sorted(landscape.facts_of(s).items())) if s else ""
+    role = s["role"] if s else "development"
+    return f"""<form class="grid" method="post" action="system-save">
+<div><label>Kennung</label><input type="text" name="id" value="{esc(s["id"] if s else "")}" {"readonly" if s else "required"}></div>
+<div><label>Titel</label><input type="text" name="title" value="{esc(s["title"] if s else "")}" required></div>
+<div><label>Rolle</label><select name="role">{options(landscape.ROLES, role, landscape.ROLE_WORDS)}</select></div>
+<div><label>Aktiv</label><select name="active">{options(("1", "0"), "1" if (not s or s["active"]) else "0", {"1": "ja", "0": "nein"})}</select></div>
+<div><label>Art (sap, jira …)</label><input type="text" name="kind" value="{esc(s["kind"] if s else "")}"></div>
+<div><label>Angaben (z. B. sid=A4H, client=001)</label><input type="text" name="facts" value="{esc(facts)}"></div>
+<div><label>Ampel</label><select name="light">{options(("",) + books.LIGHTS, s["light"] if s else "", {"": "aus der Rolle", "green": "grün", "yellow": "gelb", "red": "rot"})}</select></div>
+<div><label>Beschreibung (für den Chat)</label><input type="text" name="description" value="{esc(s["description"] if s else "")}"></div>
+<div><label>Server dieses Systems</label>{boxes or '<span class="muted">noch kein Server</span>'}<input type="hidden" name="servers_seen" value="1"></div>
+<div><button>Speichern</button></div></form>"""
+
+
+def multi_card(name):
+    """Auf der Seite einer Sicht: Multi-System machen, oder Systeme und Abgleich zeigen."""
+    ref = landscape.reference_of(DB, name)
+    if not ref:
+        cands = [s for s in landscape.systems(DB) if landscape.servers_of(DB, s["id"])]
+        if not cands:
+            return ('<div class="card"><h2>Multi-System-Sicht</h2><p class="hint">Erst unter '
+                    '<a href="./?tab=systeme">Systemlandschaft</a> Zielsysteme mit ihren Servern anlegen.</p></div>')
+        opts = "".join(f'<option value="{esc(s["id"])}">{esc(s["id"])} – {esc(s["title"])}</option>' for s in cands)
+        return f"""<div class="card"><h2>Multi-System-Sicht</h2>
+<p class="hint">Die Einträge dieser Sicht werden zur Vorlage, das gewählte System zur Referenz; ihre Einträge
+müssen auf Servern dieses Systems liegen. Weitere Systeme bekommen dieselbe Auswahl (RFC-0114).</p>
+<form class="grid" method="post" action="view-multi"><input type="hidden" name="view" value="{esc(name)}">
+<div><label>Referenzsystem</label><select name="system">{opts}</select></div>
+<div><button>Zur Multi-System-Sicht machen</button></div></form></div>"""
+    sids = landscape.view_system_ids(DB, name)
+    head = "".join(f"<th>{esc(sid)}{' (Referenz)' if sid == ref else ''}</th>" for sid in sids)
+    rows = []
+    for item in books.items(DB, name, "tool"):
+        cells = []
+        for sid in sids:
+            state, server, _doc, note = landscape.availability(DB, name, item, sid)
+            cls = {"referenz": "green", "gleich": "green", "freigegeben": "green",
+                   "abweichend": "yellow", "fehlt": "red", "mehrdeutig": "red",
+                   "gesperrt": "red"}.get(state, "red")
+            act = ""
+            if state == "abweichend":
+                act = (f'<form class="inline" method="post" action="view-system-approve">'
+                       f'<input type="hidden" name="view" value="{esc(name)}">'
+                       f'<input type="hidden" name="system" value="{esc(sid)}">'
+                       f'<input type="hidden" name="name" value="{esc(item["name"])}">'
+                       f'<button class="quiet">Für {esc(sid)} freigeben</button></form>')
+            cells.append(f'<td>{badge(cls, landscape.STATE_WORDS[state])}'
+                         + (f'<br><span class="muted">{esc(note)}</span>' if note and state != "freigegeben" else "")
+                         + f"{act}</td>")
+        rows.append(f'<tr><td><code>{esc(item["name"])}</code></td>{"".join(cells)}</tr>')
+    systems_rows = []
+    for sid in sids:
+        s = landscape.system_row(DB, sid)
+        if not s:
+            continue
+        rm = ("" if sid == ref else
+              f'<form class="inline" method="post" action="view-system-remove"><input type="hidden" name="view" '
+              f'value="{esc(name)}"><input type="hidden" name="system" value="{esc(sid)}">'
+              f'<button class="quiet">Herausnehmen</button></form>')
+        systems_rows.append(f'<tr><td><code>{esc(sid)}</code> {esc(s["title"])}</td>'
+                            f'<td>{esc(landscape.ROLE_WORDS.get(s["role"], s["role"]))}</td>'
+                            f'<td>{"aktiv" if s["active"] else "abgeschaltet"}</td>'
+                            f'<td>{badge(landscape.system_light(DB, s), landscape.system_light(DB, s))}</td><td>{rm}</td></tr>')
+    others = [s for s in landscape.systems(DB) if s["id"] not in sids and landscape.servers_of(DB, s["id"])]
+    add = ("" if not others else
+           f'<form class="grid" method="post" action="view-system-add"><input type="hidden" name="view" value="{esc(name)}">'
+           f'<div><label>Weiteres System</label><select name="system">'
+           + "".join(f'<option value="{esc(s["id"])}">{esc(s["id"])} – {esc(s["title"])}</option>' for s in others)
+           + '</select></div><div><button>Zuordnen</button></div></form>')
+    return f"""<div class="card"><h2>Multi-System-Sicht · Referenz {esc(ref)}</h2>
+<p class="hint">Im Chat steht jedes Werkzeug einmal, mit dem Argument <code>system</code> (nur aktive Systeme, deren
+Ampel das Gespräch zulässt), dazu das Werkzeug <code>{landscape.SYSTEM_TOOL}</code>. <i>gleich</i>: derselbe Text wie
+an der Referenz; <i>abweichend</i>: der Server meldet einen anderen Text -- nicht angeboten, bis Du ihn für dieses
+System freigibst; <i>fehlt</i>: kein Server des Systems bietet es an.</p>
+<table><tr><th>System</th><th>Rolle</th><th>Zustand</th><th>Ampel</th><th></th></tr>{"".join(systems_rows)}</table>
+{add}
+<div class="scroll"><table><tr><th>Werkzeug</th>{head}</tr>{"".join(rows) or '<tr><td class=muted>Noch kein Werkzeug.</td></tr>'}</table></div></div>"""
+
+
 def view_page(user, roles, host, name, notice=""):
     v = books.view_row(DB, name)
     if not v:
@@ -2409,7 +2544,7 @@ Muster mit <code>*</code> und <code>?</code>.</p>
 Haken setzen gibt frei (Name der Sicht wird vorgeschlagen, Wirkungsklasse daneben), Haken entfernen nimmt
 heraus. Ein Eintrag, den sein Server nicht mehr anbietet, steht hier nicht und bleibt, wie er ist.</p>
 {assign_tree(name)}</div>
-{copy_card(name)}{TREE_STYLE}{TREE_SCRIPT}''')
+{multi_card(name)}{copy_card(name)}{TREE_STYLE}{TREE_SCRIPT}''')
     return page(f"Sicht {name}", "".join(parts), user, roles, "sichten")
 
 
@@ -3099,7 +3234,10 @@ class Handler(BaseHTTPRequestHandler):
                     "/server-delete", "/personal-delete",
                     "/server-read", "/view-save", "/view-delete", "/item-add", "/item-remove",
                     "/view-copy", "/view-items", "/server-rename",
-                    "/item-confirm", "/item-tailor"):
+                    "/item-confirm", "/item-tailor",
+                    # 0.32 (RFC-0114)
+                    "/system-save", "/system-delete", "/view-multi", "/view-system-add",
+                    "/view-system-remove", "/view-system-approve"):
             self.handle_admin_post(path)
             return
         self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -3189,8 +3327,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, rpc_result(msg_id, {}))
         elif method in LISTS:
             kind, field = LISTS[method]
-            entries = [compose.shaped(kind, i, sess.version)
-                       for _, i in sorted(visible_items(vrow, key, kind).items())]
+            if kind == "tool" and landscape.is_multi(DB, vrow["name"]):
+                entries = multi_tools(vrow, key, sess.version, self.asked)
+            else:
+                entries = [compose.shaped(kind, i, sess.version)
+                           for _, i in sorted(visible_items(vrow, key, kind).items())]
             self.send_json(200, rpc_result(msg_id, {field: entries}))
         else:
             self.send_json(200, rpc_error(msg_id, -32601, f"Methode {method} wird in dieser "
@@ -3257,6 +3398,8 @@ class Handler(BaseHTTPRequestHandler):
         """Welcher Eintrag ist gemeint? Gibt (kind, item, name_für_messung) oder wirft Refusal."""
         if method == "tools/call":
             name = params.get("name")[:200] if isinstance(params.get("name"), str) else ""
+            if name == landscape.SYSTEM_TOOL and landscape.is_multi(DB, vrow["name"]):
+                return "tool", None, name          # 0.32: das Werkzeug des Gateways
             item = visible_items(vrow, key, "tool").get(name)
             if item is None:
                 raise Refusal("tool", name, *refusal(vrow, "tool", name))
@@ -3313,12 +3456,35 @@ class Handler(BaseHTTPRequestHandler):
                 done("refused", exc.reason)
                 answer(rpc_error(msg_id, exc.code, exc.text))
                 return
+            if item is None:
+                # 0.32 (RFC-0114 §4.3): die Systeme der Sicht -- nie Adresse oder Zugang
+                state.update(kind="tool", name=measured, server="", source="")
+                rank = landscape.ceiling_rank(key["ceiling"], self.asked)
+                land = landscape.landscape_doc(DB, vrow["name"], rank)
+                done("ok", door="")
+                answer(rpc_result(msg_id, {"content": [{"type": "text", "text": json.dumps(
+                    land, ensure_ascii=False, indent=1)}], "structuredContent": land}))
+                return
             state.update(kind=kind, name=measured, server=item["server"], source=item["source"])
             doc = json.loads(item["approved_doc"])
+            server_name = item["server"]
+            arguments = params.get("arguments")
+            if kind == "tool" and landscape.is_multi(DB, vrow["name"]):
+                # 0.32 (RFC-0114 §4.2): das System aus dem Argument, geprüft, bevor etwas
+                # hinausgeht (S2); der Text ist der für dieses System freigegebene
+                try:
+                    sysrow, server_name, doc, arguments = landscape.pick(
+                        DB, vrow["name"], item, arguments,
+                        landscape.ceiling_rank(key["ceiling"], self.asked))
+                except landscape.Refused as exc:
+                    done("refused", exc.reason)
+                    answer(rpc_error(msg_id, -32602, f"Sicht {vrow['name']}: {exc.text}"))
+                    return
+                state.update(server=server_name, system=sysrow["id"])
             try:
                 if kind == "tool":
                     args = compose.prepare_call(doc, json.loads(item["fixed"]),
-                                                json.loads(item["bounds"]), params.get("arguments"))
+                                                json.loads(item["bounds"]), arguments)
                     out_params = {"name": item["source"], "arguments": args}
                 elif kind == "prompt":
                     args = compose.check_prompt_arguments(doc, params.get("arguments"))
@@ -3339,7 +3505,7 @@ class Handler(BaseHTTPRequestHandler):
                 answer(rpc_error(msg_id, -32001, "Das Budget dieses Schlüssels ist aufgebraucht.",
                                  "budget"), status=429)
                 return
-            srow = books.server_row(DB, item["server"])
+            srow = books.server_row(DB, server_name)
             g = guard_of(srow)
             try:
                 probe = g.enter(self.rate_id(key))
@@ -3377,7 +3543,8 @@ class Handler(BaseHTTPRequestHandler):
                          state["source"], state["outcome"], state["reason"],
                          (time.monotonic() - t0) * 1000, bytes_up, state["down"],
                          person=self.person, procedure=state.get("procedure", "T"),
-                         status=state["status"], door=state["door"], light=self.asked)
+                         status=state["status"], door=state["door"], light=self.asked,
+                         system=state.get("system", ""))
             if state["sse"]:
                 self.close_connection = True
 
@@ -4022,6 +4189,35 @@ class Handler(BaseHTTPRequestHandler):
                 books.remove_item(DB, user, form.get("view", ""), form.get("kind", "tool"),
                                   form.get("name", ""))
                 notice, back = "Herausgenommen.", ("view", form.get("view", ""))
+            elif path == "/system-save":
+                servers = multi.get("servers", []) if form.get("servers_seen") else None
+                landscape.save_system(
+                    DB, user, form.get("id", "").strip(), form.get("title", ""),
+                    form.get("role", "other"), form.get("active", "1") == "1", form.get("kind", ""),
+                    landscape.parse_facts(form.get("facts", "")), form.get("light", ""),
+                    form.get("description", ""), servers)
+                notice = f"Zielsystem „{form.get('id', '')}“ gespeichert."
+            elif path == "/system-delete":
+                landscape.delete_system(DB, user, form.get("id", ""))
+                notice = f"Zielsystem „{form.get('id', '')}“ gelöscht."
+            elif path == "/view-multi":
+                landscape.make_multi(DB, user, form.get("view", ""), form.get("system", ""))
+                notice = (f"„{form.get('view', '')}“ ist jetzt eine Multi-System-Sicht mit Referenz "
+                          f"„{form.get('system', '')}“.")
+                back = ("view", form.get("view", ""))
+            elif path == "/view-system-add":
+                landscape.add_system(DB, user, form.get("view", ""), form.get("system", ""))
+                notice = f"Zielsystem „{form.get('system', '')}“ zugeordnet; der Abgleich steht unten."
+                back = ("view", form.get("view", ""))
+            elif path == "/view-system-remove":
+                landscape.remove_system(DB, user, form.get("view", ""), form.get("system", ""))
+                notice, back = "Herausgenommen.", ("view", form.get("view", ""))
+            elif path == "/view-system-approve":
+                landscape.approve_for_system(DB, user, form.get("view", ""), form.get("system", ""),
+                                             "tool", form.get("name", ""))
+                notice = (f"„{form.get('name', '')}“ für „{form.get('system', '')}“ freigegeben; "
+                          "der Text ist festgehalten.")
+                back = ("view", form.get("view", ""))
         except ValueError as exc:
             notice = str(exc)
         if back and back[0] == "server" and books.server_row(DB, back[1]):
@@ -4037,7 +4233,7 @@ POST_TAB = {"/issue": "zugaenge", "/revoke": "zugaenge", "/key-limits": "zugaeng
             "/source-sync": "server", "/server-delete": "server", "/server-save": "server",
             "/server-rename": "server",
             "/view-delete": "sichten", "/view-save": "sichten", "/view-items": "sichten",
-            "/view-copy": "sichten"}
+            "/view-copy": "sichten", "/system-save": "systeme", "/system-delete": "systeme"}
 
 
 def json_field(form, name):
@@ -4126,7 +4322,7 @@ def save_server(form, user):
 # Unterschied ist `conflict`.
 
 SETUP_PATH = "/oaap/setup"
-SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "server")
+SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "server", "system")
 # 0.31.0 (RFC-0109 §12): ein Server hinter einer Destination der Plattform -- nur
 # `destination:<bindung>[/pfad]`, nie eine freie Adresse: wohin er reicht, sagt die
 # Destination, die der Betreiber oder ein freigegebenes Rezept angelegt hat.
@@ -4140,6 +4336,8 @@ SETUP_FIELDS = {
     "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
                   "commands", "views", "support_queue"},
     "server": {"address", "auth", "light"},
+    # 0.32 (RFC-0114): ein Zielsystem der Landschaft; `type` ist seine Art (sap, jira)
+    "system": {"title", "role", "type", "active", "facts", "light", "description", "servers"},
 }
 SETUP_PROFILE_ID = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._-]{0,63}$")
 SETUP_LOCK = threading.Lock()
@@ -4206,6 +4404,12 @@ def setup_observed(kind, sid):
         srow = books.server_row(DB, sid)
         return ({"address": srow["address"], "auth_kind": srow["auth_kind"],
                  "light": srow["light"], "source": srow["source"] or ""} if srow else None)
+    if kind == "system":
+        row = landscape.system_row(DB, sid)
+        return ({"title": row["title"], "role": row["role"], "type": row["kind"],
+                 "active": bool(row["active"]), "facts": landscape.facts_of(row),
+                 "light": row["light"], "description": row["description"],
+                 "servers": landscape.servers_of(DB, sid)} if row else None)
     return None
 
 
@@ -4271,6 +4475,31 @@ def setup_wish(kind, sid, item, planned, actor):
         if item.get("light") not in books.LIGHTS:
             raise SetupRefused("light ist green, yellow oder red.")
         return {"light": item["light"]}
+    if kind == "system":
+        try:
+            books.valid_name(sid, "eines Zielsystems")
+            facts = landscape.clean_facts(item.get("facts") or {})
+        except ValueError as exc:
+            raise SetupRefused(str(exc)) from None
+        role = item.get("role", "other")
+        if role not in landscape.ROLES:
+            raise SetupRefused("role ist eine von " + ", ".join(landscape.ROLES) + ".")
+        light = item.get("light", "")
+        if light and light not in books.LIGHTS:
+            raise SetupRefused("light ist green, yellow, red oder leer (aus der Rolle).")
+        servers = item.get("servers") or []
+        if not isinstance(servers, list) or not all(isinstance(x, str) for x in servers):
+            raise SetupRefused("servers: eine Liste von Servernamen.")
+        missing = [x for x in servers if not books.server_row(DB, x) and ("server", x) not in planned]
+        if missing:
+            raise SetupRefused("Diese Server gibt es nicht: " + ", ".join(missing) + ".")
+        if not isinstance(item.get("title"), str) or not item["title"].strip():
+            raise SetupRefused("title fehlt.")
+        return {"title": item["title"].strip(), "role": role,
+                "type": str(item.get("type") or "").strip().lower(),
+                "active": item.get("active", True) is not False, "facts": facts, "light": light,
+                "description": str(item.get("description") or "").strip()[:landscape.DESC_MAX],
+                "servers": sorted(servers)}
     if kind == "server":
         try:
             books.valid_name(sid, "eines Servers")
@@ -4416,11 +4645,16 @@ def setup_matches(kind, sid, wish, obs):
     if kind == "server":
         return (not obs["source"] and obs["address"] == wish["address"]
                 and obs["auth_kind"] == wish["auth_kind"] and obs["light"] == wish["light"])
+    if kind == "system":
+        return dict(obs, servers=sorted(obs["servers"])) == wish
     return False
 
 
 def setup_difference(kind, wish, obs):
     """Ein Satz, was abweicht -- für die Notiz eines `conflict`."""
+    if kind == "system":
+        diff = sorted(k for k in wish if obs.get(k) != wish[k])
+        return "Das Zielsystem gibt es schon, anders in: " + ", ".join(diff) + "."
     if kind == "server":
         if obs["source"]:
             return "Ein Server dieses Namens kommt aus einer Quelle der Plattform."
@@ -4478,6 +4712,11 @@ def setup_set_light(srow, light, by):
 
 def setup_make(kind, sid, wish, by):
     """Legt an, mit den Funktionen der Betreiberseite. Wirft ValueError mit einem Satz."""
+    if kind == "system":
+        landscape.save_system(DB, by, sid, wish["title"], wish["role"], wish["active"],
+                              wish["type"], wish["facts"], wish["light"], wish["description"],
+                              wish["servers"])
+        return f"Zielsystem „{sid}“ angelegt."
     if kind == "server":
         books.save_server(DB, by, sid, wish["address"], wish["auth_kind"], wish["light"],
                           guard.clean(dict(guard.DEFAULTS)))
@@ -4629,6 +4868,8 @@ def setup_remove(item, actor):
             DB.commit()
         elif kind == "server":
             books.delete_server(DB, by, sid)
+        elif kind == "system":
+            landscape.delete_system(DB, by, sid)
     except ValueError as exc:
         return "conflict", str(exc)
     books.setup_forget(DB, kind, sid)
@@ -4648,6 +4889,8 @@ def setup_state(kind, sid):
     obs = setup_observed(kind, sid)
     if setup_gone(kind, obs):
         return "absent", False, ""
+    if kind == "system":
+        return "present", bool(obs["servers"]), ("aktiv" if obs["active"] else "abgeschaltet")
     if kind == "view":
         rows = books.items(DB, sid)
         active = sum(1 for i in rows if books.item_state(DB, dict(i)) == "active")
@@ -4682,6 +4925,9 @@ def setup_items(kind):
             out.append({"id": row["label"], "light": row["ceiling"],
                         "title": f"Zugangsprofil für {row['groups'] or '(keine Gruppe)'}"
                                  + (f", Sichten {vs}" if vs else "")})
+    elif kind == "system":
+        for s in landscape.systems(DB):
+            out.append({"id": s["id"], "title": s["title"], "light": landscape.system_light(DB, s)})
     elif kind == "assistant":
         for a in books.assistant_rows(DB):
             if a["state"] == "deleted":
@@ -4772,7 +5018,13 @@ def cli(argv):
              "profile groups <etikett> --groups ...\n"
              "        app.py server set <name> --auth exchange --token-url U --client-id C --audience A "
              "--credential-stdin ja | server read <name> [--token-stdin ja]\n"
-             "        app.py source list | source sync   (Quellen der Plattform, RFC-0073)")
+             "        app.py source list | source sync   (Quellen der Plattform, RFC-0073)\n"
+             "        app.py system set <id> --title T [--role production] [--kind sap] [--active ja|nein] "
+             "[--facts sid=A4H,client=001] [--light yellow] [--servers s1,s2] [--description D] | "
+             "system list | system remove <id>   (RFC-0114)\n"
+             "        app.py view multi <sicht> <referenzsystem> | view system-add <sicht> <system> | "
+             "view system-remove <sicht> <system> | view system-approve <sicht> <system> <werkzeug> | "
+             "view systems <sicht>")
     if len(argv) < 2:
         print(usage)
         return 2
@@ -4801,6 +5053,58 @@ def cli(argv):
             for src in fetch_sources():
                 print(f'{src.get("name", ""):24} {src.get("app", "")}@{src.get("version", "")} '
                       f'{src.get("channel", ""):10} {src.get("address", "")}')
+            return 0
+        if area == "system" and action == "list":
+            for s in landscape.systems(DB):
+                print(f'{s["id"]:16} {landscape.ROLE_WORDS.get(s["role"], s["role"]):12} '
+                      f'{"aktiv" if s["active"] else "aus":6} {landscape.system_light(DB, s):6} '
+                      f'{",".join(landscape.servers_of(DB, s["id"])) or "-":30} {s["title"]}')
+            return 0
+        if area == "system" and action == "set" and pos:
+            old = landscape.system_row(DB, pos[0])
+            servers = ([x.strip() for x in opts["servers"].split(",") if x.strip()]
+                       if "servers" in opts else None)
+            landscape.save_system(
+                DB, "cli", pos[0], opts.get("title", old["title"] if old else ""),
+                opts.get("role", old["role"] if old else "other"),
+                opts.get("active", "ja" if (not old or old["active"]) else "nein").lower()
+                in ("ja", "yes", "1", "true"),
+                opts.get("kind", old["kind"] if old else ""),
+                landscape.parse_facts(opts["facts"]) if "facts" in opts
+                else (landscape.facts_of(old) if old else {}),
+                opts.get("light", old["light"] if old else ""),
+                opts.get("description", old["description"] if old else ""), servers)
+            print(f"Zielsystem „{pos[0]}“ gespeichert.")
+            return 0
+        if area == "system" and action == "remove" and pos:
+            landscape.delete_system(DB, "cli", pos[0])
+            print(f"Zielsystem „{pos[0]}“ gelöscht.")
+            return 0
+        if area == "view" and action == "multi" and len(pos) >= 2:
+            landscape.make_multi(DB, "cli", pos[0], pos[1])
+            print(f"„{pos[0]}“ ist eine Multi-System-Sicht mit Referenz „{pos[1]}“.")
+            return 0
+        if area == "view" and action == "system-add" and len(pos) >= 2:
+            landscape.add_system(DB, "cli", pos[0], pos[1])
+            action, pos = "systems", pos[:1]
+        if area == "view" and action == "system-remove" and len(pos) >= 2:
+            landscape.remove_system(DB, "cli", pos[0], pos[1])
+            print("Herausgenommen.")
+            return 0
+        if area == "view" and action == "system-approve" and len(pos) >= 3:
+            landscape.approve_for_system(DB, "cli", pos[0], pos[1], "tool", pos[2])
+            print(f"„{pos[2]}“ für „{pos[1]}“ freigegeben.")
+            return 0
+        if area == "view" and action == "systems" and pos:
+            sids = landscape.view_system_ids(DB, pos[0])
+            if not sids:
+                print(f"„{pos[0]}“ ist keine Multi-System-Sicht.")
+                return 1
+            print("Werkzeug".ljust(36) + "".join(s[:16].ljust(18) for s in sids))
+            for item in books.items(DB, pos[0], "tool"):
+                print(item["name"][:35].ljust(36) + "".join(
+                    landscape.STATE_WORDS[landscape.availability(DB, pos[0], item, s)[0]][:16].ljust(18)
+                    for s in sids))
             return 0
         if area == "server" and action == "list":
             for s in books.servers(DB):
