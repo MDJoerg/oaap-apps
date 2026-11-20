@@ -232,6 +232,34 @@ ok("assistant hilfe: present, ready", doc["state"] == "present" and doc["ready"]
 st, doc = call("GET", "/oaap/setup?kind=profile&id=gibts-nicht")
 ok("unbekanntes Profil: absent, nicht ready", doc["state"] == "absent" and doc["ready"] is False, doc)
 
+print("--- 0.30.0 (RFC-0109 §4): GET ?kind= ohne id, die Liste zum Auswählen")
+srow = app.DB.execute("SELECT address, credential FROM servers WHERE name='ws-hilfe'").fetchone()
+app.DB.execute("UPDATE servers SET credential='geheim-zugang-4711' WHERE name='ws-hilfe'")
+app.DB.commit()
+lists = {}
+for kind in ("refresh", "server_light", "view", "profile", "assistant"):
+    st, lists[kind] = call("GET", "/oaap/setup?kind=" + kind)
+ok("jede Art antwortet mit einer Liste",
+   all(d.get("kind") == k and isinstance(d.get("items"), list) for k, d in lists.items()), lists)
+ok("Server: Name und Ampel", lists["server_light"]["items"] == [
+    {"id": "ws-hilfe", "title": "ws-hilfe", "light": "green"}], lists["server_light"])
+ok("Sicht, Profil (Obergrenze als Ampel), Assistent (Titel, Revision)",
+   [i["id"] for i in lists["view"]["items"]] == ["hilfe"]
+   and [(i["id"], i["light"]) for i in lists["profile"]["items"]] == [("ws-chat", "yellow")]
+   and lists["assistant"]["items"][0]["id"] == "hilfe"
+   and lists["assistant"]["items"][0]["title"].startswith("Hilfe (@1"), lists)
+raw = json.dumps(lists)
+key_digests = [r["digest"] for r in app.DB.execute("SELECT * FROM keys") if r["digest"]]
+ok("S4: kein Zugang, keine Adresse, kein Schlüssel-Digest in den Listen",
+   "geheim-zugang-4711" not in raw and (not srow["address"] or srow["address"] not in raw)
+   and not any(d_ in raw for d_ in key_digests), raw[:300])
+app.DB.execute("UPDATE servers SET credential=? WHERE name='ws-hilfe'", (srow["credential"],))
+app.DB.commit()
+st, doc = call("GET", "/oaap/setup?kind=nix")
+ok("unbekannte Art ohne id: 400", st == 400, doc)
+st, doc = call("GET", "/oaap/setup?kind=view", key="fremd")
+ok("Köder: die Liste mit fremdem Schlüssel: 403", st == 403, doc)
+
 print("--- keine Geheimnisse, keine fremden Felder")
 st, doc = call("POST", body={"v": 1, "items": [
     dict(ITEMS[2], id="mit-geheimnis", token="abc"),

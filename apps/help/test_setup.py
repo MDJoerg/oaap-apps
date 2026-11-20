@@ -138,6 +138,12 @@ try:
     ok("GET fetch/docs vor dem Abruf: absent, nicht ready",
        s == 200 and d["state"] == "absent" and d["ready"] is False and d["kind"] == "fetch"
        and d["id"] == "docs" and d["v"] == 1 and d["note"], d)
+    s, d = http(B, "GET", "/oaap/setup?kind=fetch", headers=AUTH)
+    ok("GET ?kind=fetch ohne id (RFC-0109): die Liste zum Auswählen, eine Kennung",
+       s == 200 and d["kind"] == "fetch" and [i["id"] for i in d["items"]] == ["docs"]
+       and "noch nicht geholt" in d["items"][0]["title"], d)
+    s, d = http(B, "GET", "/oaap/setup?kind=fetch")
+    ok("Köder: die Liste ohne Schlüssel → 403", s == 403)
 
     # --- POST dry ---------------------------------------------------------------
     s, d = post(B, {"v": 1, "dry": True, "items": [FETCH]})

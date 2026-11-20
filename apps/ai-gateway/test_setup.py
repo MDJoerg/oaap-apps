@@ -290,6 +290,26 @@ check("noch einmal: present, present", results(doc) == ["present", "present"], d
 for kind, ident in (("alias", "standard"), ("client", "kit-chat")):
     status, doc = door(query=f"?kind={kind}&id={ident}")
     check(f"GET {kind}: present und ready", doc["state"] == "present" and doc["ready"] is True, doc)
+
+print("\n-- 0.12.0 (RFC-0109 §4): GET ?kind= ohne id, die Liste zum Auswählen")
+status, doc = door(query="?kind=alias")
+check("Modellnamen: Kennung, Titel aus Quelle:Modell, Ampel der Quelle",
+      status == 200 and doc["kind"] == "alias" and [i["id"] for i in doc["items"]] == ["standard"]
+      and doc["items"][0]["light"] == "yellow" and doc["items"][0]["light_min"] == "yellow"
+      and "anbieter:" in doc["items"][0]["title"], doc)
+status, doc = door(query="?kind=supplier")
+raw = json.dumps(doc)
+check("Bezugsquellen (S4, Quelle mit gesetzten Zugangsdaten): Name und Ampel, nie Zugangsdaten "
+      "oder Adresse", status == 200 and doc["items"] == [{"id": "anbieter", "title": "anbieter",
+                                                         "light": "yellow"}]
+      and RICHTIG not in raw and FAKE_URL not in raw and "credential" not in raw, doc)
+status, doc = door(query="?kind=client")
+check("Freigaben: Kennung, Obergrenze als Ampel", status == 200
+      and [(i["id"], i["light"]) for i in doc["items"]] == [("kit-chat", CLIENT.get("ceiling", "yellow"))], doc)
+status, doc = door(query="?kind=nix")
+check("unbekannte Art: 400", status == 400, status)
+status, doc = door(query="?kind=alias", key="falsch")
+check("Köder: die Liste mit fremdem Schlüssel: 403", status == 403, status)
 status, doc = door({"v": 1, "items": [{"kind": "alias", "id": "x", "supplier": "fehlt",
                                        "model": "m"}]})
 check("Modellname auf eine unbekannte Quelle: refused", results(doc) == ["refused"], doc)

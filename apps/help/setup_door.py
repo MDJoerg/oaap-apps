@@ -159,11 +159,18 @@ def secret_fields(it):
 
 # --- die Tür -------------------------------------------------------------------
 def get(lib, kind, id_):
-    """GET ohne kind: was die App einrichten kann; mit kind und id: der Zustand."""
+    """GET ohne kind: was die App einrichten kann; mit kind und id: der Zustand;
+    mit kind ohne id (0.8.0, RFC-0109 §4): was es von dieser Art gibt, zum Auswählen
+    -- Kennung und kurzer Titel, nie ein Geheimnis."""
     if not kind:
         return 200, {"v": 1, "kinds": KINDS}
     if kind != "fetch":
         return 400, {"v": 1, "error": f"unbekannte Art {kind!r}", "kinds": KINDS}
+    if not id_:
+        present, _note = fetch_state(lib)
+        return 200, {"v": 1, "kind": kind, "items": [
+            {"id": FETCH_ID, "title": "Dokumentation aus der Destination docs-origin"
+                                      + (" (geholt)" if present else " (noch nicht geholt)")}]}
     if id_ != FETCH_ID:
         return 200, {"v": 1, "kind": kind, "id": id_, "state": "absent", "ready": False,
                      "note": f"nur id {FETCH_ID!r} gibt es"}

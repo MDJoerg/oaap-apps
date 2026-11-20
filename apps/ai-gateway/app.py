@@ -61,7 +61,7 @@ import templates
 import supply
 import vault
 
-VERSION = "0.11.1"
+VERSION = "0.12.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -2625,6 +2625,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, DOOR.kinds())
             return
         try:
+            if not params.get("id", "").strip() and "id" not in params:
+                self.send_json(200, DOOR.items(params.get("kind", "")))
+                return
             self.send_json(200, DOOR.state(params.get("kind", ""), params.get("id", "").strip()))
         except setupdoor.Malformed as exc:
             self.send_json(400, {"v": 1, "error": str(exc)})

@@ -244,6 +244,41 @@ class Door:
     def kinds(self):
         return {"v": 1, "kinds": list(KINDS)}
 
+    def items(self, kind):
+        """GET ?kind= ohne id (0.12.0, RFC-0109 §4): was es von dieser Art gibt, zum
+        Auswählen in einem Rezept. Kennung, kurzer Titel, Ampel -- **nie** Zugangsdaten
+        und keine Adresse (eine URL kann einen Schlüssel tragen).
+
+        Beim Modellnamen ist `light` die schlechteste Farbe, die er erreichen kann (das
+        Ehrliche, das ein Rezept als Obergrenze vorschlägt), `light_min` die beste: unter
+        ihr könnte ein Chat den Namen nie benutzen."""
+        if kind not in KINDS:
+            raise Malformed(f"Die Art „{kind}“ kennt dieses Gateway nicht.")
+        out = []
+        if kind == "supplier":
+            for row in self.db.execute("SELECT name, light FROM suppliers ORDER BY name"):
+                out.append({"id": row["name"], "title": row["name"], "light": row["light"]})
+        elif kind == "alias":
+            suppliers, aliases = self.loaded()
+            for name in sorted(aliases):
+                alias = aliases[name]
+                lights = [suppliers[t["supplier"]]["light"] for t in alias["targets"]
+                          if t["supplier"] in suppliers]
+                item = {"id": name, "title": ", ".join(
+                    f'{t["supplier"]}:{t["model"]}' for t in alias["targets"])[:200]}
+                if lights:
+                    item["light"] = max(lights, key=lambda x: supply.LIGHT_RANK.get(x, 9))
+                    item["light_min"] = min(lights, key=lambda x: supply.LIGHT_RANK.get(x, 9))
+                out.append(item)
+        else:
+            for row in self.db.execute("SELECT label, ceiling, aliases FROM keys WHERE "
+                                       "kind='client' AND revoked='' ORDER BY label"):
+                names = ", ".join(a for a in (row["aliases"] or "").split(",") if a)
+                out.append({"id": row["label"], "light": row["ceiling"],
+                            "title": "Freigabe" + (f" für {names}" if names else
+                                                   " für alle Modellnamen")})
+        return {"v": 1, "kind": kind, "items": out}
+
     def state(self, kind, ident):
         if kind not in KINDS:
             raise Malformed(f"Die Art „{kind}“ kennt dieses Gateway nicht.")

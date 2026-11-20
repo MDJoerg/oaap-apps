@@ -63,7 +63,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.29.0"
+VERSION = "0.30.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -3846,6 +3846,10 @@ class Handler(BaseHTTPRequestHandler):
             if "kind" not in query and "id" not in query:
                 self.send_json(200, {"v": 1, "kinds": list(SETUP_KINDS)})
                 return
+            if "id" not in query and query.get("kind") in SETUP_KINDS:
+                self.send_json(200, {"v": 1, "kind": query["kind"],
+                                     "items": setup_items(query["kind"])})
+                return
             kind, sid = query.get("kind", ""), query.get("id", "")
             if kind not in SETUP_KINDS or not 0 < len(sid) <= 128:
                 self.send_json(400, {"v": 1, "error": "kind ist eine von " + ", ".join(SETUP_KINDS)
@@ -4605,6 +4609,37 @@ def setup_state(kind, sid):
     view_ok = not assistant_view_problem(obs["doc"])
     return ("present", obs["state"] == "active" and view_ok,
             f"@{obs['rev']}, {obs['state']}" + ("" if view_ok else ", Sicht fehlt"))
+
+
+def setup_items(kind):
+    """GET ?kind= ohne id (0.30.0, RFC-0109 §4): was es von dieser Art gibt, zum
+    Auswählen in einem Rezept -- Kennung, kurzer Titel, Ampel, wo das Gateway eine
+    kennt. **Nie** ein Schlüssel, eine Zugangsangabe oder die Adresse eines Servers.
+    Widerrufene Profile und gelöschte Assistenten stehen nicht darin."""
+    out = []
+    if kind in ("refresh", "server_light"):
+        for row in DB.execute("SELECT name, light FROM servers ORDER BY name"):
+            out.append({"id": row["name"], "title": row["name"], "light": row["light"]})
+    elif kind == "view":
+        for row in books.views(DB):
+            out.append({"id": row["name"], "title": f"Sicht bis {row['max_effect']}"
+                                                    + (f", Server {row['server']}" if row["server"] else "")})
+    elif kind == "profile":
+        for row in DB.execute("SELECT label, groups, views, ceiling FROM keys WHERE "
+                              "kind='profile' AND revoked='' ORDER BY label"):
+            vs = ", ".join(books.key_views(row))
+            out.append({"id": row["label"], "light": row["ceiling"],
+                        "title": f"Zugangsprofil für {row['groups'] or '(keine Gruppe)'}"
+                                 + (f", Sichten {vs}" if vs else "")})
+    elif kind == "assistant":
+        for a in books.assistant_rows(DB):
+            if a["state"] == "deleted":
+                continue
+            doc = a["doc"] if isinstance(a["doc"], dict) else {}
+            out.append({"id": str(doc.get("id") or ""),
+                        "title": str(doc.get("name") or doc.get("title") or doc.get("id") or "")[:120]
+                                 + f" (@{a['rev']}, {a['state']})"})
+    return out
 
 
 SETUP_ACTOR_MAX = 120

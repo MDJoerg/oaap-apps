@@ -39,7 +39,7 @@ import apps_source
 from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
