@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.17"
 
 app:
   id: studio
   name: OAAP Studio
-  version: 0.5.2
+  version: 0.6.0
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
@@ -82,6 +82,27 @@ config:
     label: "Flotten-Schlüssel je Zielknoten (knoten=schlüssel, ';' trennt)"
     multiline: true
     secret: true
+
+docs:
+  # RFC-0094 (Manifest 0.17): die Anwenderhilfe des Studios geht an die
+  # Hilfe des Mandanten und damit auch an den Chat (help_search). Sichtbar
+  # für dieselben Rollen, die das Studio betreten dürfen.
+  - product: studio
+    title: "OAAP Studio"
+    path: docs/
+    entry: index.md
+    color: "#2563eb"
+    lang: de
+    audience: [keyuser, admin]
+    readers: [power-user, admin]
+    kinds:
+      index.md: overview
+      vorhaben-und-briefing.md: howto
+      onboarding.md: howto
+      paket-ausrollen.md: howto
+      zielknoten-und-zustand.md: concept
+      deploy-token.md: concept
+      faq.md: faq
 
 health:
   path: /healthz

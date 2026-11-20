@@ -522,7 +522,7 @@ def page(title, body, user, roles, active=""):
 </html>"""
 
 
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1356,6 +1356,9 @@ HELP_BODY = f"""
   enthält den fachlichen Auftrag und alle technischen Regeln, die eine App
   auf dieser Plattform erfüllen muss. Ihr müsst diese Regeln nicht kennen;
   das Studio schreibt sie mit.</p>
+  <p class="muted">Ausführlicher steht diese Hilfe seit Studio 0.6 auch in
+  der Hilfe eures Mandanten und ist damit im Chat zu finden (für keyuser und
+  admin).</p>
 </div>
 <div class="card">
   <h2>Ein Projekt, das es schon gibt</h2>

@@ -196,6 +196,18 @@ Generalprobe). Dazu im Plattformteil: Mandanten, Netz, Bau-Grenzen,
 offene WebSockets. Inhaltlich gleich mit Contract v0.6. Anlass: Das
 Handball-Infoboard plante für beide Fälle `public`-Routen.
 
+### Hilfe für den Chat (seit 0.6.0, RFC-0094)
+
+Das Studio bringt seine Anwenderhilfe mit: Manifest 0.17, `docs:` mit dem
+Hilfsprodukt `studio` aus dem Ordner [`docs/`](docs/) — Überblick,
+Vorhaben und Briefing, Onboarding, Paket prüfen und ausrollen, Zielknoten
+und Zustand, Deploy-Token und Anlege-Erlaubnis, FAQ. Der Knoten gibt den
+Ordner beim Installieren an die Hilfe des Mandanten weiter; dort und im
+Chat (`help_search`) ist er für **keyuser** und **admin** sichtbar — für
+dieselben Rollen, die das Studio betreten dürfen. Diese README bleibt der
+Entwicklertext; `docs/` ist für Anwender geschrieben. `docs/` kommt nicht
+ins Image (das Dockerfile zählt seine Dateien einzeln auf).
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt
