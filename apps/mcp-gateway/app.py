@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.37.0"
+VERSION = "0.38.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -928,6 +928,30 @@ def multi_tools(vrow, key, version, asked):
         if choices:
             out.append(landscape.shaped_tool(compose.shaped("tool", item, version), choices))
     out.append(landscape.system_tool(version))
+    return out
+
+
+def multi_entries(vrow, key, kind, version, asked):
+    """0.38 (RFC-0114 Stufe 2, D6): Prompts einer Multi-System-Sicht -- jeder einmal, mit
+    dem Pflichtargument `system`; Ressourcen und Vorlagen je System, auf dem sie gehen,
+    die URI mit dem System davor. Eine Ansicht (`ui://`) bleibt die der Referenz."""
+    rank = landscape.ceiling_rank(key["ceiling"], asked)
+    out = []
+    for _n, item in sorted(visible_items(vrow, key, kind).items()):
+        base = compose.shaped(kind, item, version)
+        if kind in ("resource", "template") and landscape.plain_uri(item["name"]):
+            ref = [c for c in landscape.usable(DB, vrow["name"], item, rank)
+                   if c[0]["id"] == landscape.reference_of(DB, vrow["name"])]
+            if ref:
+                out.append(base)
+            continue
+        choices = landscape.usable(DB, vrow["name"], item, rank)
+        if not choices:
+            continue
+        if kind == "prompt":
+            out.append(landscape.shaped_prompt(base, choices))
+        else:
+            out.extend(landscape.shaped_resource(base, kind, row) for row, _s, _d in choices)
     return out
 
 
@@ -2464,7 +2488,49 @@ def system_form(s):
 <div><button>Speichern</button></div></form>"""
 
 
-def multi_card(name):
+def convert_part(name, convert=""):
+    """0.38 (RFC-0114 Stufe 2): trägt die Sicht Server mehrerer Zielsysteme (Präfix-Namen),
+    bietet sie das Umwandeln in eine NEUE Multi-System-Sicht an -- erst der Plan."""
+    systems = []
+    for s in books.view_servers(DB, name):
+        sid = landscape.system_of_server(DB, s)
+        if sid and sid not in systems:
+            systems.append(sid)
+    if len(systems) < 2:
+        return ""
+    opts = "".join(f'<option value="{esc(s)}"{" selected" if s == convert else ""}>{esc(s)}</option>'
+                   for s in systems)
+    out = (f'<h3>Umwandeln</h3><p class="hint">Diese Sicht trägt Server mehrerer Zielsysteme '
+           f'({esc(", ".join(systems))}). Umwandeln legt eine <b>neue</b> Multi-System-Sicht an: die '
+           f'Einträge des Referenzsystems, die anderen Systeme zugeordnet, ihre Freigaben übernommen. Diese '
+           f'Sicht bleibt, wie sie ist; Schlüssel, Profile und Assistenten stellst Du selbst um.</p>'
+           f'<form class="grid" method="get" action="view"><input type="hidden" name="name" value="{esc(name)}">'
+           f'<div><label>Referenzsystem</label><select name="convert">{opts}</select></div>'
+           f'<div><button class="quiet">Plan zeigen</button></div></form>')
+    if not convert:
+        return out
+    plan = landscape.convert_plan(DB, name, convert)
+    if plan["problems"]:
+        return out + "".join(f'<p class="err">{esc(p)}</p>' for p in plan["problems"])
+    rows = []
+    for r in plan["rows"]:
+        if r["carry"]:
+            what = "Freigabe übernommen (eigener Text dieses Servers)"
+        elif r["old"]:
+            what = "gleich (derselbe Text wie an der Referenz)"
+        else:
+            what = "kommt hinzu, wenn sein Server denselben Text meldet (war für dieses System nicht in der Sicht)"
+        rows.append(f'<tr><td>{esc(r["system"])}</td><td><code>{esc(r["name"])}</code></td>'
+                    f'<td>{esc(r["old"] or "—")}</td><td>{esc(what)}</td></tr>')
+    return out + (f'<table><tr><th>System</th><th>Eintrag</th><th>bisher</th><th>danach</th></tr>'
+                  f'{"".join(rows)}</table>'
+                  f'<form class="grid" method="post" action="view-convert"><input type="hidden" name="view" value="{esc(name)}">'
+                  f'<input type="hidden" name="system" value="{esc(convert)}">'
+                  f'<div><label>Name der neuen Sicht</label><input type="text" name="new" required '
+                  f'value="{esc(name)}-multi"></div><div><button>Neue Multi-System-Sicht anlegen</button></div></form>')
+
+
+def multi_card(name, convert=""):
     """Auf der Seite einer Sicht: Multi-System machen, oder Systeme und Abgleich zeigen."""
     ref = landscape.reference_of(DB, name)
     if not ref:
@@ -2472,17 +2538,21 @@ def multi_card(name):
         if not cands:
             return ('<div class="card"><h2>Multi-System-Sicht</h2><p class="hint">Erst unter '
                     '<a href="./?tab=systeme">Systemlandschaft</a> Zielsysteme mit ihren Servern anlegen.</p></div>')
+        cands = [s for s in cands if set(landscape.servers_of(DB, s["id"]))
+                 & set(books.view_servers(DB, name))] or cands
         opts = "".join(f'<option value="{esc(s["id"])}">{esc(s["id"])} – {esc(s["title"])}</option>' for s in cands)
         return f"""<div class="card"><h2>Multi-System-Sicht</h2>
 <p class="hint">Die Einträge dieser Sicht werden zur Vorlage, das gewählte System zur Referenz; ihre Einträge
 müssen auf Servern dieses Systems liegen. Weitere Systeme bekommen dieselbe Auswahl (RFC-0114).</p>
 <form class="grid" method="post" action="view-multi"><input type="hidden" name="view" value="{esc(name)}">
 <div><label>Referenzsystem</label><select name="system">{opts}</select></div>
-<div><button>Zur Multi-System-Sicht machen</button></div></form></div>"""
+<div><button>Zur Multi-System-Sicht machen</button></div></form>{convert_part(name, convert)}</div>"""
     sids = landscape.view_system_ids(DB, name)
     head = "".join(f"<th>{esc(sid)}{' (Referenz)' if sid == ref else ''}</th>" for sid in sids)
     rows = []
-    for item in books.items(DB, name, "tool"):
+    for item in books.items(DB, name):
+        if item["kind"] in ("resource", "template") and landscape.plain_uri(item["name"]):
+            continue                    # eine Ansicht bleibt die der Referenz
         cells = []
         for sid in sids:
             state, server, _doc, note = landscape.availability(DB, name, item, sid)
@@ -2494,12 +2564,14 @@ müssen auf Servern dieses Systems liegen. Weitere Systeme bekommen dieselbe Aus
                 act = (f'<form class="inline" method="post" action="view-system-approve">'
                        f'<input type="hidden" name="view" value="{esc(name)}">'
                        f'<input type="hidden" name="system" value="{esc(sid)}">'
+                       f'<input type="hidden" name="kind" value="{esc(item["kind"])}">'
                        f'<input type="hidden" name="name" value="{esc(item["name"])}">'
                        f'<button class="quiet">Für {esc(sid)} freigeben</button></form>')
             cells.append(f'<td>{badge(cls, landscape.STATE_WORDS[state])}'
                          + (f'<br><span class="muted">{esc(note)}</span>' if note and state != "freigegeben" else "")
                          + f"{act}</td>")
-        rows.append(f'<tr><td><code>{esc(item["name"])}</code></td>{"".join(cells)}</tr>')
+        kw = "" if item["kind"] == "tool" else f'<br><span class="muted">{esc(landscape.KIND_LABELS[item["kind"]])}</span>'
+        rows.append(f'<tr><td><code>{esc(item["name"])}</code>{kw}</td>{"".join(cells)}</tr>')
     systems_rows = []
     for sid in sids:
         s = landscape.system_row(DB, sid)
@@ -2521,12 +2593,13 @@ müssen auf Servern dieses Systems liegen. Weitere Systeme bekommen dieselbe Aus
            + '</select></div><div><button>Zuordnen</button></div></form>')
     return f"""<div class="card"><h2>Multi-System-Sicht · Referenz {esc(ref)}</h2>
 <p class="hint">Im Chat steht jedes Werkzeug einmal, mit dem Argument <code>system</code> (nur aktive Systeme, deren
-Ampel das Gespräch zulässt), dazu das Werkzeug <code>{landscape.SYSTEM_TOOL}</code>. <i>gleich</i>: derselbe Text wie
+Ampel das Gespräch zulässt), dazu das Werkzeug <code>{landscape.SYSTEM_TOOL}</code>; ebenso jeder Prompt. Eine Ressource
+steht je System einmal, ihre URI mit dem System davor (<code>{landscape.URI_PREFIX}&lt;system&gt;/…</code>). <i>gleich</i>: derselbe Text wie
 an der Referenz; <i>abweichend</i>: der Server meldet einen anderen Text -- nicht angeboten, bis Du ihn für dieses
 System freigibst; <i>fehlt</i>: kein Server des Systems bietet es an.</p>
 <table><tr><th>System</th><th>Rolle</th><th>Zustand</th><th>Ampel</th><th></th></tr>{"".join(systems_rows)}</table>
 {add}
-<div class="scroll"><table><tr><th>Werkzeug</th>{head}</tr>{"".join(rows) or '<tr><td class=muted>Noch kein Werkzeug.</td></tr>'}</table></div></div>"""
+<div class="scroll"><table><tr><th>Eintrag</th>{head}</tr>{"".join(rows) or '<tr><td class=muted>Noch kein Eintrag.</td></tr>'}</table></div></div>"""
 
 
 def untrusted_hint(view):
@@ -2553,7 +2626,7 @@ def untrusted_hint(view):
     return f'<div class="{cls}">' + "".join(f"<p>{esc(x)}</p>" for x in lines) + "</div>"
 
 
-def view_page(user, roles, host, name, notice=""):
+def view_page(user, roles, host, name, notice="", convert=""):
     v = books.view_row(DB, name)
     if not v:
         return page("Unbekannt", '<div class="card"><p>Diese Sicht gibt es nicht.</p></div>', user, roles)
@@ -2626,7 +2699,7 @@ Muster mit <code>*</code> und <code>?</code>.</p>
 Haken setzen gibt frei (Name der Sicht wird vorgeschlagen, Wirkungsklasse daneben), Haken entfernen nimmt
 heraus. Ein Eintrag, den sein Server nicht mehr anbietet, steht hier nicht und bleibt, wie er ist.</p>
 {assign_tree(name)}</div>
-{multi_card(name)}{copy_card(name)}{TREE_STYLE}{TREE_SCRIPT}''')
+{multi_card(name, convert)}{copy_card(name)}{TREE_STYLE}{TREE_SCRIPT}''')
     return page(f"Sicht {name}", "".join(parts), user, roles, "sichten")
 
 
@@ -3352,7 +3425,9 @@ class Handler(BaseHTTPRequestHandler):
                     "/item-confirm", "/item-tailor",
                     # 0.32 (RFC-0114)
                     "/system-save", "/system-delete", "/view-multi", "/view-system-add",
-                    "/view-system-remove", "/view-system-approve"):
+                    "/view-system-remove", "/view-system-approve",
+                    # 0.38 (RFC-0114 Stufe 2)
+                    "/view-convert"):
             self.handle_admin_post(path)
             return
         self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -3444,6 +3519,8 @@ class Handler(BaseHTTPRequestHandler):
             kind, field = LISTS[method]
             if kind == "tool" and landscape.is_multi(DB, vrow["name"]):
                 entries = multi_tools(vrow, key, sess.version, self.asked)
+            elif landscape.is_multi(DB, vrow["name"]):
+                entries = multi_entries(vrow, key, kind, sess.version, self.asked)
             else:
                 entries = [compose.shaped(kind, i, sess.version)
                            for _, i in sorted(visible_items(vrow, key, kind).items())]
@@ -3563,7 +3640,21 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 state["down"] += self.send_json(status, doc, headers)
 
+        multi = landscape.is_multi(DB, vrow["name"])
+        uri_system = ""
+        if multi and method == "resources/read":
+            # 0.38 (RFC-0114 Stufe 2): die URI trägt das System; gesucht wird ohne es
+            uri_system, inner = landscape.split_uri(params.get("uri"))
+            if uri_system:
+                params = dict(params, uri=inner)
         try:
+            if multi and method == "resources/read" and not uri_system \
+                    and not landscape.plain_uri(params.get("uri")):
+                done("refused", "system_missing")
+                answer(rpc_error(msg_id, -32602, f"Sicht {vrow['name']}: In einer Multi-System-Sicht "
+                                 f"trägt die URI ihr Zielsystem: {landscape.URI_PREFIX}<system>/<uri> "
+                                 f"(Werkzeug „{landscape.SYSTEM_TOOL}“ nennt sie)."))
+                return
             try:
                 kind, item, measured = self.resolve(vrow, key, method, params)
             except Refusal as exc:
@@ -3595,9 +3686,14 @@ class Handler(BaseHTTPRequestHandler):
             doc = json.loads(item["approved_doc"])
             server_name = item["server"]
             arguments = params.get("arguments")
-            if kind == "tool" and landscape.is_multi(DB, vrow["name"]):
+            if multi and kind in ("resource", "template") and not uri_system:
+                pass                        # 0.38: eine Ansicht (ui://) -- die der Referenz
+            elif multi:
                 # 0.32 (RFC-0114 §4.2): das System aus dem Argument, geprüft, bevor etwas
-                # hinausgeht (S2); der Text ist der für dieses System freigegebene
+                # hinausgeht (S2); der Text ist der für dieses System freigegebene.
+                # 0.38 (Stufe 2): ebenso Prompts (Argument) und Ressourcen (URI).
+                if kind in ("resource", "template"):
+                    arguments = {landscape.SYSTEM_ARG: uri_system}
                 try:
                     sysrow, server_name, doc, arguments = landscape.pick(
                         DB, vrow["name"], item, arguments,
@@ -3613,7 +3709,7 @@ class Handler(BaseHTTPRequestHandler):
                                                 json.loads(item["bounds"]), arguments)
                     out_params = {"name": item["source"], "arguments": args}
                 elif kind == "prompt":
-                    args = compose.check_prompt_arguments(doc, params.get("arguments"))
+                    args = compose.check_prompt_arguments(doc, arguments)
                     out_params = {"name": item["source"]}
                     if args:
                         out_params["arguments"] = args
@@ -3919,7 +4015,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/server":
             self.send_html(200, server_page(user, roles, host, query.get("name", "")))
         elif path == "/view":
-            self.send_html(200, view_page(user, roles, host, query.get("name", "")))
+            self.send_html(200, view_page(user, roles, host, query.get("name", ""),
+                                          convert=query.get("convert", "")))
         elif path == "/auswertung":
             self.send_html(200, charts_page(user, roles, query))
         elif path == "/assistenten":
@@ -4343,11 +4440,23 @@ class Handler(BaseHTTPRequestHandler):
                 landscape.remove_system(DB, user, form.get("view", ""), form.get("system", ""))
                 notice, back = "Herausgenommen.", ("view", form.get("view", ""))
             elif path == "/view-system-approve":
+                kind = form.get("kind", "tool")
+                if kind not in landscape.KIND_LABELS:
+                    raise ValueError("Unbekannte Art.")
                 landscape.approve_for_system(DB, user, form.get("view", ""), form.get("system", ""),
-                                             "tool", form.get("name", ""))
+                                             kind, form.get("name", ""))
                 notice = (f"„{form.get('name', '')}“ für „{form.get('system', '')}“ freigegeben; "
                           "der Text ist festgehalten.")
                 back = ("view", form.get("view", ""))
+            elif path == "/view-convert":
+                plan = landscape.convert(DB, user, form.get("view", ""), form.get("system", ""),
+                                         form.get("new", "").strip())
+                carried = sum(1 for r in plan["rows"] if r["carry"])
+                notice = (f"Neue Multi-System-Sicht „{form.get('new', '').strip()}“ mit Referenz "
+                          f"„{form.get('system', '')}“ und {', '.join(plan['systems'])}; "
+                          f"{carried} Freigabe(n) übernommen. „{form.get('view', '')}“ bleibt, wie sie "
+                          "war -- Schlüssel, Profile und Assistenten nennen noch sie.")
+                back = ("view", form.get("new", "").strip())
         except ValueError as exc:
             notice = str(exc)
         if back and back[0] == "server" and books.server_row(DB, back[1]):
@@ -5165,7 +5274,8 @@ def cli(argv):
              "system list | system remove <id>   (RFC-0114)\n"
              "        app.py view multi <sicht> <referenzsystem> | view system-add <sicht> <system> | "
              "view system-remove <sicht> <system> | view system-approve <sicht> <system> <werkzeug> | "
-             "view systems <sicht>")
+             "view systems <sicht> | view system-approve <sicht> <system> <name> --kind prompt|resource|template | "
+             "view convert <sicht> <referenzsystem> [<neue sicht>]   (ohne neue Sicht: nur der Plan)")
     if len(argv) < 2:
         print(usage)
         return 2
@@ -5233,8 +5343,24 @@ def cli(argv):
             print("Herausgenommen.")
             return 0
         if area == "view" and action == "system-approve" and len(pos) >= 3:
-            landscape.approve_for_system(DB, "cli", pos[0], pos[1], "tool", pos[2])
+            landscape.approve_for_system(DB, "cli", pos[0], pos[1], opts.get("kind", "tool"), pos[2])
             print(f"„{pos[2]}“ für „{pos[1]}“ freigegeben.")
+            return 0
+        if area == "view" and action == "convert" and len(pos) >= 2:
+            plan = landscape.convert_plan(DB, pos[0], pos[1])
+            for p in plan["problems"]:
+                print(p, file=sys.stderr)
+            if plan["problems"]:
+                return 1
+            for r in plan["rows"]:
+                what = ("Freigabe übernommen" if r["carry"] else "gleich" if r["old"]
+                        else "kommt hinzu bei gleichem Text")
+                print(f'{r["system"]:16} {r["name"][:35]:36} {(r["old"] or "-")[:35]:36} {what}')
+            if len(pos) < 3:
+                print("Nur der Plan; mit einem Namen für die neue Sicht wird sie angelegt.")
+                return 0
+            landscape.convert(DB, "cli", pos[0], pos[1], pos[2])
+            print(f"Neue Multi-System-Sicht „{pos[2]}“ angelegt; „{pos[0]}“ bleibt.")
             return 0
         if area == "view" and action == "systems" and pos:
             sids = landscape.view_system_ids(DB, pos[0])
@@ -5242,7 +5368,7 @@ def cli(argv):
                 print(f"„{pos[0]}“ ist keine Multi-System-Sicht.")
                 return 1
             print("Werkzeug".ljust(36) + "".join(s[:16].ljust(18) for s in sids))
-            for item in books.items(DB, pos[0], "tool"):
+            for item in books.items(DB, pos[0]):
                 print(item["name"][:35].ljust(36) + "".join(
                     landscape.STATE_WORDS[landscape.availability(DB, pos[0], item, s)[0]][:16].ljust(18)
                     for s in sids))

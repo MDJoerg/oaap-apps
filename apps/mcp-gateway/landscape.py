@@ -16,8 +16,13 @@ für die der Eintrag angeboten ist. Das Gateway nimmt das Argument heraus und
 ruft den Server dieses Systems. Das Werkzeug `systeme` nennt die Systeme der
 Sicht -- nie eine Adresse, eine Destination oder einen Zugang (S1).
 
-Stufe 1 (D6): nur Werkzeuge; Ressourcen und Prompts einer Multi-System-Sicht
-bleiben die des Referenzsystems.
+Stufe 1 (D6): nur Werkzeuge. Stufe 2 (mcp-gateway 0.38.0): auch Prompts -- jeder
+einmal, mit dem Pflichtargument `system` wie ein Werkzeug -- und Ressourcen: je
+System, auf dem sie gehen, einmal, die URI mit dem System davor
+(`oaap-system://<system>/<uri>`). Eine Ansicht (`ui://`, RFC-0075) bleibt die des
+Referenzsystems: sie ist Code, den das Werkzeug zeigt, nicht Inhalt eines Systems.
+Dazu **Umwandeln**: aus einer Sicht, die mehrere Systeme mit Präfix-Namen trägt,
+wird eine NEUE Multi-System-Sicht; die alte bleibt, wie sie war (D9).
 """
 import json
 import re
@@ -42,6 +47,11 @@ STATE_WORDS = {"referenz": "Referenz", "gleich": "gleich", "freigegeben": "freig
                "abweichend": "abweichend", "fehlt": "fehlt", "mehrdeutig": "mehrdeutig",
                "gesperrt": "gesperrt (Referenz)"}
 SERVED = ("referenz", "gleich", "freigegeben")
+KIND_LABELS = {"tool": "Werkzeug", "prompt": "Prompt", "resource": "Ressource",
+               "template": "Ressourcenvorlage"}
+# Stufe 2: die URI einer Ressource trägt das System (D6)
+URI_PREFIX = "oaap-system://"
+PLAIN_URI = ("ui://",)
 
 SCHEMA = books.LANDSCAPE_SCHEMA   # in books, damit connect() sie anlegt
 
@@ -254,7 +264,7 @@ def remove_system(db, actor, view, sid):
 
 def availability(db, view, item, sid):
     """(Zustand, Server, freigegebener Text oder None, Notiz) dieses Eintrags für
-    dieses System. Nur Werkzeuge kennen andere Systeme als die Referenz (D6)."""
+    dieses System -- für jede Art gleich (Stufe 2: auch Prompts und Ressourcen)."""
     ref = reference_of(db, view)
     ref_state = books.item_state(db, item)
     if sid == ref:
@@ -379,10 +389,53 @@ def system_tool(version):
     return out
 
 
+def system_uri(sid, uri):
+    return f"{URI_PREFIX}{sid}/{uri}"
+
+
+def split_uri(uri):
+    """`oaap-system://<system>/<uri>` -> (system, uri); sonst ("", uri)."""
+    if not isinstance(uri, str) or not uri.startswith(URI_PREFIX):
+        return "", uri
+    sid, slash, inner = uri[len(URI_PREFIX):].partition("/")
+    if not slash or not books.NAME.match(sid) or not inner:
+        return "", uri
+    return sid, inner
+
+
+def plain_uri(uri):
+    return isinstance(uri, str) and uri.startswith(PLAIN_URI)
+
+
+def shaped_prompt(base, choices):
+    """Der Prompt, wie der Client ihn sieht, mit dem Pflichtargument `system` vorn."""
+    out = json.loads(json.dumps(base))
+    args = [a for a in (out.get("arguments") or []) if a.get("name") != SYSTEM_ARG]
+    out["arguments"] = [{"name": SYSTEM_ARG, "required": True,
+                         "description": ("Zielsystem, eins von: " + "; ".join(
+                             system_line(r) for r, _s, _d in choices))}] + args
+    return out
+
+
+def shaped_resource(base, kind, row):
+    """Die Ressource (oder Vorlage) für EIN System: URI mit dem System davor, der
+    Name mit seinem Titel."""
+    out = json.loads(json.dumps(base))
+    field = "uri" if kind == "resource" else "uriTemplate"
+    out[field] = system_uri(row["id"], out[field])
+    out["name"] = f"{out.get('name') or base[field]} ({row['title']})"
+    if "title" in out:
+        out["title"] = f"{out['title']} ({row['title']})"
+    return out
+
+
 def landscape_doc(db, view, rank=2):
     """Was der Chat über die Systeme dieser Sicht lesen darf (S1: nie Adresse,
     Destination, Zugang)."""
     tools = books.items(db, view, "tool")
+    prompts = books.items(db, view, "prompt")
+    res = [i for i in books.items(db, view) if i["kind"] in ("resource", "template")
+           and not plain_uri(i["name"])]
     out = []
     for sid in view_system_ids(db, view):
         row = system_row(db, sid)
@@ -390,13 +443,16 @@ def landscape_doc(db, view, rank=2):
             continue
         light = system_light(db, row)
         avail = [i["name"] for i in tools if availability(db, view, i, sid)[0] in SERVED]
+        p_avail = [i["name"] for i in prompts if availability(db, view, i, sid)[0] in SERVED]
+        r_avail = [system_uri(sid, i["name"]) for i in res
+                   if availability(db, view, i, sid)[0] in SERVED]
         out.append({"id": row["id"], "title": row["title"], "role": row["role"],
                     "role_label": ROLE_WORDS.get(row["role"], row["role"]),
                     "kind": row["kind"], "active": bool(row["active"]), "light": light,
                     "usable_now": bool(row["active"]) and books.LIGHT_RANK[light] <= rank,
                     "reference": sid == reference_of(db, view),
                     "facts": facts_of(row), "description": row["description"],
-                    "tools": avail})
+                    "tools": avail, "prompts": p_avail, "resources": r_avail})
     return {"view": view, "systems": out}
 
 
@@ -423,3 +479,107 @@ def pick(db, view, item, arguments, rank):
                                         f"{STATE_WORDS.get(state, state)}"
                                         + (f" ({note})" if note else "") + ".")
     return row, server, doc, args
+
+
+# ------------------------------------------------------------ Umwandeln (Stufe 2)
+
+def convert_plan(db, view, reference):
+    """Was aus einer Sicht mit Präfix-Namen würde, wenn sie eine Multi-System-Sicht mit
+    diesem Referenzsystem wäre. -> {"systems", "rows", "problems"}; nichts geändert.
+
+    Je Eintrag eines anderen Systems braucht es an der Referenz ein Gegenstück (dieselbe
+    Art, derselbe Name beim Server) mit derselben Wirkungsklasse, denselben festen
+    Argumenten und Grenzen. Eine Freigabe, die die alte Sicht für den Server des
+    anderen Systems hielt, geht mit (S3: sie war für genau diesen Server); ein
+    Eintrag, den die alte Sicht für ein System NICHT hatte, kommt hinzu, wenn sein
+    Server denselben Text meldet -- die Zeile sagt es."""
+    problems, rows = [], []
+    if not books.view_row(db, view):
+        return {"systems": [], "rows": [], "problems": [f"Eine Sicht „{view}“ gibt es nicht."]}
+    if is_multi(db, view):
+        problems.append(f"„{view}“ ist schon eine Multi-System-Sicht.")
+    if not system_row(db, reference):
+        problems.append(f"Ein Zielsystem „{reference}“ gibt es nicht.")
+    if problems:
+        return {"systems": [], "rows": [], "problems": problems}
+    mine = set(servers_of(db, reference))
+    all_items = books.items(db, view)
+    ref_items = [i for i in all_items if i["server"] in mine]
+    if not ref_items:
+        problems.append(f"Die Sicht hat keinen Eintrag auf einem Server von „{reference}“.")
+    by_source = {(i["kind"], i["source"]): i for i in ref_items}
+    systems_seen, taken = [], {}
+    for i in all_items:
+        if i["server"] in mine:
+            continue
+        sid = system_of_server(db, i["server"])
+        if not sid:
+            problems.append(f"„{i['name']}“: der Server „{i['server']}“ gehört zu keinem "
+                            "Zielsystem -- erst in der Systemlandschaft zuordnen.")
+            continue
+        if sid not in systems_seen:
+            systems_seen.append(sid)
+        ref = by_source.get((i["kind"], i["source"]))
+        if not ref:
+            problems.append(f"„{i['name']}“ ({sid}) hat an der Referenz kein Gegenstück "
+                            f"({KIND_LABELS.get(i['kind'], i['kind'])} „{i['source']}“).")
+            continue
+        diff = [w for w, col in (("Wirkungsklasse", "effect"), ("feste Argumente", "fixed"),
+                                 ("Grenzen", "bounds")) if (i[col] or "") != (ref[col] or "")]
+        if diff:
+            problems.append(f"„{i['name']}“ ({sid}) weicht von „{ref['name']}“ ab: "
+                            + ", ".join(diff) + " -- eine Multi-System-Sicht hat eine Auswahl.")
+            continue
+        if taken.get((sid, ref["kind"], ref["name"])):
+            problems.append(f"„{i['name']}“ und „{taken[(sid, ref['kind'], ref['name'])]}“ "
+                            f"({sid}) sind beide „{ref['name']}“.")
+            continue
+        taken[(sid, ref["kind"], ref["name"])] = i["name"]
+        rows.append({"system": sid, "kind": ref["kind"], "name": ref["name"], "old": i["name"],
+                     "server": i["server"],
+                     "carry": i["approved_fp"] != ref["approved_fp"],
+                     "fp": i["approved_fp"], "doc": i["approved_doc"],
+                     "by": i["approved_by"]})
+    for sid in systems_seen:
+        for ref in ref_items:
+            if taken.get((sid, ref["kind"], ref["name"])):
+                continue
+            rows.append({"system": sid, "kind": ref["kind"], "name": ref["name"], "old": "",
+                         "server": "", "carry": False, "fp": "", "doc": "", "by": ""})
+    if ref_items and not systems_seen:
+        problems.append("Die Sicht trägt nur Einträge von „" + reference + "“ -- es gibt nichts "
+                        "umzuwandeln; „Zur Multi-System-Sicht machen“ genügt.")
+    return {"systems": systems_seen, "rows": rows, "problems": problems,
+            "reference_items": [i["name"] for i in ref_items]}
+
+
+def convert(db, actor, view, reference, new):
+    """Legt die neue Multi-System-Sicht `new` an: die Einträge der Referenz (Kopie
+    der alten Sicht, Freigaben wie gehalten), die anderen Systeme zugeordnet,
+    gehaltene Freigaben je System übernommen. Die alte Sicht bleibt (D9). Wirft
+    ValueError mit den Sätzen des Plans."""
+    plan = convert_plan(db, view, reference)
+    if plan["problems"]:
+        raise ValueError(" ".join(plan["problems"]))
+    books.copy_view(db, actor, view, new)
+    mine = set(servers_of(db, reference))
+    for i in books.items(db, new):
+        if i["server"] not in mine:
+            books.remove_item(db, actor, new, i["kind"], i["name"])
+    make_multi(db, actor, new, reference)
+    for sid in plan["systems"]:
+        add_system(db, actor, new, sid)
+    stamp = books.now()
+    carried = 0
+    for r in plan["rows"]:
+        if r["carry"]:
+            db.execute("INSERT OR REPLACE INTO system_items (view,system,kind,name,server,"
+                       "approved_fp,approved_doc,approved_by,approved_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                       (new, r["system"], r["kind"], r["name"], r["server"], r["fp"], r["doc"],
+                        r["by"], stamp))
+            carried += 1
+    books.log(db, actor, "view.convert", new,
+              f"aus {view}; referenz={reference} systeme={','.join(plan['systems'])} "
+              f"freigaben übernommen={carried}")
+    db.commit()
+    return plan
