@@ -42,6 +42,16 @@ jemand wieder zulässt.
   `X-OAAP-Approved-By: <Person>`. Das MCP-Gateway verlangt beides, wenn die Sicht
   `--approval required` hat.
 - Ein abgelehnter Plan läuft nicht. Ein freigegebener läuft genau einmal.
+- **Seit 0.4.0 unterschrieben:** Vorgänge (ab 0.16.0) unterschreibt jede Freigabe mit
+  seinem Freigabeschlüssel (Bereiche → Freigabeschlüssel, nur tenant_admin). Der Lauf
+  reicht sie als `X-OAAP-Approval` weiter. Hat die Sicht `--approval signed` mit diesem
+  Schlüssel (MCP-Gateway ab 0.39.0), prüft das Gateway selbst: genau dieser Aufruf, genau
+  einmal. Wer nur den Schlüssel der Sicht hat, kann sich dann keine Freigabe ausstellen.
+  Eine Dauerfreigabe (unten) trägt keine Unterschrift; Werkzeuge mit Dauerfreigabe
+  gehören in eine Sicht mit `--approval required`.
+- **Ampel des Bereichs (seit 0.4.0, D9):** Hat der Bereich in Vorgänge eine Ampel, schickt
+  der Lauf sie als `X-OAAP-Light` an KI- und MCP-Gateway. Sie nehmen dann nur Modelle und
+  Sichten bis zu dieser Farbe; ohne eigene gelten die Decken der Schlüssel.
 - Mit dem Haken „darf Antworten an die meldende Person entwerfen“ bekommt das Modell
   zusätzlich `antwort_entwurf`. Der Entwurf wird erst öffentlich, wenn ein Mensch ihn
   veröffentlicht.
@@ -89,6 +99,9 @@ docker exec <gateway> python3 /srv/app.py view set spez-analyse --ways key --max
 # soll er schreiben dürfen (Stufe 2): drei Einstellungen müssen zusammenpassen --
 # Sicht bis write, Sicht mit Freigabepflicht, Schlüssel bis write
 docker exec <gateway> python3 /srv/app.py view set spez-analyse --max-effect write --approval required
+# besser (Gateway ab 0.39.0, Vorgänge ab 0.16.0): das Gateway prüft die Unterschrift selbst --
+# den Schlüssel aus Vorgänge → Bereiche → Freigabeschlüssel über stdin, nie als Argument
+docker exec -i <gateway> python3 /srv/app.py view set spez-analyse --approval signed --approval-key-stdin ja
 docker exec <gateway> python3 /srv/app.py key set spez-analyse --max-effect write
 docker exec <gateway> python3 /srv/app.py view add spez-analyse <quelle>-analyse <werkzeug> --effect read
 docker exec <gateway> python3 /srv/app.py key issue spez-analyse --views spez-analyse

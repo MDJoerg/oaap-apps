@@ -58,7 +58,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -499,6 +499,61 @@ def pill(status, mark="", reporter=False):
     return f'<span class="pill s-{status_color(status)}">{esc(word)}</span>'
 
 
+# 0.16.0 (RFC-0105 §7.1): der Freigabeschlüssel dieser Instanz. Mit ihm unterschreibt sie jede
+# Freigabe eines geplanten Aufrufs; der tenant_admin hinterlegt ihn bei der Sicht des
+# Spezialisten im MCP-Gateway (approval=signed), das dann selbst prüft. Er liegt nur hier
+# (Datei 0600 im Datenverzeichnis) und dort im Tresor.
+APPROVAL_PREFIX = "oaap-approval.v1."
+APPROVAL_TTL = 7 * 24 * 3600
+
+
+LIGHT_WORD = {"": "keine eigene", "green": "grün", "yellow": "gelb", "red": "rot"}
+
+
+def approval_key_path():
+    return os.path.join(DATA_DIR, "approval.key")
+
+
+def approval_key(rotate=False):
+    import secrets
+    p = approval_key_path()
+    if not rotate:
+        try:
+            with open(p, encoding="ascii") as fh:
+                k = fh.read().strip()
+            if re.fullmatch(r"oaap-fk-[0-9a-f]{64}", k):
+                return k
+        except OSError:
+            pass
+    k = "oaap-fk-" + secrets.token_hex(32)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    fd = os.open(p + ".neu", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as fh:
+        fh.write(k + "\n")
+    os.replace(p + ".neu", p)
+    return k
+
+
+def sign_approval(d, now=None):
+    """Die Freigabe als oaap-approval.v1.<angaben>.<unterschrift> (Format: mcp-gateway
+    signed_approval.py, oaap.ai.mcp-gateway §5.6)."""
+    import base64
+    import hmac
+    now = int(time.time() if now is None else now)
+    first = (os.environ.get("OAAP_INSTANCE_NAMES", "").split(",")[0] or "").strip()
+    iss = (urlparse(first).netloc if "://" in first else first) or "vorgaenge"
+    args = json.dumps(d.get("arguments") or {}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    payload = {"v": 1, "iss": iss, "case": d["case"], "plan": d["plan"], "tool": d["tool"],
+               "args": hashlib.sha256(args.encode("utf-8")).hexdigest(), "by": d["by"],
+               "iat": now, "exp": now + APPROVAL_TTL, "jti": f"{iss}:{d['case_id']}:{d['plan']}"}
+
+    def b64(raw):
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+    body = b64(json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    mac = hmac.new(approval_key().encode(), (APPROVAL_PREFIX + body).encode(), hashlib.sha256).digest()
+    return APPROVAL_PREFIX + body + "." + b64(mac)
+
+
 def case_url(number):
     """0.9.0 (RFC-0103 D7): die Adresse des Vorgangs, aus dem ersten öffentlichen Namen
     dieser Instanz -- ohne Schema (`//host/v/N`): der Browser nimmt das der Seite, auf
@@ -673,6 +728,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.new_form(who)
         if p == "/bereiche":
             return self.queues_page(who)
+        if p == "/bereiche/freigabeschluessel":
+            return self.approval_key_page(who)
         if p == "/partner":
             return self.partners_page(who)
         if p.startswith("/v/") and p.endswith("/uebergabe"):
@@ -718,6 +775,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.member_post(who, f)
             if p == "/bereiche/spezialist":
                 return self.first_responder_post(who, f)
+            if p == "/bereiche/ampel":
+                return self.queue_light_post(who, f)
+            if p == "/bereiche/freigabeschluessel":
+                return self.approval_key_post(who, f)
             if p == "/partner":
                 return self.partners_post(who, f)
             if p.startswith("/v/") and p.endswith("/uebergabe"):
@@ -752,6 +813,8 @@ class Handler(BaseHTTPRequestHandler):
                     "number": c["number"], "title": c["title"], "description": c["body"],
                     "kind": KIND_LABEL.get(c["kind"], c["kind"]), "status": c["status"],
                     "queue": c["queue"], "queue_title": qt.get(c["queue"], c["queue"]),
+                    # 0.16.0 (D9): die Ampel des Bereichs -- der Lauf schickt sie als X-OAAP-Light
+                    "queue_light": (self.store.queue(c["queue"]) or {}).get("light") or "",
                     "reported_by": c["reporter_name"], "created": c["created"],
                     "fields": tech.get("fields") or {}, "subkind": tech.get("subkind") or "",
                     "responsible": c["responsible"], "mine": c["responsible"] == who.id,
@@ -769,7 +832,7 @@ class Handler(BaseHTTPRequestHandler):
                                  **({"step": {k: e["data"].get(k) for k in ("kind", "run", "assistant", "tool", "reason",
                                                                            "arguments", "sha256", "plan")
                                               if e["data"].get(k) is not None}} if e["type"] == "spec" else {}),
-                                 **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind")}}
+                                 **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind", "token")}}
                                     if e["type"] == "approval" else {}),
                                  **({"consult": {k: e["data"].get(k) for k in ("to_name", "specialist", "consult")
                                                  if e["data"].get(k) is not None}}
@@ -821,6 +884,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, {"ok": True, "given_back": True})
         except Refused as e:
             return self.json(409, {"error": str(e)})
+
+    def queue_light_post(self, who, f):
+        if not who.manager:
+            raise Refused("Die Ampel eines Bereichs stellt der tenant_admin ein.")
+        self.store.set_queue_light(f.get("queue", ""), f.get("light", ""), who.id)
+        return self.redirect("/bereiche")
+
+    def approval_key_page(self, who, msg=""):
+        """0.16.0 (RFC-0105 §7.1): der Freigabeschlüssel, nur für den tenant_admin."""
+        if not who.manager:
+            return self.send(403, page("Abgelehnt", "<p>Den Freigabeschlüssel sieht der tenant_admin.</p>"))
+        k = approval_key()
+        body = (f"{msg}<p>Mit diesem Schlüssel unterschreibt diese App jede Freigabe eines geplanten "
+                f"Aufrufs eines Spezialisten. Hinterlegt bei seiner Sicht im <b>MCP-Gateway</b> (Seite der "
+                f"Sicht: „Schreiben mit Schlüssel“ = <i>nur mit unterschriebener Freigabe</i>, Feld "
+                f"„Freigabeschlüssel“), prüft das Gateway jede Freigabe selbst: genau dieser Aufruf, genau "
+                f"einmal, höchstens {APPROVAL_TTL // 86400} Tage alt. Wer nur den Schlüssel des Spezialisten "
+                f"hat, kann sich dann keine Freigabe mehr ausstellen.</p>"
+                f"<p><code style='user-select:all'>{esc(k)}</code></p>"
+                f"<p class=muted>Behandle ihn wie ein Passwort. Neu erzeugen macht alle noch nicht "
+                f"ausgeführten Freigaben ungültig; danach im MCP-Gateway den neuen eintragen.</p>"
+                f"<form method=post action=/bereiche/freigabeschluessel><button>Neu erzeugen</button></form>"
+                f"<p><a href=/bereiche>← Bereiche</a></p>")
+        return self.send(200, page("Freigabeschlüssel", body, "queues"))
+
+    def approval_key_post(self, who, f):
+        if not who.manager:
+            raise Refused("Den Freigabeschlüssel erzeugt der tenant_admin.")
+        approval_key(rotate=True)
+        self.store.log_queue_action("", who.id, "approval_key")
+        return self.approval_key_page(who, "<p class=ok>Neu erzeugt. Jetzt im MCP-Gateway eintragen.</p>")
 
     def first_responder_post(self, who, f):
         if not who.manager:
@@ -1358,6 +1452,8 @@ Betreff und Text.</p>
             fr_name = self.store.person_name(q["first_responder"]) if q.get("first_responder") else ""
             if fr_name:
                 names += f" · <span class=pill>KI</span> {esc(fr_name)} (Erstbearbeitung)"
+            if q.get("light"):
+                names += f" · Ampel {LIGHT_WORD.get(q['light'], q['light'])}"
             row = (f"<tr><td><code>{esc(q['id'])}</code></td><td>{esc(q['title'])}</td>"
                    f"<td>{names}</td><td>{mine}</td></tr>")
             if who.manager:
@@ -1391,7 +1487,20 @@ Betreff und Text.</p>
                         f"<p class=muted>Neue und hierher verschobene Vorgänge bekommt zuerst dieser Spezialist "
                         f"als Verantwortlichen (RFC-0105). Er arbeitet im Hintergrund, schreibt nur intern und gibt "
                         f"an die Zuständigen zurück. Zur Auswahl steht er, sobald die App Spezialisten einmal für "
-                        f"ihn gelaufen ist.</p></details></td></tr>")
+                        f"ihn gelaufen ist.</p></details>"
+                        # 0.16.0 (RFC-0105 D9): die Ampel, mit der ein Spezialist hier arbeitet
+                        f"<details><summary class=muted>Ampel für Spezialisten: "
+                        f"{esc(LIGHT_WORD.get(q.get('light') or '', 'keine eigene'))}</summary>"
+                        f"<form method=post action=/bereiche/ampel class=inline>"
+                        f"<input type=hidden name=queue value='{esc(q['id'])}'>"
+                        f"<div><label>Ampel</label><select name=light>"
+                        + "".join(f"<option value='{v}'{' selected' if v == (q.get('light') or '') else ''}>"
+                                  f"{LIGHT_WORD.get(v, 'keine eigene')}</option>" for v in ("", "green", "yellow", "red"))
+                        + f"</select></div><button>Speichern</button></form>"
+                        f"<p class=muted>Ein Spezialist schickt diese Ampel an das KI- und das MCP-Gateway. Sie "
+                        f"nehmen dann nur Modelle und Sichten bis zu dieser Farbe -- grün ist am strengsten. "
+                        f"Ohne eigene gelten die Decken seiner Schlüssel. Unterschriebene Freigaben: "
+                        f"<a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p></details></td></tr>")
             rows.append(row)
         rows = "".join(rows)
         body = (f"<p>Ein Bereich ist eine Zuständigkeit: ein Thema oder ein Team. Vorgänge kommen im "
@@ -1411,7 +1520,7 @@ Betreff und Text.</p>
             if log:
                 body += ("<h2>Zuletzt geändert</h2><table>" + "".join(
                     f"<tr><td class=muted>{esc(x['at'][:16].replace('T', ' '))}</td><td>{esc(x['queue'])}</td>"
-                    f"<td>{esc(x['name'])} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt'}</td>"
+                    f"<td>{esc(x['name']) if x['action'] in ('set', 'remove') else ''} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt' if x['action'] == 'remove' else 'Ampel ' + LIGHT_WORD.get(x['kind'] if x['kind'] != '-' else '', x['kind']) if x['action'] == 'light' else 'Freigabeschlüssel neu erzeugt' if x['action'] == 'approval_key' else esc(x['action'])}</td>"
                     f"<td class=muted>von {esc(x['actor_name'])}</td></tr>" for x in log) + "</table>")
             body += """<h2>Bereich anlegen</h2>
 <form method=post action=/bereiche class=inline>
@@ -1791,7 +1900,8 @@ Betreff und Text.</p>
                 seq = int(f.get("seq") or 0)
             except ValueError:
                 raise Refused("Unbekannter Schritt.")
-            self.store.decide(c, seq, f.get("ok") == "1", who.id, who.name, f.get("text", ""))
+            self.store.decide(c, seq, f.get("ok") == "1", who.id, who.name, f.get("text", ""),
+                              signer=sign_approval)
         elif action == "rueckfrage":
             # 0.15.0 (§6): wer verantwortlich ist oder den Bereich bearbeitet
             handler = who.may("triage", c["queue"])

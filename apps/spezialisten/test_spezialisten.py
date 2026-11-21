@@ -124,6 +124,7 @@ def case(number, who=ADMIN):
 
 # ------------------------------------------------------------ MCP-Gateway und Modell
 CALLS = []
+AI_LIGHT = []          # 0.4.0 (D9): X-OAAP-Light am Modell
 
 
 class Gw(BaseHTTPRequestHandler):
@@ -153,7 +154,9 @@ class Gw(BaseHTTPRequestHandler):
         if m == "tools/call":
             p = msg["params"]
             CALLS.append(dict(p, confirmed=self.headers.get("X-OAAP-Confirmed", ""),
-                              approved_by=self.headers.get("X-OAAP-Approved-By", "")))
+                              approved_by=self.headers.get("X-OAAP-Approved-By", ""),
+                              approval=self.headers.get("X-OAAP-Approval", ""),
+                              light=self.headers.get("X-OAAP-Light", "")))
             if p["name"] == "file_solution":
                 # wie das echte Gateway mit --approval required (0.34)
                 if self.headers.get("X-OAAP-Confirmed") != "yes" or not self.headers.get("X-OAAP-Approved-By"):
@@ -196,6 +199,7 @@ class Ki(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer " + AI_KEY:
             return self._send(401, {"error": {"message": "Schlüssel unbekannt"}})
         SEEN.append(body)
+        AI_LIGHT.append(self.headers.get("X-OAAP-Light", ""))
         step = SCRIPT["plan"].pop(0) if SCRIPT["plan"] else ("text", "Nichts mehr zu tun.")
         if step[0] == "deny":
             return self._send(403, {"error": {"message": "Ampel"}})
@@ -398,6 +402,9 @@ try:
     app.poll_once(log=lambda *a: None)
     ok("S2: solange niemand entschieden hat, kein neuer Lauf", SCRIPT["plan"] == [("text", "sollte nicht kommen")], "")
 
+    # 0.4.0 (D9): der Bereich bekommt die Ampel grün -- der nächste Lauf schickt sie an beide Gateways
+    vg_call("POST", "/bereiche/ampel", ADMIN, {"queue": "analyse", "light": "green"}, form=True)
+    AI_LIGHT.clear()
     st = approve(n7, plan[0]["seq"])
     SCRIPT["plan"] = [("text", "Lösung L-17 ist abgelegt. Fertig.")]
     CALLS.clear()
@@ -406,6 +413,19 @@ try:
     ok("S2: nach der Freigabe genau dieser Aufruf, mit X-OAAP-Confirmed und der freigebenden Person",
        st in (302, 303) and len(exe) == 1 and exe[0]["arguments"] == {"text": "Eingabe prüfen"}
        and exe[0]["confirmed"] == "yes" and exe[0]["approved_by"] == "chef", (st, CALLS))
+    # 0.4.0 (§7.1): die unterschriebene Freigabe aus Vorgänge 0.16, geprüft mit dem Modul des Gateways
+    sys.path.insert(1, os.path.join(os.path.dirname(HERE), "mcp-gateway"))
+    import signed_approval as sa
+    with open(os.path.join(DATA, "approval.key"), encoding="ascii") as fh:
+        fk = fh.read().strip()
+    try:
+        pp = sa.verify(fk, exe[0]["approval"], "file_solution", {"text": "Eingabe prüfen"}) if exe else {}
+    except sa.Invalid as exc:
+        pp = {"err": str(exc)}
+    ok("0.4.0: der Aufruf trägt die unterschriebene Freigabe (X-OAAP-Approval), die das Gateway annimmt",
+       pp.get("by") == "chef" and pp.get("tool") == "file_solution", pp)
+    ok("0.4.0 (D9): die Ampel des Bereichs geht an beide Gateways (X-OAAP-Light: green)",
+       exe and exe[0]["light"] == "green" and AI_LIGHT and set(AI_LIGHT) == {"green"}, (exe, AI_LIGHT))
     st7 = steps_of(n7)
     tool_e = [e for e in st7 if e["step"]["kind"] == "tool" and e["step"].get("plan") == plan[0]["seq"]]
     ok("S2: der ausgeführte Aufruf steht im Verlauf, an den Plan gebunden, mit Ergebnis",

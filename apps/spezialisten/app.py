@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import runner
 from store import Refused, Store, import_assistant
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("SPEZ_DATA_DIR", "/data")
 

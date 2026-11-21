@@ -20,6 +20,11 @@ Spezialisten oder einen Menschen des Bereichs und endet; die Antwort weckt ihn w
 befragter Spezialist liest den Vorgang, ruft nur lesende Werkzeuge und schreibt genau eine
 Antwort -- er wird nie verantwortlich. Die Grenzen der Rückfragen hält Vorgänge. Für einzelne
 Werkzeuge kann der tenant_admin die Freigabe je Spezialist aufheben; der Aufruf nennt dann ihn.
+
+0.4.0 (§7.1, D9): Eine Freigabe aus Vorgänge 0.16 trägt eine Unterschrift; der Lauf reicht
+sie als X-OAAP-Approval an das MCP-Gateway weiter, das sie in einer Sicht mit
+approval=signed selbst prüft. Die Ampel des Bereichs geht als X-OAAP-Light an beide
+Gateways -- sie nehmen dann nur Modelle und Sichten bis zu dieser Farbe.
 """
 import json
 import secrets
@@ -144,6 +149,7 @@ class Tools:
 
     def __init__(self, url, key, call=http):
         self.url, self.key, self.call, self.sid, self.n = url, key, call, None, 0
+        self.light = ""             # 0.4.0 (D9): die Ampel des Bereichs, als X-OAAP-Light
 
     def _rpc(self, method, params=None, note=False, extra=None):
         self.n += 1
@@ -151,6 +157,8 @@ class Tools:
         if not note:
             msg["id"] = self.n
         h = {"MCP-Protocol-Version": MCP_VERSION}
+        if self.light:
+            h["X-OAAP-Light"] = self.light
         h.update(extra or {})
         if self.sid:
             h["Mcp-Session-Id"] = self.sid
@@ -176,10 +184,13 @@ class Tools:
         d = self._rpc("tools/list")
         return (d.get("result") or {}).get("tools") or []
 
-    def call_tool(self, name, args, approved_by=""):
+    def call_tool(self, name, args, approved_by="", token=""):
         # Kopfzeilen tragen nur ASCII: Namen prozentkodiert wie die Plattform (RFC-0040 D4)
         extra = ({"X-OAAP-Confirmed": "yes", "X-OAAP-Approved-By": urllib.parse.quote(approved_by, safe=" @._-():")}
                  if approved_by else None)
+        if token:
+            # 0.4.0: die unterschriebene Freigabe aus Vorgänge (ASCII, base64url)
+            extra = dict(extra or {}, **{"X-OAAP-Approval": token})
         d = self._rpc("tools/call", {"name": name, "arguments": args}, extra=extra)
         if "error" in d:
             return True, str((d["error"] or {}).get("message", "Fehler"))
@@ -194,12 +205,14 @@ class Model:
 
     def __init__(self, url, key, model, call=http, timeout=180):
         self.url, self.key, self.model, self.call, self.timeout = url.rstrip("/"), key, model, call, timeout
+        self.light = ""             # 0.4.0 (D9)
 
     def turn(self, messages, tools):
         body = {"model": self.model, "messages": messages}
         if tools:
             body["tools"] = tools
-        st, d, _ = self.call("POST", self.url + "/chat/completions", self.key, body, timeout=self.timeout)
+        st, d, _ = self.call("POST", self.url + "/chat/completions", self.key, body,
+                             headers={"X-OAAP-Light": self.light} if self.light else None, timeout=self.timeout)
         if st in (401, 403):
             msg = (d.get("error") or {}).get("message") if isinstance(d, dict) and isinstance(d.get("error"), dict) else ""
             raise Unreachable(f"Das KI-Gateway lehnt ab (Antwort {st}){': ' + msg if msg else ''}.")
@@ -279,7 +292,8 @@ def case_as_data(case):
 
 
 def pending_approved(case):
-    """Freigegebene eigene Pläne, die noch nicht ausgeführt sind: [(plan, freigebende Person)]."""
+    """Freigegebene eigene Pläne, die noch nicht ausgeführt sind: [(plan, freigebende Person,
+    Unterschrift oder '')]."""
     entries = case.get("entries") or []
     plans = {e["seq"]: e for e in entries if e["type"] == "spec" and e.get("by_me")
              and (e.get("step") or {}).get("kind") == "plan"}
@@ -293,7 +307,7 @@ def pending_approved(case):
         plan = plans[a["plan"]]
         if a.get("sha256") != plan["step"].get("sha256"):
             continue        # an einen anderen Plan gebunden: nicht ausführen
-        out.append((plan, e.get("by", "")))
+        out.append((plan, e.get("by", ""), a.get("token") or ""))
     return out
 
 
@@ -325,14 +339,16 @@ class Run:
                 return "not_mine"
             if case.get("stopped"):
                 return "stopped_before"
+            self._light(case)
             mcp_tools = self.tools.open()
             kinds = {t["name"]: effect(t) for t in mcp_tools}
             # §7.1: zuerst, was ein Mensch freigegeben hat -- genau dieser Aufruf
             todo = pending_approved(case)
-            for plan, who in todo:
+            for plan, who, token in todo:
                 st = plan["step"]
                 t0 = self.clock()
-                failed, result = self.tools.call_tool(st["tool"], st.get("arguments") or {}, approved_by=who or "?")
+                failed, result = self.tools.call_tool(st["tool"], st.get("arguments") or {}, approved_by=who or "?",
+                                                      token=token)
                 self._entry(number, "tool", f"{st['tool']} {short(st.get('arguments') or {}, 800)} (freigegeben von {who})"
                                             f"\n→ {'Fehler: ' if failed else ''}{short(result, ENTRY_RESULT_MAX)}",
                             tool=st["tool"], plan=plan["seq"], approved_by=who, ms=int((self.clock() - t0) * 1000))
@@ -451,6 +467,7 @@ class Run:
             if case.get("stopped"):
                 return "stopped_before"
             q = mine[0]
+            self._light(case)
             mcp_tools = [t for t in self.tools.open() if effect(t) == "read"]
             fns = openai_tools(mcp_tools)
             messages = [{"role": "system", "content": CONSULT_FRAME + (s.get("system") or "")},
@@ -496,6 +513,13 @@ class Run:
             except Unreachable:
                 pass
             return "error"
+
+    def _light(self, case):
+        """0.4.0 (D9): die Ampel des Bereichs an beide Gateways (leer = keine eigene)."""
+        light = case.get("queue_light") or ""
+        light = light if light in ("green", "yellow", "red") else ""
+        self.tools.light = light
+        self.model.light = light
 
     def _limit(self, number, why):
         self._entry(number, "end", f"Grenze: {why}. Zurück an die Zuständigen.", reason="limit", steps=self.steps)

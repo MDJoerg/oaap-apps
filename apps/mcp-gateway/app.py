@@ -57,6 +57,7 @@ import clientfiles
 import compose
 import guard
 import landscape
+import signed_approval
 import signin
 import upstream
 from gwcore import charts as gcharts
@@ -64,7 +65,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.38.0"
+VERSION = "0.39.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -2626,6 +2627,10 @@ def untrusted_hint(view):
     return f'<div class="{cls}">' + "".join(f"<p>{esc(x)}</p>" for x in lines) + "</div>"
 
 
+APPROVAL_WORDS = {"": "ohne Freigabe", "required": "mit Freigabe (Kopfzeilen)",
+                  "signed": "nur mit unterschriebener Freigabe"}
+
+
 def view_page(user, roles, host, name, notice="", convert=""):
     v = books.view_row(DB, name)
     if not v:
@@ -2684,7 +2689,8 @@ Server das Modell des Clients benutzen und ihm Daten schicken.</p>
 <form class="grid" method="post" action="view-save"><input type="hidden" name="name" value="{esc(name)}">
 <div><label>Höchste Wirkungsklasse der Sicht</label><select name="max_effect">{options(books.EFFECTS, v["max_effect"], books.EFFECT_WORDS)}</select></div>
 <div><label>Zugänge</label><select name="ways">{options(books.WAYS, v["ways"], books.WAY_WORDS)}</select></div>
-{req_inputs}<div><button class="quiet">Setzen</button></div></form></div>
+{req_inputs}<div><label>Schreiben mit Schlüssel</label><select name="approval">{options(books.APPROVAL, v["approval"], APPROVAL_WORDS)}</select></div>
+<div><label>Freigabeschlüssel{" (hinterlegt)" if v["approval_key"] else ""}</label><input type="password" name="approval_key" autocomplete="off" placeholder="oaap-fk-… aus der App Vorgänge"></div><div><button class="quiet">Setzen</button></div></form></div>
 {"".join(compare)}
 <div class="card"><h2>Freigegebene Einträge</h2><p class="hint">Neue Einträge kommen über den Katalog eines
 Servers in die Sicht. Clients sehen nur den hier festgehaltenen Text, unter dem Namen der Sicht. Ein festes
@@ -3672,8 +3678,28 @@ class Handler(BaseHTTPRequestHandler):
                     land, ensure_ascii=False, indent=1)}], "structuredContent": land}))
                 return
             state.update(kind=kind, name=measured, server=item["server"], source=item["source"])
+            appr = vrow["approval"] if "approval" in vrow.keys() else ""
+            if kind == "tool" and not self.person and item["effect"] != "read" and appr == "signed":
+                # 0.39 (RFC-0105 §7.1): das Gateway prüft die Freigabe selbst -- unterschrieben
+                # mit dem Freigabeschlüssel der Sicht, genau dieser Aufruf, genau einmal
+                try:
+                    fresh = books.view_row(DB, vrow["name"])
+                    fk = VAULT.open_(MASTER, fresh["approval_key"]) if fresh["approval_key"] else ""
+                    p = signed_approval.verify(fk, self.headers.get(signed_approval.HEADER), measured,
+                                               params.get("arguments"))
+                except (signed_approval.Invalid, VaultError) as exc:
+                    done("refused", "needs_approval", door="gateway")
+                    answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: {measured} ändert etwas; "
+                                     f"hier nur mit einer unterschriebenen Freigabe. {exc}"))
+                    return
+                if not books.use_approval(DB, p["jti"], vrow["name"], measured, p["by"]):
+                    done("refused", "approval_used", door="gateway")
+                    answer(rpc_error(msg_id, -32003, f"Sicht {vrow['name']}: diese Freigabe ist schon "
+                                     "benutzt; jeder Aufruf braucht seine eigene."))
+                    return
+                state["approved_by"] = p["by"][:120]
             if kind == "tool" and not self.person and item["effect"] != "read" \
-                    and (vrow["approval"] if "approval" in vrow.keys() else "") == "required":
+                    and appr == "required":
                 # 0.34 (RFC-0105 §7.1): in dieser Sicht schreibt ein Schlüssel nur mit Freigabe
                 who_ok = " ".join((self.headers.get(APPROVED_HEADER) or "").split())[:120]
                 if (self.headers.get(CONFIRMED_HEADER) or "").strip().lower() != "yes" or not who_ok:
@@ -4370,6 +4396,13 @@ class Handler(BaseHTTPRequestHandler):
                 reqs = {r: form["req_" + r] for r in books.REQUESTS if "req_" + r in form}
                 books.save_view(DB, user, form.get("name", ""), form.get("max_effect", "read"),
                                 reqs or None, form.get("ways") or None)
+                if "approval" in form:
+                    # 0.39 (RFC-0105 §7.1): Freigabe der Sicht, mit Freigabeschlüssel
+                    fk = form.get("approval_key", "").strip()
+                    if fk and not signed_approval.KEY_RE.match(fk):
+                        raise ValueError("Ein Freigabeschlüssel sieht so aus: oaap-fk-<64 Hex-Zeichen>.")
+                    books.set_view_approval(DB, user, form.get("name", ""), form.get("approval", ""),
+                                            VAULT.seal(MASTER, fk) if fk else None)
                 notice, back = "Sicht gespeichert.", ("view", form.get("name", ""))
             elif path == "/view-delete":
                 books.delete_view(DB, user, form.get("name", ""))
@@ -5256,7 +5289,7 @@ def cli(argv):
     usage = ("Aufruf: app.py server set <name> --address A|destination:D[/pfad] [--auth none|bearer|basic|header:N|propagate] "
              "[--light green|yellow|red] [--credential-stdin ja] | server read <name> | server list\n"
              "        app.py view set <name> [--max-effect read|write|execute] "
-             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] [--approval required|none] | view list\n"
+             "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] [--approval required|signed|none] [--approval-key-stdin ja] | view list\n"
              "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
              "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
@@ -5417,7 +5450,7 @@ def cli(argv):
                 reqs = books.view_requests(v)
                 print(f'{v["name"]:20} bis={v["max_effect"]} ampel={books.view_light(DB, v["name"])} zugänge={v["ways"]} '
                       + " ".join(f"{r}={reqs[r]}" for r in books.REQUESTS)
-                      + (" freigabe=required" if v["approval"] == "required" else ""))
+                      + (f" freigabe={v['approval']}" if v["approval"] else ""))
                 for item in books.items(DB, v["name"]):
                     print(f'    {item["kind"]:8} {item["name"]:30} {item["server"]}:{item["source"]} '
                           f'{item["effect"]:8} {books.item_state(DB, item)}'
@@ -5433,8 +5466,16 @@ def cli(argv):
             books.save_view(DB, "cli", pos[0],
                             opts.get("max-effect", old["max_effect"] if old else "read"), reqs or None,
                             opts.get("ways"))
-            if "approval" in opts:
-                books.set_view_approval(DB, "cli", pos[0], opts["approval"])
+            sealed = None
+            if opts.get("approval-key-stdin", "").lower() in ("ja", "yes", "1"):
+                fk = sys.stdin.readline().strip()
+                if not signed_approval.KEY_RE.match(fk):
+                    raise ValueError("Ein Freigabeschlüssel sieht so aus: oaap-fk-<64 Hex-Zeichen>.")
+                sealed = VAULT.seal(MASTER, fk)
+            if "approval" in opts or sealed:
+                old = books.view_row(DB, pos[0])
+                books.set_view_approval(DB, "cli", pos[0], opts.get("approval", old["approval"] if old else ""),
+                                        sealed)
             print("gespeichert")
             return 0
         if area == "view" and action == "add" and len(pos) >= 3:

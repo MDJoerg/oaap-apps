@@ -277,6 +277,9 @@ class Store:
             # 0.13.0: Erstbearbeitung eines Bereichs durch einen Spezialisten (uid, leer = keiner)
             if "first_responder" not in {r[1] for r in self.db.execute("PRAGMA table_info(queues)")}:
                 self.db.execute("ALTER TABLE queues ADD COLUMN first_responder TEXT NOT NULL DEFAULT ''")
+            # 0.16.0 (RFC-0105 D9): die Ampel eines Bereichs für Spezialisten ('' = keine eigene)
+            if "light" not in {r[1] for r in self.db.execute("PRAGMA table_info(queues)")}:
+                self.db.execute("ALTER TABLE queues ADD COLUMN light TEXT NOT NULL DEFAULT ''")
             # 0.15.0 (RFC-0105 §6): Rückfragen -- eine Frage, eine Antwort; seq ist der Eintrag der Frage
             self.db.execute("CREATE TABLE IF NOT EXISTS consults (seq INTEGER PRIMARY KEY, case_id TEXT NOT NULL, "
                             "asked_by TEXT NOT NULL, asked_by_specialist INTEGER NOT NULL, target TEXT NOT NULL, "
@@ -452,6 +455,27 @@ class Store:
             if not self.db.execute("UPDATE queues SET first_responder=? WHERE id=?",
                                    (uid, qid)).rowcount:
                 raise Refused("Diesen Bereich gibt es nicht.")
+
+    QUEUE_LIGHTS = ("", "green", "yellow", "red")
+
+    def log_queue_action(self, queue, actor, action, kind=""):
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid, kind) "
+                            "VALUES (?,?,?,?,?,?)", (_now(), queue, actor, action, "", kind))
+
+    def set_queue_light(self, qid, light, actor):
+        """0.16.0 (RFC-0105 D9, §8.5): die Ampel, mit der ein Spezialist an Vorgängen dieses
+        Bereichs arbeitet -- er schickt sie als X-OAAP-Light an KI- und MCP-Gateway, die sie
+        als Decke nehmen (nur verschärfen). Leer = keine eigene: es gelten die Decken der
+        Schlüssel, wie der Mandant sie gesetzt hat."""
+        light = (light or "").strip().lower()
+        if light not in self.QUEUE_LIGHTS:
+            raise Refused("Ampel: grün, gelb, rot oder keine eigene.")
+        with self.lock, self.db:
+            if not self.db.execute("UPDATE queues SET light=? WHERE id=?", (light, qid)).rowcount:
+                raise Refused("Diesen Bereich gibt es nicht.")
+            self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid, kind) "
+                            "VALUES (?,?,?,?,?,?)", (_now(), qid, actor, "light", "", light or "-"))
 
     def _first_responder(self, cid, queue):
         """Unter der Sperre: der Spezialist des Bereichs wird verantwortlich (intern vermerkt)."""
@@ -821,7 +845,7 @@ class Store:
                 self._entry(c["id"], uid, name, "status", "",
                             {"from": r["status"], "to": "waiting_approval"}, internal=True)
 
-    def decide(self, c, seq, ok, actor, actor_name, text=""):
+    def decide(self, c, seq, ok, actor, actor_name, text="", signer=None):
         """§7.1/§7.2: ein Mensch gibt einen geplanten Aufruf oder einen Entwurf frei -- oder nicht.
         Nie der Spezialist selbst, nie zweimal. Ein freigegebener Entwurf wird öffentlich (im
         Namen des Spezialisten, mit der freigebenden Person). Danach ist der Spezialist wieder dran."""
@@ -841,9 +865,15 @@ class Store:
             r = self.db.execute("SELECT status FROM cases WHERE id=?", (c["id"],)).fetchone()
             if r["status"] in ENDED:
                 raise Refused("Der Vorgang ist beendet.")
+            adata = {"plan": seq, "sha256": data["sha256"], "ok": bool(ok), "kind": data["kind"]}
+            if ok and data["kind"] == "plan" and signer:
+                # 0.16.0 (RFC-0105 §7.1): die Freigabe, unterschrieben -- das MCP-Gateway prüft
+                # sie selbst (Sicht mit approval=signed), genau diesen Aufruf, genau einmal
+                adata["token"] = signer({"case": c["number"], "case_id": c["id"], "plan": seq,
+                                         "tool": data.get("tool") or "",
+                                         "arguments": data.get("arguments") or {}, "by": actor_name})
             self._entry(c["id"], actor, actor_name, "approval", _clip((text or "").strip(), 2000),
-                        {"plan": seq, "sha256": data["sha256"], "ok": bool(ok), "kind": data["kind"]},
-                        internal=True)
+                        adata, internal=True)
             if ok and data["kind"] == "draft":
                 self._entry(c["id"], e["actor"], e["actor_name"], "comment", e["text"],
                             {"draft": seq, "approved_by": actor_name}, internal=False)

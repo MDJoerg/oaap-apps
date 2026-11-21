@@ -24,6 +24,7 @@ passen würde.**
 import hashlib
 import json
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from gwcore import context, ledger
@@ -199,6 +200,14 @@ CREATE TABLE IF NOT EXISTS items (
 -- 0.27 (RFC-0104 Stufe 2, §3.1): was die Einrichtungstür angelegt hat -- wer (der
 -- Name aus X-OAAP-Setup-Actor), wann, ein Digest des Wunsches und einer des
 -- Zustands direkt danach. Entfernt wird nur, solange der Zustand noch dieser ist.
+-- 0.39 (RFC-0105 §7.1): jede unterschriebene Freigabe gilt genau einmal.
+CREATE TABLE IF NOT EXISTS approvals_used (
+  jti  TEXT PRIMARY KEY,
+  view TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  by   TEXT NOT NULL,
+  at   TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS setup_made (
   kind     TEXT NOT NULL,
   id       TEXT NOT NULL,
@@ -324,6 +333,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 0.37 (RFC-0117 Stufe 2): aus welcher Vorlage die Einrichtung den Assistenten machte
     # ('<rezept>@<major>' aus X-OAAP-Setup-Recipe, '' = unbekannt); der Export nennt es `from`.
     ("assistants", "origin", "TEXT NOT NULL DEFAULT ''"),
+    # 0.39 (RFC-0105 §7.1): der Freigabeschlüssel einer Sicht mit approval='signed',
+    # versiegelt im Tresor ('' = keiner). Mit ihm prüft das Gateway Freigaben selbst.
+    ("views", "approval_key", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -1233,20 +1245,40 @@ def exchange_servers(db, view):
         (view,))]
 
 
-APPROVAL = ("", "required")
+APPROVAL = ("", "required", "signed")
 
 
-def set_view_approval(db, actor, name, approval):
+def set_view_approval(db, actor, name, approval, sealed_key=None):
     """0.34 (RFC-0105 §7.1): '' = wie bisher, 'required' = ein Schlüssel schreibt in dieser
-    Sicht nur mit X-OAAP-Confirmed: yes und X-OAAP-Approved-By (die freigebende Person)."""
+    Sicht nur mit X-OAAP-Confirmed: yes und X-OAAP-Approved-By (die freigebende Person).
+    0.39: 'signed' = nur mit einer Freigabe, die mit dem Freigabeschlüssel der Sicht
+    unterschrieben ist (X-OAAP-Approval); `sealed_key` ist er, schon versiegelt (None =
+    unverändert). Der Schlüssel wird nie wieder gezeigt."""
     approval = "" if approval in ("", "none", "aus") else approval
     if approval not in APPROVAL:
-        raise ValueError("Freigabe: required oder none.")
-    if not view_row(db, name):
+        raise ValueError("Freigabe: required, signed oder none.")
+    v = view_row(db, name)
+    if not v:
         raise ValueError(f"Die Sicht {name} gibt es nicht.")
-    db.execute("UPDATE views SET approval=?, updated=? WHERE name=?", (approval, now(), name))
-    log(db, actor, "view.approval", name, approval or "none")
+    key = v["approval_key"] if sealed_key is None else sealed_key
+    if approval == "signed" and not key:
+        raise ValueError("„signed“ braucht den Freigabeschlüssel der Vorgangs-App (oaap-fk-…).")
+    db.execute("UPDATE views SET approval=?, approval_key=?, updated=? WHERE name=?",
+               (approval, key, now(), name))
+    log(db, actor, "view.approval", name, (approval or "none")
+        + (" schlüssel=neu" if sealed_key else ""))
     db.commit()
+
+
+def use_approval(db, jti, view, tool, by):
+    """0.39: eine unterschriebene Freigabe verbrauchen. False, wenn sie schon benutzt ist."""
+    try:
+        db.execute("INSERT INTO approvals_used (jti, view, tool, by, at) VALUES (?,?,?,?,?)",
+                   (jti, view, tool, by, now()))
+        db.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def view_ways(vrow):
