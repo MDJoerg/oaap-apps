@@ -23,7 +23,7 @@ import fetch as fx
 import mcp_door
 import search as sx
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 PORT = int(os.environ.get("PORT", "8000"))
 BODY_LIMIT = 256 * 1024
 CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"

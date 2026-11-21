@@ -1,9 +1,9 @@
-oaap_manifest: "0.11"
+oaap_manifest: "0.19"
 
 app:
   id: recherche
   name: Recherche
-  version: 0.1.0
+  version: 0.1.1
   type: native
   class: service
   description: "Websuche und Webseiten als MCP-Quelle (RFC-0116 Stufe 1): web_search fragt einen Suchdienst hinter der Destination search (zuerst SearXNG), web_fetch liest eine öffentliche Seite als Text. Beides lesend. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün: Suchwörter verlassen den Mandanten. In einem geschlossenen Mandanten gibt es nur die Suche."
@@ -26,6 +26,12 @@ routes:
 # RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route.
 mcp:
   path: /mcp
+
+# Manifest 0.19 (RFC-0116 Stufe 2): die Tür liefert fremden Inhalt (Webseiten). Das
+# MCP-Gateway schlägt daraufhin die Markierung vor, die die Quelle in Sichten hält,
+# deren Einträge alle lesen. Ein eigener Block: ältere Knoten überlesen ihn.
+mcp_content:
+  untrusted: true
 
 destinations:
   - name: search

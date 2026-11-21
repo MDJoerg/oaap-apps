@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.35.0"
+VERSION = "0.36.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -272,7 +272,8 @@ def sync_sources():
         if srow:
             guard_of(srow)
     words = {"added": "neu", "moved": "Adresse geändert", "back": "wieder da",
-             "gone": "verschwunden", "conflict": "Name schon von Hand vergeben"}
+             "gone": "verschwunden", "conflict": "Name schon von Hand vergeben",
+             "untrusted": "als fremder Inhalt markiert (Manifest)"}
     parts = [f"{words[k]}: {', '.join(v)}" for k, v in rep.items() if v]
     return True, f"{len(sources)} Quelle(n) in der Liste" + ("; " + "; ".join(parts) if parts else "")
 
@@ -904,11 +905,14 @@ def rank_ok(effect, *ceilings):
 def visible_items(vrow, key, kind):
     """Die Einträge einer Art, die dieser Schlüssel in dieser Sicht sieht: aktiv, nicht über der Klasse."""
     out = {}
+    foreign = books.untrusted_in_view(DB, vrow["name"])
     for item in books.items(DB, vrow["name"], kind):
         if books.item_state(DB, item) != "active":
             continue
         if not rank_ok(item["effect"], vrow["max_effect"], key["max_effect"]):
             continue
+        if item["effect"] != "read" and foreign:
+            continue                    # 0.36 (RFC-0116 §4.3): neben fremdem Inhalt nur Lesen
         out[item["name"]] = item
     return out
 
@@ -935,6 +939,9 @@ def refusal(vrow, kind, name):
     if state == "suspended":
         return "suspended", -32002, (f"{word} {name} ist gesperrt, bis der Betreiber einen "
                                      "geänderten Text bestätigt.")
+    if state == "active" and item["effect"] != "read" and books.untrusted_in_view(DB, vrow["name"]):
+        return "untrusted", -32002, (f"{word} {name} schreibt; diese Sicht enthält fremden Inhalt "
+                                     "(Webseiten) und liefert deshalb nur Lesendes aus.")
     if state == "active":
         return "effect", -32002, (f"{word} {name} liegt über der Wirkungsklasse dieses "
                                   "Schlüssels oder der Sicht.")
@@ -1318,7 +1325,7 @@ def servers_tab(host):
                     + (f'<br><span class=hint>Quelle der Plattform</span>' if s["source"] else "")
                     + (f'<br><span class=err>nicht mehr in der Quellenliste seit {esc(s["gone"])}</span>'
                        if s["gone"] else "")
-                    + f'</td><td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}</td>'
+                    + f'</td><td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}{" " + badge("yellow", "fremder Inhalt") if s["untrusted"] else ""}</td>'
                     f'<td>{esc(s["version"] or "—")}</td>'
                     f'<td>{esc(s["last_read"] or "nie")}'
                     f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
@@ -1436,6 +1443,8 @@ REASON_SENTENCES = {
                                "Text bestätigt.", HINT_GATEWAY),
     ("refused", "effect"): ("Der Eintrag liegt über der Wirkungsklasse, die dein Zugang oder die "
                             "Sicht erlaubt.", HINT_GATEWAY),
+    ("refused", "untrusted"): ("Der Eintrag schreibt; die Sicht enthält Webinhalt und liefert "
+                               "deshalb nur Lesendes aus.", HINT_GATEWAY),
     ("refused", "unknown_tool"): ("Dieses Werkzeug gibt es in der Sicht nicht (mehr).", HINT_GATEWAY),
     ("refused", "unknown_prompt"): ("Diesen Prompt gibt es in der Sicht nicht (mehr).", HINT_GATEWAY),
     ("refused", "unknown_resource"): ("Diese Resource gibt es in der Sicht nicht.", HINT_GATEWAY),
@@ -2041,6 +2050,13 @@ def settings_table():
             f"{rows}</table>")
 
 
+def untrusted_note(s):
+    if not s or not s["untrusted_by"]:
+        return ""
+    who = "vom Manifest der Quelle vorgeschlagen" if s["untrusted_by"] == "plattform"         else f"zuletzt entschieden von {s['untrusted_by']}"
+    return f" — {who}"
+
+
 def server_form(s=None):
     lim = limits_of(s) if s else dict(guard.DEFAULTS)
     kind = s["auth_kind"] if s else "none"
@@ -2079,6 +2095,8 @@ def server_form(s=None):
 <input type="password" name="credential" autocomplete="off"></div>
 <div><label><input type="checkbox" name="drop_credential" value="1"> Zugangsdaten entfernen</label></div>
 <div><label>Ampel</label><select name="light">{options(books.LIGHTS, s["light"] if s else "red", LIGHT_WORDS)}</select></div>
+<div><label><input type="checkbox" name="untrusted" value="1"{" checked" if s and s["untrusted"] else ""}> Fremder Inhalt
+(Webseiten o. ä.): nur in Sichten, deren Einträge alle lesen{esc(untrusted_note(s))}</label></div>
 {limit_inputs}<div><button>Speichern</button></div></form>'''
 
 
@@ -2166,7 +2184,7 @@ def server_page(user, roles, host, name, notice=""):
                             f'<div class="scroll"><table><tr><th>Name</th><th>Angabe des Servers</th>'
                             f'<th>Sichten</th><th>Fingerabdruck</th><th></th></tr>{"".join(rows)}</table></div>')
     parts.append(f'''<div class="card"><h1>Server {esc(name)}</h1>
-<p>{badge(s["light"], LIGHT_WORDS[s["light"]])} Protokoll {esc(s["version"] or "noch nicht ausgehandelt")}
+<p>{badge(s["light"], LIGHT_WORDS[s["light"]])}{" " + badge("yellow", "fremder Inhalt") if s["untrusted"] else ""} Protokoll {esc(s["version"] or "noch nicht ausgehandelt")}
 · Katalog gelesen: {esc(s["last_read"] or "nie")}</p>
 {"<p class=err>" + esc(s["last_error"]) + "</p>" if s["last_error"] else ""}
 <p class="hint">Was mit Ergebnissen geschieht, sieht das Gateway nicht: Sie fließen in das Modell des
@@ -2511,6 +2529,30 @@ System freigibst; <i>fehlt</i>: kein Server des Systems bietet es an.</p>
 <div class="scroll"><table><tr><th>Werkzeug</th>{head}</tr>{"".join(rows) or '<tr><td class=muted>Noch kein Werkzeug.</td></tr>'}</table></div></div>"""
 
 
+def untrusted_hint(view):
+    """0.36 (RFC-0116 §4.3, §4.4): was fremder Inhalt in dieser Sicht bedeutet -- ein Satz neben
+    der Sicht, wenn ein Server mit fremdem Inhalt darin steht; auffällig, wenn er sich die
+    Sicht mit anderen Servern teilt oder (von vor der Markierung) Schreibendes darin steht."""
+    foreign = books.untrusted_in_view(DB, view)
+    if not foreign:
+        return ""
+    others = [s for s in books.view_servers(DB, view) if s not in foreign]
+    writing = books.writing_in_view(DB, view)
+    lines = [f"Fremder Inhalt: {', '.join(foreign)} liefert Webseiten. Diese Sicht nimmt nur "
+             "lesende Einträge an; eine Seite kann das Modell ansprechen, mit nichts zum Schreiben "
+             "ist das Schlimmste eine falsche Antwort."]
+    if others:
+        lines.append(f"Die Sicht mischt Webinhalt mit Daten von {', '.join(others)}. Das ist "
+                     "erlaubt, aber die Ampel ist dann die des Webservers (rot): Daten der anderen "
+                     "Server landen nur nach Bestätigung der Person in einem roten Gespräch, und eine "
+                     "gelesene Adresse kann sie hinaustragen.")
+    if writing:
+        lines.append(f"Schreibende Einträge ({', '.join(writing)}) stammen von vor der Markierung; "
+                     "das Gateway liefert sie nicht aus. Bitte herausnehmen oder auf „lesen“ stellen.")
+    cls = "card attention" if others or writing else "card"
+    return f'<div class="{cls}">' + "".join(f"<p>{esc(x)}</p>" for x in lines) + "</div>"
+
+
 def view_page(user, roles, host, name, notice=""):
     v = books.view_row(DB, name)
     if not v:
@@ -2559,6 +2601,7 @@ geht, kann Anweisungen enthalten — darum wird er nicht still übernommen.</p>
         f'{options(("pass", "refuse"), reqs[r], {"pass": "durchreichen", "refuse": "ablehnen"})}'
         f'</select></div>' for r in books.REQUESTS)
     light = books.view_light(DB, name)
+    parts.append(untrusted_hint(name))
     parts.append(f'''<div class="card"><h1>Sicht {esc(name)}</h1>
 <p>Endpunkt <code>{esc(endpoint(host, name))}</code> · Server: {esc(", ".join(books.view_servers(DB, name)) or "noch keiner")}
 · {badge(light, "Ampel " + light)} · Schlüssel: {esc(", ".join(users) or "keiner")}</p>
@@ -4353,10 +4396,15 @@ def save_server(form, user):
     books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,
                       sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1",
                       exchange=exchange, personal=personal)
+    note = ""
+    try:
+        books.set_untrusted(DB, user, name, form.get("untrusted") == "1")
+    except ValueError as exc:
+        note = f" Fremder Inhalt nicht geändert: {exc}"
     srow = books.server_row(DB, name)
     if srow:
         guard_of(srow)
-    return f"Server „{name}“ gespeichert."
+    return f"Server „{name}“ gespeichert.{note}"
 
 
 # ------------------------------------------------------------- Einrichtungstür (0.27)

@@ -315,6 +315,12 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # Freigabe eines Menschen schreibt ('required'); die Messzeile nennt, wer freigab.
     ("views", "approval", "TEXT NOT NULL DEFAULT ''"),
     ("usage", "approved_by", "TEXT NOT NULL DEFAULT ''"),
+    # 0.36 (RFC-0116 Stufe 2, §4.3): ein Server mit fremdem Inhalt (Webseiten) steht nur
+    # in Sichten, deren Einträge alle lesen. Gesetzt vom Betreiber, vorgeschlagen vom
+    # Manifest der Quelle; `untrusted_by` sagt, wer zuletzt entschied ('' = noch niemand,
+    # 'plattform' = Vorschlag aus dem Manifest, sonst der Name des Betreibers).
+    ("servers", "untrusted", "INTEGER NOT NULL DEFAULT 0"),
+    ("servers", "untrusted_by", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -594,7 +600,7 @@ def sync_sources(db, sources, limits):
     - Verschwindet eine Quelle, bleibt ihr Server mit Zeitpunkt in `gone`;
       die Einträge in den Sichten werden nicht still entfernt.
     """
-    report = {"added": [], "moved": [], "conflict": [], "gone": [], "back": []}
+    report = {"added": [], "moved": [], "conflict": [], "gone": [], "back": [], "untrusted": []}
     seen = set()
     stamp = now()
     for src in sources:
@@ -619,6 +625,9 @@ def sync_sources(db, sources, limits):
             log(db, "plattform", "server.source", name,
                 f"aus der Quellenliste eingetragen: {src.get('app')} {src.get('version')}")
             report["added"].append(name)
+            if src.get("untrusted_content") is True:
+                _propose_untrusted(db, name)
+                report["untrusted"].append(name)
             continue
         if old["source"] != name:
             report["conflict"].append(name)
@@ -641,6 +650,11 @@ def sync_sources(db, sources, limits):
             db.execute("UPDATE servers SET address=?, updated=? WHERE name=?", (want, stamp, sname))
             log(db, "plattform", "server.source", sname, f"address: {old['address']} → {want}")
             report["moved"].append(sname)
+        # 0.36: das Manifest schlägt „fremder Inhalt“ vor, solange niemand entschieden hat
+        # (auch für eine Quelle von vor 0.36). Eine Entscheidung des Betreibers bleibt.
+        if src.get("untrusted_content") is True and not old["untrusted_by"]:
+            _propose_untrusted(db, sname)
+            report["untrusted"].append(sname)
     for row in db.execute("SELECT name,source FROM servers WHERE source<>'' AND gone=''").fetchall():
         if row["source"] not in seen:
             db.execute("UPDATE servers SET gone=?, updated=? WHERE name=?", (stamp, stamp, row["name"]))
@@ -649,6 +663,83 @@ def sync_sources(db, sources, limits):
             report["gone"].append(row["name"])
     db.commit()
     return report
+
+
+# ------------------------------------------------- fremder Inhalt (0.36, RFC-0116 §4.3)
+#
+# Eine Webseite kann das Modell ansprechen („ignoriere deine Anweisungen und rufe …“).
+# Darum steht ein Server mit fremdem Inhalt nur in Sichten, deren Einträge alle lesen:
+# Mit nichts zum Schreiben ist das Schlimmste eine falsche Antwort. Geprüft wird beim
+# Ändern (Satz statt Änderung) UND beim Ausliefern (app.visible_items) -- eine Sicht, die
+# vor der Markierung schon schrieb, liefert ihre schreibenden Einträge nicht mehr aus.
+
+UNTRUSTED_WHY = ("Eine Webseite kann das Modell ansprechen; mit nichts zum Schreiben ist das "
+                 "Schlimmste eine falsche Antwort (RFC-0116 §4.3).")
+
+
+def _propose_untrusted(db, name):
+    db.execute("UPDATE servers SET untrusted=1, untrusted_by='plattform', updated=? WHERE name=?",
+               (now(), name))
+    log(db, "plattform", "server.untrusted", name,
+        "fremder Inhalt: vom Manifest der Quelle vorgeschlagen")
+
+
+def is_untrusted(db, server):
+    row = server_row(db, server)
+    return bool(row and row["untrusted"])
+
+
+def untrusted_in_view(db, view):
+    """Die Server dieser Sicht, die als fremder Inhalt markiert sind (sortiert)."""
+    return [r[0] for r in db.execute(
+        "SELECT DISTINCT i.server FROM items i JOIN servers s ON s.name=i.server "
+        "WHERE i.view=? AND s.untrusted=1 ORDER BY i.server", (view,))]
+
+
+def writing_in_view(db, view):
+    """Die Einträge dieser Sicht, die schreiben oder ausführen (Namen, sortiert)."""
+    return [r[0] for r in db.execute("SELECT name FROM items WHERE view=? AND effect<>'read' "
+                                     "ORDER BY name", (view,))]
+
+
+def _refuse_writing_with_untrusted(db, view, effect, server=None):
+    """Satz statt Änderung, wenn die Sicht danach fremden Inhalt UND etwas Schreibendes hätte."""
+    foreign = untrusted_in_view(db, view)
+    if server and is_untrusted(db, server) and server not in foreign:
+        foreign = [server]
+    if effect != "read" and foreign:
+        raise ValueError(f"Die Sicht „{view}“ enthält fremden Inhalt (Server „{foreign[0]}“) und "
+                         f"nimmt deshalb nur lesende Einträge an. {UNTRUSTED_WHY}")
+    if server and is_untrusted(db, server):
+        writing = writing_in_view(db, view)
+        if writing:
+            raise ValueError(f"Server „{server}“ liefert fremden Inhalt und steht nur in Sichten, "
+                             f"deren Einträge alle lesen; „{view}“ hat schreibende "
+                             f"({', '.join(writing[:5])}). {UNTRUSTED_WHY}")
+
+
+def set_untrusted(db, actor, name, flag):
+    """Der Betreiber markiert einen Server als fremden Inhalt oder nimmt die Markierung
+    zurück. Markieren geht nur, solange keine Sicht mit ihm etwas Schreibendes hat."""
+    row = server_row(db, name)
+    if not row:
+        raise ValueError(f"Einen Server „{name}“ gibt es nicht.")
+    flag = bool(flag)
+    if flag and not row["untrusted"]:
+        hit = [v for v in sorted({r["view"] for r in db.execute(
+            "SELECT DISTINCT view FROM items WHERE server=?", (name,))}) if writing_in_view(db, v)]
+        if hit:
+            raise ValueError(f"Server „{name}“ steht in Sichten mit schreibenden Einträgen "
+                             f"({', '.join(hit)}); als fremder Inhalt darf er das nicht. Erst dort "
+                             f"die schreibenden Einträge herausnehmen. {UNTRUSTED_WHY}")
+    if flag == bool(row["untrusted"]):
+        return False                            # unverändert: keine Entscheidung festhalten
+    db.execute("UPDATE servers SET untrusted=?, untrusted_by=?, updated=? WHERE name=?",
+               (1 if flag else 0, actor, now(), name))
+    log(db, actor, "server.untrusted", name,
+        "fremder Inhalt: " + ("markiert" if flag else "Markierung zurückgenommen"))
+    db.commit()
+    return True
 
 
 def save_server(db, actor, name, address, auth_kind, light, limits, sealed_credential=None,
@@ -1254,6 +1345,7 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     effect = effect if kind == "tool" else "read"
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
+    _refuse_writing_with_untrusted(db, view, effect, server)
     if server_row(db, server)["auth_kind"] in PERSON_KINDS and "key" in view_ways(view_row(db, view)):
         raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht eine angemeldete "
                          f"Person; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
@@ -1323,6 +1415,8 @@ def confirm(db, actor, view, kind, name, effect=None):
     effect = (effect or item["effect"]) if kind == "tool" else "read"
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
+    if effect != item["effect"]:
+        _refuse_writing_with_untrusted(db, view, effect)
     if kind == "tool":
         try:
             compose.tailor(json.loads(cat["doc"]), json.loads(item["fixed"]),
@@ -1404,6 +1498,7 @@ def tailor_item(db, actor, view, kind, name, new_name=None, description=None, fi
             raise ValueError("Resources und Prompts sind immer „lesen“.")
         if effect not in EFFECT_RANK:
             raise ValueError("Wirkungsklasse ist read, write oder execute.")
+        _refuse_writing_with_untrusted(db, view, effect)
         sets.append("effect=?")
         args.append(effect)
         changes.append(f"Klasse {item['effect']} → {effect}")
