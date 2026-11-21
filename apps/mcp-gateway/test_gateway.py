@@ -1763,6 +1763,30 @@ check("ein zweites Mal: nichts überschrieben (400 mit den Kennungen)", st == 40
 st, d = ax("POST", "/_import", {"v": 1, "assistants": [adoc("i-neu", owner="u-jemand")]})
 st2, d2 = ax("GET", "/i-neu")
 check("Import: wer importiert, wird Besitzer", st == 200 and st2 == 200 and d2["owner"] == "u-anna", (st, d, d2))
+# 0.37.0 (RFC-0117 Stufe 2): `from` ist eine Auskunft der Datei, nie ein Teil des Assistenten
+st, d = ax("POST", "/_import",
+           {"v": 1, "assistants": [dict(adoc("i-from"), **{"from": "recipe:hilfe-assistent@1"})]})
+st2, d2 = ax("GET", "/i-from")
+check("Import mit from: angenommen, from nicht im Assistenten, keine Herkunft erfunden",
+      st == 200 and st2 == 200 and "from" not in d2
+      and books.assistant_row(app.DB, "i-from")["origin"] == "", (st, d, d2))
+st, d = ax("POST", "/_import", {"v": 1, "assistants": [dict(adoc("i-from2"), **{"from": "javascript:x"})]})
+check("KÖDER: ein kaputtes from wird abgestreift, nicht gespeichert", st == 200
+      and "from" not in books.assistant_row(app.DB, "i-from2")["doc"], (st, d))
+st, d = ax("POST", "", dict(adoc("i-from"), **{"from": "recipe:recherche@1"}))
+check("Speichern mit from: from abgestreift", st == 200 and "from" not in books.assistant_row(app.DB, "i-from")["doc"],
+      (st, d))
+books.assistant_set_origin(app.DB, "i-from", "hilfe-assistent@1")
+st, d = ax("GET", "")
+row_ = [x for x in d["assistants"] if x["id"] == "i-from"]
+check("die Liste für den Chat nennt from, wenn die Einrichtung die Vorlage kennt",
+      row_ and row_[0].get("from") == "recipe:hilfe-assistent@1", row_)
+import assistants as _ar  # noqa: E402
+check("oaap.ai.assistants 0.8: from recipe:<id>@<major> gültig, anderes mit Satz",
+      not _ar.check(dict(adoc("x"), **{"from": "recipe:hilfe-assistent@1"}))
+      and any(e.startswith("from:") for e in _ar.check(dict(adoc("x"), **{"from": "https://x"}))))
+check("... und für einen ohne Herkunft nicht",
+      all("from" not in x for x in d["assistants"] if x["id"] == "i-neu"))
 
 sid_ar = session_a("a-sicht", assistant="a-priv@2")[1]
 _before = usage_max()

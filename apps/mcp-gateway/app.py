@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.36.0"
+VERSION = "0.37.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -2653,6 +2653,27 @@ CHART_DIMS = {"view": "Sicht", "tool": "Eintrag", "kind": "Art", "key": "Schlüs
               "owner": "Verantwortlich", "application": "Anwendung"}
 
 
+def portal_base():
+    """Schema und Name des Portals aus OAAP_PORTAL_URL, oder '' (ältere Plattform)."""
+    from urllib.parse import urlsplit
+    u = urlsplit(PORTAL_URL)
+    return f"{u.scheme}://{u.netloc}" if u.scheme in ("https", "http") and u.netloc else ""
+
+
+def template_link(who):
+    """0.37 (RFC-0117 §3.5): für den tenant_admin der Weg zu den Vorlagen im Portal."""
+    if "tenant_admin" not in (getattr(who, "roles", None) or ()):
+        return ""
+    base = portal_base()
+    if not base:
+        return ('<p class="hint">Neue Assistenten aus einer Vorlage legst Du im Portal an '
+                '(Mandant → Assistenten).</p>')
+    return (f'<p><a class="btn" href="{esc(base)}/assistenten" target="_blank" rel="noopener">'
+            'Aus Vorlage …</a> <span class="hint">Hilfe, Recherche, Leer: die Vorlage bringt Sicht, '
+            'Zugang des Chats und Modell mit. Eine exportierte Datei öffnet dort ihre Vorlage wieder '
+            '(„Aus Datei“).</span></p>')
+
+
 def assistants_page(user, roles, who, params):
     """0.25 (RFC-0097 Stufe 2, RFC-0101 Stufe 4): je Assistent und Revision Aufrufe,
     Ablehnungen, Fehler, Personen, Sterne und Vorgänge; Vergleich zweier Revisionen;
@@ -2717,7 +2738,7 @@ def assistants_page(user, roles, who, params):
              f'aus den Messzeilen (vorhanden seit {esc(since[:10]) or "—"}; ältere sind nach der Aufbewahrung '
              f'gelöscht), Personen nur gezählt. Sterne und Vorgänge „Nicht zufrieden“ aus dem Chat (RFC-0101). '
              f'Export: eine Revision als Austauschdatei ohne Besitzer und Nummer.</p>'
-             + '</div>')
+             + template_link(who) + '</div>')
     return page("Assistenten", intro + ("".join(cards) or '<div class="card"><p class="muted">Noch keine Assistenten.</p></div>'),
                 user, roles, "assistenten")
 
@@ -3022,7 +3043,11 @@ class Handler(BaseHTTPRequestHandler):
                 if r["state"] == "inactive" and not manage:
                     continue
                 out.append(dict(d, rev=r["rev"], state=r["state"], changed_at=r["changed_at"],
-                                manage=manage))
+                                manage=manage,
+                                # 0.37 (RFC-0117 Stufe 2): die Vorlage, damit der Export des
+                                # Chats sie nennt -- nur wenn die Einrichtung sie kennt
+                                **({"from": "recipe:" + r["origin"]}
+                                   if books.ORIGIN.match(r.get("origin") or "") else {})))
             self.send_json(200, {"v": 1, "assistants": out, "grants_known": who.grants is not None})
             return
         if rest == "_ratings":
@@ -3111,6 +3136,8 @@ class Handler(BaseHTTPRequestHandler):
         rest = path[len(ASSISTANTS_PATH):].strip("/")
         by = carried["sub"]
         if not rest:
+            # 0.37: `from` führt das Gateway (aus der Einrichtung), es kommt nie in den Assistenten
+            body.pop("from", None)
             errs = self.assistant_problems(body, who)
             if errs:
                 self.send_json(400, {"errors": errs})
@@ -3125,6 +3152,12 @@ class Handler(BaseHTTPRequestHandler):
             if migrate and "tenant_admin" not in who.roles:
                 self.send_json(403, {"error": "Die Assistenten eines Chats übernimmt der tenant_admin."})
                 return
+            if isinstance(body, dict) and isinstance(body.get("assistants"), list):
+                # 0.37 (oaap.ai.assistants 0.8): `from` sagt, aus welcher Vorlage eine Datei
+                # kam -- eine Auskunft für den Assistenten im Portal, kein Teil des Assistenten
+                body = dict(body, assistants=[{k: v for k, v in a.items() if k != "from"}
+                                              if isinstance(a, dict) else a
+                                              for a in body["assistants"]])
             errs = arules.check_document(body)
             if not errs:
                 for i, a in enumerate(body["assistants"]):
@@ -4102,6 +4135,9 @@ class Handler(BaseHTTPRequestHandler):
                                                   "Einrichtungsschlüssel dieser Instanz."})
             return
         actor = setup_actor(self.headers.get("X-OAAP-Setup-Actor"))
+        # 0.37 (RFC-0117 Stufe 2): welches Rezept fragt ('<id>@<major>', sonst '')
+        recipe = (self.headers.get("X-OAAP-Setup-Recipe") or "").strip()
+        recipe = recipe if books.ORIGIN.match(recipe) else ""
         if method == "GET":
             query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
             if "kind" not in query and "id" not in query:
@@ -4126,7 +4162,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"v": 1, "error": "Kein JSON (oder größer als 1 MiB)."})
             return
         try:
-            doc = setup_post(body, actor)
+            doc = setup_post(body, actor, recipe)
         except ValueError as exc:
             self.send_json(400, {"v": 1, "error": str(exc)})
             return
@@ -5078,7 +5114,7 @@ def setup_body_items(body):
     return dry, mode, entries
 
 
-def setup_post(body, actor):
+def setup_post(body, actor, recipe=""):
     """POST: die Ergebnisse, eins je Eintrag, in Reihenfolge. Ohne `dry` hält die
     Einrichtung am ersten conflict/refused an (§3.1: „the build stops there“) -- was
     dahinter steht, wird nicht mehr angefasst und als refused gemeldet."""
@@ -5094,6 +5130,8 @@ def setup_post(body, actor):
                 result, note = setup_item(e, dry, actor, planned)
                 if not dry and result in ("conflict", "refused"):
                     stopped = f"{e['kind']}/{e['id']}"
+                if not dry and recipe and e["kind"] == "assistant" and result in ("made", "present"):
+                    books.assistant_set_origin(DB, e["id"], recipe)   # 0.37: für `from` im Export
             if not dry and result not in ("present",):
                 books.log(DB, "setup:" + actor, "setup." + result, f"{e['kind']}/{e['id']}",
                           note[:500])

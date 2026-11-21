@@ -321,6 +321,9 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # 'plattform' = Vorschlag aus dem Manifest, sonst der Name des Betreibers).
     ("servers", "untrusted", "INTEGER NOT NULL DEFAULT 0"),
     ("servers", "untrusted_by", "TEXT NOT NULL DEFAULT ''"),
+    # 0.37 (RFC-0117 Stufe 2): aus welcher Vorlage die Einrichtung den Assistenten machte
+    # ('<rezept>@<major>' aus X-OAAP-Setup-Recipe, '' = unbekannt); der Export nennt es `from`.
+    ("assistants", "origin", "TEXT NOT NULL DEFAULT ''"),
 )
 DOORS = ("gateway", "platform", "destination", "server")
 # Zugänge einer Sicht: Schlüssel, Anmeldung am Anmeldedienst (Verfahren X/I) und
@@ -1618,7 +1621,8 @@ _ASSIST_LOCK = _threading.Lock()
 
 def _assistant(r):
     return {"doc": json.loads(r["doc"]), "rev": r["rev"], "state": r["state"],
-            "created": r["created"], "changed_at": r["changed_at"], "changed_by": r["changed_by"]}
+            "created": r["created"], "changed_at": r["changed_at"], "changed_by": r["changed_by"],
+            "origin": r["origin"] if "origin" in r.keys() else ""}
 
 
 def assistant_rows(db):
@@ -1830,17 +1834,36 @@ def assistant_diff(db, aid, a, b):
                                      lineterm="", n=2)), None
 
 
+ORIGIN = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}$")
+
+
+def assistant_set_origin(db, aid, ref):
+    """0.37 (RFC-0117 Stufe 2): merkt sich die Vorlage eines Assistenten, den die
+    Einrichtung anlegte oder als vorhanden fand. Nur eine gültige Angabe; ändert nichts
+    am Assistenten selbst (keine Revision)."""
+    if not ORIGIN.match(ref or ""):
+        return False
+    cur = db.execute("UPDATE assistants SET origin=? WHERE id=? AND origin<>?", (ref, aid, ref))
+    db.commit()
+    return cur.rowcount > 0
+
+
 def assistant_export(db, aid, rev=None):
     """Austauschdatei {v: 1, assistants: [doc]} einer Revision, ohne Besitzer und Nummer
     (RFC-0097 §2.3): `owner` ist "-" (das Format verlangt das Feld; wer importiert, wird
-    Besitzer) -- oder None (unbekannt oder verdichtet)."""
+    Besitzer) -- oder None (unbekannt oder verdichtet). 0.37: `from` nennt die Vorlage,
+    aus der die Einrichtung ihn machte (`recipe:<id>@<major>`, oaap.ai.assistants 0.8)."""
     row = assistant_row(db, aid)
     if not row:
         return None
     doc = row["doc"] if rev in (None, row["rev"]) else (assistant_revision(db, aid, rev) or {}).get("doc")
     if not doc:
         return None
-    return {"v": 1, "assistants": [dict({k: v for k, v in doc.items() if k not in ("owner", "rev")}, owner="-")]}
+    out = dict({k: v for k, v in doc.items() if k not in ("owner", "rev", "from")}, owner="-")
+    origin = row["origin"] if "origin" in row.keys() else ""
+    if ORIGIN.match(origin or ""):
+        out["from"] = "recipe:" + origin
+    return {"v": 1, "assistants": [out]}
 
 
 def ratings_mine(db, who, limit=500):

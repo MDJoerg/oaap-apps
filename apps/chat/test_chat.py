@@ -1316,6 +1316,20 @@ check("0.17.0: Kopieren: formatiert und Klartext, sonst Klartext, sonst Auswahl 
 check("0.17.0: Löschen aus der Leiste trifft auch ein Gespräch, das nicht offen ist (die offene bleibt)",
       "async function deleteConv(id, title)" in pg and 'if (!wasOpen) { toast("Gespräch gelöscht"); return; }' in pg
       and '$("del").onclick = () => { if (C) deleteConv(C.id, C.title); };' in pg, None)
+# 0.19.0 (RFC-0117 §3.5): der Weg zu den Vorlagen im Portal, aus OAAP_PORTAL_URL
+_old = os.environ.get("OAAP_PORTAL_URL")
+os.environ["OAAP_PORTAL_URL"] = "https://portal.kunde.example/instanzen/kunde-chat"
+check("Vorlagen: das Portal des Mandanten + /assistenten",
+      app.templates_url() == "https://portal.kunde.example/assistenten", app.templates_url())
+os.environ["OAAP_PORTAL_URL"] = "javascript:alert(1)"
+check("KÖDER: eine Adresse ohne http(s) ergibt keinen Link", app.templates_url() == "")
+if _old is None:
+    os.environ.pop("OAAP_PORTAL_URL", None)
+else:
+    os.environ["OAAP_PORTAL_URL"] = _old
+check("die Seite zeigt den Link nur mit templates_url (tenant_admin)",
+      'id="atpl"' in pg and "S.templates_url" in pg and '"templates_url": templates_url() if "tenant_admin" in who.roles' in open(
+          os.path.join(HERE, "app.py"), encoding="utf-8").read())
 srv.shutdown()
 fake.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)

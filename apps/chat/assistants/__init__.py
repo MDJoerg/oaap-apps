@@ -18,7 +18,11 @@ CONTEXT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 # 0.6 (RFC-0101 D6): der Bereich der App Vorgänge, in den „Nicht zufrieden“ geht
 QUEUE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 FIELDS = {"id", "title", "greeting", "system", "model", "view", "gateway", "visibility",
-          "owner", "commands", "views", "support_queue"}
+          "owner", "commands", "views", "support_queue", "from"}
+# 0.8 (RFC-0117 Stufe 2): `from` in einer Austauschdatei nennt die Vorlage, aus der die
+# Einrichtung den Assistenten machte -- recipe:<id>@<major>. Eine Auskunft für den Import,
+# kein Recht und kein Teil, nach dem sich der Assistent verhält.
+FROM = re.compile(r"^recipe:[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}$")
 # 0.7 (RFC-0116 D9): `view` ist freiwillig -- ein Assistent ohne Sicht spricht ohne
 # Werkzeuge (der wörtliche „Assistent ohne MCP“). `gateway` ohne `view` bleibt ein Fehler:
 # wer ein Gateway nennt, glaubt, der Assistent habe dort Werkzeuge.
@@ -61,6 +65,9 @@ def check(a):
                     "(oaap.ai.assistants 0.7).")
     if a.get("views") is True and "view" not in a:
         errs.append("views ohne view: Ansichten kommen aus den Werkzeugen einer Sicht.")
+    if "from" in a and not (isinstance(a["from"], str) and FROM.match(a["from"])):
+        errs.append("from: recipe:<vorlage>@<hauptversion>, z. B. recipe:hilfe-assistent@1 "
+                    "(oaap.ai.assistants 0.8).")
     if "commands" in a and not isinstance(a["commands"], bool):
         errs.append("commands: true oder false.")
     if "views" in a and not isinstance(a["views"], bool):

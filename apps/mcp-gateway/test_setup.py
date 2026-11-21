@@ -453,6 +453,37 @@ st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "mitg
 ok("KÖDER: gateway ohne view über die Tür: refused mit Satz", results(doc) == ["refused"]
    and "gateway ohne view" in json.dumps(doc, ensure_ascii=False), doc)
 
+# 0.37.0 (RFC-0117 Stufe 2): die Vorlage aus X-OAAP-Setup-Recipe, `from` im Export
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "vorlage-a",
+                                                "title": "Vorlage A", "model": "standard"}]},
+               headers={"X-OAAP-Setup-Recipe": "assistent-leer@1"})
+ok("Einrichtung mit Rezept-Kopfzeile: angelegt, Herkunft gemerkt",
+   results(doc) == ["made"] and books.assistant_row(app.DB, "vorlage-a")["origin"] == "assistent-leer@1", doc)
+exp = books.assistant_export(app.DB, "vorlage-a")["assistants"][0]
+ok("… der Export nennt from: recipe:assistent-leer@1, der Assistent selbst nicht",
+   exp.get("from") == "recipe:assistent-leer@1"
+   and "from" not in books.assistant_row(app.DB, "vorlage-a")["doc"], exp)
+ok("… keine zweite Revision durch die Herkunft", books.assistant_row(app.DB, "vorlage-a")["rev"] == 1)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "schreibhilfe",
+                                                "title": "Schreibhilfe", "model": "standard"}]},
+               headers={"X-OAAP-Setup-Recipe": "assistent-leer@1"})
+ok("ein vorhandener Assistent (present) bekommt die Herkunft nachgetragen",
+   results(doc) == ["present"] and books.assistant_row(app.DB, "schreibhilfe")["origin"] == "assistent-leer@1", doc)
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [{"kind": "assistant", "id": "trocken",
+                                                             "title": "T", "model": "standard"}]},
+               headers={"X-OAAP-Setup-Recipe": "assistent-leer@1"})
+ok("dry merkt nichts", results(doc) == ["would_make"] and books.assistant_row(app.DB, "trocken") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "ohne-herkunft",
+                                                "title": "O", "model": "standard"}]},
+               headers={"X-OAAP-Setup-Recipe": "Böse Vorlage; drop"})
+ok("KÖDER: eine kaputte Rezept-Kopfzeile wird übergangen, nicht gemerkt",
+   results(doc) == ["made"] and books.assistant_row(app.DB, "ohne-herkunft")["origin"] == ""
+   and "from" not in books.assistant_export(app.DB, "ohne-herkunft")["assistants"][0], doc)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "feld", "title": "F",
+                                                "model": "standard", "from": "recipe:x@1"}]})
+ok("from als Feld eines Eintrags bleibt unbekannt (die Kopfzeile ist der Weg)",
+   results(doc) == ["refused"] and "from" in json.dumps(doc, ensure_ascii=False), doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")

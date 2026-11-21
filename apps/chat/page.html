@@ -324,6 +324,7 @@ dialog input,dialog textarea,dialog select{width:100%}
         <option value="all">alle</option><option value="mine">die ich ändern darf</option>
         <option value="private">privat</option><option value="context">Team</option><option value="tenant">Mandant</option></select>
       <button class="primary edit" id="anewbtn" type="button">+ Neuer Assistent</button>
+      <a id="atpl" class="edit" target="_blank" rel="noopener" hidden title="Im Portal: die Vorlage bringt Sicht, Zugang und Modell mit">Aus Vorlage …</a>
       <a id="aexp" class="edit" href="api/assistants/export" download="assistenten.json">Exportieren</a>
       <label class="imp edit">Importieren <input type="file" id="aimp" accept="application/json" hidden></label>
     </div>
@@ -1644,6 +1645,8 @@ async function loadReadiness(){
   renderAssistants();
 }
 function renderAssistants(){
+  // 0.19.0 (RFC-0117 §3.5): der tenant_admin legt Assistenten mit Werkzeugen aus Vorlagen im Portal an
+  if (S.templates_url) { $("atpl").href = S.templates_url; $("atpl").hidden = false; } else { $("atpl").hidden = true; }
   const box = $("alist"); box.textContent = "";
   const q = $("aq").value.trim().toLowerCase(), f = $("ascope").value;
   const list = S.assistants.filter(a =>

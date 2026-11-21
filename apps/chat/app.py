@@ -47,7 +47,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.18.0"
+VERSION = "0.19.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -124,6 +124,14 @@ LIGHT_HEADER = "X-OAAP-Light"
 _DL = (os.environ.get("CHAT_DEFAULT_LIGHT") or "").strip().lower()
 # D5: grün ist die Vorgabe; der Mandant darf gelb vorgeben (Demo, Schulung), rot nie.
 DEFAULT_LIGHT = _DL if _DL in ("green", "yellow") else "green"
+
+
+def templates_url():
+    """0.19.0 (RFC-0117 §3.5): die Seite „Assistenten“ des Portals (aus OAAP_PORTAL_URL,
+    runtime 2.38) -- dort legt der tenant_admin Assistenten aus Vorlagen an. '' ohne."""
+    from urllib.parse import urlsplit
+    u = urlsplit((os.environ.get("OAAP_PORTAL_URL") or "").strip())
+    return f"{u.scheme}://{u.netloc}/assistenten" if u.scheme in ("https", "http") and u.netloc else ""
 if _DL and _DL not in ("green", "yellow"):
     SETUP_ERRORS.append(f"CHAT_DEFAULT_LIGHT kennt nur green oder yellow, nicht „{_DL[:20]}“ "
                         "(rot ist nie die Vorgabe) -- es gilt grün.")
@@ -1358,6 +1366,7 @@ class Handler(BaseHTTPRequestHandler):
                 "migration": home.migration_pending() if "tenant_admin" in who.roles else 0,
                 "errors": SETUP_ERRORS + ([home.error] if home.error else []),
                 "tenant_admin": "tenant_admin" in who.roles,
+                "templates_url": templates_url() if "tenant_admin" in who.roles else "",
                 "teams_known": (home.grants_known is not False) if home.mode == "gateway"
                 else who.grants is not None,
                 "client": bool(CLIENT_KEY and CLIENT_URL), "model": model_ready(),
