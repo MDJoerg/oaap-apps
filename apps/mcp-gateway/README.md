@@ -762,6 +762,12 @@ in **Vorgänge**: Sie hängt dort an einem Hash über Werkzeug und Argumente, un
 Spezialisten führt nur aus, was so freigegeben ist. Das Gateway sorgt dafür, dass ohne
 diese Angabe nichts schreibt, und hält sie fest.
 
+## Assistent ohne Sicht (0.35, RFC-0116 D9)
+
+Über die via-Tür und die Einrichtungstür lässt sich ein Assistent ohne `view`
+anlegen (`oaap.ai.assistants` 0.7); die Einrichtung gibt ihm dann einen
+Systemprompt ohne Werkzeuge. `gateway` ohne `view` lehnt sie mit einem Satz ab.
+
 ## Was noch fehlt
 
 - **MCP `2026-07-28`:** zustandslos, ohne `initialize` und Sitzungen.

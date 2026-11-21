@@ -426,7 +426,7 @@ dialog input,dialog textarea,dialog select{width:100%}
     <div class="row">
       <div style="flex:1"><label>Modellname des KI-Gateways</label><select name="model" required></select>
         <div id="mhint" style="font-size:.8rem;margin-top:.2rem;opacity:.75"></div></div>
-      <div style="flex:1"><label>Sicht des MCP-Gateways</label><input name="view" required list="viewlist" autocomplete="off">
+      <div style="flex:1"><label>Sicht des MCP-Gateways (leer = ohne Werkzeuge)</label><input name="view" list="viewlist" autocomplete="off">
         <datalist id="viewlist"></datalist>
         <div id="vhint" style="font-size:.8rem;margin-top:.2rem;opacity:.75"></div></div>
       <div style="flex:1"><label>Gateway (leer = das einzige)</label><input name="gateway"></div>
@@ -720,7 +720,7 @@ $("reqsend").onclick = async () => {
   const l = convLight();
   const facts = ["", "— vom Chat ergänzt —", "Assistent: " + a.id + " (" + a.title + ")",
     "Modell: " + LIGHT.model.id + (LIGHT.model.light ? " (" + LWORD[LIGHT.model.light] + ")" : ""),
-    "Sicht: " + LIGHT.view.name + (LIGHT.view.light ? " (" + LWORD[LIGHT.view.light] + ")" : ""),
+    "Sicht: " + (LIGHT.view.name || "keine") + (LIGHT.view.light ? " (" + LWORD[LIGHT.view.light] + ")" : ""),
     "Ampel des Gesprächs: " + LWORD[l] + " (" + LSAYS[l] + ")", "Chat " + ((S && S.version) || "")];
   const doc = {kind: RKIND,
     title: (RKIND === "idea" ? "Grüne Option erbeten: " : "Vorab-Frage: ") + a.title,
@@ -1660,7 +1660,7 @@ function renderAssistants(){
     card.appendChild(tags);
     const g = (a.greeting || "").replace(/[*_`#>\[\]]/g, "");
     if (g) card.appendChild(el("p", "", g.length > 140 ? g.slice(0, 140) + " …" : g));
-    card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · Sicht " + a.view));
+    card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · " + (a.view ? "Sicht " + a.view : "ohne Werkzeuge")));
     const acts = el("div", "acts");
     const go = el("button", "primary", "Neues Gespräch"); go.type = "button";
     go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive"; acts.appendChild(go);
@@ -1720,8 +1720,11 @@ F.onsubmit = async ev => {
   const v = {scope: F.elements.scope.value};
   if (v.scope === "context") v.context = {team: F.elements.team.value.trim()};
   const a = {id: F.elements.id.value.trim(), title: F.elements.title.value.trim(), system: F.elements.system.value,
-             model: F.elements.model.value.trim(), view: F.elements.view.value.trim(), visibility: v,
+             model: F.elements.model.value.trim(), visibility: v,
              owner: "-", commands: F.elements.commands.checked, views: F.elements.views.checked};
+  // 0.18.0 (RFC-0116 D9): ohne Sicht spricht der Assistent ohne Werkzeuge
+  if (F.elements.view.value.trim()) a.view = F.elements.view.value.trim();
+  else { a.commands = false; a.views = false; }
   if (F.elements.greeting.value.trim()) a.greeting = F.elements.greeting.value.trim();
   if (F.elements.gateway.value.trim()) a.gateway = F.elements.gateway.value.trim();
   if (F.elements.support_queue.value.trim()) a.support_queue = F.elements.support_queue.value.trim();

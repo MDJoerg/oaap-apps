@@ -433,6 +433,16 @@ Die Messungen am Knoten mit echtem Modell:
 `oaap-lab/assistent-probe/messung_stufe2.py` (23/23) und
 `messung_stufe3.py` (26/26).
 
+## Assistent ohne Sicht (0.18.0, RFC-0116 D9)
+
+`view` ist seit `oaap.ai.assistants` 0.7 freiwillig. Ein Assistent ohne Sicht
+spricht ohne Werkzeuge: der Chat fragt kein MCP-Gateway, schickt dem Modell
+keine Werkzeuge, und ein erfundener Werkzeugaufruf des Modells erreicht keine
+Tür (das Modell liest „gibt es in dieser Sicht nicht“). Die Einrichtung prüft
+nur das Modell, die Ampel nur dessen Farbe. Im Formular bleibt das Feld
+„Sicht“ dann leer. `gateway` ohne `view` wird abgelehnt (wer ein Gateway
+nennt, glaubt an Werkzeuge dort), ebenso `views: true` ohne `view`.
+
 ## Noch nicht
 
 Streaming der Antwort, Anhänge, Formulare, Sprache, mobile Ansicht als

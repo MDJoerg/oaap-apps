@@ -47,7 +47,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.17.0"
+VERSION = "0.18.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -264,6 +264,10 @@ class McpWay:
     """Die Sicht eines Assistenten, als die Person dieser Anfrage."""
 
     def __init__(self, person, assertion, assistant, light=""):
+        if not assistant.get("view"):
+            # 0.18.0 (RFC-0116 D9): ein Satz statt eines KeyError, an jeder Tür
+            raise Stop("Dieser Assistent hat keine Sicht und darum keine Werkzeuge, "
+                       "Befehle oder Ansichten.", 400)
         self.light = light if light in LIGHT_RANK else ""
         self.views = bool(assistant.get("views"))
         gw = gateway_for(assistant.get("gateway") or "")
@@ -576,8 +580,11 @@ def step(person, person_name, assertion, assistant, conv, decision):
                      f"Ich habe nach {loop.MAX_MODEL_TURNS} Runden aufgehört, ohne fertig zu "
                      "werden. Formuliere die Frage bitte enger."})
         return "done"
-    way = way or McpWay(person, assertion, assistant, conv_light(conv))
-    listed = way.tools()
+    if assistant.get("view"):
+        way = way or McpWay(person, assertion, assistant, conv_light(conv))
+        listed = way.tools()
+    else:
+        listed = []          # 0.18.0 (RFC-0116 D9): ohne Sicht keine Werkzeuge, kein Gateway
     tools, effects_now = loop.tools_for_model(listed)
     effects.clear()
     effects.update(effects_now)
@@ -644,22 +651,13 @@ def own_instance_guess():
     return ""
 
 
-def setup_report(person, assertion, a):
-    """Jedes Teil, das dieser Assistent braucht, der Reihe nach -- mit dem nächsten Schritt.
-
-    Prüft echt (eine Runde als die Person, eine Frage an das KI-Gateway), damit der
-    Bericht sagt, was IST, nicht was eingestellt sein sollte."""
-    items = []
-
-    def add(key, ok, title, detail="", next_=""):
-        items.append({"key": key, "ok": ok, "title": title, "detail": detail, "next": next_})
-        return ok
-
+def _tools_report(person, assertion, a, add):
+    """Der MCP-Teil des Einrichtungsberichts; False, wenn danach nichts mehr zu prüfen ist."""
     if not add("client", bool(CLIENT_KEY and CLIENT_URL), "Der Chat darf als MCP-Client handeln",
                "" if CLIENT_KEY and CLIENT_URL else "Die Plattform hat dieser Instanz keinen Client-Schlüssel gegeben.",
                "" if CLIENT_KEY and CLIENT_URL else "Das Manifest erklärt mcp_client; eine Generalprobe bekommt keinen. "
                "Instanz neu ausrollen oder die Plattform aktualisieren (ab 0.1.243)."):
-        return items
+        return False
     try:
         gw = gateway_for(a.get("gateway") or "")
         add("gateway", True, f"Gateway {gw['name']} ist im Mandanten erreichbar")
@@ -713,6 +711,26 @@ def setup_report(person, assertion, a):
     elif gw:
         add("view", False, f"Sicht {a['view']} als du", "Keine Zusicherung der Plattform in dieser Anfrage.",
             "Über die Plattform angemeldet öffnen, nicht mit einem Schlüssel.")
+    return True
+
+
+def setup_report(person, assertion, a):
+    """Jedes Teil, das dieser Assistent braucht, der Reihe nach -- mit dem nächsten Schritt.
+
+    Prüft echt (eine Runde als die Person, eine Frage an das KI-Gateway), damit der
+    Bericht sagt, was IST, nicht was eingestellt sein sollte."""
+    items = []
+
+    def add(key, ok, title, detail="", next_=""):
+        items.append({"key": key, "ok": ok, "title": title, "detail": detail, "next": next_})
+        return ok
+
+    if not a.get("view"):
+        # 0.18.0 (RFC-0116 D9): ein Assistent ohne Sicht spricht ohne Werkzeuge
+        add("view", True, "Ohne Sicht: dieser Assistent spricht ohne Werkzeuge",
+            "Er braucht kein MCP-Gateway und keinen Zugang dort (oaap.ai.assistants 0.7).")
+    elif not _tools_report(person, assertion, a, add):
+        return items
     # 0.16.0 (RFC-0104 §4): welcher Weg zum Modell, und was ihm fehlt.
     if not model_ready():
         add("destination", False, "Ein Modell ist angebunden",
@@ -890,7 +908,10 @@ def light_report(a, assertion):
     models, merr = ki_models(assertion)
     m = next((x for x in models if x["id"] == a.get("model")), None)
     mlight = m["light"] if m and m.get("light") in LIGHT_RANK else ""
-    _gw, rows, _all, verr = gateway_views(a.get("gateway") or "", assertion)
+    if a.get("view"):
+        _gw, rows, _all, verr = gateway_views(a.get("gateway") or "", assertion)
+    else:
+        rows, verr = [], ""     # ohne Sicht zählt nur das Modell (RFC-0116 D9)
     v = next((x for x in rows if x.get("name") == a.get("view")), None)
     vlight = v.get("light") if v and v.get("light") in LIGHT_RANK else ""
     known = [x for x in (mlight, vlight) if x]
@@ -899,7 +920,8 @@ def light_report(a, assertion):
                                   key=LIGHT_RANK.get, default="")
     said = merr or verr or ("" if m else f"Der Modellname {a.get('model')} ist für den Schlüssel "
                             "des Chats nicht erreichbar.") or ("" if v else
-                            f"Die Sicht {a.get('view')} kennt das Gateway für dich nicht.")
+                            f"Die Sicht {a.get('view')} kennt das Gateway für dich nicht."
+                            if a.get("view") else "")
     return {"model": {"id": a.get("model"), "light": mlight},
             "view": {"name": a.get("view"), "light": vlight},
             "needs": needs, "ceiling": ceiling, "default": DEFAULT_LIGHT, "said": said}
@@ -1374,6 +1396,8 @@ class Handler(BaseHTTPRequestHandler):
             assertion = self.headers.get(ASSERTION, "").strip()
             seen, out = {}, {}
             for a, _o in home.all(who):
+                if not a.get("view"):
+                    continue        # ohne Sicht fehlt nie ein Werkzeug (RFC-0116 D9)
                 k = (a.get("gateway") or "", a.get("view") or "")
                 if k not in seen:
                     seen[k] = gateway_readiness(k[0], assertion, k[1])

@@ -623,6 +623,36 @@ it = items(r)
 check("Sicht ohne Zugangsprofil: nicht ok, nächster Schritt nennt Profil, vermutete Gruppe @vuebung-chat und Zugang platform",
       not it["view"]["ok"] and "Zugangsprofil" in it["view"]["next"] and "@vuebung-chat" in it["view"]["next"]
       and "Plattform" in it["view"]["next"], it.get("view"))
+
+# ------------------------------------------------ 0.18.0 (RFC-0116 D9): ein Assistent ohne Sicht
+import assistants as _ar  # noqa: E402
+_nov = {k: v for k, v in asst("schreibhilfe", "private").items() if k != "view"}
+check("0.18.0: oaap.ai.assistants 0.7 -- ohne view gültig", _ar.check(_nov) == [], _ar.check(_nov))
+check("0.18.0: KÖDER: gateway ohne view wird mit Satz abgelehnt",
+      any("gateway ohne view" in e for e in _ar.check(dict(_nov, gateway="gw1"))), _ar.check(dict(_nov, gateway="gw1")))
+check("0.18.0: KÖDER: views ohne view wird abgelehnt", any("views ohne view" in e for e in _ar.check(dict(_nov, views=True))))
+st, r = req("POST", "/api/assistants", _nov)
+check("0.18.0: der Chat speichert einen Assistenten ohne Sicht", st == 200 and not r.get("errors"), r)
+st, r = req("POST", "/api/assistants", dict(_nov, id="mitgw", gateway="gw1"))
+check("0.18.0: ... mit gateway, aber ohne view: abgelehnt", st != 200 or r.get("errors"), r)
+st, r = req("GET", "/api/setup?assistant=schreibhilfe")
+it = items(r)
+check("0.18.0: Einrichtung ohne Sicht: kein Client, kein Gateway gefragt -- „ohne Werkzeuge“, dann das Modell",
+      st == 200 and all(i["ok"] for i in r["items"]) and set(it) == {"view", "destination", "model"}
+      and "ohne Werkzeuge" in it["view"]["title"], r)
+_, cn = req("POST", "/api/conv", {"assistant": "schreibhilfe"})
+_door, _models = len(DOOR), len(MODEL)
+st, r = req("POST", f"/api/conv/{cn['id']}/send", {"text": "Hallo"})
+check("0.18.0: ohne Sicht antwortet das Modell, ohne Werkzeuge im Rumpf",
+      st == 200 and r["state"] == "done" and len(MODEL) == _models + 1 and "tools" not in MODEL[-1], (r, MODEL[-1:]))
+st, r = req("POST", f"/api/conv/{cn['id']}/send", {"text": "Erfunden"})
+st, r = req("POST", f"/api/conv/{cn['id']}/step", {})
+check("0.18.0: KÖDER: ein erfundener Werkzeugaufruf erreicht keine Tür, der Assistent erfährt warum",
+      len(DOOR) == _door and any(m.get("role") == "tool" and "gibt es in dieser Sicht nicht" in m.get("content", "")
+                                 for m in r.get("messages", [])), r)
+st, r = req("GET", "/api/light?assistant=schreibhilfe")
+check("0.18.0: /api/light ohne Sicht: nur das Modell zählt (gelb), kein Fehlersatz",
+      st == 200 and r["needs"] == "yellow" and r["view"]["light"] == "" and not r["said"], r)
 req("POST", "/api/assistants", asst("falschesmodell", "private", model="gross"))
 st, r = req("GET", "/api/setup?assistant=falschesmodell")
 it = items(r)

@@ -1,0 +1,51 @@
+oaap_manifest: "0.11"
+
+app:
+  id: recherche
+  name: Recherche
+  version: 0.1.0
+  type: native
+  class: service
+  description: "Websuche und Webseiten als MCP-Quelle (RFC-0116 Stufe 1): web_search fragt einen Suchdienst hinter der Destination search (zuerst SearXNG), web_fetch liest eine öffentliche Seite als Text. Beides lesend. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün: Suchwörter verlassen den Mandanten. In einem geschlossenen Mandanten gibt es nur die Suche."
+
+care:
+  # RFC-0071 §15: nur Standardbibliothek, beim Bau wird nichts nachgeladen.
+  rebuild: self
+
+services:
+  web:
+    build: .
+    port: 8000
+
+routes:
+  # Seite, Status und MCP-Tür für angemeldete Personen. Über das MCP-Gateway des
+  # Mandanten erreicht ein Assistent die Tür als die Person, die mit ihm spricht.
+  - path: /
+    roles: [admin, keyuser, user, support]
+
+# RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route.
+mcp:
+  path: /mcp
+
+destinations:
+  - name: search
+    kind: http
+    purpose: "Suchdienst: eine SearXNG-Instanz mit format json (eigene oder gemietete), z. B. http://<host>:8080"
+
+config:
+  - key: RECHERCHE_BACKEND
+    label: "Art des Suchdienstes hinter der Destination search (Stufe 1: searxng)"
+    default: "searxng"
+  - key: RECHERCHE_FETCH
+    label: "Webseiten lesen (web_fetch) an oder aus -- aus: nur die Suche; in einem geschlossenen Mandanten immer aus"
+    default: "on"
+  - key: RECHERCHE_ALLOW
+    label: "Nur diese Domains liest web_fetch (Komma-Liste, leer = alle öffentlichen)"
+    default: ""
+  - key: RECHERCHE_DENY
+    label: "Diese Domains liest web_fetch nie (Komma-Liste)"
+    default: ""
+
+health:
+  path: /healthz
+  startup_grace_seconds: 10

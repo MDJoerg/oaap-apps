@@ -19,7 +19,10 @@ CONTEXT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 QUEUE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 FIELDS = {"id", "title", "greeting", "system", "model", "view", "gateway", "visibility",
           "owner", "commands", "views", "support_queue"}
-REQUIRED = ("id", "title", "system", "model", "view", "visibility", "owner")
+# 0.7 (RFC-0116 D9): `view` ist freiwillig -- ein Assistent ohne Sicht spricht ohne
+# Werkzeuge (der wörtliche „Assistent ohne MCP“). `gateway` ohne `view` bleibt ein Fehler:
+# wer ein Gateway nennt, glaubt, der Assistent habe dort Werkzeuge.
+REQUIRED = ("id", "title", "system", "model", "visibility", "owner")
 # Was nach einem Recht aussieht (D1): ausdrücklich abgelehnt.
 RIGHTS = {"key", "api_key", "token", "secret", "roles", "role", "on_behalf_of", "principal",
           "scopes", "scope", "grants", "password"}
@@ -52,6 +55,12 @@ def check(a):
         errs.append("view: der Name einer Sicht des MCP-Gateways.")
     if "gateway" in a and not (isinstance(a["gateway"], str) and INSTANCE.match(a["gateway"])):
         errs.append("gateway: der Name einer Gateway-Instanz des Mandanten.")
+    if "gateway" in a and "view" not in a:
+        errs.append("gateway ohne view: ein Gateway nennt nur, wer dort eine Sicht nutzt -- "
+                    "ohne Sicht spricht der Assistent ohne Werkzeuge und braucht keins "
+                    "(oaap.ai.assistants 0.7).")
+    if a.get("views") is True and "view" not in a:
+        errs.append("views ohne view: Ansichten kommen aus den Werkzeugen einer Sicht.")
     if "commands" in a and not isinstance(a["commands"], bool):
         errs.append("commands: true oder false.")
     if "views" in a and not isinstance(a["views"], bool):

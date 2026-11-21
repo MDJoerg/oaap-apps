@@ -442,6 +442,17 @@ ok("wieder wie angelegt: remove entfernt ihn", results(doc) == ["removed"]
 st, doc = call("POST", body={"v": 1, "items": [SRV]})
 ok("… und ein neuer Lauf legt ihn wieder an", results(doc) == ["made"], doc)
 
+# 0.35.0 (RFC-0116 D9): ein Assistent ohne Sicht über die Einrichtungstür
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "schreibhilfe",
+                                                "title": "Schreibhilfe", "model": "standard"}]})
+row = books.assistant_row(app.DB, "schreibhilfe")
+ok("Assistent ohne Sicht: angelegt, Systemprompt ohne Werkzeuge", results(doc) == ["made"] and row
+   and "view" not in row["doc"] and "keine Werkzeuge" in row["doc"]["system"], doc)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "mitgw", "title": "X",
+                                                "model": "standard", "gateway": "ws-werkzeuge"}]})
+ok("KÖDER: gateway ohne view über die Tür: refused mit Satz", results(doc) == ["refused"]
+   and "gateway ohne view" in json.dumps(doc, ensure_ascii=False), doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")

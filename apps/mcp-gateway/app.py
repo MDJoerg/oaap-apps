@@ -64,7 +64,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.34.0"
+VERSION = "0.35.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4662,8 +4662,12 @@ def setup_wish(kind, sid, item, planned, actor):
             doc["system"] = (f"Du bist der Assistent „{doc['title']}“. Antworte knapp und nutze "
                              f"die Werkzeuge der Sicht {doc['view']}; sag, wenn sie keine Antwort "
                              "hergeben.")
+        elif "system" not in doc and isinstance(doc.get("title"), str):
+            # 0.35.0 (RFC-0116 D9): ohne Sicht spricht er ohne Werkzeuge
+            doc["system"] = (f"Du bist der Assistent „{doc['title']}“. Antworte knapp; du hast "
+                             "keine Werkzeuge und sagst, wenn du etwas nicht weißt.")
         errs = arules.problems(doc)
-        if not errs and ("view", doc["view"]) not in planned:
+        if not errs and "view" in doc and ("view", doc["view"]) not in planned:
             errs = assistant_view_problem(doc)
         if errs:
             raise SetupRefused(" ".join(errs))
