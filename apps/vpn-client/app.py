@@ -41,6 +41,8 @@ import sys
 import threading
 import time
 
+import appframe as af
+import mcpdoor
 import vpnconf
 
 PORT = 8080
@@ -50,7 +52,8 @@ IDENTITY_PREFIX = "x-oaap-"
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "te", "trailer", "trailers", "transfer-encoding", "upgrade", "host",
        "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "forwarded"}
-VERSION = "0.2.0"
+VERSION = "0.3.0"
+APP_NAME = "VPN-Client"
 
 try:
     TIMEOUT = max(10, min(3600, int(os.environ.get("VPN_TIMEOUT_SECONDS") or 600)))
@@ -208,8 +211,8 @@ def supervise():
     if not os.path.exists(TUN_DEVICE):
         say(state="kein Tunnelgeraet", since=now(),
             error="Dieser Container hat kein /dev/net/tun. Eine Generalprobe "
-                  "bekommt keinen Tunnel (RFC-0060 D6); sonst wurde die App ohne "
-                  "--confirm-tun installiert. Es wird nicht erneut versucht.")
+                  "bekommt keinen Tunnel; sonst wurde die App ohne Tunnelrecht "
+                  "installiert (--confirm-tun). Es wird nicht erneut versucht.")
         return
     say(forward=read_forward())
     why = apply_filter()
@@ -323,6 +326,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                "since": s["since"]})
             return self._plain(200 if s["state"] == "verbunden" else 503, body,
                                "application/json")
+        if path == "/mcp":
+            # vor allem anderen: das MCP-Gateway hat die Person angemeldet
+            # und reicht sie in den X-OAAP-Kopfzeilen durch.
+            return DOOR.serve(self)
         if path == "/oaap/links" and self.command in ("GET", "HEAD"):
             return self._plain(200, json.dumps(link_answer()), "application/json")
         if path.startswith("/t/"):
@@ -418,47 +425,107 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
 
 
+STATE_WORDS = {"verbunden": ("verbunden", "ok"), "verbindet": ("verbindet …", "warn"),
+               "startet": ("startet …", "info"), "getrennt": ("getrennt", "err"),
+               "nicht konfiguriert": ("nicht eingerichtet", "warn"),
+               "kein Tunnelgeraet": ("kein Tunnelgerät", "err"),
+               "Filter fehlt": ("Paketfilter fehlt", "err")}
+
+PAGE_STYLE = (".vpn-log{background:var(--oaap-color-bg);border:1px solid var(--oaap-color-border);"
+              "border-radius:6px;padding:.6rem;overflow-x:auto;font-size:.8rem;max-height:24rem}")
+
+
+def state_badge(state):
+    word, kind = STATE_WORDS.get(state, (state, ""))
+    return af.badge(word, kind)
+
+
 def page():
     with LOCK:
         s = dict(STATE)
-    e = html.escape
-    with LOCK:
         reach = {n: dict(r) for n, r in REACH.items()}
+    e = af.esc
 
     def seen(n):
         r = reach.get(n)
         if not r:
-            return "–"
-        word = "antwortet" if r["state"] == "ok" else f"antwortet nicht ({e(r['why'])})"
-        return f"{word} seit {e(r['since'])}, geprüft {e(r['checked'])}"
-    rows = "".join(
+            return '<span class="oaap-muted">noch nicht geprüft</span>'
+        if r["state"] == "ok":
+            b = af.badge("antwortet", "ok")
+        else:
+            b = af.badge("antwortet nicht", "err") + f' <span class="oaap-muted">({e(r["why"])})</span>'
+        return f'{b} <span class="oaap-muted">seit {e(r["since"])}, geprüft {e(r["checked"])}</span>'
+    rows = [
         f"<tr><td>{e(n)}</td><td><code>{e(t['url'])}</code></td>"
-        f"<td>{'eigene Route in den Tunnel' if t['ip'] else 'Name -- keine eigene Route, nur wenn der Tunnel ihn ohnehin erreicht'}</td>"
+        f"<td class=\"oaap-minor\">{'eigene Route in den Tunnel' if t['ip'] else 'Name – keine eigene Route, nur wenn der Tunnel ihn ohnehin erreicht'}</td>"
         f"<td>{seen(n)}</td></tr>"
-        for n, t in sorted(TARGETS.items()))
+        for n, t in sorted(TARGETS.items())]
+    head = "<th>Name</th><th>Adresse hinter dem Tunnel</th><th class=\"oaap-minor\">Weg</th><th>Erreichbar</th>"
     log = e("\n".join(LOG)) or "(noch nichts)"
-    return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VPN-Client</title><style>
-body{{font-family:system-ui,sans-serif;max-width:60rem;margin:1.5rem auto;padding:0 1rem;color:#1d2433;background:#fff}}
-@media (prefers-color-scheme:dark){{body{{color:#e6e9ef;background:#151a23}}code,pre{{background:#232a36}}}}
-code,pre{{background:#f1f3f6;padding:.1rem .3rem;border-radius:4px}} pre{{padding:.6rem;overflow-x:auto;font-size:.8rem}}
-table{{border-collapse:collapse;width:100%}} td,th{{text-align:left;padding:.3rem .5rem;border-bottom:1px solid #8884}}
-.s{{font-size:1.3rem;font-weight:600}}</style></head><body>
-<h1>VPN-Client</h1>
-<p class="s">Tunnel: {e(s['state'])}</p>
-<p>seit {e(s['since'] or '–')} · Gegenstelle {e(s['remote'] or '–')} · Tunnel-Adresse {e(s['tunnel_ip'] or '–')} · Versuche {s['attempts']}</p>
-<p>{('<strong>Letzter Fehler:</strong> ' + e(s['error'])) if s['error'] else ''}</p>
-<h2>Ziele</h2>
-{('<p><strong>' + e(TARGET_ERROR) + '</strong></p>') if TARGET_ERROR else ''}
-<table><tr><th>Name</th><th>Adresse hinter dem Tunnel</th><th>Weg</th><th>Erreichbar</th></tr>{rows or '<tr><td colspan=4>keine</td></tr>'}</table>
-<p>Erreichbar nur über eine Destination der Plattform: <code>--target through:&lt;diese Instanz&gt;/&lt;name&gt;</code>.
-Den Schlüssel des Ziels trägt die Destination, nicht diese App.</p>
-<h2>Was die Gegenseite nicht darf</h2>
-<p>Paketfilter: {e(s['filter'] or '–')} · ip_forward im Container: {e(s['forward'] or '–')}</p>
-<p>Aus der Datei verworfen: {e(', '.join(s['dropped']) or 'nichts')} · geschobene Routen und DNS werden ignoriert.</p>
-<h2>Protokoll (OpenVPN, letzte Zeilen)</h2><pre>{log}</pre>
-<p><small>vpn-client {VERSION} · RFC-0060 · Ziele geprüft alle {PROBE_EVERY} s (RFC-0087)</small></p></body></html>"""
+    tunnel = af.card("Tunnel", (
+        f"<p>{state_badge(s['state'])}</p>"
+        + af.facts([("seit", e(s['since'] or '–')), ("Gegenstelle", e(s['remote'] or '–')),
+                    ("Tunnel-Adresse", e(s['tunnel_ip'] or '–')), ("Versuche", str(s['attempts']))])
+        + (af.msg("Letzter Fehler: " + s['error'], error=True) if s['error'] else "")))
+    targets = af.card("Ziele", (
+        (af.msg(TARGET_ERROR, error=True) if TARGET_ERROR else "")
+        + af.table(head, rows, "Noch keine Ziele. In der Konfiguration der Instanz unter "
+                   "„Ziele hinter dem Tunnel“ eines je Zeile eintragen, z. B. "
+                   "<code>gaming = http://10.8.0.5:11434</code>.")
+        + "<p class=\"oaap-muted\">Erreichbar nur über eine Destination der Plattform: "
+          "<code>through:&lt;diese Instanz&gt;/&lt;name&gt;</code>. Den Schlüssel des Ziels "
+          f"trägt die Destination, nicht diese App. Die Ziele werden alle {PROBE_EVERY} s geprüft.</p>"))
+    guard = af.card("Was die Gegenseite nicht darf", af.facts([
+        ("Paketfilter", e(s['filter'] or '–')),
+        ("Weiterleitung im Container (ip_forward)", e(s['forward'] or '–')),
+        ("Aus der Datei verworfen", e(', '.join(s['dropped']) or 'nichts')),
+        ("Geschobene Routen und DNS", "werden ignoriert")]))
+    proto = af.card("Protokoll (OpenVPN, letzte Zeilen)", f'<pre class="vpn-log">{log}</pre>')
+    body = af.pagehead("Zustand des Tunnels") + tunnel + targets + guard + proto
+    return af.page("", body, app=APP_NAME, version=VERSION, product="vpn-client",
+                   style=PAGE_STYLE)
+
+
+# ---------------------------------------------------------------- MCP
+# Nur lesen, nur für admin (wie die Seite) -- und weniger als die Seite:
+# keine Adressen, keine Zeilen aus der Konfigurationsdatei, kein Protokoll.
+DOOR = mcpdoor.Door("oaap-vpn-client", VERSION,
+                    "Zustand des VPN-Tunnels und seiner Ziele lesen (nur Namen und ok/down, "
+                    "keine Adressen, keine Zugangsdaten).")
+
+
+def _admin(who):
+    if "admin" not in (who.get("roles") or []):
+        raise mcpdoor.Refused("Den Zustand des Tunnels sehen nur Administratoren.")
+
+
+@DOOR.tool("vpn_state", "Zustand des Tunnels",
+           "Liefert den Zustand des VPN-Tunnels (verbunden oder nicht, seit wann, Versuche, "
+           "ob der Paketfilter steht) und je Ziel, ob es antwortet. Enthält keine Adressen "
+           "und keine Zugangsdaten.")
+def _vpn_state(args, who):
+    _admin(who)
+    with LOCK:
+        s = dict(STATE)
+        reach = {n: dict(r) for n, r in REACH.items()}
+    word, _kind = STATE_WORDS.get(s["state"], (s["state"], ""))
+    return {"tunnel": {"state": "ok" if s["state"] == "verbunden" else "down",
+                       "text": word, "since": s["since"], "attempts": s["attempts"],
+                       "filter": bool(s["filter"]) and s["filter"].startswith("gesetzt"),
+                       "configured": s["state"] != "nicht konfiguriert"},
+            "targets": [{"name": n,
+                         "state": (reach.get(n) or {}).get("state", "unknown"),
+                         "since": (reach.get(n) or {}).get("since", ""),
+                         "checked": (reach.get(n) or {}).get("checked", "")}
+                        for n in sorted(TARGETS)],
+            "targets_error": bool(TARGET_ERROR)}
+
+
+DOOR.prompt("vpn_check", "Steht der Tunnel?",
+            "Prüft, ob der VPN-Tunnel steht und welche Ziele antworten.",
+            "Prüfe mit vpn_state, ob der VPN-Tunnel steht und welche Ziele antworten. "
+            "Sag in zwei, drei Sätzen, was nicht in Ordnung ist und was ein Administrator "
+            "als Nächstes prüfen sollte (Konfiguration der Instanz, Gegenstelle, Ziel).")
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):

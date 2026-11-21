@@ -18,6 +18,8 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin fleetview
 
 WORKDIR /srv
 COPY app.py fleet.py /srv/
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 USER 10001
 EXPOSE 8000

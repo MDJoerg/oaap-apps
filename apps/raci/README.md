@@ -1,4 +1,6 @@
-# OAAP RACI
+# Zuständigkeiten (RACI)
+
+> **Seit 0.2.0 (RFC-0118):** Name ohne „OAAP“; Seiten im Rahmen der Plattform (`appframe/`, Kit `/platform/theme.css`, Rahmenskript `/platform/app.js`); Listenbericht mit Suche, Filtern, Sortierung und Blättern; Übersicht aller Firmen mit ihren Verantwortlichen, Kontaktperson als Auswahl statt eingefügter Kennung, eigene Palette und rohe Benutzer/Rollen entfernt; Kennung nur noch einmal im Objektkopf, kopierbar; Anwenderhilfe in `docs/`; MCP-Tür `/mcp` mit Lesewerkzeugen (`mcpdoor/`). Der Text unten beschreibt die Entstehung und ist in Teilen überholt (z. B. „keine Liste/Suche im Zwilling“).
 
 Die **zweite Referenz-App** fuer den digitalen Zwilling (RFC-0031,
 Bauplan Schritt 4) -- der Contributor zu

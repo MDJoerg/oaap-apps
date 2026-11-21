@@ -1,209 +1,280 @@
-"""OAAP RACI 0.1 -- Contributor into someone else's object (RFC-0031
-Schritt 4, the digital twin's reference apps).
+"""Zuständigkeiten (RACI) -- Contributor in ein fremdes Objekt (RFC-0031
+Schritt 4, eine der Referenz-Apps des digitalen Zwillings; Oberfläche
+nach RFC-0118: Rahmen, Listenbericht, Auswahl statt URN, Hilfe, MCP).
 
-RFC-0031's own prose calls the two consumed types "Customer"/"Person";
-this app's REGISTERED type keys are 'Firma'/'Kontaktperson' instead,
-because 'Customer'/'Person' are already permanently registered on
-oaap-test by a throwaway probe from Schritt 2's own live verification
-(see [Partnerverwaltung](../partnerverwaltung/)'s oaap-app.yaml for the
-full story -- oaap.data.model 0.1 has no way to release a type key
-again).
+RACI hält fest, welche Kontaktperson für eine Firma verantwortlich ist:
+eine Beziehung 'responsible' in der eigenen Gruppe 'raci.assignments' auf
+der Firma -- einem Objekttyp, den RACI weder besitzt noch verändert. Der
+Zwilling verweigert jedem anderen das Schreiben in diese Gruppe und RACI
+das Schreiben in die Kerngruppe der Firma ("nobody else writes there").
 
-The second half of the proof Partnerverwaltung started: RFC-0031 SS9
-Schritt 3 -- *"RACI (contributor) reads both [the customer and the
-employee] as references, writes `responsible` relations into
-`raci.assignments` on Muller GmbH."* This app does exactly that, and
-nothing this app owns can be written by anyone else: `raci.assignments`
-is RACI's OWN group type (D1: "others attach their own group types")
-on `Firma`, an object type it neither owns nor alters -- the twin
-refuses any write to it from any other origin (RFC-0031 SS3.3, "nobody
-else writes there"), and refuses THIS app writing into `Firma`'s own
-core group even by naming it explicitly.
+RACI KONSUMIERT 'Firma' und 'Kontaktperson' nur als Referenz (Kennung,
+Titel; bei der Kontaktperson zusätzlich die E-Mail) und zeigt auch nur
+das -- nie die Stammdaten der Partnerverwaltung. Firmen und Personen
+werden aus den Listen des Zwillings gewählt (GET /twin/objects?type=…,
+eine Anfrage je Typ mit Titeln und Gruppen), nicht als URN eingefügt.
+Keine eigene Ablage.
 
-RACI CONSUMES `Firma` and `Kontaktperson` -- it reads them only as
-references (D6: platform id, type, title, origin -- "more only through
-a consolidated model the tenant owns"). It never reads or writes
-`crm.core`/`crm.contact`, and it holds NO storage of its own: every
-Kunde/Mitarbeiter-ID a person pastes in is looked up fresh from the
-twin, every time. There is deliberately no search here yet --
-`/twin/references` (RFC-0031 SS1) is not built in 0.1 -- so the id
-comes from [Partnerverwaltung](../partnerverwaltung/)'s own object
-page, which shows it in plain text for exactly this purpose.
-
-Gebaut wie jede andere Referenz-App: kein eigener Login, ein
-HTTP-Port, keine Persistenz, Konfiguration ueber deklarierte Variablen,
-Logs nach stdout, Gesundheitspfad, nur Standardbibliothek (plus
-twin.py).
+Kein eigener Login, ein HTTP-Port, Gesundheitspfad, nur
+Standardbibliothek plus twin.py, appframe/ und mcpdoor/ (Kopien aus lib/).
 """
 import html
-import sys
 import json
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, quote, unquote_plus, urlparse
 
+import appframe as af
+import mcpdoor
 import twin
 
-VERSION = "0.1.3"
+APP_NAME = "Zuständigkeiten (RACI)"
+APP_ID = "raci"
+VERSION = "0.2.0"
 PORT = 8000
 
 ASSIGNMENT_GROUP = "raci.assignments"
+FIRMA_TYPE = "Firma"
+KONTAKT_TYPE = "Kontaktperson"
 
 esc = html.escape
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:52rem;margin:1.6rem auto;padding:0 1.2rem}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .muted{color:var(--oaap-muted);font-size:.9rem}
-  form.stack{display:flex;flex-direction:column;gap:.6rem;max-width:32rem}
-  form.stack label{font-size:.82rem;color:var(--oaap-muted)}
-  input{padding:.5rem .6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
-       font-size:.95rem;min-height:40px}
-  ul.assign{list-style:none;margin:0;padding:0}
-  ul.assign li{padding:.5rem 0;border-bottom:1px solid var(--oaap-border)}
-  ul.assign li:last-child{border-bottom:none}
-  code{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
-       word-break:break-all}
-</style>"""
 
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
+def responsible_of(firma):
+    g = (firma.get("groups") or {}).get(ASSIGNMENT_GROUP) or {}
+    return [r for r in g.get("relations") or [] if r.get("key") == "responsible" and r.get("target")]
 
 
-def page(body, user, roles):
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>RACI -- OAAP</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="./">
-    <span><b>RACI</b><small>responsible, aus der Referenz</small></span>
-  </a>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-<main>{body}</main>
-<footer style="max-width:52rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-  color:var(--oaap-muted);font-size:.8rem">
-  OAAP RACI {VERSION} -- Contributor in raci.assignments, Consumer von Firma/Kontaktperson (RFC-0031 Schritt 4)
-</footer>
-</html>"""
+def email_of(person):
+    g = (person.get("groups") or {}).get("crm.contact") or {}
+    v = (g.get("attributes") or {}).get("Email") or {}
+    return str(v.get("value") or "")
+
+
+def load(type_key):
+    try:
+        objs, truncated = twin.list_objects(type_key)
+    except twin.TwinError as exc:
+        label = "Firmen" if type_key == FIRMA_TYPE else "Kontaktpersonen"
+        return [], f"Die Liste der {label} ist gerade nicht lesbar ({exc.status or 'keine Verbindung'})."
+    return objs, ("Es werden die ersten 500 angezeigt." if truncated else "")
+
+
+def person_title(pid, people):
+    p = people.get(pid)
+    if p:
+        return p.get("title") or ""
+    try:
+        o = twin.get_object(pid)
+    except twin.TwinError:
+        o = None
+    if o:
+        people[pid] = o
+        return o.get("title") or ""
+    return "nicht lesbare Person"
+
+
+# --------------------------------------------------------------- Optik
+
+STYLE = (".rc-kennung code{overflow-wrap:anywhere}"
+         ".rc-kennung button{margin-left:8px;padding:2px 8px;font-size:.85em}"
+         ".rc-list{margin:0;padding-left:1.2rem}")
+
+
+def render(title, body, obj=None, obj_title=None):
+    # eine einzige Fläche -- keine Reiterleiste (RFC-0118 §6.1)
+    return af.page(title, body, app=APP_NAME, version=VERSION, product=APP_ID,
+                   obj=obj, obj_title=obj_title, style=STYLE)
 
 
 def not_configured_card():
-    return """<div class="card attention">
-  <h2>Kein Zwilling-Zugang</h2>
-  <p class="hint">Diese Instanz hat weder <code>OAAP_TWIN_URL</code> noch
-    <code>OAAP_PLATFORM_KEY</code> -- entweder tragt dieser Knoten das
-    Profil <code>store</code> nicht, oder diese Instanz ist eine
-    Generalprobe, die RFC-0031 SS2.2 bewusst keinen Zwilling-Schluessel
-    gibt.</p>
-</div>"""
+    return af.card("Keine Verbindung zum Zwilling",
+                   "<p>Diese Instanz ist nicht mit dem Zwilling des Mandanten verbunden. "
+                   "Ohne ihn kann sie keine Zuständigkeiten anzeigen oder festhalten. "
+                   "Bitte die Betreuung der Plattform fragen.</p>", "oaap-warn")
 
 
-def load_form(notice=""):
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
-    parts.append("""<div class="card">
-  <h2>Kunde laden</h2>
-  <p class="hint">Die ID kommt aus <a href="../partnerverwaltung/">Partnerverwaltung</a>s
-    Objektseite -- eine Referenz, keine eigene Ablage (D6). Eine Suche gibt
-    es in oaap.data.twin 0.1 noch nicht.</p>
-  <form class="stack" method="get" action="/">
-    <label>Kunde-ID<input type="text" name="kunde" required placeholder="urn:oaap:obj:..."></label>
-    <button type="submit">Laden</button>
-  </form>
-</div>""")
-    return "".join(parts)
+def kennung(obj_id):
+    return (f'<span class="rc-kennung"><code id="kennung">{esc(obj_id)}</code>'
+            '<button type="button" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText('
+            "document.getElementById('kennung').textContent)\">Kopieren</button></span>")
+
+
+def render_list(params):
+    """Übersicht: alle Firmen des Mandanten mit ihren Verantwortlichen."""
+    firmen, n1 = load(FIRMA_TYPE)
+    personen, n2 = load(KONTAKT_TYPE)
+    people = {p["id"]: p for p in personen}
+
+    def names(f):
+        return ", ".join(person_title(r["target"], people) for r in responsible_of(f))
+    q = af.Query(params, filters=("person", "offen"), default_sort="firma")
+    used = sorted({r["target"] for f in firmen for r in responsible_of(f) if r["target"] in people},
+                  key=lambda i: (people[i].get("title") or "").lower())
+    rows = firmen
+    if q.filters.get("person"):
+        rows = [f for f in rows if any(r["target"] == q.filters["person"] for r in responsible_of(f))]
+    if q.filters.get("offen") == "ohne":
+        rows = [f for f in rows if not responsible_of(f)]
+    elif q.filters.get("offen") == "mit":
+        rows = [f for f in rows if responsible_of(f)]
+    cols = [("Kunde (Firma)", "firma", lambda f: f.get("title") or "", ""),
+            ("Verantwortlich", "verantwortlich", names, ""),
+            ("Anzahl", "anzahl", lambda f: len(responsible_of(f)), "oaap-num")]
+
+    def row(f):
+        n = len(responsible_of(f))
+        return (f'<tr><td><a href="?kunde={esc(quote(f["id"], safe=""))}">{esc(f.get("title") or "")}</a></td>'
+                f'<td>{esc(names(f)) if n else af.badge("niemand zugewiesen", "warn")}</td>'
+                f'<td class="oaap-num">{n}</td></tr>')
+    body = (af.pagehead("Zuständigkeiten")
+            + "".join(af.msg(n, error=True) for n in (n1, n2) if n)
+            + af.list_report(
+                q, rows, cols, row, noun="Firmen", placeholder="Firma oder Person",
+                choices=[("person", "Verantwortlich", [(i, people[i].get("title") or "") for i in used]),
+                         ("offen", "Zuweisung", [("ohne", "niemand zugewiesen"), ("mit", "mit Verantwortlichen")])],
+                empty_text="Noch keine Firmen. Firmen werden in der Partnerverwaltung angelegt."))
+    return body
 
 
 def render_customer(customer_id, notice=""):
-    parts = []
+    """Die Seite einer Firma: wer verantwortlich ist, und wer es werden kann."""
+    parts = [af.back("./", "Zurück zur Übersicht")]
     if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
+        parts.append(af.msg(notice, error=True))
     try:
         customer = twin.get_object(customer_id)
     except twin.TwinError as exc:
-        parts.append(f'<div class="card attention"><p>{esc(exc.detail or str(exc))}</p></div>')
+        parts.append(af.msg(f"Diese Firma ist nicht lesbar ({exc.status or 'keine Verbindung'}).", error=True))
         return "".join(parts)
     if customer is None:
-        parts.append('<div class="card attention"><p>Kein Kunde mit dieser ID.</p></div>')
+        parts.append(af.msg("Kein Kunde mit dieser Kennung.", error=True))
         return "".join(parts)
-    if customer["type"] != "Firma":
-        parts.append(f'<div class="card attention"><p>'
-                      f'<code>{esc(customer_id)}</code> ist ein {esc(customer["type"])}, '
-                      f'keine Firma.</p></div>')
+    if customer["type"] != FIRMA_TYPE:
+        parts.append(af.msg(f"„{customer['title']}“ ist keine Firma.", error=True))
         return "".join(parts)
-
-    group = (customer.get("groups") or {}).get(ASSIGNMENT_GROUP, {})
-    rows = []
-    for rel in group.get("relations") or []:
-        if rel["key"] != "responsible":
-            continue
-        try:
-            person = twin.get_object(rel["target"])
-        except twin.TwinError:
-            person = None
-        who = esc(person["title"]) if person else f"<code>{esc(rel['target'])}</code>"
-        rows.append(f"<li><b>{who}</b> <span class='badge'>responsible</span></li>")
-    assignments = (f"<ul class='assign'>{''.join(rows)}</ul>" if rows
-                   else "<p class='muted' style='margin:0'>noch niemand zugewiesen</p>")
-
-    parts.append(f"""<div class="card">
-  <h2>{esc(customer['title'])} <span class="badge">Firma</span></h2>
-  <p class="muted"><code>{esc(customer_id)}</code></p>
-  <p class="hint" style="margin-top:.8rem"><b>raci.assignments</b> -- verantwortlich (responsible):</p>
-  {assignments}
-</div>
-<div class="card">
-  <h2>Zuweisen</h2>
-  <p class="hint">Die Mitarbeiter-ID kommt ebenfalls aus
-    <a href="../partnerverwaltung/">Partnerverwaltung</a> (dort als Person angelegt).</p>
-  <form class="stack" method="post" action="/assign">
-    <input type="hidden" name="customer_id" value="{esc(customer_id)}">
-    <label>Mitarbeiter-ID<input type="text" name="person_id" required
-      placeholder="urn:oaap:obj:..."></label>
-    <button type="submit">Als verantwortlich zuweisen</button>
-  </form>
-</div>""")
+    personen, note = load(KONTAKT_TYPE)
+    people = {p["id"]: p for p in personen}
+    assigned = responsible_of(customer)
+    parts.append(f'<div class="oaap-objhead"><h1>{esc(customer["title"])}</h1>'
+                 + af.facts([("Art", "Kunde (Firma)"), ("Verantwortlich", str(len(assigned))),
+                             ("Kennung", kennung(customer["id"]))]) + "</div>")
+    if note:
+        parts.append(af.msg(note, error=True))
+    if assigned:
+        items = []
+        for r in assigned:
+            mail = email_of(people.get(r["target"]) or {})
+            since = f' <span class="oaap-muted">seit {esc(str(r["valid_from"]))}</span>' if r.get("valid_from") else ""
+            items.append(f"<li><b>{esc(person_title(r['target'], people))}</b>"
+                         f"{' · ' + esc(mail) if mail else ''}{since}</li>")
+        inner = f'<ul class="rc-list">{"".join(items)}</ul>'
+    else:
+        inner = af.empty("Noch niemand verantwortlich. Unten eine Kontaktperson wählen und zuweisen.")
+    parts.append(af.card("Verantwortlich", inner))
+    taken = {r["target"] for r in assigned}
+    opts = "".join(f'<option value="{esc(p["id"])}">{esc(p.get("title") or "")}'
+                   f'{" (" + esc(email_of(p)) + ")" if email_of(p) else ""}</option>'
+                   for p in sorted(personen, key=lambda p: (p.get("title") or "").lower())
+                   if p["id"] not in taken)
+    if opts:
+        form = ('<form class="oaap-form" method="post" action="assign">'
+                f'<input type="hidden" name="customer_id" value="{esc(customer["id"])}">'
+                f'<label>Kontaktperson<select name="person_id" required><option value="">– bitte wählen –</option>{opts}</select></label>'
+                '<div><button type="submit" class="primary">Als verantwortlich zuweisen</button></div></form>')
+    else:
+        form = af.empty("Keine weitere Kontaktperson zur Auswahl. Kontaktpersonen werden in der "
+                        "Partnerverwaltung angelegt.")
+    parts.append(af.card("Zuweisen", form))
     return "".join(parts)
 
 
-def render_home(kunde_id=None, notice=""):
+def render_home(kunde_id=None, notice="", params=None):
     if not twin.configured():
         return not_configured_card()
-    body = load_form(notice if not kunde_id else "")
     if kunde_id:
-        body += render_customer(kunde_id, notice if kunde_id else "")
-    return body
+        return render_customer(kunde_id, notice)
+    return (af.msg(notice, error=True) if notice else "") + render_list(params or {})
+
+
+# ------------------------------------------------------------- MCP-Tür
+
+door = mcpdoor.Door(f"oaap-{APP_ID}", VERSION,
+                    "Zuständigkeiten lesen: welche Kontaktperson für welche Firma verantwortlich ist.")
+
+
+def _need_session(who):
+    # dieselbe Prüfung wie die Seiten: ohne Rollen keine Daten
+    if not who.get("roles"):
+        raise mcpdoor.Refused("Dafür braucht es eine angemeldete Sitzung.")
+    if not twin.configured():
+        raise mcpdoor.Refused("Diese Instanz ist nicht mit dem Zwilling verbunden.")
+
+
+def _list_or_refuse(type_key):
+    try:
+        return twin.list_objects(type_key)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Der Zwilling antwortet nicht ({exc.status or 'keine Verbindung'}).") from None
+
+
+@door.tool("raci_search", "Zuständigkeiten suchen",
+           "Sucht Firmen mit ihren Verantwortlichen, nach Firmen- oder Personenname. "
+           "Mit ohne_verantwortliche=true nur Firmen, für die niemand zuständig ist.",
+           {"q": {"type": "string", "description": "Firma oder Person, leer für alle"},
+            "ohne_verantwortliche": {"type": "boolean", "description": "nur Firmen ohne Verantwortliche"},
+            "limit": {"type": "integer", "description": "höchstens so viele Treffer (1–50, Standard 20)"}})
+def _mcp_search(args, who):
+    _need_session(who)
+    firmen, trunc = _list_or_refuse(FIRMA_TYPE)
+    personen, _t = _list_or_refuse(KONTAKT_TYPE)
+    people = {p["id"]: p for p in personen}
+    try:
+        limit = max(1, min(50, int(args.get("limit") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    q = af.Query({"q": str(args.get("q") or "")})
+    hits = []
+    for f in firmen:
+        names = [people.get(r["target"], {}).get("title") or "nicht lesbare Person" for r in responsible_of(f)]
+        if args.get("ohne_verantwortliche") is True and names:
+            continue
+        if q.matches(f.get("title"), " ".join(names)):
+            hits.append({"kennung": f["id"], "firma": f.get("title"), "verantwortlich": names})
+    return {"treffer": hits[:limit], "anzahl": len(hits), "gekuerzt": len(hits) > limit or trunc}
+
+
+@door.tool("raci_read", "Zuständigkeit einer Firma lesen",
+           "Liest, wer für eine Firma verantwortlich ist, mit E-Mail und Datum.",
+           {"kennung": {"type": "string", "description": "Kennung der Firma aus raci_search"}},
+           required=("kennung",))
+def _mcp_read(args, who):
+    _need_session(who)
+    oid = str(args.get("kennung") or "").strip()
+    if not oid:
+        raise mcpdoor.Refused("Welche Kennung?")
+    try:
+        firma = twin.get_object(oid)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Nicht lesbar ({exc.status or 'keine Verbindung'}).") from None
+    if not firma or firma.get("type") != FIRMA_TYPE:
+        raise mcpdoor.Refused("Keine Firma mit dieser Kennung.")
+    personen, _t = _list_or_refuse(KONTAKT_TYPE)
+    people = {p["id"]: p for p in personen}
+    return {"kennung": firma["id"], "firma": firma["title"],
+            "verantwortlich": [{"kennung": r["target"], "name": person_title(r["target"], people),
+                                "email": email_of(people.get(r["target"]) or {}) or None,
+                                "seit": r.get("valid_from")} for r in responsible_of(firma)]}
+
+
+door.prompt("raci_wer_ist_zustaendig", "Wer ist zuständig?",
+            "Findet die Verantwortlichen für eine Firma.",
+            "Wer ist für die Firma „{firma}“ verantwortlich? Nutze raci_search und raci_read und nenne "
+            "die Personen mit E-Mail.", arguments=("firma",))
+door.prompt("raci_luecken", "Firmen ohne Zuständigkeit",
+            "Listet die Firmen, für die noch niemand verantwortlich ist.",
+            "Für welche Firmen ist noch niemand verantwortlich? Nutze raci_search mit "
+            "ohne_verantwortliche=true und nenne die Firmen beim Namen.")
 
 
 # --------------------------------------------------------------- HTTP
@@ -247,51 +318,71 @@ class Handler(BaseHTTPRequestHandler):
                 form[unquote_plus(k)] = unquote_plus(v)
         return form
 
+    def page(self, status, body, kunde_title=None, kunde_id=None):
+        self.send_html(status, render(kunde_title or "Übersicht", body,
+                                      obj=f"Firma:{kunde_id}" if kunde_id else None, obj_title=kunde_title))
+
+    def refuse(self):
+        self.page(403, af.card("", "<p>Diese Seite braucht eine angemeldete Sitzung.</p>"))
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            door.serve(self)
+            return
         path = parsed.path.rstrip("/") or "/"
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION,
                                   "twin": twin.configured()})
             return
-        user, roles = self.identity()
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
             return
         if path != "/":
-            self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+            self.page(404, af.empty('Diese Seite gibt es nicht. <a href="./">Zur Übersicht</a>'))
             return
-        kunde_id = (parse_qs(parsed.query).get("kunde") or [""])[0].strip()
-        self.send_html(200, page(render_home(kunde_id or None), user, roles))
+        qs = parse_qs(parsed.query)
+        kunde_id = (qs.get("kunde") or [""])[0].strip()
+        # der Titel der Firma steht im Objektkopf; für Fragen/Feedback reicht die Kennung
+        self.page(200, render_home(kunde_id or None, params=qs), None, kunde_id or None)
 
     def do_POST(self):
-        path = self.path.split("?")[0].rstrip("/") or "/"
-        user, roles = self.identity()
+        path = self.path.split("?")[0]
+        if path == "/mcp":
+            door.serve(self)
+            return
+        path = path.rstrip("/") or "/"
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
             return
         if path != "/assign":
-            self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+            self.page(404, af.empty("Diese Aktion gibt es nicht."))
             return
         form = self.read_form()
         customer_id = (form.get("customer_id") or "").strip()
         person_id = (form.get("person_id") or "").strip()
         notice = ""
         if not (customer_id and person_id):
-            notice = "Kunde- und Mitarbeiter-ID werden beide gebraucht."
+            notice = "Bitte eine Kontaktperson wählen."
         else:
             try:
                 twin.write_group(customer_id, ASSIGNMENT_GROUP,
                                  relations=[{"key": "responsible", "target": person_id}])
             except twin.TwinError as exc:
-                notice = exc.detail or str(exc)
-        self.send_html(200, page(render_home(customer_id or None, notice), user, roles))
+                notice = f"Zuweisen abgelehnt: {exc.detail or exc}"
+        if notice:
+            self.page(200, render_home(customer_id or None, notice), None, customer_id or None)
+            return
+        self.send_response(303)
+        self.send_header("Location", "/?kunde=" + quote(customer_id, safe=""))
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 
 def main():
-    sys.stdout.write(f"OAAP RACI {VERSION} auf Port {PORT} -- "
+    sys.stdout.write(f"{APP_NAME} {VERSION} auf Port {PORT} -- "
                      f"Zwilling: {'konfiguriert' if twin.configured() else 'FEHLT'}\n")
     sys.stdout.flush()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

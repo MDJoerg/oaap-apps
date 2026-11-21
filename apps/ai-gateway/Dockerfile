@@ -27,6 +27,9 @@ COPY templates/ /srv/templates/
 # Die gemeinsamen Bücher der Gateways (RFC-0065 Stufe 0). Eine Kopie von
 # oaap-apps/lib/gwcore — geändert wird dort, check-shared.py gleicht ab.
 COPY gwcore/ /srv/gwcore/
+# Rahmen und MCP-Tür der Plattform-Apps (RFC-0118). Kopien aus oaap-apps/lib.
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 USER 10001
 EXPOSE 8000

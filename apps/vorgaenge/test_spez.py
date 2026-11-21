@@ -148,7 +148,7 @@ ok("KÖDER: die meldende Person sieht auf ihrer Seite keinen Schritt des Spezial
    st == 200 and "Kurzdumps" not in page and "find_dumps" not in page and "Ursache gefunden" not in page, "")
 st, page = call("GET", f"/v/{c1['number']}", ADMIN)
 ok("der tenant_admin sieht den dunklen Chat: KI-Marke, Werkzeug zugeklappt, Stopp-Knopf",
-   "Kurzdumps" in page and "<span class=pill>KI</span>" in page and "Aufruf und Ergebnis" in page
+   "Kurzdumps" in page and '<span class="oaap-badge info">KI</span>' in page and "Aufruf und Ergebnis" in page
    and "Spezialist anhalten" in page, "")
 st, d = call("GET", "/api/spez/turn", SPEZ)
 ok("an der Reihe: ein Lauf gezählt, letzter Eintrag ist der eigene", d["cases"][0]["runs"] == 1

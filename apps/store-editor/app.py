@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OAAP Store Editor 0.2 — Bauschritt 2 aus RFC-0013: bearbeiten, als Datei.
+"""Store-Editor — Store-Listen prüfen und pflegen (RFC-0013 Bauschritte 1+2, RFC-0118).
 
 Eine Store-Liste ist kein Dokument, sondern eine Anweisung, die auf
 fremden Rechnern Software installiert. Deshalb ist der **Prüfer** der
@@ -29,9 +29,9 @@ gelesen, und ein selbstgebauter YAML-Leser, der eine Schreibweise
 missversteht, wäre genau die stille Falschaussage, gegen die dieses
 Werkzeug antritt.
 
-Optik nach oaap-design/docs/design-guidelines.md v0.1 — Rahmen und
-Stil sind bewusst aus dem Studio übernommen, damit beide wie ein
-Produkt aussehen.
+Seit 0.4 (RFC-0118) im Rahmen der Plattform: Kit /platform/theme.css,
+Rahmenskript /platform/app.js, eine Reiterleiste, Listenberichte, die
+Hilfe aus docs/ und eine lesende MCP-Tür unter /mcp.
 """
 
 import hashlib
@@ -48,10 +48,13 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import yaml
 
+import appframe as af
 import checker as ck
 import editor as ed
+import helpdocs
+import mcpdoor
 
-VERSION = "0.3.3"
+VERSION = "0.4.0"
 PORT = 8000
 FETCH_TIMEOUT = 15
 
@@ -88,7 +91,7 @@ LEVEL_LABEL = {ck.FEHLER: "Fehler", ck.BEFUND: "Befund", ck.HINWEIS: "Hinweis"}
 # Der Plural steht ausgeschrieben da, statt aus einer Regel zu folgen:
 # „Fehler" bleibt gleich, „Befund" und „Hinweis" nicht.
 LEVEL_PLURAL = {ck.FEHLER: "Fehler", ck.BEFUND: "Befunde", ck.HINWEIS: "Hinweise"}
-LEVEL_BADGE = {ck.FEHLER: "err", ck.BEFUND: "test", ck.HINWEIS: "off"}
+LEVEL_BADGE = {ck.FEHLER: "err", ck.BEFUND: "warn", ck.HINWEIS: ""}
 LEVEL_HELP = {
     ck.FEHLER: "So ist die Liste nicht benutzbar — ein Knoten würde daran "
                "scheitern oder etwas Falsches tun.",
@@ -100,7 +103,7 @@ LEVEL_HELP = {
 
 KIND_LABEL = {ed.STRUKTUR: "strukturell", ed.REDAKTIONELL: "redaktionell",
               ed.ERZEUGT: "aus dem Manifest"}
-KIND_BADGE = {ed.STRUKTUR: "err", ed.REDAKTIONELL: "test", ed.ERZEUGT: "off"}
+KIND_BADGE = {ed.STRUKTUR: "err", ed.REDAKTIONELL: "info", ed.ERZEUGT: ""}
 
 MESSAGES = {
     "gespeichert": ("ok", "Gespeichert — in der Arbeitskopie dieser Instanz. "
@@ -112,7 +115,7 @@ MESSAGES = {
                         "veröffentlichte Stand."),
     "aufgenommen": ("ok", "Der Eintrag ist aufgenommen. Solange sein Manifest "
                           "nicht abrufbar ist, meldet der Prüfer das bei jedem "
-                          "Lauf — so ist es entschieden (RFC-0013, Frage 4)."),
+                          "Lauf."),
     "entfernt": ("ok", "Der Eintrag ist aus der Arbeitskopie entfernt."),
     "quelle_aufgenommen": ("ok", "Die Liste ist aufgenommen und war auf Anhieb "
                                  "abrufbar."),
@@ -134,148 +137,49 @@ def esc(v):
     return html.escape(str(v if v is not None else ""), quote=True)
 
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  nav.main{display:flex;gap:.25rem;margin-left:1rem;flex:1}
-  nav.main a{color:#fff;text-decoration:none;padding:.55rem .9rem;border-radius:.4rem;
-       opacity:.85;border-bottom:3px solid transparent}
-  nav.main a:hover{background:rgba(255,255,255,.12);opacity:1}
-  nav.main a.active{border-bottom-color:var(--oaap-blue-100);opacity:1;font-weight:600}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 1.2rem}
-  h1{font-size:1.35rem;margin:.2rem 0 1rem}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  h3{font-size:.9rem;margin:1.4rem 0 .2rem;color:var(--oaap-blue-900)}
-  .pagehead{display:flex;align-items:center;justify-content:space-between;gap:1rem;
-       flex-wrap:wrap;margin-bottom:1rem}
-  .pagehead h1{margin:0}
-  .back{display:inline-block;margin-bottom:.8rem;color:var(--oaap-blue-600);text-decoration:none}
-  .back:hover{text-decoration:underline}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.danger{border-color:#fecaca}
-  .card.locked{background:#fbfcfe}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.test{background:#fef3c7;color:#92400e}
-  .badge.off{background:#f3f4f6;color:#6b7280}
-  .badge.ok{background:#dcfce7;color:#166534}
-  .badge.err{background:#fee2e2;color:#991b1b}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px;font-family:inherit}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  a.btn.ghost,button.ghost{background:transparent;color:var(--oaap-blue-600);
-       border:1px solid var(--oaap-blue-600)}
-  a.btn.ghost:hover,button.ghost:hover{background:var(--oaap-blue-100)}
-  button.danger{background:var(--err)} button.danger:hover{background:#991b1b}
-  button.linkish{background:none;color:var(--oaap-blue-600);padding:0;
-       min-height:auto;font-size:.95rem;text-align:left}
-  button.linkish:hover{background:none;text-decoration:underline}
-  label{display:block;font-size:.85rem;color:var(--oaap-muted);margin-top:.9rem}
-  input,select,textarea{width:100%;padding:.55rem;margin:.25rem 0 .2rem;
-       border:1px solid var(--oaap-border);border-radius:.4rem;font-size:.95rem;
-       font-family:inherit}
-  input:disabled,textarea:disabled{background:#f3f4f6;color:#4b5563}
-  textarea{min-height:5.5rem;resize:vertical}
-  textarea.small{min-height:3.5rem}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .err{color:var(--err)}.ok{color:var(--ok)}.muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.6rem .5rem;border-bottom:1px solid var(--oaap-border);
-       vertical-align:middle}
-  th{font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  tr.rowlink:hover td{background:#f8fafc}
-  td a.rowaction{color:var(--oaap-blue-600);text-decoration:none;white-space:nowrap}
-  td a.rowaction:hover{text-decoration:underline}
+APP_NAME = "Store-Editor"
+
+# Nur, was dem Editor eigen ist -- Farben ausschließlich über das Kit
+# (/platform/theme.css). Kopfleiste, Reiter, Karten, Tabellen, Badges und
+# Knöpfe kommen aus dem Rahmen (RFC-0118 §4).
+STYLE = """
+  .oaap-main h3{font-size:.9rem;margin:1.4rem 0 .2rem;color:var(--oaap-color-primary)}
+  .oaap-card.locked{background:var(--oaap-color-bg)}
+  .oaap-card label{display:block;font-size:.85rem;color:var(--oaap-color-text-muted);margin-top:.9rem}
+  .oaap-card input:not([type=checkbox]),.oaap-card select,.oaap-card textarea{width:100%;box-sizing:border-box;margin:.25rem 0 .2rem}
+  .oaap-card input:disabled,.oaap-card textarea:disabled{opacity:.75}
+  textarea{min-height:5.5rem;resize:vertical} textarea.small{min-height:3.5rem}
+  .hint{font-size:.8rem;color:var(--oaap-color-text-muted);margin:0 0 .6rem}
+  .muted{color:var(--oaap-color-text-muted);font-size:.9rem}
+  .err{color:var(--oaap-color-danger)} .ok{color:var(--oaap-color-success)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 1.2rem}
   .actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.1rem;align-items:center}
-  .checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));
-       gap:.1rem .8rem;margin:.4rem 0 .2rem}
-  .checks label{display:flex;align-items:center;gap:.5rem;margin:0;padding:.3rem 0;
-       font-size:.92rem;color:var(--oaap-text);cursor:pointer}
-  .checks input{width:auto;margin:0}
-  .lockline{display:flex;align-items:center;gap:.5rem;font-size:.8rem;
-       color:var(--oaap-muted);margin:.1rem 0 .6rem}
-  .lockline input{width:auto;margin:0}
-  dl.facts{margin:0;display:grid;grid-template-columns:11rem 1fr;gap:.45rem 1rem}
-  dl.facts dt{color:var(--oaap-muted);font-size:.85rem}
-  dl.facts dd{margin:0;word-break:break-word}
-  .flash{border-left:4px solid var(--ok);background:#f0fdf4;padding:.7rem 1rem;
-       border-radius:.3rem;margin-bottom:1.1rem;font-size:.92rem}
-  .flash.muted{border-left-color:var(--oaap-muted);background:#f9fafb}
-  footer.oaap{max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-       color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
-  @media (max-width:640px){
-    nav.main{order:3;flex-basis:100%;margin-left:0}
-    .userbox .who{display:none}
-    .grid2{grid-template-columns:1fr}
-    dl.facts{grid-template-columns:1fr;gap:.1rem .5rem}
-    dl.facts dd{margin-bottom:.5rem}
-  }
-</style>"""
+  .actions form{margin:0}
+  .checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));gap:.1rem .8rem;margin:.4rem 0 .2rem}
+  .oaap-card .checks label{display:flex;align-items:center;gap:.5rem;margin:0;padding:.3rem 0;font-size:.92rem;color:var(--oaap-color-text);cursor:pointer}
+  .lockline{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:var(--oaap-color-text-muted);margin:.1rem 0 .6rem}
+  .oaap-card .lockline label{margin:0;display:flex;gap:.4rem;align-items:center}
+  .oaap-msg.note{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral)}
+  .oaap-main article{max-width:75ch}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+"""
 
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
-
-# Hexagon cluster = apps/ecosystem/studio (design guidelines 1), inline
-# because OAAP UIs load nothing from outside.
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="34,6 58,20 58,48 34,62 10,48 10,20" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/>'
-            '<polygon points="72,30 92,41 92,64 72,76 52,64 52,41" fill="#fff" opacity=".85"/>'
-            '<polygon points="42,58 66,72 66,94 42,96 22,84 22,70" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
+# Die Bereiche des Editors -- eine Reiterleiste, Einrichtung zuletzt (§6).
+TABS = [("/", "Übersicht"), ("/pruefen", "Liste einfügen"), ("/quellen", "Listen und Zugang")]
+ACTIVE = {"lists": "/", "paste": "/pruefen", "sources": "/quellen"}
 
 
-def page(title, body, user, roles, active="", flash=""):
-    """Gemeinsamer Rahmen: Kopf mit Marke, Navigation, Benutzer, Fuß."""
+def page(title, body, user="", roles="", active="", flash="", obj=None, status_note=""):
+    """Der Rahmen der Plattform (appframe): Kopfleiste, Reiter, Fußzeile.
+    Wer angemeldet ist, zeigt das Benutzermenü des Rahmens -- nie die
+    Rollen (user/roles bleiben nur für die Aufrufer stehen)."""
     note = ""
     if flash in MESSAGES:
         cls, text = MESSAGES[flash]
-        note = f'<div class="flash {"muted" if cls == "muted" else ""}">{esc(text)}</div>'
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} — OAAP Store Editor</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="/">{LOGO_SVG}
-    <span><b>OAAP STORE EDITOR</b><small>App-Listen prüfen und pflegen</small></span>
-  </a>
-  <nav class="main">
-    <a href="/" class="{'active' if active == 'lists' else ''}">Listen</a>
-    <a href="/quellen" class="{'active' if active == 'sources' else ''}">Listen und Zugang</a>
-    <a href="/pruefen" class="{'active' if active == 'paste' else ''}">Liste einfügen</a>
-    <a href="/hilfe" class="{'active' if active == 'help' else ''}">Hilfe</a>
-  </nav>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-<main>{note}{body}</main>
-<footer class="oaap">
-  <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
-    <polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="#2563eb"/></svg>
-  OAAP Store Editor {VERSION} — Bauschritt 2: bearbeiten. Geschrieben wird nur
-  in die Arbeitskopie dieser Instanz, nicht in ein Repository.
-</footer>
-</html>"""
+        note = (af.msg(text) if cls != "muted" else
+                f'<div class="oaap-msg note" role="status">{esc(text)}</div>')
+    return af.page(title, note + body, app=APP_NAME, version=VERSION, product="store-editor",
+                   tabs=TABS, active=ACTIVE.get(active), obj=obj, style=STYLE)
 
 
 # ------------------------------------------------------------ Arbeitskopie
@@ -496,9 +400,9 @@ def summary_badges(rep):
         n = rep["counts"][lvl]
         if n:
             word = LEVEL_LABEL[lvl] if n == 1 else LEVEL_PLURAL[lvl]
-            out.append(f'<span class="badge {LEVEL_BADGE[lvl]}">{n} {esc(word)}</span>')
+            out.append(f'<span class="oaap-badge {LEVEL_BADGE[lvl]}">{n} {esc(word)}</span>')
     if not out:
-        out.append('<span class="badge ok">ohne Beanstandung</span>')
+        out.append('<span class="oaap-badge ok">ohne Beanstandung</span>')
     return " ".join(out)
 
 
@@ -507,7 +411,7 @@ def findings_rows(findings, with_app=True):
     for f in sorted(findings, key=lambda x: (ck.LEVELS.index(x["level"]), x["app"])):
         app_cell = f'<td><code>{esc(f["app"]) or "—"}</code></td>' if with_app else ""
         rows.append(
-            f'<tr><td><span class="badge {LEVEL_BADGE[f["level"]]}">'
+            f'<tr><td><span class="oaap-badge {LEVEL_BADGE[f["level"]]}">'
             f'{esc(LEVEL_LABEL[f["level"]])}</span></td>{app_cell}'
             f'<td><code>{esc(f["field"])}</code></td>'
             f'<td>{esc(f["text"])}</td>'
@@ -518,20 +422,20 @@ def findings_rows(findings, with_app=True):
 
 def findings_table(rep):
     if not rep["findings"]:
-        return ('<div class="card"><p class="ok">Keine Beanstandung. Jeder '
+        return ('<div class="oaap-card"><p class="ok">Keine Beanstandung. Jeder '
                 'Eintrag deckt sich mit dem Manifest, auf das er zeigt.</p></div>')
     legend = "".join(
-        f'<p class="muted"><span class="badge {LEVEL_BADGE[l]}">{esc(LEVEL_LABEL[l])}</span> '
+        f'<p class="muted"><span class="oaap-badge {LEVEL_BADGE[l]}">{esc(LEVEL_LABEL[l])}</span> '
         f'{esc(LEVEL_HELP[l])}</p>' for l in ck.LEVELS if rep["counts"][l])
-    return f'''<div class="card" style="overflow-x:auto">
+    return f'''<div class="oaap-card" style="overflow-x:auto">
   <h2>Was geprüft wurde</h2>
-  <table>
+  <table class="oaap-table">
     <tr><th>Art</th><th>App</th><th>Feld</th><th>Befund</th>
         <th>In der Liste</th><th>Im Manifest</th></tr>
     {findings_rows(rep["findings"])}
   </table>
 </div>
-<div class="card">{legend}</div>'''
+<div class="oaap-card">{legend}</div>'''
 
 
 def checkboxes(name, vocab, labels, chosen):
@@ -557,7 +461,7 @@ def select(name, vocab, labels, chosen, empty="— nicht gesetzt —"):
 # --------------------------------------------------------------------- HTTP
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"oaap-store-editor/{VERSION}"
+    server_version = f"store-editor/{VERSION}"
 
     def log_message(self, fmt, *args):
         # Logs nach stdout, ohne Kopfzeilen: Die tragen Benutzernamen.
@@ -604,6 +508,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"ok\n")
             return
+        if path == "/mcp":
+            # Vor allem anderen: das Gateway hat die Person schon angemeldet.
+            return DOOR.serve(self)
         q = parse_qs(parsed.query)
         flash = (q.get("m") or [""])[0]
         user, roles = self.who()
@@ -613,12 +520,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(self.lists_page(user, roles, flash))
         elif path == "/pruefen":
             self.send_html(page("Liste einfügen", PASTE_BODY, user, roles, "paste"))
-        elif path == "/hilfe":
-            self.send_html(page("Hilfe", HELP_BODY, user, roles, "help"))
+        elif path == "/hilfe" or (parts[:1] == ["hilfe"] and len(parts) == 2):
+            self.help_page(parts[1] if len(parts) == 2 else "", user, roles)
         elif path == "/quellen":
             self.send_html(self.sources_page(user, roles, flash))
         elif parts[:1] == ["liste"] and len(parts) == 2:
-            self.send_html(self.list_page(parts[1], user, roles, flash))
+            self.send_html(self.list_page(parts[1], user, roles, flash, q))
+        elif parts[:1] == ["liste"] and parts[2:3] in (["pruefung"], ["entwurf"]) and len(parts) == 3:
+            self.send_html(self.list_page(parts[1], user, roles, flash, q, tab=parts[2]))
         elif parts[:1] == ["liste"] and parts[2:3] == ["aenderungen"]:
             self.send_html(self.changes_page(parts[1], user, roles))
         elif parts[:1] == ["liste"] and parts[2:3] == ["datei"]:
@@ -633,14 +542,16 @@ class Handler(BaseHTTPRequestHandler):
                                            remove=(q.get("entfernen") or [""])[0] == "1"))
         else:
             self.send_html(page("Nicht gefunden",
-                                '<div class="card"><p class="err">Diese Seite gibt es '
-                                'nicht.</p><p><a class="back" href="/">← Zu den '
+                                '<div class="oaap-card"><p class="err">Diese Seite gibt es '
+                                'nicht.</p><p><a class="oaap-back" href="/">← Zu den '
                                 'Listen</a></p></div>', user, roles), 404)
 
     # ----------------------------------------------------------------- POST
 
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/mcp":
+            return DOOR.serve(self)
         user, roles = self.who()
         parts = [p for p in path.split("/") if p]
 
@@ -657,7 +568,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parts[:1] != ["liste"] or len(parts) < 3:
             self.send_html(page("Nicht gefunden",
-                                '<div class="card"><p class="err">Diese Seite gibt es '
+                                '<div class="oaap-card"><p class="err">Diese Seite gibt es '
                                 'nicht.</p></div>', user, roles), 404)
             return
 
@@ -665,7 +576,7 @@ class Handler(BaseHTTPRequestHandler):
         src = self.source_at(idx)
         if not src:
             self.send_html(page("Nicht gefunden",
-                                '<div class="card"><p class="err">Diese Liste ist nicht '
+                                '<div class="oaap-card"><p class="err">Diese Liste ist nicht '
                                 'eingetragen.</p></div>', user, roles), 404)
             return
         url = src["url"]
@@ -691,7 +602,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.save_entry(idx, src, unquote(parts[3]), form, user, roles)
                 return
         self.send_html(page("Nicht gefunden",
-                            '<div class="card"><p class="err">Unbekannte '
+                            '<div class="oaap-card"><p class="err">Unbekannte '
                             'Aktion.</p></div>', user, roles), 404)
 
     # -------------------------------------------------------------- Helfer
@@ -714,8 +625,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def not_found(self, user, roles, text):
         return page("Nicht gefunden",
-                    f'<div class="card"><p class="err">{esc(text)}</p>'
-                    f'<p><a class="back" href="/">← Zu den Listen</a></p></div>',
+                    f'<div class="oaap-card"><p class="err">{esc(text)}</p>'
+                    f'<p><a class="oaap-back" href="/">← Zu den Listen</a></p></div>',
                     user, roles, "lists")
 
     # --------------------------------------------------------------- Seiten
@@ -723,178 +634,225 @@ class Handler(BaseHTTPRequestHandler):
     def lists_page(self, user, roles, flash=""):
         warn = ""
         if not storage_ready():
-            warn = ('<div class="card danger"><h2>Kein Speicher</h2>'
+            warn = ('<div class="oaap-card oaap-danger"><h2>Kein Speicher</h2>'
                     '<p class="err">Diese Instanz hat keinen beschreibbaren '
                     'Speicher. Prüfen geht, Bearbeiten nicht — die Arbeitskopie '
-                    'hätte keinen Platz.</p><p class="muted">Der Speicher wird im '
-                    'Manifest deklariert (<code>storage</code>). Eine Instanz aus '
-                    'Version 0.1.0 kennt ihn noch nicht: Ein erneutes Ausrollen '
-                    'über das Portal legt ihn an.</p></div>')
+                    'hätte keinen Platz.</p><p class="muted">Ein erneutes Ausrollen '
+                    'über das Portal legt den Speicher an.</p></div>')
         sources = load_sources()
         if not sources:
-            return page("Listen", f'<h1>Listen</h1>{warn}{LISTS_EMPTY}',
+            return page("Listen", f'{af.pagehead("Listen")}{warn}{LISTS_EMPTY}',
                         user, roles, "lists", flash)
         rows = []
         for i, src in enumerate(sources):
             url = src["url"]
             doc, work, err = current(src)
-            draft = ('<span class="badge test">Entwurf</span> ' if work else "")
+            draft = ('<span class="oaap-badge test">Entwurf</span> ' if work else "")
             if err:
-                rows.append(f'<tr><td>{draft}<a class="rowaction" href="/liste/{i}">'
-                            f'{esc(url)}</a></td>'
-                            f'<td colspan="2"><span class="err">{esc(err)}</span></td>'
-                            f'<td><a class="rowaction" href="/liste/{i}">Ansehen</a></td></tr>')
+                rows.append(f'<tr><td>{draft}<a href="/liste/{i}">{esc(src.get("name") or url)}</a>'
+                            f'<br><span class="muted">{esc(url)}</span></td>'
+                            f'<td colspan="2"><span class="err">{esc(err)}</span></td></tr>')
                 continue
             rep = self.checked(src, doc)
-            name = str((doc or {}).get("name") or url)
+            name = str((doc or {}).get("name") or src.get("name") or url)
             rows.append(
-                f'<tr class="rowlink"><td>{draft}<a class="rowaction" href="/liste/{i}">'
+                f'<tr><td>{draft}<a href="/liste/{i}">'
                 f'{esc(name)}</a><br><span class="muted">{esc(url)}</span></td>'
                 f'<td>{rep["entries"]} Einträge<br><span class="muted">'
                 f'{rep["checked"]} geprüft, {rep["unreachable"]} ungeprüft</span></td>'
-                f'<td>{summary_badges(rep)}</td>'
-                f'<td><a class="rowaction" href="/liste/{i}">Öffnen</a></td></tr>')
-        body = f'''<h1>Listen</h1>{warn}
-<div class="card" style="overflow-x:auto">
-  <table>
-    <tr><th>Liste</th><th>Umfang</th><th>Ergebnis</th><th></th></tr>
-    {"".join(rows)}
-  </table>
-</div>
-<p class="muted">Ein <span class="badge test">Entwurf</span> ist eine
+                f'<td>{summary_badges(rep)}</td></tr>')
+        table = af.table("<th>Liste</th><th>Umfang</th><th>Ergebnis</th>", rows)
+        body = f'''{af.pagehead("Listen")}{warn}
+{table}
+<p class="muted">Ein <span class="oaap-badge test">Entwurf</span> ist eine
    Arbeitskopie auf dieser Instanz. Geprüft wird dann der Entwurf und nicht
-   mehr die Veröffentlichung — der Wächter darf für das, was gerade
-   entsteht, nicht blind sein. Veröffentlicht wird in diesem Stand nichts;
-   das ist Bauschritt 3 aus RFC-0013.</p>'''
+   mehr die Veröffentlichung. Veröffentlicht wird von hier aus nichts — das
+   Ergebnis ist eine Datei zum Herunterladen.</p>'''
         return page("Listen", body, user, roles, "lists", flash)
 
-    def list_page(self, idx, user, roles, flash=""):
+    def list_page(self, idx, user, roles, flash="", params=None, tab=""):
+        """Die Seite einer Liste: Objektkopf und drei Reiter (RFC-0118 §6.5)
+        -- Einträge (Listenbericht), Prüfung (Listenbericht der Befunde),
+        Entwurf (Arbeitskopie, Abgleich, Aufnehmen, Bericht, Entfernen)."""
         src = self.source_at(idx)
         if not src:
             return self.not_found(user, roles, "Diese Liste ist nicht eingetragen.")
         url = src["url"]
+        base = f"/liste/{esc(idx)}"
         doc, work, err = current(src)
         if err:
-            return page(url, f'<a class="back" href="/">← Zurück</a>'
-                             f'<div class="card danger"><p class="err">{esc(err)}</p>'
-                             f'<p class="muted">Adresse: <code>{esc(url)}</code></p></div>',
+            return page(url, f'{af.back("/", "Zu den Listen")}'
+                             f'<div class="oaap-card oaap-danger"><p class="err">{esc(err)}</p>'
+                             f'<p class="muted">Adresse: <code>{esc(url)}</code></p></div>'
+                             f'{self.remove_source_card(idx)}',
                         user, roles, "lists", flash)
         rep = self.checked(src, doc)
         title = str(doc.get("name") or url)
+        nfind = len(rep["findings"])
+        tabs = af.tabs([(base, "Einträge", len([e for e in doc.get("apps") or [] if isinstance(e, dict)])),
+                        (f"{base}/pruefung", "Prüfung", nfind or None),
+                        (f"{base}/entwurf", "Entwurf")],
+                       f"{base}/{tab}" if tab else base)
+        head = (f'{af.back("/", "Zu den Listen")}'
+                f'<div class="oaap-objhead">{af.pagehead(title, summary_badges(rep))}'
+                f'<p class="muted"><code>{esc(url)}</code>'
+                f'{" · " + af.badge("Entwurf", "test") if work else ""}</p></div>{tabs}')
+        if tab == "pruefung":
+            query = af.Query(params or {}, filters=("art",), default_sort="art")
+            body = head + self.findings_report(rep, query, f"{base}/pruefung?")
+        elif tab == "entwurf":
+            body = head + self.draft_tab(idx, src, doc, work, rep)
+        else:
+            query = af.Query(params or {}, filters=("pruefung",), default_sort="app")
+            body = head + self.entries_report(idx, doc, work, rep, query)
+        return page(title, body, user, roles, "lists", flash, obj=f"Liste:{idx}")
+
+    def entries_report(self, idx, doc, work, rep, query):
         per_app = {}
         for f in rep["findings"]:
             per_app.setdefault(f["app"], []).append(f["level"])
 
-        rows = []
-        for e in doc.get("apps") or []:
-            if not isinstance(e, dict):
-                continue
+        def worst(e):
+            lv = per_app.get(str(e.get("id") or ""), [])
+            return min([ck.LEVELS.index(l) for l in lv] or [len(ck.LEVELS)])
+
+        def state(e):
+            w = worst(e)
+            return ck.LEVELS[w] if w < len(ck.LEVELS) else "ok"
+
+        entries = [e for e in doc.get("apps") or [] if isinstance(e, dict)]
+        want = query.filters.get("pruefung")
+        if want:
+            entries = [e for e in entries if state(e) == want]
+        cols = [("App", "app", lambda e: str(e.get("name") or e.get("id") or ""), ""),
+                ("Kennung", "id", lambda e: str(e.get("id") or ""), "oaap-minor"),
+                ("Version", "version", lambda e: str(e.get("version") or ""), ""),
+                ("Art", "klasse", lambda e: str(e.get("app_class") or ""), "oaap-minor"),
+                ("Reifegrad", "reife", lambda e: str(e.get("maturity") or ""), "oaap-minor"),
+                ("Prüfung", "pruefung", worst, "")]
+
+        def row(e):
             app_id = str(e.get("id") or "")
-            marks = overrides_of(work, app_id) if work else set()
             lv = per_app.get(app_id, [])
             badges = " ".join(
-                f'<span class="badge {LEVEL_BADGE[l]}">{lv.count(l)} '
-                f'{esc(LEVEL_LABEL[l] if lv.count(l) == 1 else LEVEL_PLURAL[l])}</span>'
-                for l in ck.LEVELS if lv.count(l)) or '<span class="badge ok">in Ordnung</span>'
-            mark = (f'<br><span class="muted">{len(marks)} übersteuert</span>'
-                    if marks else "")
-            rows.append(
-                f'<tr class="rowlink"><td><a class="rowaction" '
-                f'href="/liste/{esc(idx)}/eintrag/{quote(app_id)}">{esc(e.get("name") or app_id)}'
-                f'</a><br><span class="muted"><code>{esc(app_id)}</code></span>{mark}</td>'
-                f'<td>{esc(e.get("version"))}<br><span class="muted">'
-                f'{esc(e.get("app_class") or "—")}</span></td>'
-                f'<td>{esc(e.get("maturity") or "—")}<br><span class="muted">'
-                f'{esc(e.get("status") or "—")}</span></td>'
-                f'<td>{badges}</td>'
-                f'<td><a class="rowaction" href="/liste/{esc(idx)}/eintrag/'
-                f'{quote(app_id)}">Bearbeiten</a><br>'
-                f'<form method="post" action="/liste/{esc(idx)}/abgleich" '
-                f'style="margin:0;display:inline">'
-                f'<input type="hidden" name="id" value="{esc(app_id)}">'
-                f'<button class="linkish">Abgleichen</button></form><br>'
-                f'<a class="rowaction" href="/liste/{esc(idx)}/eintrag/'
-                f'{quote(app_id)}/bericht">Bericht</a></td></tr>')
+                af.badge(f'{lv.count(l)} {LEVEL_LABEL[l] if lv.count(l) == 1 else LEVEL_PLURAL[l]}',
+                         LEVEL_BADGE[l]) for l in ck.LEVELS if lv.count(l)) or af.badge("in Ordnung", "ok")
+            marks = overrides_of(work, app_id) if work else set()
+            mark = f'<br><span class="muted">{len(marks)} übersteuert</span>' if marks else ""
+            return (f'<tr><td><a href="/liste/{esc(idx)}/eintrag/{quote(app_id)}">'
+                    f'{esc(e.get("name") or app_id)}</a>{mark}</td>'
+                    f'<td class="oaap-minor"><code>{esc(app_id)}</code></td>'
+                    f'<td>{esc(e.get("version"))}</td>'
+                    f'<td class="oaap-minor">{esc(e.get("app_class") or "—")}</td>'
+                    f'<td class="oaap-minor">{esc(e.get("maturity") or "—")}</td>'
+                    f'<td>{badges}</td></tr>')
+        choices = [("pruefung", "Prüfung", [(ck.FEHLER, "mit Fehler"), (ck.BEFUND, "mit Befund"),
+                                             (ck.HINWEIS, "mit Hinweis"), ("ok", "in Ordnung")])]
+        return af.list_report(query, entries, cols, row, base=f"/liste/{esc(idx)}?", noun="Einträge",
+                              choices=choices, placeholder="Name oder Kennung",
+                              empty_text="Diese Liste hat noch keinen Eintrag. Im Reiter "
+                                         "„Entwurf“ nimmst Du den ersten auf.")
 
+    def findings_report(self, rep, query, base):
+        rows = rep["findings"]
+        want = query.filters.get("art")
+        if want:
+            rows = [f for f in rows if f["level"] == want]
+        cols = [("Art", "art", lambda f: ck.LEVELS.index(f["level"]), ""),
+                ("App", "app", lambda f: f["app"] or "", ""),
+                ("Feld", "feld", lambda f: f["field"] or "", ""),
+                ("Befund", "text", lambda f: f["text"] or "", ""),
+                ("In der Liste", "", None, "oaap-minor"),
+                ("Im Manifest", "", None, "oaap-minor")]
+
+        def row(f):
+            return (f'<tr><td>{af.badge(LEVEL_LABEL[f["level"]], LEVEL_BADGE[f["level"]])}</td>'
+                    f'<td><code>{esc(f["app"]) or "—"}</code></td>'
+                    f'<td><code>{esc(f["field"])}</code></td><td>{esc(f["text"])}</td>'
+                    f'<td class="oaap-minor">{esc(f["list"]) or "—"}</td>'
+                    f'<td class="oaap-minor">{esc(f["manifest"]) or "—"}</td></tr>')
+        choices = [("art", "Art", [(l, LEVEL_PLURAL[l]) for l in ck.LEVELS])]
+        legend = "".join(
+            f'<p class="muted">{af.badge(LEVEL_LABEL[l], LEVEL_BADGE[l])} {esc(LEVEL_HELP[l])}</p>'
+            for l in ck.LEVELS if rep["counts"][l])
+        report = af.list_report(query, rows, cols, row, base=base, noun="Befunde", choices=choices,
+                                placeholder="App, Feld oder Text",
+                                empty_text="Keine Beanstandung. Jeder Eintrag deckt sich mit "
+                                           "dem Manifest, auf das er zeigt.")
+        facts = af.facts([("Einträge", str(rep["entries"])),
+                          ("Gegen das Manifest geprüft", str(rep["checked"])),
+                          ("Ungeprüft geblieben", str(rep["unreachable"]))])
+        return f'{facts}<br>{report}{legend}'
+
+    def draft_tab(self, idx, src, doc, work, rep):
         changes = ed.diff_documents(work["published"], doc) if work else []
-        draft_card = ""
         if work:
             c = ed.count_kinds(changes)
-            draft_card = f'''<div class="card">
-  <h2>Entwurf <span class="badge test">nicht veröffentlicht</span></h2>
+            draft_card = f'''<div class="oaap-card">
+  <h2>Entwurf <span class="oaap-badge test">nicht veröffentlicht</span></h2>
   <p class="muted">Begonnen am {esc(work.get("begonnen"))}, zuletzt gespeichert
      {esc(work.get("saved") or "—")}. {len(changes)} Änderung(en) gegenüber dem
      veröffentlichten Stand: {c[ed.STRUKTUR]} strukturell, {c[ed.REDAKTIONELL]}
      redaktionell, {c[ed.ERZEUGT]} aus den Manifesten übernommen.</p>
   <div class="actions">
-    <a class="btn ghost" href="/liste/{esc(idx)}/aenderungen">Änderungen ansehen</a>
-    <a class="btn" href="/liste/{esc(idx)}/datei">Als Datei herunterladen</a>
-    <form method="post" action="/liste/{esc(idx)}/verwerfen" style="margin:0"
+    <a class="oaap-btn" href="/liste/{esc(idx)}/aenderungen">Änderungen ansehen</a>
+    <a class="oaap-btn primary" href="/liste/{esc(idx)}/datei">Als Datei herunterladen</a>
+    <form method="post" action="/liste/{esc(idx)}/verwerfen"
           onsubmit="return confirm('Den Entwurf verwerfen? Alle Änderungen daran gehen verloren.')">
       <button class="danger">Entwurf verwerfen</button></form>
   </div>
 </div>'''
         else:
-            draft_card = ('<div class="card"><p class="muted">Es gibt noch keinen '
+            draft_card = ('<div class="oaap-card"><h2>Entwurf</h2><p class="muted">Es gibt noch keinen '
                           'Entwurf. Die erste Änderung an einem Eintrag legt eine '
                           'Arbeitskopie an; der veröffentlichte Stand bleibt daneben '
                           'stehen und dient als Vergleich.</p></div>')
 
-        take = f'''<div class="card">
+        take = f'''<div class="oaap-card">
   <h2>Mit den Manifesten abgleichen</h2>
   <p class="muted">Holt für jeden Eintrag Name, Verpackungsart, Version, Art der
-     App und Rollen aus dem Manifest — das ist die 80-%-Regel aus RFC-0012 §1.3.
+     App und Rollen aus dem Manifest.
      <strong>Übersteuerte Felder bleiben unberührt</strong>, sonst nähme jede
      Neuerzeugung eine bewusste Entscheidung stillschweigend zurück.
-     Für eine einzelne App steht <em>Abgleichen</em> in ihrer Zeile.</p>
+     Für eine einzelne App steht <em>Abgleichen</em> auf ihrer Seite.</p>
   <form method="post" action="/liste/{esc(idx)}/uebernehmen" style="margin:0">
-    <button class="ghost">Alle Einträge abgleichen</button></form>
+    <button>Alle Einträge abgleichen</button></form>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Nachpflege-Bericht</h2>
   <p class="muted">Der umgekehrte Weg: Statt die Liste ans Manifest anzupassen,
      sagt der Bericht, <strong>was dem Manifest fehlt</strong> — als Auftrag zum
      Weiterreichen an die KI, die die App betreut, mit einem einsetzbaren
      YAML-Block. Denn das Manifest gehört dem, der die App gebaut hat; der
      Katalog ist nur ein Verzeichnis.</p>
-  <p class="muted">Was der Katalog führt und das Manifest-Format noch nicht
-     kennt, steht getrennt und <strong>ohne Auftrag</strong> — das ist ein
-     offener Punkt an der Spezifikation und kein Versäumnis der App.</p>
   <div class="actions">
-    <a class="btn ghost" href="/liste/{esc(idx)}/bericht">Bericht für die ganze
-       Liste</a></div>
+    <a class="oaap-btn" href="/liste/{esc(idx)}/bericht">Bericht für die ganze Liste</a></div>
 </div>'''
+        return f"{draft_card}{take}{self.new_entry_card(idx)}{self.remove_source_card(idx)}"
 
-        body = f'''<a class="back" href="/">← Zu den Listen</a>
-<div class="pagehead"><h1>{esc(title)}</h1><div>{summary_badges(rep)}</div></div>
-{draft_card}
-<div class="card" style="overflow-x:auto">
-  <h2>Einträge</h2>
-  <table>
-    <tr><th>App</th><th>Version / Art</th><th>Reifegrad / Stand</th>
-        <th>Prüfung</th><th></th></tr>
-    {"".join(rows) or '<tr><td colspan="5" class="muted">Diese Liste hat noch keinen Eintrag.</td></tr>'}
-  </table>
-</div>
-{take}
-{self.new_entry_card(idx)}
-{findings_table(rep)}
-<div class="card"><h2>Herkunft</h2><dl class="facts">
-  <dt>Quelle</dt><dd><code>{esc(url)}</code></dd>
-  <dt>Einträge</dt><dd>{rep["entries"]}</dd>
-  <dt>Gegen das Manifest geprüft</dt><dd>{rep["checked"]}</dd>
-  <dt>Ungeprüft geblieben</dt><dd>{rep["unreachable"]}</dd>
-</dl></div>'''
-        return page(title, body, user, roles, "lists", flash)
+    def remove_source_card(self, idx):
+        """Eine Liste aus dem Editor nehmen -- früher eine Zeilenaktion auf
+        „Listen und Zugang“, jetzt auf der Seite der Liste (RFC-0118 §7.5)."""
+        if not may_configure(self.role_set()):
+            return ""
+        return f'''<div class="oaap-card oaap-danger">
+  <h2>Liste aus dem Editor nehmen</h2>
+  <p class="muted">Im Repository ändert das nichts. Ein Entwurf zu dieser Liste
+     geht dabei verloren.</p>
+  <form method="post" action="/quellen/entfernen"
+        onsubmit="return confirm('Diese Liste aus dem Editor nehmen? Ein Entwurf dazu geht verloren.')">
+    <input type="hidden" name="i" value="{esc(idx)}">
+    <button class="danger">Liste aus dem Editor nehmen</button></form>
+</div>'''
 
     def new_entry_card(self, idx, error="", values=None):
         v = values or {}
         msg = f'<p class="err">{esc(error)}</p>' if error else ""
-        return f'''<div class="card">
+        return f'''<div class="oaap-card">
   <h2>Eintrag aufnehmen</h2>
   <p class="muted">Nur Kennung und Zeiger auf das Paket — alles Weitere holt
-     „Aus den Manifesten übernehmen". Ein Eintrag darf entstehen,
-     <strong>bevor sein Manifest abrufbar ist</strong> (RFC-0013, Frage 4);
+     der Abgleich mit dem Manifest. Ein Eintrag darf entstehen,
+     <strong>bevor sein Manifest abrufbar ist</strong>;
      der Prüfer meldet dann bei jedem Lauf, dass er ohne Beleg dasteht.</p>
   {msg}
   <form method="post" action="/liste/{esc(idx)}/neu">
@@ -909,9 +867,22 @@ class Handler(BaseHTTPRequestHandler):
       <label>Fester Stand (Tag oder Zweig, sonst der Hauptzweig)
         <input name="ref" value="{esc(v.get("ref"))}" placeholder="v1.23.0"></label>
     </div>
-    <div class="actions"><button class="ghost">Aufnehmen</button></div>
+    <div class="actions"><button class="primary">Aufnehmen</button></div>
   </form>
 </div>'''
+
+    def help_page(self, slug, user, roles):
+        """Die Hilfe aus docs/ -- dieselben Dateien, die über `docs:` an die
+        Hilfe des Mandanten gehen (eine Quelle, RFC-0118 §9)."""
+        got = helpdocs.load(slug)
+        if not got:
+            self.send_html(self.not_found(user, roles, "Diese Hilfeseite gibt es nicht."), 404)
+            return
+        title, html_ = got
+        body = (f'<div class="grid2" style="grid-template-columns:3fr 1fr;align-items:start">'
+                f'<article class="oaap-card">{html_}</article>'
+                f'<aside class="oaap-card"><h2>Hilfe</h2>{helpdocs.toc(slug)}</aside></div>')
+        self.send_html(page(title, body, user, roles, "help"))
 
     def entry_page(self, idx, app_id, user, roles, flash="", remove=False, error=""):
         src = self.source_at(idx)
@@ -931,16 +902,16 @@ class Handler(BaseHTTPRequestHandler):
         back = f'/liste/{esc(idx)}'
 
         if remove:
-            body = f'''<a class="back" href="{back}/eintrag/{quote(app_id)}">← Zurück</a>
+            body = f'''{af.back(f"{back}/eintrag/{quote(app_id)}", "Zurück")}
 <h1>{esc(entry.get("name") or app_id)} entfernen?</h1>
-<div class="card danger">
+<div class="oaap-card oaap-danger">
   <p>Der Eintrag <code>{esc(app_id)}</code> verschwindet aus der Arbeitskopie.
      Die veröffentlichte Liste bleibt unberührt — entfernt ist er dort erst,
      wenn die neue Datei veröffentlicht wird.</p>
   <form method="post" action="{back}/eintrag/{quote(app_id)}">
     <input type="hidden" name="tun" value="entfernen">
     <div class="actions"><button class="danger">Ja, entfernen</button>
-      <a class="btn ghost" href="{back}/eintrag/{quote(app_id)}">Abbrechen</a></div>
+      <a class="oaap-btn" href="{back}/eintrag/{quote(app_id)}">Abbrechen</a></div>
   </form>
 </div>'''
             return page("Entfernen", body, user, roles, "lists")
@@ -957,9 +928,9 @@ class Handler(BaseHTTPRequestHandler):
                                        "solange steht die Behauptung dieses Eintrags "
                                        "ohne Beleg da.", murl, ""))
         findings = [f for f in findings if f["app"] in (app_id, "")]
-        fbox = ('<div class="card"><p class="ok">Dieser Eintrag deckt sich mit '
+        fbox = ('<div class="oaap-card"><p class="ok">Dieser Eintrag deckt sich mit '
                 'seinem Manifest.</p></div>' if not findings else
-                f'<div class="card" style="overflow-x:auto"><h2>Prüfung</h2><table>'
+                f'<div class="oaap-card" style="overflow-x:auto"><h2>Prüfung</h2><table class="oaap-table">'
                 f'<tr><th>Art</th><th>Feld</th><th>Befund</th><th>In der Liste</th>'
                 f'<th>Im Manifest</th></tr>{findings_rows(findings, with_app=False)}'
                 f'</table></div>')
@@ -984,7 +955,7 @@ class Handler(BaseHTTPRequestHandler):
                         'Das Manifest sagt dazu nichts — es ist noch Format 0.1.')
             else:
                 side = "Das Manifest war nicht abrufbar."
-            mark = (' <span class="badge test">übersteuert</span>' if unlocked else "")
+            mark = (' <span class="oaap-badge test">übersteuert</span>' if unlocked else "")
             checked = " checked" if unlocked else ""
             gen_rows.append(f'''<label>{esc(ed.FIELD_LABEL[field])}{mark}
   <input name="gen_{field}" value="{esc(shown)}"{"" if unlocked else " disabled"}></label>
@@ -992,13 +963,17 @@ class Handler(BaseHTTPRequestHandler):
   <label style="margin:0"><input type="checkbox" name="entriegelt" value="{field}"{checked}> abweichend pflegen</label>
   <span>{side}</span></div>''')
 
-        body = f'''<a class="back" href="{back}">← Zur Liste</a>
-<div class="pagehead"><h1>{esc(entry.get("name") or app_id)}</h1>
-  <div><span class="badge">{esc(app_id)}</span></div></div>
-{f'<div class="card danger"><p class="err">{esc(error)}</p></div>' if error else ""}
+        sync = (f'<form method="post" action="{back}/abgleich" style="display:inline">'
+                f'<input type="hidden" name="id" value="{esc(app_id)}">'
+                f'<button title="Nur die Felder aus dem Manifest, Texte bleiben">Abgleichen</button></form> '
+                f'<a class="oaap-btn" href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>')
+        body = f'''{af.back(back, "Zur Liste")}
+<div class="oaap-objhead">{af.pagehead(entry.get("name") or app_id, sync)}
+  <p class="muted"><code>{esc(app_id)}</code></p></div>
+{f'<div class="oaap-card oaap-danger"><p class="err">{esc(error)}</p></div>' if error else ""}
 {fbox}
 <form method="post" action="{back}/eintrag/{quote(app_id)}">
-<div class="card">
+<div class="oaap-card">
   <h2>Redaktionell — worüber ein Mensch nachdenken muss</h2>
   <label>Ein Satz dazu (erscheint in der Übersicht)
     <input name="summary" value="{esc(entry.get("summary"))}" maxlength="200"></label>
@@ -1027,7 +1002,7 @@ class Handler(BaseHTTPRequestHandler):
   </div>
 </div>
 
-<div class="card">
+<div class="oaap-card">
   <h2>Verweise und Bilder</h2>
   <div class="grid2">{link_fields}</div>
   <label>Weitere Verweise — je Zeile <code>Beziehung | Adresse | Beschriftung</code>
@@ -1035,32 +1010,31 @@ class Handler(BaseHTTPRequestHandler):
   <label>Bildschirmfotos — je Zeile <code>Pfad | Bildunterschrift</code>
     <textarea name="screenshots" class="small">{esc(ed.format_pairs(entry.get("screenshots"), ("src", "caption")))}</textarea></label>
   <p class="hint">Bildpfade gelten <strong>relativ zur Liste</strong>, nicht als
-     Adresse eines fremden Servers (RFC-0012 §1.1): Sonst ruft jeder Knoten, der
+     Adresse eines fremden Servers: Sonst ruft jeder Knoten, der
      die Store-Seite öffnet, einen Rechner auf, den niemand ausgewählt hat — und
      verrät ihm damit seine Existenz.</p>
 </div>
 
-<div class="card locked">
+<div class="oaap-card locked">
   <h2>Aus dem Manifest erzeugt</h2>
   <p class="hint">Diese fünf Felder gehören dem Paket, nicht dem Katalog. Wer sie
      abweichend pflegen will, hakt das an — dann bleibt die Abweichung bei der
      nächsten Neuerzeugung stehen, statt stillschweigend zurückgenommen zu
-     werden (RFC-0012 §1.3).</p>
+     werden.</p>
   {"".join(gen_rows)}
 </div>
 
-<div class="card">
-  <h2>Von Hand, obwohl §1.3 sie „erzeugt" nennt</h2>
-  <p class="hint">RFC-0012 §1.3 führt diese Felder unter „aus dem Manifest
-     erzeugt". Eine Neuerzeugung kann das heute nicht einlösen:
+<div class="oaap-card">
+  <h2>Von Hand gepflegt, obwohl sie dem Paket gehören</h2>
+  <p class="hint">Diese Felder gehören eigentlich zum Paket, eine Neuerzeugung
+     kann sie heute aber nicht liefern:
      <code>profiles</code> kennt das Manifest-Schema nicht, das Freigabedatum
      wäre das eines Git-Tags, und beim Bild liegt es anders — <code>app.icon</code>
      gibt es sehr wohl, aber im Katalog gilt ein Bildpfad relativ zur Liste und
      im Manifest relativ zum Paket; eine Neuerzeugung müsste die Datei
      kopieren. Sie hier verriegelt darzustellen wäre eine Unwahrheit: Es gäbe
-     nichts, woraus sie je erzeugt würden. Offener Punkt am Papier —
-     der <a href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>
-     hält ihn fest, statt ihn zu verschweigen.</p>
+     nichts, woraus sie je erzeugt würden. Der <a href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>
+     hält das fest, statt es zu verschweigen.</p>
   <div class="grid2">
     <label>Freigegeben am (JJJJ-MM-TT)
       <input name="released" value="{esc(entry.get("released"))}" placeholder="2026-08-09"></label>
@@ -1077,20 +1051,19 @@ class Handler(BaseHTTPRequestHandler):
       <input name="pkg_ref" value="{esc(pkg.get("ref"))}"></label>
   </div>
   <p class="hint">Ein Eintrag <strong>ohne festen Stand</strong> installiert,
-     was der Hauptzweig gerade enthält — nicht eine bestimmte Version
-     (RFC-0012 §1.1).</p>
+     was der Hauptzweig gerade enthält — nicht eine bestimmte Version.</p>
 </div>
 
 <div class="actions">
-  <button name="tun" value="speichern">Speichern</button>
-  <button name="tun" value="uebernehmen" class="ghost">Speichern und mit dem Manifest abgleichen</button>
-  <a class="btn ghost" href="{back}/eintrag/{quote(app_id)}/bericht">Nachpflege-Bericht</a>
-  <a class="btn ghost" href="{back}">Abbrechen</a>
-  <a class="btn ghost" href="{back}/eintrag/{quote(app_id)}?entfernen=1"
-     style="margin-left:auto;color:var(--err);border-color:var(--err)">Eintrag entfernen</a>
+  <button name="tun" value="speichern" class="primary">Speichern</button>
+  <button name="tun" value="uebernehmen">Speichern und mit dem Manifest abgleichen</button>
+  <a class="oaap-btn" href="{back}">Abbrechen</a>
+  <a class="oaap-btn danger" href="{back}/eintrag/{quote(app_id)}?entfernen=1"
+     style="margin-left:auto">Eintrag entfernen</a>
 </div>
 </form>'''
-        return page(entry.get("name") or app_id, body, user, roles, "lists", flash)
+        return page(entry.get("name") or app_id, body, user, roles, "lists", flash,
+                    obj=f"Eintrag:{app_id}")
 
     def changes_page(self, idx, user, roles):
         src = self.source_at(idx)
@@ -1103,37 +1076,37 @@ class Handler(BaseHTTPRequestHandler):
         changes = ed.diff_documents(work["published"], work["doc"])
         c = ed.count_kinds(changes)
         rows = "".join(
-            f'<tr><td><span class="badge {KIND_BADGE[ch["kind"]]}">'
+            f'<tr><td><span class="oaap-badge {KIND_BADGE[ch["kind"]]}">'
             f'{esc(KIND_LABEL[ch["kind"]])}</span></td>'
             f'<td><code>{esc(ch["app"])}</code></td>'
             f'<td>{esc(ed.FIELD_LABEL.get(ch["field"], ch["field"]))}</td>'
             f'<td class="muted">{esc(ch["before"]) or "—"}</td>'
             f'<td>{esc(ch["after"]) or "—"}</td></tr>' for ch in changes)
-        table = (f'<div class="card" style="overflow-x:auto"><table>'
+        table = (f'<div class="oaap-card" style="overflow-x:auto"><table class="oaap-table">'
                  f'<tr><th>Art</th><th>App</th><th>Feld</th><th>Vorher</th>'
                  f'<th>Nachher</th></tr>{rows}</table></div>' if changes else
-                 '<div class="card"><p class="muted">Der Entwurf ist mit dem '
+                 '<div class="oaap-card"><p class="muted">Der Entwurf ist mit dem '
                  'veröffentlichten Stand identisch.</p></div>')
-        body = f'''<a class="back" href="/liste/{esc(idx)}">← Zur Liste</a>
+        body = f'''{af.back(f"/liste/{esc(idx)}", "Zur Liste")}
 <h1>Was sich ändern würde</h1>
-<div class="card">
+<div class="oaap-card">
   <p>Gegenüber dem Stand, der beim Beginn des Entwurfs veröffentlicht war
      ({esc(work.get("begonnen"))}).</p>
-  <dl class="facts">
+  <dl class="oaap-kv">
     <dt>Strukturell</dt><dd>{c[ed.STRUKTUR]} — Einträge aufgenommen, entfernt,
        oder ein Paket, das umzieht</dd>
     <dt>Redaktionell</dt><dd>{c[ed.REDAKTIONELL]} — Texte, Einordnung, Verweise</dd>
     <dt>Aus den Manifesten</dt><dd>{c[ed.ERZEUGT]} — vom Prüfer erzeugt, nicht
        von Hand geschrieben</dd>
   </dl>
-  <p class="muted">Die Trennung ist keine Kosmetik: In Bauschritt 3 zählt die
-     Mengenbremse <strong>nur</strong> die ersten beiden. Was der Prüfer selbst
+  <p class="muted">Die Trennung ist keine Kosmetik: Beim späteren
+     Zurückschreiben zählt die Mengenbremse <strong>nur</strong> die ersten beiden. Was der Prüfer selbst
      aus den Manifesten gebildet hat, ist maschinell und nachvollziehbar
      entstanden — zählte es mit, käme die Rückfrage bei jedem Lauf und würde
-     weggeklickt (RFC-0013, Frage 5).</p>
+     weggeklickt.</p>
 </div>
 {table}
-<div class="actions"><a class="btn" href="/liste/{esc(idx)}/datei">Als Datei
+<div class="actions"><a class="oaap-btn primary" href="/liste/{esc(idx)}/datei">Als Datei
    herunterladen</a></div>'''
         return page("Änderungen", body, user, roles, "lists")
 
@@ -1155,12 +1128,12 @@ class Handler(BaseHTTPRequestHandler):
         # bei jedem Lauf, dass er ohne Beleg dasteht.
         broken = [f for f in ck.check_structure(doc) if f["level"] == ck.FEHLER]
         if broken:
-            body = (f'<a class="back" href="/liste/{esc(idx)}">← Zur Liste</a>'
+            body = (f'{af.back(f"/liste/{esc(idx)}", "Zur Liste")}'
                     f'<h1>Diese Liste wäre nicht benutzbar</h1>'
-                    f'<div class="card danger"><p>Ein Knoten würde daran scheitern '
+                    f'<div class="oaap-card oaap-danger"><p>Ein Knoten würde daran scheitern '
                     f'oder etwas Falsches tun. Der Prüfer ist der Wächter — deshalb '
                     f'gibt es die Datei erst, wenn das behoben ist.</p></div>'
-                    f'<div class="card" style="overflow-x:auto"><table>'
+                    f'<div class="oaap-card" style="overflow-x:auto"><table class="oaap-table">'
                     f'<tr><th>Art</th><th>App</th><th>Feld</th><th>Befund</th>'
                     f'<th>In der Liste</th><th>Im Manifest</th></tr>'
                     f'{findings_rows(broken)}</table></div>')
@@ -1318,30 +1291,22 @@ class Handler(BaseHTTPRequestHandler):
             if not slot:
                 zugang = '<span class="muted">öffentlich</span>'
             elif token_of(src):
-                zugang = (f'<span class="badge ok">Platz {slot}</span><br>'
+                zugang = (f'<span class="oaap-badge ok">Platz {slot}</span><br>'
                           f'<span class="muted">Schlüssel ist hinterlegt</span>')
             else:
-                zugang = (f'<span class="badge err">Platz {slot} leer</span><br>'
+                zugang = (f'<span class="oaap-badge err">Platz {slot} leer</span><br>'
                           f'<span class="muted">im Portal eintragen</span>')
-            entfernen = ("" if not darf else
-                         f'<form method="post" action="/quellen/entfernen" '
-                         f'style="margin:0" onsubmit="return confirm('
-                         f'\'Diese Liste aus dem Editor nehmen? Ein Entwurf dazu '
-                         f'geht verloren.\')">'
-                         f'<input type="hidden" name="i" value="{i}">'
-                         f'<button class="linkish" style="color:var(--err)">'
-                         f'Entfernen</button></form>')
             rows.append(
-                f'<tr><td><a class="rowaction" href="/liste/{i}">'
+                f'<tr><td><a href="/liste/{i}">'
                 f'{esc(src.get("name") or src["url"])}</a><br>'
                 f'<span class="muted">{esc(src["url"])}</span></td>'
-                f'<td>{zugang}</td><td>{entfernen}</td></tr>')
+                f'<td>{zugang}</td></tr>')
 
         slots = "".join(
             f'<option value="{n}"{" selected" if str(v.get("token")) == str(n) else ""}>'
             f'Platz {n} — {"Schlüssel hinterlegt" if TOKENS[n - 1] else "noch leer"}'
             f'</option>' for n in range(1, len(TOKENS) + 1))
-        form = "" if not darf else f'''<div class="card">
+        form = "" if not darf else f'''<div class="oaap-card">
   <h2>Liste aufnehmen</h2>
   {f'<p class="err">{esc(error)}</p>' if error else ""}
   <form method="post" action="/quellen/aufnehmen">
@@ -1358,25 +1323,23 @@ class Handler(BaseHTTPRequestHandler):
         <option value="0">keine — das Repository ist öffentlich</option>
         {slots}
       </select></label>
-    <div class="actions"><button>Aufnehmen</button></div>
+    <div class="actions"><button class="primary">Aufnehmen</button></div>
   </form>
 </div>'''
 
         hinweis = "" if darf else (
-            '<div class="card"><p class="muted">Listen aufzunehmen oder zu '
+            '<div class="oaap-card"><p class="muted">Listen aufzunehmen oder zu '
             'entfernen ist Einrichtung und braucht die Rolle <code>keyuser</code> '
             'oder <code>admin</code>. Bearbeiten darf jeder, der hierher '
             'kommt.</p></div>')
 
-        body = f'''<h1>Listen und Zugangsdaten</h1>
-<div class="card" style="overflow-x:auto">
-  <table>
-    <tr><th>Liste</th><th>Zugang</th><th></th></tr>
-    {"".join(rows) or '<tr><td colspan="3" class="muted">Noch keine Liste eingetragen.</td></tr>'}
-  </table>
-</div>
+        table = af.table("<th>Liste</th><th>Zugang</th>", rows,
+                         "Noch keine Liste eingetragen. Unten nimmst Du die erste auf.")
+        body = f'''{af.pagehead("Listen und Zugangsdaten")}
+{table}
+<p class="muted">Entfernen steht auf der Seite einer Liste, im Reiter „Entwurf“.</p>
 {form}{hinweis}
-<div class="card">
+<div class="oaap-card">
   <h2>Wo die Schlüssel liegen — und warum nicht hier</h2>
   <p>Ein privates Repository verlangt einen Zugangsschlüssel schon zum
      <strong>Lesen</strong>. Der Editor kennt drei <strong>Plätze</strong>; die
@@ -1388,8 +1351,7 @@ class Handler(BaseHTTPRequestHandler):
      für Geheimnisse an. Sie würde damit nachbauen, was die Plattform schon hat,
      und zwar schwächer geschützt. Die feste Zahl an Plätzen ist der Preis
      dafür — sichtbar statt versteckt: Braucht es einen vierten, ist genau das
-     der Beleg, dass die Plattform eine allgemeine Lösung bekommen sollte
-     (RFC-0013).</p>
+     der Beleg, dass die Plattform eine allgemeine Lösung bekommen sollte.</p>
   <p class="muted">Ein Schlüssel geht <strong>nur an den Anbieter, für den er
      eingetragen ist</strong>. Eine Liste kann nicht dadurch, dass sie auf ein
      fremdes Repository zeigt, dorthin ein Token schicken lassen.</p>
@@ -1526,7 +1488,7 @@ class Handler(BaseHTTPRequestHandler):
         if not problem and not git.startswith("https://"):
             problem = "Das Paket muss über https:// erreichbar sein."
         if problem:
-            body = (f'<a class="back" href="/liste/{esc(idx)}">← Zur Liste</a>'
+            body = (f'{af.back(f"/liste/{esc(idx)}", "Zur Liste")}'
                     f'<h1>Eintrag aufnehmen</h1>'
                     f'{self.new_entry_card(idx, problem, values)}')
             self.send_html(page("Eintrag aufnehmen", body, user, roles, "lists"))
@@ -1543,16 +1505,16 @@ class Handler(BaseHTTPRequestHandler):
             doc = json.loads(text)
         except ValueError as e:
             self.send_html(page("Liste einfügen",
-                                f'<h1>Liste einfügen</h1><div class="card danger">'
+                                f'<div class="oaap-card oaap-danger">'
                                 f'<p class="err">Das ist keine gültige JSON-Datei: '
                                 f'{esc(e)}</p></div>{PASTE_BODY}', user, roles, "paste"))
             return
-        rep = self.checked(src, doc)
+        # Eine eingefügte Liste hat keine Quelle und damit keinen Schlüssel.
+        rep = self.checked({"url": "", "token": 0}, doc)
         title = str((doc or {}).get("name") or "Eingefügte Liste")
-        body = (f'<a class="back" href="/pruefen">← Zurück</a>'
-                f'<div class="pagehead"><h1>{esc(title)}</h1>'
-                f'<div>{summary_badges(rep)}</div></div>'
-                f'<div class="card"><dl class="facts">'
+        body = (f'{af.back("/pruefen", "Zurück")}'
+                f'{af.pagehead(title, summary_badges(rep))}'
+                f'<div class="oaap-card"><dl class="oaap-kv">'
                 f'<dt>Einträge</dt><dd>{rep["entries"]}</dd>'
                 f'<dt>Gegen das Manifest geprüft</dt><dd>{rep["checked"]}</dd>'
                 f'<dt>Ungeprüft geblieben</dt><dd>{rep["unreachable"]}</dd>'
@@ -1567,7 +1529,7 @@ def one(form, key, default=""):
     return (form.get(key) or [default])[0].strip()
 
 
-LISTS_EMPTY = '''<div class="card">
+LISTS_EMPTY = '''<div class="oaap-card">
   <h2>Noch keine Liste eingetragen</h2>
   <p class="muted">Unter <a href="/quellen">Listen und Zugang</a> nimmst Du
      eine auf — auch eine aus einem privaten Repository. Die Voreinstellung
@@ -1576,8 +1538,8 @@ LISTS_EMPTY = '''<div class="card">
      sich unter <a href="/pruefen">Liste einfügen</a> trotzdem prüfen.</p>
 </div>'''
 
-PASTE_BODY = '''<h1>Liste einfügen</h1>
-<div class="card">
+PASTE_BODY = '''<div class="oaap-pagehead"><h1>Liste einfügen</h1></div>
+<div class="oaap-card">
   <p class="muted">Für eine Liste, die noch nicht veröffentlicht ist —
      etwa eine, die gerade entsteht. Der Inhalt wird geprüft und nirgends
      gespeichert. Die Manifeste holt der Prüfer aus den Repositories, auf
@@ -1586,95 +1548,132 @@ PASTE_BODY = '''<h1>Liste einfügen</h1>
     <label>Inhalt der Liste (JSON)
       <textarea name="doc" rows="14" required
                 placeholder='{"store": "0.2", "name": "…", "apps": [ … ]}'></textarea></label>
-    <div class="actions"><button>Prüfen</button></div>
+    <div class="actions"><button class="primary">Prüfen</button></div>
   </form>
 </div>'''
 
-HELP_BODY = f'''<h1>Hilfe</h1>
-<div class="card">
-  <h2>Wozu dieses Werkzeug</h2>
-  <p>Eine Store-Liste ist kein Dokument. Sie ist eine Anweisung, die auf
-     fremden Rechnern Software installiert. Deshalb prüft dieses Werkzeug
-     eine Liste nicht nur gegen das Format, sondern <strong>gegen die
-     Manifeste, auf die sie zeigt</strong>.</p>
-  <p class="muted">Der Anlass steht in RFC-0013: Ollama stand am 09.08.2026
-     in unserer Liste als Hintergrunddienst, sein Manifest sagte davon
-     nichts. Der Widerspruch war wochenlang unsichtbar — beim Lesen von
-     JSON findet so etwas kein Mensch.</p>
-</div>
-<div class="card">
-  <h2>Die drei Arten von Befund</h2>
-  <dl class="facts">
-    <dt><span class="badge err">Fehler</span></dt><dd>{esc(LEVEL_HELP[ck.FEHLER])}</dd>
-    <dt><span class="badge test">Befund</span></dt><dd>{esc(LEVEL_HELP[ck.BEFUND])}</dd>
-    <dt><span class="badge off">Hinweis</span></dt><dd>{esc(LEVEL_HELP[ck.HINWEIS])}</dd>
-  </dl>
-  <p class="muted">Unbekannte Werte im Vokabular sind bewusst nur ein
-     Hinweis: Ein Knoten toleriert sie (RFC-0012 §8.1), also darf der
-     Editor nicht so tun, als wäre die Liste kaputt.</p>
-</div>
-<div class="card">
-  <h2>Wie bearbeitet wird</h2>
-  <p>Die erste Änderung legt einen <strong>Entwurf</strong> an — eine
-     Arbeitskopie auf dieser Instanz. Der veröffentlichte Stand bleibt
-     daneben stehen; <em>Änderungen ansehen</em> zeigt jederzeit, was sich
-     unterscheidet. Solange ein Entwurf besteht, prüft der Prüfer ihn und
-     nicht mehr die Veröffentlichung.</p>
-  <p><strong>Fünf Felder gehören dem Paket:</strong> Name, Verpackungsart,
-     Version, Art der App und die Rollen. Sie stehen verriegelt da und
-     werden aus dem Manifest übernommen. Wer eines davon abweichend pflegen
-     will, hakt „abweichend pflegen" an — die Abweichung wird dann
-     <strong>markiert</strong> und überlebt die nächste Neuerzeugung. Ohne
-     diese Markierung nähme jede Neuerzeugung eine bewusste Entscheidung
-     stillschweigend zurück (RFC-0012 §1.3).</p>
-  <p class="muted">Die Markierungen liegen im Editor, nicht in der Liste:
-     Eine Liste ist ein Dokument nach dem Schema, die Buchführung des
-     Editors gehört nicht hinein. Wer dieselbe Liste in einem anderen
-     Editor öffnet, sieht sie deshalb nicht.</p>
-</div>
-<div class="card">
-  <h2>Was verglichen wird — und was nicht</h2>
-  <p>Verglichen wird, was in Liste <em>und</em> Manifest steht: Name,
-     Verpackungsart, Version, Art der App und die Rollen (als Menge —
-     die Reihenfolge bedeutet nichts).</p>
-  <p class="muted"><strong>Nicht</strong> verglichen werden
-     <code>description</code> (in der Liste steht absichtlich der längere,
-     redaktionelle Text), <code>icon</code>, <code>released</code> und
-     <code>profiles</code>. RFC-0012 §1.3 führt sie als „erzeugt", was eine
-     Neuerzeugung nicht einlösen kann: <code>released</code> und
-     <code>profiles</code> kennt das Manifest-Schema gar nicht, und beim Bild
-     gilt im Katalog ein Pfad relativ zur Liste, im Manifest einer relativ zum
-     Paket. Das ist ein offener Punkt am Papier, kein Versäumnis dieses
-     Werkzeugs — deshalb sind sie hier frei bearbeitbar statt verriegelt.</p>
-</div>
-<div class="card">
-  <h2>Der Nachpflege-Bericht</h2>
-  <p>Der Abgleich geht in eine Richtung: Liste folgt Manifest. Der Bericht
-     geht in die andere — er sagt, <strong>was dem Manifest fehlt</strong>,
-     und ist zum Weiterreichen an die KI gedacht, die die App betreut. Mit
-     einem YAML-Block, den man einsetzen kann.</p>
-  <p class="muted">Drei Dinge tut er bewusst <em>nicht</em>. Er verlangt nichts
-     nachzupflegen, wo Liste und Manifest sich <strong>widersprechen</strong> —
-     dort ist der Katalog schuld, und eine fremde KI anzuweisen, unsere
-     veraltete Version zu übernehmen, wäre schlimmer als gar kein Bericht. Er
-     schlägt für das Bild <strong>keinen Pfad</strong> vor, weil der im Katalog
-     einen anderen Bezugspunkt hat. Und was das Manifest-Format noch nicht
-     kennt, führt er getrennt und <strong>ohne Auftrag</strong>.</p>
-</div>
-<div class="card">
-  <h2>Was dieser Stand nicht kann</h2>
-  <p>Er <strong>veröffentlicht nichts</strong>: kein Zurückschreiben ins
-     Repository, keine Zugangsdaten. Das Ergebnis ist eine Datei zum
-     Herunterladen. Das Zurückschreiben ist Bauschritt 3 aus RFC-0013,
-     dann mit den drei Betriebsarten — allein gepflegt, Vier-Augen,
-     Vorschlag einreichen.</p>
-  <p class="muted">Der Prüfer ist dabei der Wächter, nicht der Mensch: Was
-     strukturell kaputt ist, gibt es auch jetzt schon nicht als Datei.</p>
-</div>'''
+# ------------------------------------------------------------- MCP-Tür
+#
+# RFC-0118 §9: die Assistenten des Mandanten lesen, was die Seite zeigt --
+# Listen, Einträge, Befunde. Dieselben Rollen wie die Seite (Route / im
+# Manifest: user, keyuser, admin). Nie ein Schlüssel: Die Quelle nennt nur
+# ihren Platz, nicht seinen Inhalt. Kein Schreibwerkzeug in dieser Stufe.
+
+PAGE_ROLES = {"user", "keyuser", "admin"}
+
+DOOR = mcpdoor.Door(
+    "oaap-store-editor", VERSION,
+    "Store-Listen dieses Editors lesen: welche Listen es gibt, welche Apps sie "
+    "führen und was der Prüfer gegen ihre Manifeste findet. Nur lesend.")
+
+
+def _may_read(who):
+    if not PAGE_ROLES & set(who.get("roles") or []):
+        raise mcpdoor.Refused("Der Store-Editor ist nur für user, keyuser und admin.")
+
+
+def _check(src, doc):
+    return ck.check_document(doc, fetch=fetch, load_yaml=yaml.safe_load,
+                             token=token_of(src), token_forge=ed.source_forge(src["url"]))
+
+
+def _source(args):
+    raw = str(args.get("liste", "")).strip()
+    sources = load_sources()
+    if raw.isdigit() and int(raw) < len(sources):
+        return raw, sources[int(raw)]
+    for i, src in enumerate(sources):
+        if raw and raw in (src["url"], src.get("name") or ""):
+            return str(i), src
+    raise mcpdoor.Refused("Diese Liste ist nicht eingetragen. store_editor_lists nennt die Listen.")
+
+
+@DOOR.tool("store_editor_lists", "Listen zeigen",
+           "Nennt die Store-Listen, die dieser Editor pflegt: Nummer, Name, Adresse, "
+           "ob ein Entwurf besteht und ob ein Zugangsplatz gilt.")
+def _mcp_lists(args, who):
+    _may_read(who)
+    out = []
+    for i, src in enumerate(load_sources()):
+        work = load_work(src["url"])
+        slot = int(src.get("token") or 0)
+        out.append({"liste": str(i), "name": src.get("name") or "", "url": src["url"],
+                    "entwurf": bool(work),
+                    "zugang": "öffentlich" if not slot else
+                              (f"Platz {slot}" + ("" if token_of(src) else " (leer)"))})
+    return {"listen": out}
+
+
+@DOOR.tool("store_editor_entries", "Einträge einer Liste",
+           "Nennt die Apps einer Liste mit Version, Art, Reifegrad und der Zahl der "
+           "Befunde des Prüfers je App.",
+           {"liste": {"type": "string", "description": "Nummer, Name oder Adresse der Liste"},
+            "q": {"type": "string", "description": "Suchwort in Name oder Kennung (optional)"}},
+           required=("liste",))
+def _mcp_entries(args, who):
+    _may_read(who)
+    idx, src = _source(args)
+    doc, work, err = current(src)
+    if err:
+        return {"liste": idx, "fehler": err}
+    rep = _check(src, doc)
+    per = {}
+    for f in rep["findings"]:
+        per.setdefault(f["app"], {}).setdefault(LEVEL_PLURAL[f["level"]], 0)
+        per[f["app"]][LEVEL_PLURAL[f["level"]]] += 1
+    q = str(args.get("q") or "").lower()
+    apps = []
+    for e in doc.get("apps") or []:
+        if not isinstance(e, dict):
+            continue
+        app_id = str(e.get("id") or "")
+        if q and q not in f"{app_id} {e.get('name') or ''}".lower():
+            continue
+        apps.append({"id": app_id, "name": e.get("name") or app_id, "version": e.get("version"),
+                     "art": e.get("app_class"), "reifegrad": e.get("maturity"),
+                     "befunde": per.get(app_id, {})})
+    return {"liste": idx, "name": doc.get("name") or src["url"], "entwurf": bool(work),
+            "eintraege": apps}
+
+
+@DOOR.tool("store_editor_findings", "Befunde lesen",
+           "Liest die Befunde des Prüfers zu einer Liste oder zu einer App darin: Art "
+           "(Fehler, Befund, Hinweis), Feld, Text, Wert in der Liste und im Manifest.",
+           {"liste": {"type": "string", "description": "Nummer, Name oder Adresse der Liste"},
+            "app": {"type": "string", "description": "Kennung einer App (optional)"}},
+           required=("liste",))
+def _mcp_findings(args, who):
+    _may_read(who)
+    idx, src = _source(args)
+    doc, _work, err = current(src)
+    if err:
+        return {"liste": idx, "fehler": err}
+    rep = _check(src, doc)
+    app_id = str(args.get("app") or "").strip()
+    rows = [f for f in rep["findings"] if not app_id or f["app"] in (app_id, "")]
+    return {"liste": idx, "eintraege": rep["entries"], "geprueft": rep["checked"],
+            "ungeprueft": rep["unreachable"],
+            "befunde": [{"art": LEVEL_LABEL[f["level"]], "app": f["app"], "feld": f["field"],
+                         "text": f["text"], "liste": f["list"], "manifest": f["manifest"]}
+                        for f in rows]}
+
+
+DOOR.prompt("store_editor_review", "Liste prüfen",
+            "Fasst zusammen, was der Prüfer an einer Store-Liste beanstandet.",
+            "Prüfe die Store-Liste {liste} im Store-Editor: Lies ihre Befunde "
+            "(store_editor_findings) und fasse zusammen, was ein Knoten daran scheitern "
+            "ließe (Fehler), wo Liste und Manifest sich widersprechen (Befunde) und was "
+            "nur auffällt (Hinweise). Schlage vor, was zuerst zu tun ist.", ("liste",))
+DOOR.prompt("store_editor_entry", "Eintrag erklären",
+            "Erklärt den Stand einer App in einer Store-Liste.",
+            "Erkläre den Eintrag {app} in der Store-Liste {liste}: Lies die Einträge "
+            "(store_editor_entries) und die Befunde zu dieser App (store_editor_findings) "
+            "und sage in einfachen Worten, ob er sich mit seinem Manifest deckt und was "
+            "nachzupflegen wäre.", ("liste", "app"))
 
 
 def main():
-    print(f"OAAP Store Editor {VERSION} auf Port {PORT}; "
+    print(f"Store-Editor {VERSION} auf Port {PORT}; "
           f"{len(load_sources())} Liste(n); {sum(1 for t in TOKENS if t)} von "
           f"{len(TOKENS)} Zugangsdaten-Plätzen belegt; Speicher {DATA_DIR} "
           f"{'beschreibbar' if storage_ready() else 'NICHT beschreibbar'}", flush=True)

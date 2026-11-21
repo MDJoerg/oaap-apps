@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: keycloak
-  name: Keycloak (Anmeldedienst)
-  version: 0.1.7
+  name: Anmeldedienst (Keycloak)
+  version: 0.2.0
   type: wrapped
   # Kein Startfeld-Kachel: Keycloak hat zwar eine Oberfläche, aber es ist
   # keine App, die jemand "benutzt" — es ist die Tür, durch die andere
@@ -147,3 +147,20 @@ health:
   # als eine, die nur "der Port ist offen" sagt.
   path: /realms/master/.well-known/openid-configuration
   startup_grace_seconds: 120
+
+# RFC-0118 §9 (Typ D): Hilfe nur für die Verwaltung und den Betrieb -- was der
+# Dienst ist, wie die Plattform ihn nutzt, typische Aufgaben, häufige Fragen.
+docs:
+  - product: keycloak
+    title: "Anmeldedienst (Keycloak)"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin]
+    readers: [admin, operator]
+    kinds:
+      index.md: overview
+      mandant-anbinden.md: howto
+      schalter-im-realm.md: howto
+      verwaltung-oeffnen.md: howto
+      faq.md: faq

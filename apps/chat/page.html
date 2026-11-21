@@ -67,6 +67,17 @@ transform:rotate(-45deg);transition:transform .15s}
 .sfoot button:hover,.sfoot button.on{background:var(--me)}
 .sfoot button .n{float:right;font-size:.75rem;color:var(--muted)}
 #who{font-size:.75rem;padding:.3rem .5rem 0}
+/* RFC-0118 §5 Typ A: Hilfe und Benutzermenü in der Leiste unten (statt Kopfzeile) */
+.sme{display:flex;align-items:center;gap:.4rem;padding:.3rem .5rem 0;font-size:.85rem}
+.sme a{color:inherit}
+.sme details.umenu{position:relative;margin-left:auto}
+.sme details.umenu>summary{list-style:none;cursor:pointer;padding:.2rem .4rem;border-radius:.4rem}
+.sme details.umenu>summary::-webkit-details-marker{display:none}
+.sme details.umenu>summary:hover{background:var(--me)}
+.sme .mbody{top:auto;bottom:calc(100% + .3rem);left:auto;right:0}
+.sme .mbody a,.sme .mbody button{display:block;width:100%;text-align:left;border:0;background:none;padding:.5rem .7rem;color:inherit;text-decoration:none;font:inherit;cursor:pointer}
+.sme .mbody a:hover,.sme .mbody button:hover{background:var(--me)}
+.sme .mwho{padding:.3rem .7rem;font-size:.75rem;color:var(--muted)}
 #scrim{display:none}
 
 /* ---- 0.17.0: Kontextmenü -- ein Symbol, dasselbe an jeder Nachricht und jedem Gespräch */
@@ -283,6 +294,7 @@ dialog input,dialog textarea,dialog select{width:100%}
     <button id="manage" type="button">Assistenten</button>
     <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
     <button id="nset" type="button">Einstellungen</button>
+    <div class="sme" id="sme"></div>
     <div class="muted" id="who"></div>
   </div>
 </aside>
@@ -1744,13 +1756,65 @@ $("aimp").onchange = async ev => {
   ev.target.value = ""; await refreshState();
 };
 
+// RFC-0118 §4/§5 (Typ A): Hilfe und Benutzermenü wie der Rahmen der Plattform
+// (/platform/app.js), nur in der Leiste unten. Dieselben Quellen: /platform/context.json
+// (Adresse der Hilfe, des Portals) und /auth/whoami (Anzeigename, Links). Nichts erfunden:
+// keine Hilfe ohne Hilfe-App, kein Menü ohne Sitzung, nie die Rollen.
+async function getJSONq(url){
+  try { const r = await fetch(url, {headers: {"Accept": "application/json"}, credentials: "same-origin"});
+        return r.ok ? await r.json() : null; }
+  catch (e) { return null; }
+}
+async function loadMe(){
+  const box = $("sme"); if (!box) return;
+  const [ctx, me] = await Promise.all([getJSONq("/platform/context.json"), getJSONq("/auth/whoami")]);
+  const c = ctx || {}, app = c.app || {};
+  box.textContent = "";
+  if (c.help) {
+    const h = el("a", "", "Hilfe");
+    h.href = String(c.help).replace(/\/+$/, "") + "/p/" + encodeURIComponent(app.id || "chat");
+    h.target = "_blank"; h.rel = "noopener"; h.setAttribute("data-oaap-help", "");
+    box.appendChild(h);
+  }
+  if (me && me.username) {
+    const d = el("details", "umenu");
+    d.appendChild(el("summary", "", me.display_name || me.username));
+    const m = el("div", "mbody");
+    m.appendChild(el("div", "mwho", me.username));
+    if (c.portal) { const a = el("a", "", "Portal"); a.href = c.portal; m.appendChild(a); }
+    if (me.links && me.links.password) { const a = el("a", "", "Passwort ändern"); a.href = me.links.password; m.appendChild(a); }
+    // Abmelden ist ein POST, nie ein Link (Leitfaden §5.1)
+    const f = el("form"); f.method = "post"; f.action = (me.links && me.links.logout) || "/auth/logout";
+    const b = el("button", "", "Abmelden"); b.type = "submit"; f.appendChild(b); m.appendChild(f);
+    d.appendChild(m);
+    document.addEventListener("click", ev => { if (d.open && !d.contains(ev.target)) d.open = false; });
+    box.appendChild(d);
+  } else if (S && S.user) {
+    box.appendChild(el("span", "muted", S.user));
+  }
+}
+
+// RFC-0118 P5: "Fragen" in an app's header opens the chat with
+// ?frage=<a started question>&kontext=app:<id>[/<object>]. The question
+// becomes the draft of a NEW conversation -- never sent by itself, the
+// person finishes it. The address is cleaned so a reload does not repeat it.
+const ASK = (() => {
+  try {
+    const q = new URLSearchParams(location.search);
+    const f = (q.get("frage") || "").slice(0, 2000);
+    if (q.has("frage") || q.has("kontext")) history.replaceState(null, "", location.pathname + location.hash);
+    return f;
+  } catch (e) { return ""; }
+})();
 (async () => {
   await refreshState();
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
-  $("who").textContent = (S.user || "") + " · Chat " + S.version;
+  $("who").textContent = "Chat " + S.version;
+  loadMe();
   loadFeedback();
   if (location.hash === "#assistenten") showView("asst");
   else if (location.hash === "#vorgaenge") showView("cases");
+  else if (ASK) { startDraft(); $("t").value = ASK; $("t").dispatchEvent(new Event("input")); $("t").focus(); }
   else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
   if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);

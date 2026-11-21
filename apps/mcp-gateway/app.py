@@ -1,4 +1,4 @@
-"""OAAP MCP-Gateway 0.3 — Tool-Server hinter einem Endpunkt je Sicht.
+"""MCP-Gateway 0.3 — Tool-Server hinter einem Endpunkt je Sicht.
 
 Umsetzung der Capability `oaap.ai.mcp-gateway` 0.3 (RFC-0065 Stufen 1
 bis 3): Eine Sicht bündelt Tools, Resources und Prompts mehrerer Server
@@ -49,6 +49,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qsl, quote, unquote_plus
 
+import appframe as af
 import argcheck
 import assistants as arules
 CASE_NUMBER_RE = __import__("re").compile(r"^V-\d{4}-\d{4,6}$")
@@ -65,7 +66,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.39.0"
+VERSION = "0.40.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -701,7 +702,7 @@ def propagate_access(person):
         raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
                        "(Verfahren P). Das geht heute mit einer Person aus einem Chat der "
                        "Plattform; eine Anmeldung beim Anmeldedienst nimmt die Destination noch "
-                       "nicht an (RFC-0066 Form B).")
+                       "nicht an.")
     raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
                    "(Verfahren P) und braucht eine Person; mit einem Schlüssel geht es nicht.")
 
@@ -823,7 +824,7 @@ def read_catalog(name, person=None):
     text = f"Katalog von „{name}“ gelesen: {counts}, Protokoll {session.version}."
     if discover:
         # D15: die App zeigt dem Gateway SEINE Liste, nicht die einer Person.
-        text += " Als Gateway gelesen (Erkundungs-Tür, RFC-0073 §16)."
+        text += " Als Gateway gelesen (Erkundungs-Tür)."
     if changed:
         text += " Gesperrt, weil geändert oder verschwunden: " + ", ".join(changed) + "."
     return True, text
@@ -1070,103 +1071,72 @@ def forbidden(sentence):
 
 # ------------------------------------------------------------- Optik
 
-STYLE = """<style>
-  :root{--oaap-blue-950:#172554;--oaap-blue-900:#1e3a8a;--oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb;--oaap-blue-100:#dbeafe;--oaap-bg:#f4f6fa;--oaap-surface:#fff;
-    --oaap-text:#1f2937;--oaap-muted:#6b7280;--oaap-border:#e5e7eb;--ok:#15803d;--err:#b91c1c}
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;margin:0;
-       background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75}
-  .userbox{margin-left:auto;font-size:.9rem;text-align:right;line-height:1.2}
-  .userbox small{opacity:.75}
-  /* Reiter (0.9.0): eine Seite je Aufgabe statt einer langen Liste. */
-  nav.tabs{display:flex;gap:.1rem;overflow-x:auto;background:var(--oaap-surface);
-       border-bottom:1px solid var(--oaap-border);padding:0 1.2rem;position:sticky;top:0;z-index:5}
-  nav.tabs a{padding:.85rem .9rem .7rem;text-decoration:none;color:var(--oaap-muted);
-       border-bottom:3px solid transparent;white-space:nowrap;font-size:.93rem}
-  nav.tabs a:hover{color:var(--oaap-text)}
-  nav.tabs a.on{color:var(--oaap-blue-900);border-bottom-color:var(--oaap-blue-600);font-weight:600}
+APP_NAME = "MCP-Gateway"
+
+# RFC-0118 (0.40.0): Kopfleiste, Reiter, Fußzeile, Farben und Dunkelmodus kommen aus
+# dem Rahmen (appframe) und dem Kit der Plattform (/platform/theme.css). Hier steht
+# nur, was dieser App eigen ist -- Farben ausschließlich über die Variablen des Kits.
+STYLE = """
+  .card{background:var(--oaap-color-surface);border:1px solid var(--oaap-color-border);
+       border-radius:var(--oaap-radius);padding:1.1rem 1.2rem;margin-bottom:1.2rem}
+  .card.attention{border-left:4px solid var(--oaap-color-warning)}
+  .card.secretbox{border-left:4px solid var(--oaap-color-success)}
+  .card h1{font-size:1.35rem;margin:.1rem 0 .8rem} .card h2{font-size:1.02rem;margin:0 0 .8rem}
   .chead{display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;
        margin-bottom:.6rem}
   .chead h2{margin:0}
-  details.add{margin-top:1rem;border-top:1px solid var(--oaap-border);padding-top:1rem}
-  details.add>summary{display:inline-block;list-style:none;padding:.5rem 1.1rem;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;font-size:.92rem;margin:0}
+  details.add{margin-top:1rem;border-top:1px solid var(--oaap-color-border);padding-top:1rem}
+  details.add>summary{display:inline-block;list-style:none;padding:.45rem 1rem;border-radius:var(--oaap-radius);
+       background:var(--oaap-color-primary);color:var(--oaap-color-primary-text);font-size:.92rem;margin:0}
   details.add>summary::-webkit-details-marker{display:none}
-  details.add[open]>summary{background:#f3f4f6;color:#374151;margin-bottom:1rem}
+  details.add[open]>summary{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral);margin-bottom:1rem}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.8rem;margin-bottom:1.2rem}
-  a.tile{background:var(--oaap-surface);border:1px solid var(--oaap-border);border-radius:.6rem;
-       padding:1rem 1.1rem;text-decoration:none;color:var(--oaap-text);display:block}
-  a.tile:hover{border-color:var(--oaap-blue-600)}
+  a.tile{background:var(--oaap-color-surface);border:1px solid var(--oaap-color-border);border-radius:var(--oaap-radius);
+       padding:1rem 1.1rem;text-decoration:none;color:var(--oaap-color-text);display:block}
+  a.tile:hover{border-color:var(--oaap-color-primary)}
   a.tile b{display:block;font-size:1.7rem;line-height:1.1;margin-bottom:.2rem}
-  a.tile span{color:var(--oaap-muted);font-size:.85rem}
+  a.tile span{color:var(--oaap-color-text-muted);font-size:.85rem}
   ul.todo{margin:0;padding:0;list-style:none}
-  ul.todo li{padding:.55rem 0;border-bottom:1px solid var(--oaap-border);display:flex;gap:.6rem;
-       align-items:baseline;flex-wrap:wrap}
+  ul.todo li{padding:.55rem 0;border-bottom:1px solid var(--oaap-color-border);display:flex;gap:.6rem;
+       align-items:baseline;flex-wrap:wrap;max-width:none}
   ul.todo li:last-child{border-bottom:0}
   ol.steps{margin:.2rem 0 0;padding-left:1.2rem}ol.steps li{margin:.35rem 0}
   .card.sources{display:flex;gap:1rem;align-items:center;justify-content:space-between;flex-wrap:wrap}
   .card.sources p{margin:0;max-width:48rem}
-  main{max-width:68rem;margin:1.6rem auto;padding:0 1.2rem}
-  h1{font-size:1.35rem;margin:.2rem 0 1rem} h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);border-radius:.6rem;
-       padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .card.secretbox{border-color:#86efac;background:#f0fdf4}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;background:var(--oaap-blue-100);
-       color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.green{background:#dcfce7;color:#166534}.badge.yellow{background:#fef3c7;color:#92400e}
-  .badge.red,.badge.err{background:#fee2e2;color:#991b1b}.badge.off{background:#f3f4f6;color:#6b7280}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  button.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;font-size:.85rem}
-  button.quiet:hover{background:#e5e7eb}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  details summary{cursor:pointer;color:var(--oaap-blue-700);font-size:.85rem;margin:.1rem 0 .5rem}
-  .err{color:var(--err)}.muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
-       vertical-align:top;font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  code{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
-       word-break:break-all}
-  pre{background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:.5rem;overflow-x:auto;
-       font-size:.82rem;white-space:pre-wrap;word-break:break-word}
-  form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.8rem 1rem;
-       align-items:end}
+  a.btn,a.button{display:inline-block;padding:.45rem 1rem;border-radius:var(--oaap-radius);text-decoration:none;
+       background:var(--oaap-color-primary);color:var(--oaap-color-primary-text)}
+  .hint{font-size:.82rem;color:var(--oaap-color-text-muted);margin:0 0 .6rem}
+  details summary{cursor:pointer;color:var(--oaap-color-primary);font-size:.85rem;margin:.1rem 0 .5rem}
+  .err{color:var(--oaap-color-danger)}.muted{color:var(--oaap-color-text-muted);font-size:.9rem}
+  .attention{color:var(--oaap-color-warning)}
+  .card table:not(.oaap-table){width:100%;border-collapse:collapse}
+  .card table:not(.oaap-table) th,.card table:not(.oaap-table) td{text-align:left;padding:.5rem .5rem;
+       border-bottom:1px solid var(--oaap-color-border);vertical-align:top;font-size:.92rem}
+  .card table:not(.oaap-table) th{font-size:.8rem;color:var(--oaap-color-text-muted)}
+  code{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral);border-radius:.25rem;
+       padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
+  pre{background:var(--oaap-color-bg);border:1px solid var(--oaap-color-border);padding:.9rem 1rem;
+       border-radius:var(--oaap-radius);overflow-x:auto;font-size:.82rem;white-space:pre-wrap;word-break:break-word}
+  form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.8rem 1rem;align-items:end}
   form.inline{display:inline}
-  label{display:block;font-size:.82rem;color:var(--oaap-muted);margin-bottom:.25rem}
-  input[type=text],input[type=number],input[type=password],select{width:100%;padding:.5rem .6rem;
-       border-radius:.4rem;border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px;
-       background:#fff}
+  .card label{display:block;font-size:.82rem;color:var(--oaap-color-text-muted);margin-bottom:.25rem}
+  .card input[type=text],.card input[type=number],.card input[type=password],.card select{width:100%;
+       box-sizing:border-box;min-height:38px}
   .side{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
   .scroll{overflow-x:auto}td.num{text-align:right;white-space:nowrap}
   .legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:0 0 .5rem;font-size:.85rem}
   .lg{display:inline-flex;align-items:center;gap:.35rem}
   .lg i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}
-  svg.chart{width:100%;height:auto;display:block} svg.chart .ax{font-size:11px;fill:var(--oaap-muted)}
+  svg.chart{width:100%;height:auto;display:block} svg.chart .ax{font-size:11px;fill:var(--oaap-color-text-muted)}
   .hbar{display:grid;grid-template-columns:minmax(8rem,2fr) 3fr minmax(6rem,auto);gap:.6rem;
        align-items:center;padding:.3rem 0;font-size:.9rem}
   .hl{overflow:hidden;text-overflow:ellipsis}.hl code{white-space:nowrap;font-size:.78rem}
-  .ht{background:#f3f4f6;border-radius:4px;height:.8rem;overflow:hidden}
+  .ht{background:var(--oaap-badge-neutral-bg);border-radius:4px;height:.8rem;overflow:hidden}
   .ht i{display:block;height:100%;border-radius:0 4px 4px 0}
-  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-muted)}
-  footer.oaap{max-width:68rem;margin:2rem auto 1.2rem;padding:0 1.2rem;color:var(--oaap-muted);
-       font-size:.8rem}
+  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-color-text-muted)}
+  tr.why td{border-top:0;padding-top:0;font-size:.85rem}
   @media (max-width:640px){.side{grid-template-columns:1fr}.hbar{grid-template-columns:1fr 1fr}}
-</style>"""
-
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="50,6 88,28 88,72 50,94 12,72 12,28" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/><circle cx="50" cy="50" r="13" fill="#fff"/>'
-            '</svg>')
+"""
 
 STATE_WORDS = {"active": ("green", "freigegeben"), "suspended": ("yellow", "gesperrt: Text geändert"),
                "missing": ("red", "fehlt beim Server")}
@@ -1175,40 +1145,37 @@ LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
                "red": "rot — Daten können abfließen"}
 
 
+# Die Reiter (RFC-0118 §6): Links, der erste liest, Einstellungen zuletzt.
 TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
         ("sichten", "./?tab=sichten", "Sichten"),
-        ("systeme", "./?tab=systeme", "Systemlandschaft"),          # 0.32, RFC-0114
-        ("zugaenge", "./?tab=zugaenge", "Schlüssel &amp; Profile"),
-        ("anmeldung", "./?tab=anmeldung", "Anmeldung"), ("aufrufe", "./?tab=aufrufe", "Aufrufe &amp; Prüfspur"),
-        ("auswertung", "auswertung", "Auswertung"),
+        ("systeme", "./?tab=systeme", "Systemlandschaft"),          # 0.32
+        ("zugaenge", "./?tab=zugaenge", "Schlüssel & Profile"),
         ("assistenten", "assistenten", "Assistenten"),
-        ("vorlagen", "vorlagen", "Vorlagen"),          # 0.28.0, RFC-0107
+        ("aufrufe", "./?tab=aufrufe", "Aufrufe & Prüfspur"),
+        ("auswertung", "auswertung", "Auswertung"),
+        ("vorlagen", "vorlagen", "Vorlagen"),          # 0.28.0
         # 0.15.2: die eigene Seite auch für die Verwaltung erreichbar -- die
         # Kachel führt eine Admin-Person auf die Verwaltung, nicht auf /me.
-        ("me", "me", "Meine Aufrufe"))
+        ("me", "me", "Meine Aufrufe"),
+        ("anmeldung", "./?tab=anmeldung", "Anmeldung"))
+TAB_HREF = {key: href for key, href, _label in TABS}
 
 
-def page(title, body, user, roles, active="start"):
-    nav = "".join(f'<a href="{href}"{" class=on" if key == active else ""}>{label}</a>'
-                  for key, href, label in TABS)
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{esc(title)} — OAAP MCP-Gateway</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="./">{LOGO_SVG}
-    <span><b>OAAP MCP-GATEWAY</b><small>Eine Sicht, ein Schlüssel, freigegebene Werkzeuge</small></span></a>
-  <div class="userbox">{esc(user)}<br><small>{esc(roles)}</small></div>
-</header>
-<nav class="tabs" aria-label="Bereiche">{nav}</nav>
-<main>
-{body}</main>
-<footer class="oaap">OAAP MCP-Gateway {VERSION} — zählt Aufrufe, speichert keine Argumente
-und keine Ergebnisse</footer></html>"""
+def page(title, body, user=None, roles=None, active="start", tabs=True, status_obj=None):
+    """Eine Seite im Rahmen der Plattform. `user`/`roles` bleiben in der Signatur
+    (alte Aufrufer), stehen aber nie auf der Seite: das Benutzermenü des Rahmens
+    zeigt die Person, Rollen zeigt niemand (RFC-0118 §4)."""
+    return af.page(title, body, app=APP_NAME, version=VERSION, product="mcp-gateway",
+                   tabs=[(href, label) for _k, href, label in TABS] if tabs else None,
+                   active=TAB_HREF.get(active), obj=status_obj, style=STYLE)
+
+
+BADGE_KIND = {"green": "ok", "yellow": "warn", "red": "err", "err": "err", "off": "", "": ""}
 
 
 def badge(cls, text):
-    return f'<span class="badge {esc(cls)}">{esc(text)}</span>'
+    """Ampel- und Zustandsfarben auf die fünf Farben des Kits."""
+    return af.badge(text, BADGE_KIND.get(cls, "info"))
 
 
 def options(values, current, words=None):
@@ -1339,46 +1306,95 @@ per Gruppe, oder ein Chat der Plattform (<code>@&lt;chat&gt;</code>).</li></ol><
     return tiles + todo_card + sources_card() + guide
 
 
-def servers_tab(host):
-    rows = []
-    for s in books.servers(DB):
+def tab_report(tab, query, rows, columns, row_html, **kw):
+    """Ein Listenbericht in einem Reiter (RFC-0118 §7). Die Adresse trägt den Reiter mit:
+    Spaltenköpfe und Blättern über die Basis, das Suchformular über ein verstecktes Feld
+    (ein GET-Formular verwirft die Abfrage seiner Zieladresse)."""
+    out = af.list_report(query, rows, columns, row_html, base=f"./?tab={tab}&", **kw)
+    return out.replace('role="search">', f'role="search"><input type="hidden" name="tab" value="{esc(tab)}">', 1)
+
+
+LIGHT_CHOICES = [("green", "grün"), ("yellow", "gelb"), ("red", "rot")]
+LIGHT_ORDER = {"green": 0, "yellow": 1, "red": 2}
+
+
+def servers_tab(host, params=None):
+    q = af.Query(params or {}, filters=("light", "art"), default_sort="name")
+    rows = list(books.servers(DB))
+    if q.filters["light"]:
+        rows = [s for s in rows if s["light"] == q.filters["light"]]
+    if q.filters["art"] == "quelle":
+        rows = [s for s in rows if s["source"]]
+    elif q.filters["art"] == "eigen":
+        rows = [s for s in rows if not s["source"]]
+
+    def row_html(s):
         g = GUARDS.get(s["name"])
         st = g.state() if g else None
         load = (f'{st["inflight"]} laufend, {st["waiting"]} wartend'
                 + (f', Pause {st["open_for"]} s' if st["open_for"] else "")) if st else "—"
-        rows.append(f'<tr><td><a href="server?name={quote(s["name"])}"><b>{esc(s["name"])}</b></a>'
-                    + (f'<br><span class=hint>Quelle der Plattform</span>' if s["source"] else "")
-                    + (f'<br><span class=err>nicht mehr in der Quellenliste seit {esc(s["gone"])}</span>'
-                       if s["gone"] else "")
-                    + f'</td><td><code>{esc(s["address"])}</code></td><td>{badge(s["light"], s["light"])}{" " + badge("yellow", "fremder Inhalt") if s["untrusted"] else ""}</td>'
-                    f'<td>{esc(s["version"] or "—")}</td>'
-                    f'<td>{esc(s["last_read"] or "nie")}'
-                    f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
-                    f'</td><td>{esc(load)}</td></tr>')
+        return (f'<tr><td><a href="server?name={quote(s["name"])}"><b>{esc(s["name"])}</b></a>'
+                + (f'<br><span class=hint>Quelle der Plattform</span>' if s["source"] else "")
+                + (f'<br><span class=err>nicht mehr in der Quellenliste seit {esc(s["gone"])}</span>'
+                   if s["gone"] else "")
+                + f'</td><td class="oaap-minor"><code>{esc(s["address"])}</code></td>'
+                f'<td>{badge(s["light"], s["light"])}{" " + badge("yellow", "fremder Inhalt") if s["untrusted"] else ""}</td>'
+                f'<td class="oaap-minor">{esc(s["version"] or "—")}</td>'
+                f'<td>{esc(s["last_read"] or "nie")}'
+                f'{"<br><span class=err>" + esc(s["last_error"]) + "</span>" if s["last_error"] else ""}'
+                f'</td><td class="oaap-minor">{esc(load)}</td></tr>')
+
+    report = tab_report(
+        "server", q, rows,
+        [("Name", "name", lambda s: s["name"], ""), ("Adresse", "address", lambda s: s["address"], "oaap-minor"),
+         ("Ampel", "light", lambda s: LIGHT_ORDER.get(s["light"], 9), ""),
+         ("Protokoll", "", None, "oaap-minor"), ("Katalog gelesen", "read", lambda s: s["last_read"] or "", ""),
+         ("Last", "", None, "oaap-minor")],
+        row_html, noun="Server", placeholder="Name oder Adresse",
+        empty_text="Noch kein Server. „+ Server anlegen“ trägt den ersten ein.",
+        choices=[("light", "Ampel", LIGHT_CHOICES),
+                 ("art", "Herkunft", [("quelle", "Quelle der Plattform"), ("eigen", "von Hand")])])
     return sources_card() + f'''<div class="card"><div class="chead"><h2>Server</h2></div>
 <p class="hint">MCP-Server mit Streamable HTTP. Adresse als URL oder <code>destination:&lt;name&gt;</code>
 — dann setzt die Plattform die Zugangsdaten ein, und das Gateway hält kein Geheimnis.</p>
-<div class="scroll"><table><tr><th>Name</th><th>Adresse</th><th>Ampel</th><th>Protokoll</th>
-<th>Katalog gelesen</th><th>Last</th></tr>{"".join(rows) or '<tr><td colspan=6 class=muted>Noch kein Server.</td></tr>'}</table></div>
+{report}
 {add_box("+ Server anlegen", server_form())}</div>'''
 
 
-def views_tab(host):
-    vrows = []
+def views_tab(host, params=None):
+    q = af.Query(params or {}, filters=("ways", "light"), default_sort="name")
+    rows = []
     for v in books.views(DB):
-        states = view_states(v["name"])
-        summary = ", ".join(f"{n} {STATE_WORDS[s][1]}" for s, n in sorted(states.items())) or "leer"
-        light = books.view_light(DB, v["name"])
-        vrows.append(f'<tr><td><a href="view?name={quote(v["name"])}"><b>{esc(v["name"])}</b></a></td>'
-                     f'<td>{esc(", ".join(books.view_servers(DB, v["name"])) or "—")}<br>{badge(light, light)}</td>'
-                     f'<td>bis {esc(books.EFFECT_WORDS[v["max_effect"]])}<br>'
-                     f'<span class="muted">{esc(books.WAY_WORDS.get(v["ways"], v["ways"]))}</span></td>'
-                     f'<td>{esc(summary)}</td><td><code>{esc(endpoint(host, v["name"]))}</code></td></tr>')
+        rows.append({"name": v["name"], "ways": v["ways"], "max_effect": v["max_effect"],
+                     "servers": ", ".join(books.view_servers(DB, v["name"])),
+                     "light": books.view_light(DB, v["name"]), "states": view_states(v["name"])})
+    if q.filters["ways"]:
+        rows = [r for r in rows if r["ways"] == q.filters["ways"]]
+    if q.filters["light"]:
+        rows = [r for r in rows if r["light"] == q.filters["light"]]
+
+    def row_html(r):
+        summary = ", ".join(f"{n} {STATE_WORDS[s][1]}" for s, n in sorted(r["states"].items())) or "leer"
+        return (f'<tr><td><a href="view?name={quote(r["name"])}"><b>{esc(r["name"])}</b></a></td>'
+                f'<td>{esc(r["servers"] or "—")}<br>{badge(r["light"], r["light"])}</td>'
+                f'<td>bis {esc(books.EFFECT_WORDS[r["max_effect"]])}<br>'
+                f'<span class="muted">{esc(books.WAY_WORDS.get(r["ways"], r["ways"]))}</span></td>'
+                f'<td>{esc(summary)}</td><td class="oaap-minor"><code>{esc(endpoint(host, r["name"]))}</code></td></tr>')
+
+    report = tab_report(
+        "sichten", q, rows,
+        [("Sicht", "name", lambda r: r["name"], ""), ("Server, Ampel", "servers", lambda r: r["servers"], ""),
+         ("Höchste Klasse", "effect", lambda r: books.EFFECTS.index(r["max_effect"])
+          if r["max_effect"] in books.EFFECTS else 9, ""),
+         ("Einträge", "items", lambda r: sum(r["states"].values()), ""), ("Endpunkt", "", None, "oaap-minor")],
+        row_html, noun="Sichten", placeholder="Sicht oder Server",
+        empty_text="Noch keine Sicht. „+ Sicht anlegen“ legt die erste an.",
+        choices=[("ways", "Zugänge", [(w, books.WAY_WORDS.get(w, w)) for w in books.WAYS]),
+                 ("light", "Ampel", LIGHT_CHOICES)])
     return f'''<div class="card"><div class="chead"><h2>Sichten</h2></div>
 <p class="hint">Eine Sicht ist ein MCP-Endpunkt. Sie bündelt, was hier freigegeben ist — aus einem
 Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst.</p>
-<div class="scroll"><table><tr><th>Sicht</th><th>Server, Ampel</th><th>Höchste Klasse</th><th>Einträge</th>
-<th>Endpunkt</th></tr>{"".join(vrows) or '<tr><td colspan=5 class=muted>Noch keine Sicht.</td></tr>'}</table></div>
+{report}
 <details class="add"><summary>+ Sicht anlegen</summary>
 <form class="grid" method="post" action="view-save">
 <div><label>Name (Pfad)</label><input type="text" name="name" required></div>
@@ -1387,39 +1403,50 @@ Server oder mehreren. Ein neues Tool eines Servers erscheint nirgends von selbst
 <div><button>Anlegen</button></div></form></details></div>''' + views_tree()
 
 
-def keys_tab(host):
+def key_state(k):
+    state = badge("off", "widerrufen") if k["revoked"] else badge("green", "gültig")
+    if k["kind"] == "profile":
+        state += " " + badge("yellow", "Zugangsprofil") + f'<br><span class="muted">Gruppen: ' \
+            f'{esc(", ".join(books.profile_groups(k)))}</span>'
+    if not k["revoked"]:
+        for p in key_problems(k):
+            state += f'<br><span class="err">{esc(p)}</span>'
+    return state
+
+
+def keys_tab(host, params=None):
+    q = af.Query(params or {}, filters=("art", "zustand"), default_sort="label")
     totals = books.totals(DB)
-    krows = []
-    for k in books.keys(DB):
+    rows = list(books.keys(DB))
+    if q.filters["art"] in ("key", "profile"):
+        rows = [k for k in rows if k["kind"] == q.filters["art"]]
+    if q.filters["zustand"] == "gueltig":
+        rows = [k for k in rows if not k["revoked"]]
+    elif q.filters["zustand"] == "widerrufen":
+        rows = [k for k in rows if k["revoked"]]
+
+    def calls_of(k):
         t = totals.get(k["id"])
-        used = f'{t["calls"]} Aufrufe' if t else "—"
-        state = badge("off", "widerrufen") if k["revoked"] else badge("green", "gültig")
-        action = "" if k["revoked"] else (
-            f'<form class="inline" method="post" action="revoke"><input type="hidden" name="label" '
-            f'value="{esc(k["label"])}"><button class="quiet">Widerrufen</button></form>')
-        if k["kind"] == "profile":
-            state += " " + badge("yellow", "Zugangsprofil") + f'<br><span class="muted">Gruppen: ' \
-                f'{esc(", ".join(books.profile_groups(k)))}</span>'
-        if not k["revoked"]:
-            for p in key_problems(k):
-                state += f'<br><span class="err">{esc(p)}</span>'
-            action += (f'<details><summary class="quiet">Ändern</summary><form method="post" action="key-limits">'
-                       f'<input type="hidden" name="label" value="{esc(k["label"])}">'
-                       f'<label>Sichten (Komma)</label><input type="text" name="views" value="{esc(k["views"])}" required>'
-                       f'<label>Höchste Wirkungsklasse</label><select name="max_effect">'
-                       f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select>'
-                       f'<label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select>'
-                       + (f'<label>Gruppen (Komma): * oder /pfad = Anmeldung am Gateway; '
-                          f'@&lt;chat&gt; oder @* = Personen aus einem Chat</label>'
-                          f'<input type="text" name="groups" value="{esc(", ".join(books.profile_groups(k)))}" required>'
-                          if k["kind"] == "profile" else "")
-                       + f'<button>Speichern</button></form></details>')
-        krows.append(f'<tr><td><b>{esc(k["label"])}</b><br>{state}</td>'
-                     f'<td>{esc(", ".join(books.key_views(k)))}</td>'
-                     f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
-                     f'{badge(k["ceiling"], "Ampel bis " + k["ceiling"])}</td>'
-                     f'<td>{esc(used)}{" / Budget " + str(k["budget_calls"]) if k["budget_calls"] else ""}</td>'
-                     f'<td class="muted">{esc(context_line(k))}</td><td>{action}</td></tr>')
+        return t["calls"] if t else 0
+
+    def row_html(k):
+        n = calls_of(k)
+        return (f'<tr><td><a href="key?label={quote(k["label"])}"><b>{esc(k["label"])}</b></a><br>{key_state(k)}</td>'
+                f'<td>{esc(", ".join(books.key_views(k)))}</td>'
+                f'<td>bis {esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))}<br>'
+                f'{badge(k["ceiling"], "Ampel bis " + k["ceiling"])}</td>'
+                f'<td class="oaap-num">{f"{n} Aufrufe" if n else "—"}{" / Budget " + str(k["budget_calls"]) if k["budget_calls"] else ""}</td>'
+                f'<td class="muted oaap-minor">{esc(context_line(k))}</td></tr>')
+
+    report = tab_report(
+        "zugaenge", q, rows,
+        [("Etikett", "label", lambda k: k["label"], ""), ("Sichten", "views", lambda k: k["views"], ""),
+         ("Grenzen", "", None, ""), ("Verbrauch", "calls", calls_of, "oaap-num"),
+         ("Kontext", "context", lambda k: context_line(k), "oaap-minor")],
+        row_html, noun="Schlüssel und Profile", placeholder="Etikett, Sicht, Kontext",
+        empty_text="Noch kein Schlüssel. „+ Schlüssel ausstellen“ legt den ersten an.",
+        choices=[("art", "Art", [("key", "Schlüssel"), ("profile", "Zugangsprofil")]),
+                 ("zustand", "Zustand", [("gueltig", "gültig"), ("widerrufen", "widerrufen")])])
     vnames = [v["name"] for v in books.views(DB)]
     return f'''<div class="card"><div class="chead"><h2>Schlüssel und Zugangsprofile</h2></div>
 <p class="hint">Ein Schlüssel ist ein Geheimnis für Agenten und Pipelines. Ein Zugangsprofil hat keinen Wert,
@@ -1427,12 +1454,12 @@ es gilt für Personen — und die kommen auf zwei Wegen:</p>
 <ul class="hint">
 <li><b>Selbst am Gateway angemeldet</b> (z. B. Claude Code mit Anmeldung): Gruppen <code>*</code> für alle,
 die sich anmelden dürfen, oder volle Pfade wie <code>/sap-dev</code>. Die Sicht braucht den Zugang „Anmeldung“.</li>
-<li><b>Von einem Chat der Plattform hergetragen</b> (Verfahren A): <code>@&lt;chat-instanz&gt;</code>, etwa
+<li><b>Von einem Chat der Plattform hergetragen</b>: <code>@&lt;chat-instanz&gt;</code>, etwa
 <code>@bec-chat</code>, oder <code>@*</code> für jeden Chat des Mandanten. Die Sicht braucht den Zugang „Plattform“.
 Ein <code>*</code> gilt für einen Chat <b>nicht</b>.</li>
 </ul>
-<div class="scroll"><table><tr><th>Etikett</th><th>Sichten</th><th>Grenzen</th><th>Verbrauch</th>
-<th>Kontext</th><th></th></tr>{"".join(krows) or '<tr><td colspan=6 class=muted>Noch kein Schlüssel.</td></tr>'}</table></div>
+<p class="hint">Widerrufen und ändern auf der Seite eines Schlüssels: Etikett anklicken.</p>
+{report}
 <details class="add"><summary>+ Schlüssel ausstellen oder Zugangsprofil anlegen</summary>
 <form class="grid" method="post" action="issue">
 <div><label>Etikett</label><input type="text" name="label" required></div>
@@ -1445,6 +1472,45 @@ Ein <code>*</code> gilt für einen Chat <b>nicht</b>.</li>
 <div><label>Budget (Aufrufe, 0 = ohne)</label><input type="number" name="budget" value="0" min="0"></div>
 <div><label>Rate je Minute (0 = {DEFAULT_RATE})</label><input type="number" name="rate" value="0" min="0"></div>
 {context_inputs()}<div><button>Ausstellen</button></div></form></details></div>'''
+
+
+def key_page(user, roles, host, label):
+    """Die Seite eines Schlüssels oder Zugangsprofils: Zustand, Grenzen, Verbrauch -- und
+    die Handlungen, die früher in der Tabellenzeile standen (Widerrufen, Ändern)."""
+    k = next((x for x in books.keys(DB) if x["label"] == label), None)
+    if not k:
+        return page("Unbekannt", af.back("./?tab=zugaenge") +
+                    '<div class="card"><p>Diesen Schlüssel gibt es nicht.</p></div>', active="zugaenge")
+    t = books.totals(DB).get(k["id"])
+    facts = af.facts([
+        ("Art", "Zugangsprofil" if k["kind"] == "profile" else "Schlüssel"),
+        ("Sichten", esc(", ".join(books.key_views(k)) or "—")),
+        ("Höchste Klasse", esc(books.EFFECT_WORDS.get(k["max_effect"], k["max_effect"]))),
+        ("Ampel höchstens", badge(k["ceiling"], k["ceiling"])),
+        ("Verbrauch", f'{t["calls"]} Aufrufe' if t else "—"),
+        ("Budget", str(k["budget_calls"]) if k["budget_calls"] else "ohne"),
+        ("Kontext", esc(context_line(k))),
+        ("Angelegt", esc(k["created"] or "—"))])
+    actions = ""
+    if not k["revoked"]:
+        actions = (f'<div class="card"><h2>Ändern</h2><form class="grid" method="post" action="key-limits">'
+                   f'<input type="hidden" name="label" value="{esc(k["label"])}">'
+                   f'<div><label>Sichten (Komma)</label><input type="text" name="views" value="{esc(k["views"])}" required></div>'
+                   f'<div><label>Höchste Wirkungsklasse</label><select name="max_effect">'
+                   f'{options(books.EFFECTS, k["max_effect"], books.EFFECT_WORDS)}</select></div>'
+                   f'<div><label>Ampel höchstens</label><select name="ceiling">{options(books.LIGHTS, k["ceiling"])}</select></div>'
+                   + (f'<div><label>Gruppen (Komma): * oder /pfad = Anmeldung am Gateway; '
+                      f'@&lt;chat&gt; oder @* = Personen aus einem Chat</label>'
+                      f'<input type="text" name="groups" value="{esc(", ".join(books.profile_groups(k)))}" required></div>'
+                      if k["kind"] == "profile" else "")
+                   + f'<div><button>Speichern</button></div></form></div>'
+                   f'<div class="card"><h2>Widerrufen</h2><p class="hint">Gilt sofort; ein widerrufener '
+                   f'Schlüssel kommt nicht zurück.</p><form method="post" action="revoke">'
+                   f'<input type="hidden" name="label" value="{esc(k["label"])}">'
+                   f'<button class="danger">Widerrufen</button></form></div>')
+    body = (af.back("./?tab=zugaenge") + f'<div class="oaap-objhead"><h1>{esc(k["label"])}</h1>'
+            f'<p>{key_state(k)}</p>{facts}</div>' + actions)
+    return page(k["label"], body, active="zugaenge", status_obj=f"Schlüssel:{k['label']}")
 
 
 # ------------------------------------------------------------------ /me (RFC-0095)
@@ -1560,7 +1626,7 @@ def me_filter(query, uid, also=()):
 
 ME_REALM_NOTE = ("Aufrufe, bei denen du dich selbst am Anmeldedienst angemeldet hast (etwa aus "
                  "Claude Code), erscheinen hier, sobald die Plattform dem Gateway deine Kennung "
-                 "aus dem Anmeldedienst mitgibt (RFC-0095 D2). Aufrufe mit einem API-Schlüssel "
+                 "aus dem Anmeldedienst mitgibt. Aufrufe mit einem API-Schlüssel "
                  "haben keine Person und stehen nie hier.")
 
 
@@ -1691,100 +1757,144 @@ kann ihn löschen.</p>
 
 
 def me_page(user, uid, query, admin=False, notice="", also=()):
+    """Die Seite der Person. Ein Listenbericht (RFC-0118 §7) über ihre Aufrufe: Suche,
+    Auswahl nach Ausgang, Sicht und Tag, sortierbar, geblättert ab 50. Dieselben Filter
+    wie /me/v1/calls (me_filter), die Adresse trägt sie."""
     doc = me_doc(uid, query, also)
     flt = doc["filter"]
-    views_seen = sorted({r["view"] for r in books.person_calls(DB, "platform", uid, days=ME_DAYS,
-                                                               also=also)})
+    every = books.person_calls(DB, "platform", uid, days=ME_DAYS, also=also)
+    views_seen = sorted({r["view"] for r in every})
+    days_seen = sorted({(r["time"] or "")[:10] for r in every if r["time"]}, reverse=True)
+    q = af.Query(query, filters=("problems", "view", "day"), default_sort="-time")
+    # „Nur Probleme“ ist voreingestellt, wenn es welche gab -- die Auswahl zeigt, was gilt.
+    q.filters.update(problems="1" if flt["problems"] else "0", view=flt["view"], day=flt["day"])
 
-    def link(**change):
-        q = {"problems": "1" if flt["problems"] else "0", "view": flt["view"], "day": flt["day"]}
-        q.update(change)
-        return "me?" + "&amp;".join(f"{k}={quote(v)}" for k, v in q.items() if v)
-
-    rows = []
-    for c in doc["calls"]:
+    def row_html(c):
         who = " · ".join(x for x in (c["client"], c["assistant"]) if x) or "—"
         mark = badge("green" if c["outcome"] == "ok" else "yellow" if c["outcome"] in (
             "limited", "tool_error") else "red", ME_OUTCOME_WORDS.get(c["outcome"], c["outcome"]))
         kind = "" if c["kind"] == "tool" else (
             " <span class=muted>" + esc(compose.KIND_WORDS.get(c["kind"], c["kind"])) + "</span>")
-        rows.append(f'<tr><td>{esc(c["time"].replace("T", " ").rstrip("Z"))}</td>'
-                    f'<td><a href="{link(view=c["view"])}">{esc(c["view"])}</a></td>'
-                    f'<td><code>{esc(c["name"] or "—")}</code>{kind}</td><td>{esc(who)}</td>'
-                    f'<td>{esc(c["procedure"])}</td><td>{mark}</td><td class="num">{c["ms"]} ms</td></tr>')
+        out = (f'<tr><td>{esc(c["time"].replace("T", " ").rstrip("Z"))}</td>'
+               f'<td><a href="{esc(q.href("me?", view=c["view"], offset=0))}">{esc(c["view"])}</a></td>'
+               f'<td><code>{esc(c["name"] or "—")}</code>{kind}</td><td class="oaap-minor">{esc(who)}</td>'
+               f'<td class="oaap-minor">{esc(c["procedure"])}</td><td>{mark}</td>'
+               f'<td class="oaap-num">{c["ms"]} ms</td></tr>')
         if c["sentence"]:
-            rows.append(f'<tr class="why"><td></td><td colspan="6">{esc(c["sentence"])} '
-                        f'<span class="muted">Abgelehnt oder gemeldet von: '
-                        f'{esc(DOOR_WORDS.get(c["door"], "—"))}. {esc(c["hint"])}</span></td></tr>')
-    filters = [f'<a href="{link(problems="0" if flt["problems"] else "1")}">'
-               f'{"Alle Aufrufe zeigen" if flt["problems"] else "Nur Probleme zeigen"}</a>']
-    if flt["view"]:
-        filters.append(f'Sicht <b>{esc(flt["view"])}</b> (<a href="{link(view="")}">alle Sichten</a>)')
-    if flt["day"]:
-        filters.append(f'Tag <b>{esc(flt["day"])}</b> (<a href="{link(day="")}">alle Tage</a>)')
-    day_form = (f'<form method="get" action="me" style="display:inline">'
-                f'<input type="hidden" name="problems" value="{"1" if flt["problems"] else "0"}">'
-                f'<input type="hidden" name="view" value="{esc(flt["view"])}">'
-                f'<input type="date" name="day" value="{esc(flt["day"])}"> <button class="quiet">Tag</button></form>')
+            out += (f'<tr class="why"><td></td><td colspan="6">{esc(c["sentence"])} '
+                    f'<span class="muted">Abgelehnt oder gemeldet von: '
+                    f'{esc(DOOR_WORDS.get(c["door"], "—"))}. {esc(c["hint"])}</span></td></tr>')
+        return out
+
+    columns = [("Zeit (UTC)", "time", lambda c: c["time"], ""),
+               ("Sicht", "view", lambda c: c["view"], ""),
+               ("Eintrag", "name", lambda c: c["name"] or "", ""),
+               ("Chat · Assistent", "client", lambda c: " ".join(x for x in (c["client"], c["assistant"]) if x), "oaap-minor"),
+               ("Verfahren", "", None, "oaap-minor"),
+               ("Ausgang", "outcome", lambda c: c["outcome"], ""),
+               ("Dauer", "ms", lambda c: c["ms"] or 0, "oaap-num")]
     empty = ("Keine Probleme in den letzten 30 Tagen." if flt["problems"] and not flt["view"]
              and not flt["day"] else "Keine Aufrufe für diesen Filter.")
-    top = f'<div class="card attention"><p>{esc(notice)}</p></div>' if notice else ""
-    body = top + f'''<div class="card"><h2>Meine Aufrufe</h2>
+    report = af.list_report(
+        q, doc["calls"], columns, row_html, base="me?", noun="Aufrufe", empty_text=empty,
+        choices=[("problems", "Ausgang", [("1", "nur Probleme"), ("0", "alle Aufrufe")]),
+                 ("view", "Sicht", [(v, v) for v in views_seen]),
+                 ("day", "Tag", [(d, d) for d in days_seen])],
+        placeholder="Sicht, Eintrag, Chat …")
+    top = af.msg(notice) if notice else ""
+    back = af.back("./", "zur Verwaltung") if admin else ""
+    body = back + top + f'''<div class="oaap-pagehead"><h1>Meine Aufrufe</h1></div>
 <p class="hint">Deine Aufrufe über dieses Gateway in den letzten {ME_DAYS} Tagen – aus dem Chat,
 aus Apps der Plattform. Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
 Der Grund einer Ablehnung steht in Worten darunter, mit dem, der abgelehnt hat.</p>
-<p>{" · ".join(filters)} · {day_form}</p>
-<div class="scroll"><table><tr><th>Zeit (UTC)</th><th>Sicht</th><th>Eintrag</th><th>Chat · Assistent</th>
-<th>Verfahren</th><th>Ausgang</th><th>Dauer</th></tr>
-{"".join(rows) or f'<tr><td colspan=7 class=muted>{empty}</td></tr>'}</table></div>
+{report}
 <p class="hint">Sichten mit Aufrufen: {esc(", ".join(views_seen) or "keine")}.
 Als JSON: <a href="me/v1/calls">me/v1/calls</a>.</p>
-<p class="hint">{esc(doc["note"])}</p></div>
+<p class="hint">{esc(doc["note"])}</p>
 {me_first_read_card()}{me_credentials_card(uid)}{me_templates_card(uid)}'''
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meine Werkzeuge — OAAP MCP-Gateway</title>
-{STYLE}<style>tr.why td{{border-top:0;padding-top:0;font-size:.85rem}}</style>
-<header class="oaap">
-  <a class="brand" href="me">{LOGO_SVG}
-    <span><b>MEINE WERKZEUGE</b><small>Deine Aufrufe über das MCP-Gateway</small></span></a>
-  <div class="userbox">{esc(user)}{'<br><small><a href="./">zur Verwaltung</a></small>' if admin else ""}</div>
-</header>
-<main>
-{body}</main>
-<footer class="oaap">OAAP MCP-Gateway {VERSION} — du siehst nur deine eigenen Aufrufe</footer></html>"""
+    return page("Meine Werkzeuge", body, active="me", tabs=admin)
 
 
-def calls_tab(host):
+CALLS_SHOWN = 1000          # so viele Messzeilen liest der Reiter; geblättert wird zu je 50
+
+
+def calls_tab(host, params=None):
     labels = {k["id"]: k["label"] for k in books.keys(DB)}
-    urows = "".join(
-        f'<tr><td>{esc(r["time"])}</td><td>{esc(labels.get(r["key_id"], r["key_id"]))}</td>'
-        f'<td>{esc(r["view"])}</td><td><code>{esc(r["tool"] or "—")}</code>'
-        f'{"" if r["kind"] == "tool" else " <span class=muted>" + esc(compose.KIND_WORDS.get(r["kind"], r["kind"])) + "</span>"}</td>'
-        f'<td>{esc(r["outcome"])}{" (" + esc(r["reason"]) + ")" if r["reason"] else ""}</td>'
-        f'<td class="num">{r["ms"]} ms</td><td class="num">{esc(fmt_bytes(r["bytes_up"]))} / '
-        f'{esc(fmt_bytes(r["bytes_down"]))}</td></tr>' for r in books.recent(DB, limit=40))
+    q = af.Query(params or {}, filters=("outcome", "view"), default_sort="-time")
+    rows = books.recent(DB, limit=CALLS_SHOWN)
+    views_seen = sorted({r["view"] for r in rows if r["view"]})
+    if q.filters["outcome"]:
+        rows = [r for r in rows if r["outcome"] == q.filters["outcome"]]
+    if q.filters["view"]:
+        rows = [r for r in rows if r["view"] == q.filters["view"]]
+
+    def row_html(r):
+        kind = "" if r["kind"] == "tool" else (
+            " <span class=muted>" + esc(compose.KIND_WORDS.get(r["kind"], r["kind"])) + "</span>")
+        word = OUTCOME_WORDS.get(r["outcome"], r["outcome"])
+        cls = "green" if r["outcome"] == "ok" else "yellow" if r["outcome"] in ("tool_error", "limited") else "red"
+        return (f'<tr><td>{esc(r["time"])}</td><td>{esc(labels.get(r["key_id"], r["key_id"]))}</td>'
+                f'<td>{esc(r["view"])}</td><td><code>{esc(r["tool"] or "—")}</code>{kind}</td>'
+                f'<td>{badge(cls, word)}{" <span class=muted>(" + esc(r["reason"]) + ")</span>" if r["reason"] else ""}</td>'
+                f'<td class="oaap-num">{r["ms"]} ms</td><td class="oaap-num oaap-minor">{esc(fmt_bytes(r["bytes_up"]))} / '
+                f'{esc(fmt_bytes(r["bytes_down"]))}</td></tr>')
+
+    report = tab_report(
+        "aufrufe", q, rows,
+        [("Zeit", "time", lambda r: r["time"], ""),
+         ("Schlüssel", "key", lambda r: labels.get(r["key_id"], r["key_id"]) or "", ""),
+         ("Sicht", "view", lambda r: r["view"] or "", ""), ("Eintrag", "tool", lambda r: r["tool"] or "", ""),
+         ("Ausgang", "outcome", lambda r: r["outcome"] or "", ""), ("Dauer", "ms", lambda r: r["ms"] or 0, "oaap-num"),
+         ("Bytes hoch/runter", "", None, "oaap-num oaap-minor")],
+        row_html, noun="Aufrufe", placeholder="Schlüssel, Sicht, Eintrag",
+        empty_text="Noch keine Aufrufe. Sobald ein Client eine Sicht benutzt, steht hier jede Zeile.",
+        choices=[("outcome", "Ausgang", list(OUTCOME_WORDS.items())),
+                 ("view", "Sicht", [(v, v) for v in views_seen])])
     proto = ", ".join(f'{r["method"]} {r["n"]}' for r in books.protocol_totals(DB)) or "—"
-    out = f'''<div class="card"><h2>Letzte Aufrufe</h2>
+    return f'''<div class="card"><div class="chead"><h2>Letzte Aufrufe</h2>
+<a href="./?tab=spur">Prüfspur ansehen</a></div>
 <p class="hint">Gezählt, nicht mitgeschrieben: Argumente und Ergebnisse stehen nirgends.
+Die letzten {CALLS_SHOWN} Messzeilen; ältere stehen in der <a href="auswertung">Auswertung</a>.
 Protokollverkehr der letzten 30 Tage: {esc(proto)}.</p>
-<div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Sicht</th><th>Eintrag</th><th>Ausgang</th>
-<th>Dauer</th><th>Bytes hoch/runter</th></tr>{urows or '<tr><td colspan=7 class=muted>Noch keine.</td></tr>'}</table></div></div>'''
-
-    arows = "".join(f'<tr><td>{esc(r["time"])}</td><td>{esc(r["actor"])}</td><td>{esc(r["action"])}</td>'
-                    f'<td>{esc(r["subject"])}</td><td class="muted">{esc(r["detail"])}</td></tr>'
-                    for r in books.audit(DB, 40))
-    return out + (f'<div class="card"><h2>Prüfspur</h2><div class="scroll"><table><tr><th>Zeit</th>'
-                  f'<th>Wer</th><th>Was</th><th>Woran</th><th>Einzelheiten</th></tr>{arows}</table></div></div>')
+{report}</div>'''
 
 
-TAB_PAGES = lambda: {"start": ("Übersicht", start_tab), "server": ("Server", servers_tab),
-             "sichten": ("Sichten", views_tab), "systeme": ("Systemlandschaft", systems_tab),
-             "zugaenge": ("Schlüssel und Profile", keys_tab),
-             "anmeldung": ("Anmeldung", signin_card), "aufrufe": ("Aufrufe und Prüfspur", calls_tab)}
+AUDIT_SHOWN = 1000
 
 
-def admin_page(user, roles, host, notice="", secret=None, tab="start"):
+def audit_tab(host, params=None):
+    """Die Prüfspur: wer hat was geändert. Ein eigener Listenbericht unter dem Reiter
+    „Aufrufe & Prüfspur“ (zwei Listenberichte auf einer Seite teilten sich die Adresse)."""
+    q = af.Query(params or {}, filters=("action",), default_sort="-time")
+    rows = books.audit(DB, AUDIT_SHOWN)
+    actions = sorted({r["action"] for r in rows if r["action"]})
+    if q.filters["action"]:
+        rows = [r for r in rows if r["action"] == q.filters["action"]]
+    report = tab_report(
+        "spur", q, rows,
+        [("Zeit", "time", lambda r: r["time"], ""), ("Wer", "actor", lambda r: r["actor"] or "", ""),
+         ("Was", "action", lambda r: r["action"] or "", ""), ("Woran", "subject", lambda r: r["subject"] or "", ""),
+         ("Einzelheiten", "detail", lambda r: r["detail"] or "", "oaap-minor")],
+        lambda r: (f'<tr><td>{esc(r["time"])}</td><td>{esc(r["actor"])}</td><td>{esc(r["action"])}</td>'
+                   f'<td>{esc(r["subject"])}</td><td class="muted oaap-minor">{esc(r["detail"])}</td></tr>'),
+        noun="Einträge", placeholder="Person, Handlung, Gegenstand",
+        empty_text="Noch nichts geändert.", choices=[("action", "Was", [(a, a) for a in actions])])
+    return (af.back("./?tab=aufrufe", "Zurück zu den Aufrufen")
+            + f'<div class="card"><h2>Prüfspur</h2><p class="hint">Jede Änderung an Servern, Sichten, '
+            f'Schlüsseln und Freigaben, mit Person und Zeit. Die letzten {AUDIT_SHOWN} Einträge.</p>{report}</div>')
+
+
+TAB_PAGES = lambda: {"start": ("Übersicht", lambda host, _p: start_tab(host)),
+                     "server": ("Server", servers_tab),
+                     "sichten": ("Sichten", views_tab), "systeme": ("Systemlandschaft", systems_tab),
+                     "zugaenge": ("Schlüssel und Profile", keys_tab),
+                     "anmeldung": ("Anmeldung", lambda host, _p: signin_card(host)),
+                     "aufrufe": ("Aufrufe und Prüfspur", calls_tab),
+                     "spur": ("Prüfspur", audit_tab)}
+TAB_ACTIVE = {"spur": "aufrufe"}
+
+
+def admin_page(user, roles, host, notice="", secret=None, tab="start", params=None):
     pages = TAB_PAGES()   # signin_card steht weiter unten
     if tab not in pages:
         tab = "start"
@@ -1808,8 +1918,8 @@ Umgebungsvariable <code>{clientfiles.KEY_VAR}</code>):
                      'Zugangsdaten verweigert die App, bis der Tresorschlüssel gesetzt ist (Portal → '
                      'Instanz → Konfiguration → erzeugen).</p></div>')
     title, build = pages[tab]
-    parts.append(build(host))
-    return page(title, "".join(parts), user, roles, tab)
+    parts.append(build(host, params or {}))
+    return page(title, "".join(parts), user, roles, TAB_ACTIVE.get(tab, tab))
 
 
 CALLBACK_PORT = 33418                # fester Rücksprung-Port für Claude Code (D15)
@@ -1823,8 +1933,8 @@ def signin_card(host):
                 + ' auf <b>„Anmeldung einrichten“</b> klicken (das darf die Verwaltung des Mandanten, tenant_admin, ab Plattform 0.1.309; davor nur der Betreiber, server_admin) -- die Plattform legt die Clients im Realm '
                 'an und gibt dem Gateway die Werte. Die Felder MCPGW_* in der Konfiguration der Instanz '
                 'bleiben dafür <b>leer</b>; von Hand gesetzt gewinnen sie (nur ohne Konnektor nötig). Am '
-                'Knoten: <code>oaap idp mcp &lt;konnektor&gt; --instance &lt;name&gt;</code> '
-                '(RFC-0065 D14, D15; RFC-0073 Stufe 3).</p></div>')
+                'Knoten: <code>oaap idp mcp &lt;konnektor&gt; --instance &lt;name&gt;</code>.'
+                '</p></div>')
     err = ISSUER_KEYS.error if ISSUER_KEYS else ""
     views = [v["name"] for v in books.views(DB) if "signin" in books.view_ways(v)]
     cmd = "\n".join(f"claude mcp add --transport http {v} {endpoint(host, v)} \\\n"
@@ -2439,30 +2549,65 @@ es ist; die Freigaben gehen in beiden Fällen mit (derselbe festgehaltene Text).
 
 # ------------------------------------------------- Systemlandschaft (RFC-0114)
 
-def systems_tab(host):
+def systems_tab(host, params=None):
     """Die Zielsysteme dieses Gateways: Titel, Rolle, aktiv, Art, Angaben, Server, Ampel."""
-    rows = []
-    for s in landscape.systems(DB):
+    q = af.Query(params or {}, filters=("role", "active"), default_sort="id")
+    rows = list(landscape.systems(DB))
+    if q.filters["role"]:
+        rows = [s for s in rows if s["role"] == q.filters["role"]]
+    if q.filters["active"] in ("1", "0"):
+        rows = [s for s in rows if bool(s["active"]) == (q.filters["active"] == "1")]
+
+    def row_html(s):
         facts = ", ".join(f"{k}={v}" for k, v in sorted(landscape.facts_of(s).items()))
         light = landscape.system_light(DB, s)
-        rows.append(f'<tr><td><code>{esc(s["id"])}</code><br>{esc(s["title"])}</td>'
-                    f'<td>{esc(landscape.ROLE_WORDS.get(s["role"], s["role"]))}</td>'
-                    f'<td>{"aktiv" if s["active"] else "abgeschaltet"}</td><td>{esc(s["kind"] or "—")}</td>'
-                    f'<td class="muted">{esc(facts or "—")}</td>'
-                    f'<td>{esc(", ".join(landscape.servers_of(DB, s["id"])) or "—")}</td>'
-                    f'<td>{badge(light, light)}</td>'
-                    f'<td><details><summary>Ändern</summary>{system_form(s)}'
-                    f'<form method="post" action="system-delete"><input type="hidden" name="id" '
-                    f'value="{esc(s["id"])}"><button class="quiet">Löschen</button></form></details></td></tr>')
+        return (f'<tr><td><a href="system?id={quote(s["id"])}"><code>{esc(s["id"])}</code></a><br>{esc(s["title"])}</td>'
+                f'<td>{esc(landscape.ROLE_WORDS.get(s["role"], s["role"]))}</td>'
+                f'<td>{badge("green", "aktiv") if s["active"] else badge("off", "abgeschaltet")}</td>'
+                f'<td class="oaap-minor">{esc(s["kind"] or "—")}</td>'
+                f'<td class="muted oaap-minor">{esc(facts or "—")}</td>'
+                f'<td>{esc(", ".join(landscape.servers_of(DB, s["id"])) or "—")}</td>'
+                f'<td>{badge(light, light)}</td></tr>')
+
+    report = tab_report(
+        "systeme", q, rows,
+        [("System", "id", lambda s: s["id"], ""), ("Rolle", "role", lambda s: s["role"], ""),
+         ("Zustand", "active", lambda s: 0 if s["active"] else 1, ""), ("Art", "kind", lambda s: s["kind"] or "", "oaap-minor"),
+         ("Angaben", "", None, "oaap-minor"), ("Server", "", None, ""),
+         ("Ampel", "", None, "")],
+        row_html, noun="Zielsysteme", placeholder="Kennung, Titel, Art",
+        empty_text="Noch kein Zielsystem. Unten „Zielsystem anlegen“.",
+        choices=[("role", "Rolle", [(r, landscape.ROLE_WORDS.get(r, r)) for r in landscape.ROLES]),
+                 ("active", "Zustand", [("1", "aktiv"), ("0", "abgeschaltet")])])
     return f"""<div class="card"><h1>Systemlandschaft</h1>
 <p class="hint">Ein Zielsystem ist, wohin ein Werkzeug über einen MCP-Server reicht -- ein SAP-System, eine
 Jira-Seite, ein Wiki. Eine <b>Multi-System-Sicht</b> wird einmal an einem Referenzsystem ausgeprägt und für
 weitere Systeme angeboten; im Chat steht jedes Werkzeug einmal, mit dem Argument <code>system</code>.
 Die Liste hält nie eine Adresse oder einen Zugang. Die Ampel kommt aus der Rolle (Produktion: gelb),
-wenn keine gesetzt ist, und ist nie lockerer als ein Server des Systems (RFC-0114).</p>
-<div class="scroll"><table><tr><th>System</th><th>Rolle</th><th>Zustand</th><th>Art</th><th>Angaben</th>
-<th>Server</th><th>Ampel</th><th></th></tr>{"".join(rows) or '<tr><td colspan=8 class=muted>Noch kein Zielsystem.</td></tr>'}</table></div></div>
+wenn keine gesetzt ist, und ist nie lockerer als ein Server des Systems.</p>
+{report}</div>
 <div class="card"><h2>Zielsystem anlegen</h2>{system_form(None)}</div>"""
+
+
+def system_page(user, roles, host, sid):
+    """Die Seite eines Zielsystems: Angaben, Ändern und Löschen (früher in der Tabellenzeile)."""
+    s = landscape.system_row(DB, sid)
+    if not s:
+        return page("Unbekannt", af.back("./?tab=systeme") +
+                    '<div class="card"><p>Dieses Zielsystem gibt es nicht.</p></div>', active="systeme")
+    facts = ", ".join(f"{k}={v}" for k, v in sorted(landscape.facts_of(s).items()))
+    light = landscape.system_light(DB, s)
+    head = af.facts([("Rolle", esc(landscape.ROLE_WORDS.get(s["role"], s["role"]))),
+                     ("Zustand", "aktiv" if s["active"] else "abgeschaltet"),
+                     ("Art", esc(s["kind"] or "—")), ("Angaben", esc(facts or "—")),
+                     ("Server", esc(", ".join(landscape.servers_of(DB, s["id"])) or "—")),
+                     ("Ampel", badge(light, light))])
+    body = (af.back("./?tab=systeme") + f'<div class="oaap-objhead"><h1>{esc(s["title"] or s["id"])}</h1>'
+            f'<p><code>{esc(s["id"])}</code></p>{head}</div>'
+            f'<div class="card"><h2>Ändern</h2>{system_form(s)}</div>'
+            f'<div class="card"><h2>Löschen</h2><form method="post" action="system-delete">'
+            f'<input type="hidden" name="id" value="{esc(s["id"])}"><button class="danger">Löschen</button></form></div>')
+    return page(s["title"] or s["id"], body, active="systeme", status_obj=f"System:{s['id']}")
 
 
 def system_form(s):
@@ -2815,7 +2960,7 @@ def assistants_page(user, roles, who, params):
     since = books.assistant_evaluation(DB, rows[0]["doc"]["id"])["usage_since"] if rows else ""
     intro = (f'<div class="card"><h1>Assistenten</h1><p class="hint">Je Revision: Aufrufe, Ablehnungen und Fehler '
              f'aus den Messzeilen (vorhanden seit {esc(since[:10]) or "—"}; ältere sind nach der Aufbewahrung '
-             f'gelöscht), Personen nur gezählt. Sterne und Vorgänge „Nicht zufrieden“ aus dem Chat (RFC-0101). '
+             f'gelöscht), Personen nur gezählt. Sterne und Vorgänge „Nicht zufrieden“ aus dem Chat. '
              f'Export: eine Revision als Austauschdatei ohne Besitzer und Nummer.</p>'
              + template_link(who) + '</div>')
     return page("Assistenten", intro + ("".join(cards) or '<div class="card"><p class="muted">Noch keine Assistenten.</p></div>'),
@@ -3977,7 +4122,7 @@ class Handler(BaseHTTPRequestHandler):
         doc = {"resource": self.origin() + (rest or "/mcp"),
                "authorization_servers": [ISSUER],
                "bearer_methods_supported": ["header"],
-               "resource_name": rest[5:] or "OAAP MCP-Gateway"}
+               "resource_name": rest[5:] or APP_NAME}
         self.send_json(200, doc, [("Cache-Control", "max-age=300")])
 
     def do_DELETE(self):
@@ -4043,6 +4188,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/view":
             self.send_html(200, view_page(user, roles, host, query.get("name", ""),
                                           convert=query.get("convert", "")))
+        elif path == "/key":
+            self.send_html(200, key_page(user, roles, host, query.get("label", "")))
+        elif path == "/system":
+            self.send_html(200, system_page(user, roles, host, query.get("id", "")))
         elif path == "/auswertung":
             self.send_html(200, charts_page(user, roles, query))
         elif path == "/assistenten":
@@ -4066,7 +4215,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_html(200, templates_page(user, roles, host, pairs))
         else:
-            self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start")))
+            self.send_html(200, admin_page(user, roles, host, tab=query.get("tab", "start"),
+                                           params=query))
 
     def handle_me(self, path):
         """/me und /me/v1/calls (RFC-0095 Stufe 1): die eigenen Aufrufe der Person.
@@ -5552,7 +5702,7 @@ def cli(argv):
 def main():
     if len(sys.argv) > 1:
         sys.exit(cli(sys.argv[1:]))
-    sys.stdout.write(f"OAAP MCP-Gateway {VERSION} auf Port {PORT} — {len(books.servers(DB))} "
+    sys.stdout.write(f"MCP-Gateway {VERSION} auf Port {PORT} — {len(books.servers(DB))} "
                      f"Server, {len(books.views(DB))} Sichten; Katalog alle "
                      f"{CATALOG_MINUTES or '—'} Minuten\n")
     sys.stdout.flush()

@@ -12,6 +12,7 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin recherche
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
 COPY app.py fetch.py search.py mcp_door.py /srv/
+COPY appframe/ /srv/appframe/
 
 USER 10001
 EXPOSE 8000

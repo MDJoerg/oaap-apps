@@ -1,4 +1,4 @@
-# OAAP Ollama-Modelle
+# Ollama-Modelle
 
 Die Betriebsoberfläche zu einem Dienst, der keine hat. Ollama ist im
 OAAP-KI-Stack ein tragendes Teil geworden — aber Modelle holt man auf

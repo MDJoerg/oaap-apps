@@ -1,5 +1,5 @@
-OAAP - Desktop im Browser
-=========================
+Desktop im Browser (Webtop)
+===========================
 
 Dein Benutzer auf diesem Desktop: __USER__
 Version des Desktops: (unbekannt)
@@ -24,6 +24,10 @@ SAP-System für Eclipse ADT (aus der Instanzkonfiguration)
   Hostname:  __ABAP_HOST__
   Port:      __ABAP_PORT__ (HTTPS)
   Mandant:   __ABAP_CLIENT__
+
+Hilfe
+  Hilfe im Portal unter „Hilfe“ → „Desktop im Browser (Webtop)“ – dort stehen erste Schritte,
+  die Werkzeuge und häufige Fragen. Fragen kannst du auch im Chat deines Mandanten stellen.
 
 Hinweise
   Die Sitzung läuft im Container weiter, wenn du den Browser schließt - beim nächsten Öffnen stehen die Fenster noch.

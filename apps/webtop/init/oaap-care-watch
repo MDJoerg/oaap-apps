@@ -56,7 +56,7 @@ def notify(summary, body, urgency="normal"):
             cmd = ([sys.executable, NOTIFY_CMD] if NOTIFY_CMD.endswith(".py") else [NOTIFY_CMD])
             subprocess.run(cmd + [urgency, summary, body], timeout=10, check=False)
             return
-        cmd = (f"DISPLAY=:1 notify-send -u {urgency} -a 'OAAP Desktop' -i system-reboot "
+        cmd = (f"DISPLAY=:1 notify-send -u {urgency} -a 'Desktop' -i system-reboot "
                f"{shlex.quote(summary)} {shlex.quote(body)}")
         subprocess.run(["su", USER, "-c", cmd], timeout=10, check=False,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

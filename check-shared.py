@@ -33,6 +33,17 @@ SHARED = {
     # Markdown mit Mermaid und SVG, formatiert/roh -- im Chat und in den Vorgängen
     # dieselbe Darstellung (Ziel: der Ordner static/md der App).
     "mdview": ["chat:static/md", "vorgaenge:static/md"],
+    # RFC-0118 P2: der Rahmen jeder App mit Oberfläche (Kopfleiste, Reiter,
+    # Fußzeile, Listenbericht) -- Kit und Rahmenskript liefert die Plattform.
+    "appframe": ["vorgaenge", "spezialisten", "studio", "wegweiser", "partnerverwaltung",
+                 "mitarbeiterverwaltung", "projekt", "raci", "ai-gateway", "mcp-gateway",
+                 "help", "fleetview", "store-editor", "package-catalog", "marketplace",
+                 "ollama-models", "rollen-rechte", "vpn-client", "recherche"],
+    # RFC-0118 P7: die MCP-Tür der Apps, die keine eigene haben.
+    "mcpdoor": ["spezialisten", "studio", "wegweiser", "partnerverwaltung",
+                "mitarbeiterverwaltung", "projekt", "raci", "ai-gateway", "fleetview",
+                "store-editor", "package-catalog", "marketplace", "ollama-models",
+                "rollen-rechte", "vpn-client"],
 }
 
 

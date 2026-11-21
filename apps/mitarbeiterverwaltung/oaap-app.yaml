@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: mitarbeiterverwaltung
-  name: OAAP Mitarbeiterverwaltung
-  version: 0.1.2
+  name: Mitarbeiterverwaltung
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4, zweite Welle): Owner von Mitarbeiter, unabhaengig von Partnerverwaltung"
+  description: "Mitarbeiter mit E-Mail, Telefon und Abteilung im digitalen Zwilling des Mandanten pflegen"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -18,8 +18,13 @@ services:
     port: 8000
 
 routes:
+  # deckt auch /mcp ab: das MCP-Gateway reicht die Person durch, die Tür
+  # prüft wie die Seiten (RFC-0073, RFC-0118 §9)
   - path: /
     roles: [user]
+
+mcp:
+  path: /mcp
 
 storage:
   # Nur der eigene Index (id + type) -- derselbe Grundsatz wie in
@@ -85,6 +90,22 @@ data_model:
 contributes:
   - type: Mitarbeiter
     role: owner
+
+docs:
+  # RFC-0094 / RFC-0118 §9: die Anwenderhilfe geht an die Hilfe des Mandanten
+  # und damit auch an den Chat.
+  - product: mitarbeiterverwaltung
+    title: "Mitarbeiterverwaltung"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user]
+    readers: [end-user]
+    kinds:
+      index.md: overview
+      mitarbeiter-anlegen.md: howto
+      mitarbeiter-finden.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

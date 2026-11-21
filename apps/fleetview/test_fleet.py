@@ -237,7 +237,76 @@ check("keine Knotenliste, keine Schlüssel mehr",
       "FLEETVIEW_NODES" not in man and "FLEETVIEW_KEYS" not in man)
 appsrc = open(os.path.join(here, "app.py"), encoding="utf-8").read()
 check("Version in app.py und Manifest gleich",
-      'VERSION = "1.0.0"' in appsrc and "version: 1.0.0" in man)
+      'VERSION = "1.1.0"' in appsrc and "version: 1.1.0" in man)
+check("Name im Manifest ohne OAAP: Flotte", "name: Flotte" in man and "OAAP FleetView" not in man)
+
+print("\n-- Seiten im Rahmen, Listen, MCP-Tür (1.1.0)")
+os.environ["FLEETVIEW_DATA_DIR"] = tempfile.mkdtemp()
+import io  # noqa: E402
+import app  # noqa: E402
+app._state = fleet.read_fleet("http://gw/twin", SECRET, None, fetch=good, now=NOW)
+html_ = app.overview({})
+check("Übersicht trägt Kit und Rahmen der Plattform",
+      "/platform/theme.css" in html_ and "/platform/app.js" in html_)
+check("... den Namen Flotte, ohne OAAP und ohne eigene Palette",
+      'class="oaap-appname">Flotte<' in html_ and "OAAP FLEETVIEW" not in html_
+      and "--oaap-blue-900" not in html_ and "anna" not in html_)
+check("Reiter: Übersicht zuerst, dann Instanzen",
+      html_.index(">Übersicht<") < html_.index(">Instanzen<") and 'aria-current="page"' in html_)
+check("Knotenliste als Listenbericht mit Zählzeile", "5 Knoten" in html_ and "oaap-filter" in html_)
+h = app.overview({"state": ["silent"]})
+check("Filter Zustand=Stumm zeigt nur oaap-bernd",
+      "oaap-bernd" in h and "node/raspberrypi" not in h and "1 Knoten" in h)
+h = app.overview({"q": ["raspberry"]})
+check("Suche findet raspberrypi", "node/raspberrypi" in h and "node/oaapx02" not in h)
+h = app.instances_page({"sort": ["-instance"]})
+check("Instanzen sortiert absteigend (aria-sort)", 'aria-sort="descending"' in h
+      and h.index(">kuma<") < h.index(">chat<"))
+many = [inst(f"i{n:03d}", "oaap-demo") for n in range(120)]
+app._state = fleet.read_fleet("http://gw/twin", SECRET, None,
+                              fetch=lambda u, k, t: ((NODES if t == "FleetNode" else many), False),
+                              now=NOW)
+h = app.instances_page({})
+check("Blättern ab 50: 1–50 von 120, Weitere 50", "1–50 von 120" in h and "offset=50" in h)
+h2 = app.instances_page({"offset": ["100"]})
+check("... dritte Seite zeigt i100 bis i119", ">i100<" in h2 and ">i119<" in h2 and ">i099<" not in h2)
+app._state = fleet.read_fleet("http://gw/twin", SECRET, None, fetch=good, now=NOW)
+h = app.node_page("oaap-demo", {})
+check("Objektseite: zurück zur Liste, Objekt für Fragen", 'class="oaap-back"' in h
+      and 'data-oaap-object="FleetNode:oaap-demo"' in h)
+
+
+def rpc(msg, roles):
+    who = {"user": "anna", "roles": roles}
+    return app.DOOR.answer(msg, who)
+
+
+r = rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, ["admin"])
+names = sorted(t["name"] for t in r["result"]["tools"])
+check("MCP tools/list", names == ["fleetview_instances", "fleetview_node_read", "fleetview_nodes"], names)
+r = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "fleetview_nodes", "arguments": {}}}, ["support"])
+txt = r["result"]["content"][0]["text"]
+doc = json.loads(txt)
+check("fleetview_nodes als support: fünf Knoten, Stumm benannt",
+      not r["result"]["isError"] and len(doc["nodes"]) == 5
+      and any(a["label"] == "Stumm" for a in doc["attention"]))
+check("... ohne Schlüssel", SECRET not in txt)
+r = rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "fleetview_node_read", "arguments": {"name": "oaapi01"}}}, ["admin"])
+doc = json.loads(r["result"]["content"][0]["text"])
+check("fleetview_node_read nach Alias", doc["name"] == "oaap-demo" and len(doc["instances"]) == 2)
+r = rpc({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+         "params": {"name": "fleetview_instances", "arguments": {"q": "oaapx02"}}}, ["admin"])
+doc = json.loads(r["result"]["content"][0]["text"])
+check("fleetview_instances sucht (Knoten)", doc["total"] == 1
+      and doc["instances"][0]["node"] == "oaapx02", doc)
+for tool in ("fleetview_nodes", "fleetview_node_read", "fleetview_instances"):
+    r = rpc({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+             "params": {"name": tool, "arguments": {"name": "oaapi01"}}}, ["user"])
+    check(f"{tool} als user: abgelehnt wie die Seite", r["result"]["isError"] is True)
+r = rpc({"jsonrpc": "2.0", "id": 6, "method": "prompts/list"}, ["admin"])
+check("zwei Vorlagen", len(r["result"]["prompts"]) == 2)
 
 print(f"\n{ok} bestanden, {fail} fehlgeschlagen")
 sys.exit(1 if fail else 0)

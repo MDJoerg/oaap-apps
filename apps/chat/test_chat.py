@@ -1330,6 +1330,21 @@ else:
 check("die Seite zeigt den Link nur mit templates_url (tenant_admin)",
       'id="atpl"' in pg and "S.templates_url" in pg and '"templates_url": templates_url() if "tenant_admin" in who.roles' in open(
           os.path.join(HERE, "app.py"), encoding="utf-8").read())
+# 0.20.0 (RFC-0118 §5 Typ A): Hilfe und Benutzermenü in der Leiste unten, aus denselben
+# Quellen wie der Rahmen der Plattform -- aber ohne /platform/app.js (eigenes Layout).
+_me = _pg.split("async function loadMe")[1].split("const ASK")[0]
+check("0.20.0: Name ohne OAAP, Vorgabe „Chat“", "OAAP" not in app.TITLE and "<title>__TITLE__</title>" in _pg, app.TITLE)
+check("0.20.0: Leiste unten: Hilfe aus /platform/context.json (Produktseite chat)",
+      'id="sme"' in _pg and 'getJSONq("/platform/context.json")' in _pg
+      and '"/p/" + encodeURIComponent(app.id || "chat")' in _me, None)
+check("0.20.0: Benutzermenü aus /auth/whoami: Anzeigename, Portal, Passwort ändern",
+      'getJSONq("/auth/whoami")' in _pg and "me.display_name || me.username" in _me and '"Portal"' in _me
+      and '"Passwort ändern"' in _me, None)
+check("0.20.0: Abmelden ist ein POST an /auth/logout, kein Link",
+      'f.method = "post"' in _me and '"/auth/logout"' in _me and 'href="/auth/logout"' not in _pg, None)
+check("0.20.0: kein Rahmen-Skript, keine Rollen in der Leiste",
+      'src="/platform/app.js"' not in _pg and "roles" not in _me and 'S.user || "") + " · Chat' not in _pg, None)
+check("0.20.0: der Sprung aus „Fragen“ (?frage=) bleibt", "const ASK = (() =>" in _pg and 'q.get("frage")' in _pg, None)
 srv.shutdown()
 fake.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)

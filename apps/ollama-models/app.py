@@ -1,4 +1,4 @@
-"""OAAP Ollama-Modelle 0.1 — die Betriebsoberfläche zu einem Dienst ohne eigene.
+"""Ollama-Modelle — die Betriebsoberfläche zu einem Dienst ohne eigene.
 
 Ollama ist in unserem KI-Stack ein tragendes Teil geworden, bringt aber
 **keine Oberfläche** mit: Modelle holt man auf der Kommandozeile, und
@@ -38,11 +38,13 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote_plus
+from urllib.parse import parse_qs, unquote_plus, urlencode
 
+import appframe as af
+import mcpdoor
 import ollama
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 PORT = 8000
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://oaap-app-ollama:11434").rstrip("/")
@@ -149,105 +151,108 @@ def forget_finished():
 
 # ------------------------------------------------------------------- Optik
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 1.2rem}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .card.busy{border-color:#93c5fd;background:#eff6ff}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.ok{background:#dcfce7;color:#166534}
-  .badge.err{background:#fee2e2;color:#991b1b}
-  .badge.off{background:#f3f4f6;color:#6b7280}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  button.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;
-       font-size:.85rem}
-  button.quiet:hover{background:#e5e7eb}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
-       vertical-align:middle;font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  code{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
-       word-break:break-all}
-  pre{background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:.5rem;
-       overflow-x:auto;font-size:.82rem}
-  .bar{height:.55rem;border-radius:.3rem;background:#e5e7eb;overflow:hidden;margin:.35rem 0}
-  .bar span{display:block;height:100%;background:var(--oaap-blue-600)}
-  form.inline{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:0}
-  input[type=text]{flex:1 1 16rem;padding:.5rem .6rem;border-radius:.4rem;
-       border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
-  footer.oaap{max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-       color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
-  @media (max-width:640px){ .userbox .who{display:none} }
-</style>"""
+APP_NAME = "Ollama-Modelle"
+PRODUCT = "ollama-models"
 
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
+# Nur, was dieser App eigen ist; Farben kommen aus dem Kit der Plattform.
+STYLE = """
+.hint{font-size:.85rem;color:var(--oaap-color-text-muted);margin:0 0 .6rem}
+.oaap-card.busy{border-left:4px solid var(--oaap-color-primary)}
+code{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral);border-radius:.25rem;
+     padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
+pre{background:var(--oaap-color-bg);color:var(--oaap-color-text);border:1px solid var(--oaap-color-border);
+    padding:.9rem 1rem;border-radius:var(--oaap-radius);overflow-x:auto;font-size:.82rem}
+.bar{height:.55rem;border-radius:.3rem;background:var(--oaap-color-border);overflow:hidden;margin:.35rem 0}
+.bar span{display:block;height:100%;background:var(--oaap-color-primary)}
+form.inline{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:0}
+form.inline input[type=text]{flex:1 1 16rem}
+"""
 
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="34,6 58,20 58,48 34,62 10,48 10,20" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/>'
-            '<polygon points="72,30 92,41 92,64 72,76 52,64 52,41" fill="#fff" opacity=".85"/>'
-            '<polygon points="42,58 66,72 66,94 42,96 22,84 22,70" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
+TABS = [("./", "Übersicht"), ("anschluss", "Anschluss ans KI-Gateway"), ("protokoll", "Protokoll")]
 
 
-def page(body, user, roles, refresh=False):
+def page(title, body, active="./", refresh=False, obj=None, status_tabs=True):
     # Läuft ein Vorgang, aktualisiert die Seite sich selbst — ohne
     # JavaScript, weil ein Fortschrittsbalken kein Grund ist, eine
     # Oberfläche von Skripten abhängig zu machen.
-    meta = '<meta http-equiv="refresh" content="3">' if refresh else ""
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">{meta}
-<link rel="icon" href="{FAVICON}">
-<title>Modelle — OAAP Ollama</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="./">{LOGO_SVG}
-    <span><b>OLLAMA-MODELLE</b><small>Was liegt da, was läuft, was fehlt</small></span>
-  </a>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-<main>{body}</main>
-<footer class="oaap">
-  <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
-    <polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="#2563eb"/></svg>
-  OAAP Ollama-Modelle {VERSION} — verwaltet Modelle; gechattet wird woanders
-</footer>
-</html>"""
+    head = '<meta http-equiv="refresh" content="3">' if refresh else ""
+    return af.page(title, body, app=APP_NAME, version=VERSION, product=PRODUCT,
+                   tabs=TABS if status_tabs else None, active=active, obj=obj,
+                   style=STYLE, head=head)
 
 
-def render(user, roles, may_change, notice=""):
+def unreachable_card(err):
+    return af.card("Ollama antwortet nicht", f"""
+  <p class="hint">{esc(err)} — versucht wurde <code>{esc(OLLAMA_URL)}</code>.</p>
+  <p class="hint">Das ist fast immer die fehlende <b>App-zu-App-Verbindung</b>:
+    Standard ist Isolation, eine Verbindung ist eine ausdrückliche
+    Entscheidung des Betreibers. An der Maschine:</p>
+  <pre>sudo oaap app link add &lt;diese-instanz&gt; {esc(ollama.instance_of(OLLAMA_URL))}</pre>
+  <p class="hint">Danach erreichen sich beide über das eigene Netz des Paares —
+    Ollamas Schnittstelle bleibt dabei unveröffentlicht, was gut ist: Sie kennt keine
+    Anmeldung.</p>""", "oaap-warn")
+
+
+def pulls_card():
+    pulls = pull_state()
+    if not pulls:
+        return "", False
+    busy = any(not r["done"] for r in pulls.values())
+    rows = []
+    for name, row in sorted(pulls.items()):
+        if row["error"]:
+            state = af.badge(row["error"], "err")
+        elif row["done"]:
+            state = af.badge("fertig", "ok")
+        else:
+            state = af.badge(row["status"] or "läuft", "info")
+        bar = ""
+        if row["total"]:
+            pct = min(100, int(row["completed"] * 100 / row["total"]))
+            bar = (f'<div class="bar"><span style="width:{pct}%"></span></div>'
+                   f'<span class="oaap-muted">{ollama.human_size(row["completed"])} von '
+                   f'{ollama.human_size(row["total"])} ({pct} %)</span>')
+        rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{state}{bar}</td></tr>')
+    return af.card("Wird geholt", f"""
+  <p class="hint">Die Seite aktualisiert sich selbst, solange etwas läuft.
+    Wegnavigieren ist ungefährlich — geholt wird auf dem Knoten, nicht im
+    Browser.</p>
+  {af.table("<th>Modell</th><th>Stand</th>", rows)}""", "busy"), busy
+
+
+def installed_report(installed, loaded_names, params):
+    families = sorted({r["family"] for r in installed if r["family"]})
+    q = af.Query(params, filters=("familie", "geladen"), default_sort="-size")
+    rows = [r for r in installed
+            if (not q.filters["familie"] or r["family"] == q.filters["familie"])
+            and (not q.filters["geladen"] or (r["name"] in loaded_names) == (q.filters["geladen"] == "ja"))]
+    columns = [
+        ("Modell", "name", lambda r: r["name"], ""),
+        ("Größe", "size", lambda r: r["size"], "oaap-num"),
+        ("Parameter · Quantisierung", "family",
+         lambda r: " · ".join(x for x in (r["parameters"], r["quantization"], r["family"]) if x), "oaap-minor"),
+        ("Geändert", "modified", lambda r: r["modified"], "oaap-minor"),
+    ]
+
+    def row_html(r):
+        info = " · ".join(x for x in (r["parameters"], r["quantization"], r["family"]) if x)
+        mark = " " + af.badge("geladen", "ok") if r["name"] in loaded_names else ""
+        return (f'<tr><td><a href="modell?{urlencode({"name": r["name"]})}"><code>{esc(r["name"])}</code></a>{mark}</td>'
+                f'<td class="oaap-num">{esc(ollama.human_size(r["size"]))}</td>'
+                f'<td class="oaap-minor oaap-muted">{esc(info)}</td>'
+                f'<td class="oaap-minor oaap-muted">{esc(r["modified"])}</td></tr>')
+    choices = [("geladen", "Im Speicher", [("ja", "geladen"), ("nein", "nicht geladen")])]
+    if families:
+        choices.insert(0, ("familie", "Familie", [(f, f) for f in families]))
+    return af.list_report(q, rows, columns, row_html, base="./?", noun="Modelle",
+                          empty_text="Noch kein Modell installiert.", choices=choices,
+                          placeholder="Modellname")
+
+
+def render(user, roles, may_change, notice="", params=None, error=False):
     forget_finished()
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
+    params = params or {}
+    parts = [af.msg(notice, error=error)] if notice else []
 
     version, verr = ollama.version(OLLAMA_URL)
     installed, ierr = ollama.models(OLLAMA_URL)
@@ -255,164 +260,234 @@ def render(user, roles, may_change, notice=""):
     err = verr or ierr
 
     if err:
-        parts.append(f"""<div class="card attention">
-  <h2>Ollama antwortet nicht</h2>
-  <p class="hint">{esc(err)} — versucht wurde <code>{esc(OLLAMA_URL)}</code>.</p>
-  <p class="hint">Das ist fast immer die fehlende <b>App-zu-App-Verbindung</b>:
-    Standard ist Isolation (RFC-0016), eine Verbindung ist eine ausdrückliche
-    Entscheidung des Betreibers. An der Maschine:</p>
-  <pre>sudo oaap app link add &lt;diese-instanz&gt; {esc(ollama.instance_of(OLLAMA_URL))}</pre>
-  <p class="hint">Danach erreichen sich beide über das eigene Netz des Paares —
-    Ollamas API bleibt dabei unveröffentlicht, was gut ist: Sie kennt keine
-    Authentifizierung.</p>
-</div>""")
-        return page("".join(parts), user, roles)
+        parts.append(unreachable_card(err))
+        return page("Übersicht", af.pagehead("Modelle") + "".join(parts))
 
-    # --- laufende Vorgänge
-    pulls = pull_state()
-    busy = any(not r["done"] for r in pulls.values())
+    pulls, busy = pulls_card()
     if pulls:
-        rows = []
-        for name, row in sorted(pulls.items()):
-            if row["error"]:
-                state = f'<span class="badge err">{esc(row["error"])}</span>'
-            elif row["done"]:
-                state = '<span class="badge ok">fertig</span>'
-            else:
-                state = f'<span class="badge">{esc(row["status"] or "läuft")}</span>'
-            bar = ""
-            if row["total"]:
-                pct = min(100, int(row["completed"] * 100 / row["total"]))
-                bar = (f'<div class="bar"><span style="width:{pct}%"></span></div>'
-                       f'<span class="muted">{ollama.human_size(row["completed"])} von '
-                       f'{ollama.human_size(row["total"])} ({pct} %)</span>')
-            rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{state}{bar}</td></tr>')
-        parts.append(f"""<div class="card busy">
-  <h2>Wird geholt</h2>
-  <p class="hint">Die Seite aktualisiert sich selbst, solange etwas läuft.
-    Wegnavigieren ist ungefährlich — geholt wird auf dem Knoten, nicht im
-    Browser.</p>
-  <table>{"".join(rows)}</table>
-</div>""")
+        parts.append(pulls)
 
     # --- im Speicher
     if loaded:
         rows = []
         for row in loaded:
             where = "Grafikspeicher" if row["vram"] else "Arbeitsspeicher"
-            rows.append(f'<tr><td><code>{esc(row["name"])}</code></td>'
-                        f'<td>{esc(ollama.human_size(row["size"]))}</td>'
+            rows.append(f'<tr><td><a href="modell?{urlencode({"name": row["name"]})}"><code>{esc(row["name"])}</code></a></td>'
+                        f'<td class="oaap-num">{esc(ollama.human_size(row["size"]))}</td>'
                         f'<td>{esc(where)}</td>'
-                        f'<td class="muted">bis {esc(row["until"] or "?")}</td></tr>')
-        parts.append(f"""<div class="card">
-  <h2>Gerade geladen</h2>
+                        f'<td class="oaap-muted">bis {esc(row["until"] or "?")}</td></tr>')
+        parts.append(af.card("Gerade geladen", f"""
   <p class="hint">Ollama hält ein benutztes Modell eine Weile im Speicher.
     Ist die Liste leer, muss das nächste Modell erst wieder eingelesen werden —
     das ist die Wartezeit, die nach einer Pause wie ein Fehler aussieht und
     keiner ist.</p>
-  <table><tr><th>Modell</th><th>Belegt</th><th>Wo</th><th>Vorgehalten</th></tr>
-  {"".join(rows)}</table>
-</div>""")
+  {af.table('<th>Modell</th><th class="oaap-num">Belegt</th><th>Wo</th><th>Vorgehalten</th>', rows)}"""))
 
     # --- installiert
     total = sum(r["size"] for r in installed)
     if installed:
-        rows = []
-        for row in installed:
-            info = " · ".join(x for x in (row["parameters"], row["quantization"],
-                                          row["family"]) if x)
-            action = ""
-            if may_change:
-                action = (f'<form method="post" action="delete" style="margin:0" '
-                          f'onsubmit="return confirm(\'{esc(row["name"])} wirklich löschen?\')">'
-                          f'<input type="hidden" name="model" value="{esc(row["name"])}">'
-                          f'<button class="quiet" type="submit">löschen</button></form>')
-            rows.append(f'<tr><td><code>{esc(row["name"])}</code><br>'
-                        f'<span class="muted">{esc(info)}</span></td>'
-                        f'<td>{esc(ollama.human_size(row["size"]))}</td>'
-                        f'<td class="muted">{esc(row["modified"])}</td>'
-                        f'<td>{action}</td></tr>')
-        parts.append(f"""<div class="card">
-  <h2>Installierte Modelle</h2>
-  <p class="hint">Zusammen <b>{esc(ollama.human_size(total))}</b> auf dem Mount der
+        parts.append(af.card("Installierte Modelle", f"""
+  <p class="hint">Zusammen <b>{esc(ollama.human_size(total))}</b> auf dem Speicher der
     Ollama-Instanz. Wie viel dort noch frei ist, kann diese App nicht sehen —
     sie schaut in einen fremden Container hinein, nicht auf dessen Platte; das
-    weiß der Knoten.</p>
-  <table><tr><th>Modell</th><th>Größe</th><th>Geändert</th><th></th></tr>
-  {"".join(rows)}</table>
-</div>""")
+    weiß der Knoten. Ein Klick auf ein Modell zeigt Einzelheiten{" und löschen" if may_change else ""}.</p>
+  {installed_report(installed, {r["name"] for r in loaded}, params)}"""))
     else:
-        parts.append("""<div class="card attention">
-  <h2>Noch kein Modell installiert</h2>
+        parts.append(af.card("Noch kein Modell installiert", """
   <p class="hint">Ollama läuft, hat aber nichts zu antworten. Unten ein paar
-    Startpunkte.</p>
-</div>""")
+    Startpunkte.</p>""", "oaap-warn"))
 
     # --- holen
     if may_change:
-        chips = "".join(
-            f'<tr><td><code>{esc(name)}</code></td><td>{esc(size)}</td>'
-            f'<td class="muted">{esc(why)}</td>'
-            f'<td><form method="post" action="pull" style="margin:0">'
-            f'<input type="hidden" name="model" value="{esc(name)}">'
-            f'<button class="quiet" type="submit">holen</button></form></td></tr>'
-            for name, size, why in SUGGESTIONS)
-        parts.append(f"""<div class="card">
-  <h2>Modell holen</h2>
+        pick = (params.get("vorschlag") or "").strip() if isinstance(params.get("vorschlag"), str) else ""
+        sugg = [f'<tr><td><a href="./?{urlencode({"vorschlag": name})}#holen"><code>{esc(name)}</code></a></td>'
+                f'<td>{esc(size)}</td><td class="oaap-muted">{esc(why)}</td></tr>'
+                for name, size, why in SUGGESTIONS]
+        parts.append(f"""<section class="oaap-card" id="holen"><h2>Modell holen</h2>
   <form class="inline" method="post" action="pull">
-    <input type="text" name="model" placeholder="z. B. qwen2.5:3b" required>
-    <button type="submit">Holen</button>
+    <input type="text" name="model" placeholder="z. B. qwen2.5:3b" value="{esc(pick)}" required aria-label="Modellname">
+    <button class="primary" type="submit">Holen</button>
   </form>
   <p class="hint" style="margin-top:.8rem">Der Name ist der von
     <code>ollama.com</code>; ohne Doppelpunkt nimmt Ollama <code>:latest</code>.</p>
-  <h2 style="margin-top:1.2rem">Bewährte Startpunkte</h2>
-  <p class="hint">Vorschläge, kein Katalog. Auf einem Knoten <b>ohne
-    Grafikkarte</b> entscheidet die Größe darüber, ob ein Modell benutzbar ist
+  <h3>Bewährte Startpunkte</h3>
+  <p class="hint">Vorschläge, kein Katalog. Ein Klick trägt den Namen oben ein. Auf einem
+    Knoten <b>ohne Grafikkarte</b> entscheidet die Größe darüber, ob ein Modell benutzbar ist
     oder nur vorhanden — kleine Modelle antworten in Sekunden, ein 70B-Modell
     rechnet Minuten an einem Satz.</p>
-  <table><tr><th>Modell</th><th>Größe</th><th>Wofür</th><th></th></tr>{chips}</table>
-</div>""")
+  {af.table("<th>Modell</th><th>Größe</th><th>Wofür</th>", sugg)}
+</section>""")
     else:
-        parts.append("""<div class="card">
+        parts.append(af.card("", """
   <p class="hint" style="margin:0">Modelle zu holen oder zu löschen belegt Platz
     und Bandbreite auf dem Knoten und ist deshalb der Serververwaltung
-    vorbehalten. Sehen darf diese Seite jeder Schlüsselanwender.</p>
-</div>""")
+    vorbehalten. Sehen darf diese Seite jeder Schlüsselanwender.</p>"""))
 
-    # --- Anschluss ans Gateway
+    parts.append(f'<p class="hint">Ollama-Version: {esc(version or "unbekannt")}.</p>')
+    return page("Übersicht", af.pagehead("Modelle") + "".join(parts), refresh=busy)
+
+
+def model_page(name, may_change):
+    """Die Objektseite eines Modells: Kennzahlen und, für die Verwaltung, Löschen."""
+    installed, err = ollama.models(OLLAMA_URL)
+    loaded, _ = ollama.running(OLLAMA_URL)
+    back = af.back("./", "Zurück zur Übersicht")
+    if err:
+        return page(name or "Modell", back + unreachable_card(err), active="./")
+    row = next((r for r in installed if r["name"] == name), None)
+    if row is None:
+        return page("Unbekanntes Modell", back + af.pagehead(name or "Modell")
+                    + af.empty("Dieses Modell ist nicht (mehr) installiert. "
+                               '<a href="./">Zur Übersicht</a>'), active="./")
+    live = next((r for r in loaded if r["name"] == name), None)
+    facts = af.facts([
+        ("Größe", esc(ollama.human_size(row["size"]))),
+        ("Parameter", esc(row["parameters"])),
+        ("Quantisierung", esc(row["quantization"])),
+        ("Familie", esc(row["family"])),
+        ("Geändert", esc(row["modified"])),
+        ("Im Speicher", af.badge("geladen", "ok") + (
+            f' <span class="oaap-muted">bis {esc(live["until"] or "?")}</span>' if live["until"] else "")
+         if live else af.badge("nicht geladen")),
+    ])
+    body = (back + f'<div class="oaap-objhead"><h1><code>{esc(name)}</code></h1>{facts}</div>')
+    if may_change:
+        body += af.card("Löschen", f"""
+  <p class="hint">Gibt den Platz auf dem Knoten frei. Ein gelöschtes Modell lässt sich
+    jederzeit wieder holen; im KI-Gateway antwortet es bis dahin nicht.</p>
+  <form method="post" action="delete" onsubmit="return confirm('{esc(name)} wirklich löschen?')">
+    <input type="hidden" name="model" value="{esc(name)}">
+    <button class="danger" type="submit">Modell löschen</button></form>""", "oaap-danger")
+    return page(name, body, active="./", obj=f"Modell:{name}")
+
+
+def gateway_page():
+    installed, _ = ollama.models(OLLAMA_URL)
     inst = ollama.instance_of(OLLAMA_URL)
     first = installed[0]["name"] if installed else "qwen2.5:3b"
-    parts.append(f"""<div class="card">
-  <h2>Anschluss ans KI-Gateway</h2>
-  <p class="hint">Damit das Gateway diese Modelle anbieten kann, braucht es
+    body = af.pagehead("Anschluss ans KI-Gateway") + af.card("", f"""
+  <p class="hint">Damit das KI-Gateway diese Modelle anbieten kann, braucht es
     einmal eine Verbindung und zwei Zeilen Konfiguration. Die Ampelfarbe ist
     <b>grün</b>: Die Daten verlassen das Unternehmen nicht.</p>
   <pre>sudo oaap app link add &lt;gateway-instanz&gt; {esc(inst)}
 
 AIGW_SUPPLIERS   ollama={esc(OLLAMA_URL)}/v1 light=green
 AIGW_ALIASES     chat-default = ollama:{esc(first)}</pre>
-  <p class="hint">Ollamas eigene API wird dabei <b>nicht veröffentlicht</b> —
-    sie kennt keine Authentifizierung, und was nicht geroutet ist, kann
-    niemand aufrufen.</p>
-</div>""")
+  <p class="hint">Ollamas eigene Schnittstelle wird dabei <b>nicht veröffentlicht</b> —
+    sie kennt keine Anmeldung, und was nicht geroutet ist, kann
+    niemand aufrufen.</p>""")
+    return page("Anschluss ans KI-Gateway", body, active="anschluss")
 
-    # --- Protokoll
-    log = recent()
-    if log:
-        rows = "".join(
-            f'<tr><td class="muted">{esc(r.get("time", ""))}</td>'
-            f'<td>{esc(r.get("actor", "?"))}</td><td>{esc(r.get("action", ""))}</td>'
-            f'<td><code>{esc(r.get("model", ""))}</code></td>'
-            f'<td class="muted">{esc(r.get("detail", ""))}</td></tr>' for r in log)
-        parts.append(f"""<div class="card">
-  <h2>Was hier geschah</h2>
-  <p class="hint">Holen und Löschen belegen Platz und Bandbreite — das gehört
-    nachvollziehbar festgehalten. Ollama-Version: {esc(version or "unbekannt")}.</p>
-  <table><tr><th>Zeit</th><th>Wer</th><th>Was</th><th>Modell</th><th></th></tr>
-  {rows}</table>
-</div>""")
 
-    return page("".join(parts), user, roles, refresh=busy)
+def log_page(params):
+    log = recent(500)
+    q = af.Query(params, filters=("was",), default_sort="-time")
+    kinds = sorted({r.get("action", "") for r in log if r.get("action")})
+    rows = [r for r in log if not q.filters["was"] or r.get("action") == q.filters["was"]]
+    columns = [
+        ("Zeit", "time", lambda r: r.get("time", ""), ""),
+        ("Wer", "actor", lambda r: r.get("actor", ""), ""),
+        ("Was", "action", lambda r: r.get("action", ""), ""),
+        ("Modell", "model", lambda r: r.get("model", ""), ""),
+        ("Einzelheiten", "", None, "oaap-minor"),
+    ]
+
+    def row_html(r):
+        return (f'<tr><td class="oaap-muted">{esc(r.get("time", ""))}</td>'
+                f'<td>{esc(r.get("actor", "?"))}</td><td>{esc(r.get("action", ""))}</td>'
+                f'<td><code>{esc(r.get("model", ""))}</code></td>'
+                f'<td class="oaap-minor oaap-muted">{esc(r.get("detail", ""))}</td></tr>')
+    body = (af.pagehead("Protokoll")
+            + '<p class="hint">Holen und Löschen belegen Platz und Bandbreite — das gehört '
+              'nachvollziehbar festgehalten: wer, wann, welches Modell.</p>'
+            + af.list_report(q, rows, columns, row_html, base="protokoll?", noun="Einträge",
+                             empty_text="Noch nichts geholt oder gelöscht.",
+                             choices=[("was", "Was", [(k, k) for k in kinds])],
+                             placeholder="Wer oder welches Modell"))
+    return page("Protokoll", body, active="protokoll")
+
+
+# --------------------------------------------------------------- MCP
+
+door = mcpdoor.Door(
+    "oaap-ollama-models", VERSION,
+    "Liest, welche Ollama-Modelle auf diesem Knoten installiert sind und welche gerade "
+    "im Speicher liegen. Holen und löschen geht nur auf der Seite.")
+
+
+def _seen(who):
+    # Dieselbe Regel wie die Seite: ohne geprüfte Rolle nichts.
+    if not who.get("roles"):
+        raise mcpdoor.Refused("Diese Auskunft braucht eine angemeldete Sitzung.")
+
+
+def _model_doc(r, loaded_names):
+    return {"name": r["name"], "size": ollama.human_size(r["size"]), "bytes": r["size"],
+            "parameters": r["parameters"], "quantization": r["quantization"],
+            "family": r["family"], "modified": r["modified"], "loaded": r["name"] in loaded_names}
+
+
+@door.tool("ollama_models_list", "Installierte Modelle",
+           "Listet die auf diesem Knoten installierten Ollama-Modelle mit Größe, Parametern, "
+           "Quantisierung und ob sie gerade geladen sind. Optional nach einem Wort filtern.",
+           {"q": {"type": "string", "description": "Suchwort im Modellnamen oder in der Familie"}})
+def _tool_list(args, who):
+    _seen(who)
+    installed, err = ollama.models(OLLAMA_URL)
+    if err:
+        raise mcpdoor.Refused(f"Ollama antwortet nicht: {err}")
+    loaded, _ = ollama.running(OLLAMA_URL)
+    names = {r["name"] for r in loaded}
+    words = str(args.get("q") or "").lower().split()
+    hits = [r for r in installed
+            if all(w in f'{r["name"]} {r["family"]}'.lower() for w in words)]
+    return {"models": [_model_doc(r, names) for r in hits], "count": len(hits),
+            "total_size": ollama.human_size(sum(r["size"] for r in installed))}
+
+
+@door.tool("ollama_models_loaded", "Geladene Modelle",
+           "Zeigt, welche Modelle gerade im Speicher liegen, wie viel sie belegen, ob im "
+           "Grafik- oder Arbeitsspeicher, und bis wann Ollama sie vorhält.")
+def _tool_loaded(args, who):
+    _seen(who)
+    loaded, err = ollama.running(OLLAMA_URL)
+    if err:
+        raise mcpdoor.Refused(f"Ollama antwortet nicht: {err}")
+    return {"loaded": [{"name": r["name"], "size": ollama.human_size(r["size"]),
+                        "where": "Grafikspeicher" if r["vram"] else "Arbeitsspeicher",
+                        "until": r["until"]} for r in loaded],
+            "count": len(loaded)}
+
+
+@door.tool("ollama_models_read", "Ein Modell",
+           "Liest die Angaben zu einem installierten Modell: Größe, Parameter, "
+           "Quantisierung, Familie, Änderungsdatum und ob es geladen ist.",
+           {"name": {"type": "string", "description": "Modellname, z. B. qwen2.5:3b"}},
+           required=("name",))
+def _tool_read(args, who):
+    _seen(who)
+    name = str(args.get("name") or "").strip()
+    installed, err = ollama.models(OLLAMA_URL)
+    if err:
+        raise mcpdoor.Refused(f"Ollama antwortet nicht: {err}")
+    row = next((r for r in installed if r["name"] == name), None)
+    if row is None:
+        raise mcpdoor.Refused(f"Das Modell „{name}“ ist nicht installiert.")
+    loaded, _ = ollama.running(OLLAMA_URL)
+    return _model_doc(row, {r["name"] for r in loaded})
+
+
+door.prompt("ollama_modell_waehlen", "Passendes Modell wählen",
+            "Empfiehlt unter den installierten Modellen eines für eine Aufgabe.",
+            "Welches der installierten Ollama-Modelle passt am besten für diese Aufgabe: "
+            "{aufgabe}? Lies die Liste mit ollama_models_list, achte auf Größe und darauf, "
+            "dass der Knoten womöglich keine Grafikkarte hat, und begründe kurz.",
+            arguments=("aufgabe",))
+door.prompt("ollama_wartezeit_erklaeren", "Wartezeit erklären",
+            "Erklärt, warum die erste Antwort eines Modells gerade lange dauern kann.",
+            "Die erste Antwort eines Modells dauert lange. Prüfe mit ollama_models_loaded, "
+            "welche Modelle im Speicher liegen, und erkläre in einfachen Worten, ob das "
+            "Laden die Wartezeit erklärt.")
 
 
 # --------------------------------------------------------------- HTTP
@@ -446,27 +521,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def params(self):
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return {k: v[0] for k, v in parse_qs(qs).items() if v}
+
     def do_GET(self):
         path = self.path.split("?")[0].rstrip("/") or "/"
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION})
             return
+        if path == "/mcp":
+            door.serve(self)
+            return
         user, roles = self.identity()
         if not self.roles():
             # Ohne Kopfzeile kommt niemand hier an, außer die Route ist
             # falsch gesetzt. Dann lieber schweigen als raten.
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.send_html(403, page("Kein Zugriff", af.card("", '<p>Diese Seite braucht eine '
+                                     'angemeldete Sitzung.</p>'), status_tabs=False))
             return
-        self.send_html(200, render(user, roles, "admin" in self.roles()))
+        admin = "admin" in self.roles()
+        params = self.params()
+        if path == "/modell":
+            self.send_html(200, model_page(params.get("name", ""), admin))
+        elif path == "/anschluss":
+            self.send_html(200, gateway_page())
+        elif path == "/protokoll":
+            self.send_html(200, log_page(params))
+        elif path == "/":
+            self.send_html(200, render(user, roles, admin, params=params))
+        else:
+            self.send_html(404, page("Unbekannt", af.empty('Diese Seite gibt es nicht. '
+                                                           '<a href="./">Zur Übersicht</a>')))
 
     def do_POST(self):
         path = self.path.split("?")[0].rstrip("/") or "/"
+        if path == "/mcp":
+            door.serve(self)
+            return
         user, roles = self.identity()
         if "admin" not in self.roles():
-            self.send_html(403, page('<div class="card"><p>Modelle zu holen oder zu '
-                                     'löschen ist der Serververwaltung vorbehalten.</p>'
-                                     '</div>', user, roles))
+            self.send_html(403, page("Kein Zugriff", af.card("", '<p>Modelle zu holen oder zu '
+                                     'löschen ist der Serververwaltung vorbehalten.</p>')))
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -480,26 +576,25 @@ class Handler(BaseHTTPRequestHandler):
                 form[unquote_plus(name)] = unquote_plus(value)
         model = (form.get("model") or "").strip()
 
-        notice = ""
+        notice, error = "", False
         if not model:
-            notice = "Ohne Modellnamen kann ich nichts tun."
+            notice, error = "Ohne Modellnamen kann ich nichts tun.", True
         elif path == "/pull":
-            notice = ("" if start_pull(model, user)
-                      else f"„{model}“ wird bereits geholt.")
+            if not start_pull(model, user):
+                notice, error = f"„{model}“ wird bereits geholt.", True
         elif path == "/delete":
             okay, err = ollama.delete(OLLAMA_URL, model)
             note(user, "delete" if okay else "delete-fehlgeschlagen", model, err)
-            notice = (f"„{model}“ gelöscht — der Platz ist auf dem Knoten wieder frei."
-                      if okay else f"Löschen fehlgeschlagen: {err}")
+            notice, error = ((f"„{model}“ gelöscht — der Platz ist auf dem Knoten wieder frei.", False)
+                             if okay else (f"Löschen fehlgeschlagen: {err}", True))
         else:
-            self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>',
-                                     user, roles))
+            self.send_html(404, page("Unbekannt", af.empty("Unbekannter Pfad.")))
             return
-        self.send_html(200, render(user, roles, True, notice))
+        self.send_html(200, render(user, roles, True, notice, error=error))
 
 
 def main():
-    sys.stdout.write(f"OAAP Ollama-Modelle {VERSION} auf Port {PORT} — "
+    sys.stdout.write(f"{APP_NAME} {VERSION} auf Port {PORT} — "
                      f"Ollama unter {OLLAMA_URL}\n")
     sys.stdout.flush()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

@@ -24,6 +24,9 @@ WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen, sonst startet der Container
 # nicht (die Dateien werden einzeln aufgezählt, nicht per COPY . kopiert).
 COPY app.py catalog.py zipinfo.py multipart.py upstream.py /srv/
+# Rahmen und MCP-Tür (RFC-0118): Kopien aus lib/, je ein Paket.
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 USER 10001
 EXPOSE 8000

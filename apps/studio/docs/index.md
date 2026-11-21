@@ -1,4 +1,4 @@
-# OAAP Studio – Überblick
+# Studio – Überblick
 
 Das Studio ist das Verzeichnis Deiner **App-Vorhaben** und der Ort, an dem
 aus Deinen Antworten ein **Briefing** für eine KI entsteht. Das Briefing
@@ -33,9 +33,22 @@ auf die Test-Instanz aus.
 
 | Bereich | Wozu |
 |---|---|
-| **Vorhaben** | Liste aller Vorhaben, je Vorhaben eine Seite mit Briefing, Paket, Instanzen |
+| **Übersicht** | Liste aller Vorhaben – mit Suche, Filter nach Status und App-Typ |
 | **Onboarding** | Plattform-Briefing und Starter-Paket für Projekte, die es schon gibt |
-| **Hilfe** | die Kurzfassung dieser Seiten direkt im Studio |
+
+Ein Klick auf ein Vorhaben öffnet seine Seite mit den Reitern
+**Übersicht**, **Paket**, **Briefing** und **Deployment-Zettel**. Diese
+Hilfe erreichst Du oben rechts über **Hilfe**.
+
+## Welche Regeln das Briefing nennt
+
+Das Briefing sagt der KI auch, wie eine App aussehen und sich verhalten
+muss, damit sie wie ein Teil der Plattform wirkt: der Rahmen mit
+Kopfleiste und Benutzermenü, Reiter und Listen in einheitlicher Form, eine
+eigene Hilfe (`docs/`), eine MCP-Tür, über die Assistenten die Daten der
+App lesen können, und – wo es Geschäftsobjekte wie Firmen oder Personen
+gibt – der Digitale Zwilling statt einer Privatkopie. Das Starter-Paket
+zeigt all das lauffähig.
 
 ## Weiterlesen
 

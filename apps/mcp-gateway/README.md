@@ -1,4 +1,4 @@
-# OAAP MCP-Gateway
+# MCP-Gateway
 
 MCP-Server hinter **einem Endpunkt je Sicht**. Ein KI-Client — Claude
 Code, Copilot, ein eigener Agent — spricht mit `/mcp/<sicht>` wie mit

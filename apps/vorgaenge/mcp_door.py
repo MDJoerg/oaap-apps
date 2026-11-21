@@ -35,6 +35,14 @@ TOOLS = [
          "scope": {"type": "string", "enum": ["all", "mine", "queues"],
                    "description": "mine = von dir gemeldet, queues = in deinen Bereichen"}}},
      "annotations": {"readOnlyHint": True}},
+    # 0.17.0 (RFC-0118 §9): suchen wie die Übersicht -- dieselben Vorgänge, dieselben Rechte
+    {"name": "search_cases",
+     "description": "Sucht in den Vorgängen, die du sehen darfst, nach Wörtern in Nummer, Betreff, "
+                    "Beschreibung und Meldender. Standard nur offene.",
+     "inputSchema": {"type": "object", "required": ["query"], "properties": {
+         "query": {"type": "string", "maxLength": 200, "description": "Suchwörter; alle müssen vorkommen"},
+         "include_closed": {"type": "boolean", "description": "auch erledigte"}}},
+     "annotations": {"readOnlyHint": True}},
     {"name": "get_case",
      "description": "Ein Vorgang mit Verlauf (Kommentare, Statuswechsel). Die Nummer steht so, wie "
                     "list_cases sie nennt, z. B. V-2026-0042.",
@@ -103,6 +111,23 @@ def _tool(store, who, rules, name, args):
     qt = {q["id"]: q["title"] for q in queues}
     if name == "list_queues":
         return [{"id": q["id"], "title": q["title"]} for q in queues]
+    if name == "search_cases":
+        words = str(args.get("query") or "").lower().split()[:20]
+        if not words:
+            raise rules.refused("Bitte mindestens ein Suchwort angeben.")
+        open_only = not args.get("include_closed")
+        readable = who.readable(queues)
+        rows = (store.listing(queues=readable, open_only=open_only) if readable else [])             + store.listing(reporter=who.id, open_only=open_only)             + store.listing(person=who.id, open_only=open_only)             + store.listing(involved=who.id, open_only=open_only)
+        seen, out = set(), []
+        for c in rows:
+            if c["number"] in seen or not rules.can_see(who, c):
+                continue
+            hay = " ".join(str(c.get(k) or "") for k in ("number", "title", "body", "reporter_name")).lower()
+            if all(w in hay for w in words):
+                seen.add(c["number"])
+                out.append(_short(c, qt, rules))
+        out.sort(key=lambda x: x["updated"], reverse=True)
+        return {"count": len(out), "cases": out[:MAX_LIST]}
     if name == "list_cases":
         scope = args.get("scope") or "all"
         open_only = not args.get("include_closed")

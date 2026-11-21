@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: rollen-rechte
   name: Rollen & Rechte
-  version: 0.2.2
+  version: 0.3.0
   type: native
   class: frontend
-  description: "Werkzeug des Mandanten-Admins fuer fachliche Berechtigungen (RFC-0045 A7): wer darf was in welcher App -- Personen, Rollen, Berechtigungspakete, Zuordnungen, Gruppen des Anmeldedienstes, Protokoll. Privilegiert: verwaltet die Rechte EINES Mandanten, nie Plattformrollen"
+  description: "Werkzeug des Mandanten-Admins für fachliche Berechtigungen: wer darf was in welcher App – Personen, Rollen, Berechtigungspakete, Zuordnungen, Gruppen des Anmeldedienstes, Protokoll. Privilegiert: verwaltet die Rechte eines Mandanten, nie Plattformrollen"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -26,6 +26,31 @@ services:
 routes:
   - path: /
     roles: [user]
+
+# RFC-0118 §9: eine MCP-Tür mit Lesewerkzeugen (Personen, was eine Person
+# darf, Rollen und Pakete, Zuordnungen) unter der Route /. Sie fragt den
+# Identity-Dienst als die durchgereichte Person -- wer kein Mandanten-Admin
+# ist, bekommt dieselbe Ablehnung wie auf der Seite.
+mcp:
+  path: /mcp
+
+# RFC-0118 §9 / RFC-0094: die Hilfe für Mandanten-Admins.
+docs:
+  - product: rollen-rechte
+    title: "Rollen & Rechte"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin, user]
+    readers: [admin]
+    kinds:
+      index.md: overview
+      begriffe.md: concept
+      rolle-anlegen.md: howto
+      paket-zuordnen.md: howto
+      gruppen.md: howto
+      weitergaben.md: howto
+      faq.md: faq
 
 # Nichts Eigenes. Alles Wissen liegt im Identity-Dienst; diese App haelt
 # keine Kopie. (Der Gesundheitspfad braucht kein Verzeichnis.)

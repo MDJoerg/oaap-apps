@@ -101,8 +101,8 @@ ok("shows the customer's OWN title, read fresh, not cached",
 ok("resolves the responsible relation's target to the PERSON's title, "
    "not the bare id -- proves the reference is followed, not copied",
    "Anna" in html)
-ok("the assignment is labelled with the group it lives in",
-   "raci.assignments" in html or "responsible" in html)
+ok("the assignment is labelled in German, without the raw group key (RFC-0118)",
+   "Verantwortlich" in html and ">raci.assignments" not in html and ">responsible" not in html)
 
 print("\n=== render_customer: wrong type and missing object are handled, not raised ===")
 ok("a Kontaktperson id where a Firma was expected is refused with a plain reason",

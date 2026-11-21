@@ -76,3 +76,16 @@ Ja. Beide enthalten weder Token noch Erlaubnis noch Adressen einer Instanz.
 Das Studio nimmt bis `STUDIO_MAX_PACKAGE_MB` an (Vorgabe 64 MB). Der
 Betreiber kann den Wert in der Konfiguration der Studio-Instanz erhöhen, bis
 256 MB.
+
+## Kann eine KI im Chat Auskunft über unsere Vorhaben geben?
+
+Ja, lesend: Die Assistenten des Mandanten können über die MCP-Tür des
+Studios die Vorhaben suchen, eines lesen und sein Briefing abrufen – mit
+denselben Rechten wie Du auf der Seite (keyuser und admin). Anlegen,
+ändern oder ausrollen können sie nichts; der Deploy-Token bleibt bei Dir.
+
+## Wo ist die Seite „Hilfe“ im Studio geblieben?
+
+Die Hilfe steht jetzt an einer Stelle: in diesen Seiten. Du erreichst sie
+oben rechts über **Hilfe**; die alte Adresse `/hilfe` zeigt dieselben
+Seiten.

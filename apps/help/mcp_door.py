@@ -171,7 +171,7 @@ def answer(lib, roles, version, msg):
         return ok({"resources": lib.resources(roles=roles)})
     if method == "resources/templates/list":
         return ok({"resourceTemplates": [{"uriTemplate": "help://{source}/{id}",
-                                          "name": "Dokument der OAAP-Hilfe",
+                                          "name": "Dokument der Hilfe",
                                           "mimeType": "text/markdown"}]})
     if method == "resources/read":
         ref = _uri(params.get("uri"))

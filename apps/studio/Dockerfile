@@ -30,7 +30,12 @@ WORKDIR /srv
 # dort nicht hingehört (Tests, __pycache__, README). Der Preis ist, dass
 # ein neues Modul hier eingetragen werden MUSS — vergisst man es, startet
 # der Container nicht (bei fleet.py in 0.3 fast passiert).
-COPY app.py pkg.py deployer.py multipart.py fleet.py /srv/
+COPY app.py pkg.py deployer.py multipart.py fleet.py helpdocs.py /srv/
+# RFC-0118: Rahmen und MCP-Tür (Kopien aus lib/), die Hilfe aus docs/
+# (dieselben Dateien wie `docs:` im Manifest, auch unter /hilfe).
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
+COPY docs/ /srv/docs/
 # Das Starter-Paket wird auf Anfrage zu einer ZIP gepackt und
 # herausgegeben — es gehört also ins Image, nicht nur ins Repository.
 COPY starter/ /srv/starter/

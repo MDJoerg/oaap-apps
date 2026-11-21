@@ -78,6 +78,7 @@ class Fake(app.Handler):
         self.status = 200
         self.location = ""
         self.headers_sent = {}
+        self.headers = {"X-OAAP-User": "klicktest", "X-OAAP-Roles": "keyuser"}
 
     def send_html(self, body, status=200):
         self.body, self.status = body, status
@@ -118,8 +119,8 @@ try:
     ok("ihr einziger Eintrag steht in der Tabelle", ">Ollama<" in body)
     ok("und der Prüfer meldet den Widerspruch zur Klasse",
        "Befund" in body, "Liste: frontend, Manifest: service")
-    ok("ohne Entwurf steht das auch da",
-       "Es gibt noch keinen Entwurf" in body)
+    ok("ohne Entwurf steht das auch da (Reiter Entwurf)",
+       "Es gibt noch keinen Entwurf" in h.list_page("0", "klicktest", "keyuser", tab="entwurf"))
 
     print("\n=== ein Abgleich ohne Fund legt keinen Entwurf an ===")
     # Sonst steht nach einem blossen „wie ist der Stand?" ein Entwurf mit
@@ -158,7 +159,7 @@ try:
        "Das Manifest sagt:" in body)
     ok("die Felder ohne Quelle sind frei bearbeitbar",
        'name="released"' in body and 'name="icon"' in body
-       and "obwohl §1.3 sie" in body)
+       and "Von Hand gepflegt" in body)
     ok("ein bekannter Verweis hat sein eigenes Feld",
        'name="link_source"' in body and 'value="https://a"' in body)
 
@@ -249,7 +250,7 @@ try:
     doc = app.load_work(LIST_URL)["doc"]
     ok("er steht in der Arbeitskopie", ed.entry_by_id(doc, "bdt-hub") is not None)
     ok("und der Prüfer meldet ihn als ohne Beleg — statt ihn abzulehnen",
-       "Beleg" in Fake().list_page("0", "klicktest", "keyuser"),
+       "Beleg" in Fake().list_page("0", "klicktest", "keyuser", tab="pruefung"),
        "RFC-0013 Frage 4")
     h = Fake()
     h.add_entry("0", SRC, {"id": ["bdt-hub"], "git": ["https://x/y"]},

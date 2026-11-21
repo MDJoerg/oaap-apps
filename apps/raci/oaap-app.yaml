@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: raci
-  name: OAAP RACI
-  version: 0.1.3
+  name: Zuständigkeiten (RACI)
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4): liest Firma/Kontaktperson als Referenz, schreibt 'responsible' in raci.assignments"
+  description: "Festhalten, welche Kontaktperson für welche Firma verantwortlich ist -- im digitalen Zwilling, auf den Firmen der Partnerverwaltung"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -18,8 +18,13 @@ services:
     port: 8000
 
 routes:
+  # deckt auch /mcp ab: das MCP-Gateway reicht die Person durch, die Tür
+  # prüft wie die Seiten (RFC-0073, RFC-0118 §9)
   - path: /
     roles: [user]
+
+mcp:
+  path: /mcp
 
 # RFC-0031 SS5 / oaap.data.model 0.1 SS2.2 -- fast wortgleich mit dem
 # RACI-Beispiel dort und in test_data_model.py's Fixtur, bis auf die
@@ -34,7 +39,8 @@ routes:
 data_model:
   relation_types:
     - key: responsible
-      title: "is responsible for"
+      # title ist reine Anzeige (additiv); title_inverse bleibt wie registriert
+      title: "ist verantwortlich für"
       title_inverse: "has responsible"
       from: Kontaktperson
       to: Firma
@@ -51,9 +57,27 @@ contributes:
 consumes:
   - type: Firma
     as: Kunde
+  # „Kontaktperson“, nicht „Mitarbeiter“ -- den Typ Mitarbeiter gibt es
+  # (Mitarbeiterverwaltung), und er ist ein anderer (RFC-0118 §2)
   - type: Kontaktperson
-    as: Mitarbeiter
+    as: Kontaktperson
     fields: [reference, Email]
+
+docs:
+  # RFC-0094 / RFC-0118 §9: die Anwenderhilfe geht an die Hilfe des Mandanten
+  # und damit auch an den Chat.
+  - product: raci
+    title: "Zuständigkeiten (RACI)"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user]
+    readers: [end-user]
+    kinds:
+      index.md: overview
+      verantwortung-zuweisen.md: howto
+      luecken-finden.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

@@ -17,16 +17,20 @@ import sys
 import threading
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+import appframe as af
 import fetch as fx
 import mcp_door
 import search as sx
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
+APP_NAME = "Recherche"
 PORT = int(os.environ.get("PORT", "8000"))
 BODY_LIMIT = 256 * 1024
-CSP = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
+# Kit und Rahmen der Plattform (RFC-0118): Stil, Skript und Abfragen nur vom eigenen Ursprung
+CSP = ("default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; "
+       "connect-src 'self'; base-uri 'none'; form-action 'self'")
 
 
 def on(v, default="on"):
@@ -54,7 +58,7 @@ class State:
     def fetch_off_sentence(self):
         if self.closed():
             return ("web_fetch gibt es hier nicht: diese Instanz gehört einem geschlossenen "
-                    "Mandanten und erreicht das Internet nur über ihre Destinationen (RFC-0068).")
+                    "Mandanten und erreicht das Internet nur über ihre Destinationen.")
         return "web_fetch ist in dieser Instanz ausgeschaltet (RECHERCHE_FETCH=off); nur die Suche geht."
 
     def count(self, tool, refused=""):
@@ -126,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, self.state.status())
         if p == "/":
             return self.send(200, self.home())
-        return self.send(404, "<p>Diese Seite gibt es nicht.</p>")
+        return self.send(404, af.page("Nicht gefunden", af.empty("Diese Seite gibt es nicht. <a href=\"./\">Zur Übersicht</a>"), app=APP_NAME, version=VERSION, product="recherche"))
 
     def do_POST(self):
         try:
@@ -154,33 +158,39 @@ class Handler(BaseHTTPRequestHandler):
     def home(self):
         s = self.state.status()
         e = html.escape
-        rows = "".join(
-            f"<tr><td>{e(r['day'])}</td><td>{e(r['tool'])}</td><td>{r['ok']}</td>"
-            f"<td>{e(', '.join(f'{k}: {v}' for k, v in sorted(r['refused'].items())) or '–')}</td></tr>"
-            for r in s["counts"][:60]) or "<tr><td colspan=4>Noch nichts gezählt (seit dem letzten Start).</td></tr>"
         dest = ("zugeordnet" if s["search_destination"] else
-                "<b>nicht zugeordnet</b> -- <code>oaap destination bind &lt;instanz&gt; &lt;destination&gt; --as search</code>")
-        return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Recherche</title>
-<style>body{{font:15px/1.5 system-ui,sans-serif;max-width:820px;margin:2em auto;padding:0 16px;color:#222}}
-code{{background:#f2f2f2;padding:0 3px}}table{{border-collapse:collapse;width:100%}}
-td,th{{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left}}.muted{{color:#666}}</style></head><body>
-<h1>Recherche</h1>
-<p>Eine Quelle für das MCP-Gateway dieses Mandanten (RFC-0116): <code>web_search</code> fragt einen
-Suchdienst, <code>web_fetch</code> liest eine öffentliche Seite als Text. Ein Assistent nutzt sie über
-die Sicht <code>recherche</code>; das Gespräch muss dafür auf <b>rot</b> stehen, denn Suchwörter und
-Adressen verlassen den Mandanten.</p>
-<table>
-<tr><th>Suchdienst (Destination <code>search</code>)</th><td>{dest}</td></tr>
-<tr><th>Webseiten lesen (<code>web_fetch</code>)</th><td>{'an' if s['fetch'] else 'aus'}{' (geschlossener Mandant)' if s['egress'] == 'closed' else ''}</td></tr>
-<tr><th>Erlaubte Seiten</th><td>{e(', '.join(s['allow'])) or 'alle öffentlichen'}</td></tr>
-<tr><th>Gesperrte Seiten</th><td>{e(', '.join(s['deny'])) or 'keine'}</td></tr>
-</table>
-<h2>Gezählt</h2>
-<p class="muted">Je Tag und Werkzeug, seit dem letzten Start. Suchwörter, Adressen und Inhalte schreibt
-die App nirgends hin.</p>
-<table><tr><th>Tag</th><th>Werkzeug</th><th>beantwortet</th><th>abgelehnt (Grund: Zahl)</th></tr>{rows}</table>
-<p class="muted">recherche {VERSION}</p></body></html>"""
+                "<b>nicht zugeordnet</b> – <code>oaap destination bind &lt;instanz&gt; &lt;destination&gt; --as search</code>")
+        fetch = ("an" if s["fetch"] else "aus") + (" (geschlossener Mandant)" if s["egress"] == "closed" else "")
+        settings = af.card("Einstellungen", (
+            '<dl class="oaap-kv">'
+            f"<dt>Suchdienst</dt><dd>{dest}</dd>"
+            f"<dt>Webseiten lesen</dt><dd>{e(fetch)}</dd>"
+            f"<dt>Erlaubte Seiten</dt><dd>{e(', '.join(s['allow'])) or 'alle öffentlichen'}</dd>"
+            f"<dt>Gesperrte Seiten</dt><dd>{e(', '.join(s['deny'])) or 'keine'}</dd></dl>"))
+        q = af.Query(parse_qs(urlparse(self.path).query), filters=("tool",), default_sort="-day")
+        rows = [r for r in s["counts"] if not q.filters["tool"] or r["tool"] == q.filters["tool"]]
+        cols = [("Tag", "day", lambda r: r["day"], ""),
+                ("Werkzeug", "tool", lambda r: r["tool"], ""),
+                ("beantwortet", "ok", lambda r: r["ok"], "oaap-num"),
+                ("abgelehnt (Grund: Zahl)", "", None, "")]
+
+        def row(r):
+            ref = ", ".join(f"{k}: {v}" for k, v in sorted(r["refused"].items())) or "–"
+            return (f"<tr><td>{e(r['day'])}</td><td>{e(r['tool'])}</td>"
+                    f"<td class=\"oaap-num\">{r['ok']}</td><td>{e(ref)}</td></tr>")
+        counts = af.list_report(
+            q, rows, cols, row, noun="Zeilen", placeholder="Tag oder Werkzeug",
+            choices=[("tool", "Werkzeug", [("web_search", "web_search"), ("web_fetch", "web_fetch")])],
+            empty_text="Noch nichts gezählt (seit dem letzten Start).")
+        body = (af.pagehead("Recherche")
+                + "<p>Eine Quelle für die Assistenten dieses Mandanten: <code>web_search</code> fragt "
+                "einen Suchdienst, <code>web_fetch</code> liest eine öffentliche Seite als Text. Ein "
+                "Gespräch muss dafür auf <b>rot</b> stehen, denn Suchwörter und Adressen verlassen "
+                "den Mandanten.</p>"
+                + settings
+                + af.card("Gezählt", '<p class="oaap-muted">Je Tag und Werkzeug, seit dem letzten Start. '
+                          "Suchwörter, Adressen und Inhalte schreibt die App nirgends hin.</p>" + counts))
+        return af.page("Recherche", body, app=APP_NAME, version=VERSION, product="recherche")
 
 
 def main():

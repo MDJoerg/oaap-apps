@@ -483,7 +483,7 @@ check("QR mit host als Ursprung", s == 200 and b == qr.png(qr.encode(f"https://g
 s, h, b = call("GET", f"/api/v1/links/{D3['id']}/qr?host=evil.example", USER)
 check("QR mit fremdem host: 422", s == 422 and j(b)["error"]["code"] == "validation")
 s, h, b = call("GET", f"/manage/links/{D3['id']}", USER)
-check("Link-Seite: Adress-Auswahl, Vorgabe gewählt", s == 200 and b'class="btn quiet on" href="/manage/links/' in b
+check("Link-Seite: Adress-Auswahl, Vorgabe gewählt", s == 200 and b'class="oaap-btn primary" aria-current="true" href="/manage/links/' in b
       and f"?host=go.objid.info".encode() in b and f'id="theurl">https://go.joomp.de/{D3["area"]}/{D3["key"]}<'.encode() in b)
 s, h, b = call("GET", f"/manage/links/{D3['id']}?host=go.objid.info", USER)
 check("Link-Seite mit host: Adresse, QR und Downloads folgen", s == 200
@@ -546,6 +546,75 @@ check("Link-Seite: alle Plattform-Namen wählbar, Vorgabe vorn", s == 200 and b"
 app.PLATFORM_HOSTS = []
 s, h, b = call("PUT", "/api/v1/hosts", ADMIN, {"hosts": [], "default": ""})
 check("Zurückgesetzt: wieder die Adresse der Anfrage", s == 200 and j(b)["default"] == BASE)
+
+# ------------------------------------- Rahmen, Listen, MCP-Tür (0.5.0, RFC-0118)
+print("Rahmen, Listen, MCP-Tür")
+s, h, b = call("GET", "/manage", USER)
+check("angemeldete Seite: Kit und Rahmen der Plattform", s == 200 and b"/platform/theme.css" in b
+      and b"/platform/app.js" in b and b'class="oaap-appname">Wegweiser<' in b)
+check("... ohne eigene Palette, ohne Rollen im Kopf, ohne Großbuchstaben-Kopf",
+      b"--oaap-blue-900" not in b and b"WEGWEISER" not in b and b"keyuser" not in b and b"Uta" not in b)
+check("Benutzer: ein Reiter (keine Leiste), kein Verwaltungsreiter", b"oaap-tabs" not in b and b'href="/admin"' not in b)
+s, h, b = call("GET", "/manage", ADMIN)
+check("admin: Reiter Meine Links, Areas, Verwaltung zuletzt",
+      b.index(b">Meine Links<") < b.index(b">Areas<") < b.index(b">Verwaltung<"))
+s, h, b = call("GET", "/manage/new", USER)
+check("Neuer Link auf eigener Seite, mit zurück", s == 200 and b'action="/manage/links"' in b and b"oaap-back" in b)
+s, h, b = call("GET", "/", None)
+check("öffentlich: eigene Optik, nichts von der Plattform", s == 404 and b"/platform/" not in b and b"oaap-header" not in b)
+s, h, b = call("GET", f"/{D3['area']}/{D3['key']}", None)
+check("öffentliche Zwischenseite unverändert ohne Rahmen", b"/platform/" not in b and b"oaap-header" not in b, s)
+
+for n in range(60):
+    call("POST", "/api/v1/links", USER, {"area": "r", "target_url": f"https://example.org/viele/{n}", "title": f"Viele {n:02d}"})
+s, h, b = call("GET", "/manage", USER)
+check("Listenbericht: Zählzeile und Blättern ab 50", b"1\xe2\x80\x9350 von" in b and b"offset=50" in b, b[-600:])
+s, h, b = call("GET", "/manage?q=Viele+07", USER)
+check("Suche über Titel", b"Viele 07" in b and b"Viele 08" not in b)
+s, h, b = call("GET", "/manage?sort=titel", USER)
+check("Sortierung nach Titel aufsteigend", b'aria-sort="ascending"' in b and b.index(b"Viele 00") < b.index(b"Viele 01"))
+s, h, b = call("GET", "/manage?status=disabled", USER)
+check("Filter Status: keine deaktivierten -> sagt es", b"Keine Treffer" in b)
+s, h, b = call("GET", "/admin", ADMIN)
+check("Verwaltung: Areas als Listenbericht, Neue Area als Knopf", b"oaap-filter" in b and b'href="/admin/new"' in b)
+s, h, b = call("GET", "/admin/new", ADMIN)
+check("Neue Area auf eigener Seite", s == 200 and b'action="/admin/areas"' in b)
+s, h, b = call("POST", "/admin/areas", ADMIN, form={"slug": "admin", "type": "redirect"})
+check("Neue Area mit Fehler: 422 auf der Seite Neue Area", s == 422 and b"Das ging so nicht" in b and b'action="/admin/areas"' in b)
+
+
+def mcp(msg, who):
+    s, h, b = call("POST", "/mcp", who, msg)
+    return s, j(b) if b else {}
+
+
+def tool(name, args, who):
+    s, d = mcp({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": name, "arguments": args}}, who)
+    r = d.get("result") or {}
+    t = (r.get("content") or [{}])[0].get("text", "")
+    return r.get("isError"), t
+
+
+s, d = mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, USER)
+names = sorted(t["name"] for t in d["result"]["tools"])
+check("MCP tools/list", s == 200 and names == ["wegweiser_areas", "wegweiser_link_read", "wegweiser_search"], names)
+err, t = tool("wegweiser_search", {"q": "Viele 07"}, USER)
+check("wegweiser_search: eigener Link", not err and j(t.encode())["total"] == 1, t[:300])
+check("... ohne PIN-Hash oder Fehlversuche", "pin_hash" not in t and "pin_failures" not in t)
+err, t = tool("wegweiser_search", {"q": "Viele 07"}, OTHER)
+check("wegweiser_search: fremde Person sieht ihn nicht", not err and j(t.encode())["total"] == 0, t[:200])
+err, t = tool("wegweiser_search", {"area": "r", "q": "Viele 07"}, KEYUSER)
+check("wegweiser_search: Verantwortlicher der Area sieht ihn", not err and j(t.encode())["total"] == 1, t[:200])
+err, t = tool("wegweiser_link_read", {"link": f"{D3['area']}/{D3['key']}"}, USER)
+check("wegweiser_link_read nach area/key", not err and j(t.encode())["id"] == D3["id"], t[:300])
+err, t = tool("wegweiser_link_read", {"link": D3["id"]}, OTHER)
+check("wegweiser_link_read: fremder Link abgelehnt wie die Seite", err is True, t)
+err, t = tool("wegweiser_areas", {}, USER)
+check("wegweiser_areas: nur nutzbare Areas, geheim nicht", not err and "geheim" not in t and '"r"' in t, t[:300])
+err, t = tool("wegweiser_search", {}, {})
+check("ohne Person: abgelehnt", err is True)
+s, d = mcp({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}, USER)
+check("zwei Vorlagen", len(d["result"]["prompts"]) == 2)
 
 server.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)

@@ -1,29 +1,20 @@
-"""OAAP Mitarbeiterverwaltung 0.1 -- Owner of Mitarbeiter (RFC-0031
-Schritt 4, zweite Welle; program/zielbild-datenplattform.md Runde 1,
-Punkt 5: "eine einfache Mitarbeiterverwaltung").
+"""Mitarbeiterverwaltung -- Owner von Mitarbeiter im digitalen Zwilling
+(RFC-0031 Schritt 4, zweite Welle; Oberfläche nach RFC-0118: Rahmen,
+Listenbericht, Hilfe, MCP).
 
-Diese App weiss NICHTS von Partnerverwaltung und liest/schreibt auch
+Diese App weiß NICHTS von der Partnerverwaltung und liest/schreibt auch
 nichts von ihr (kein consumes, kein contributes auf Firma oder
-Kontaktperson) -- das ist der Punkt, nicht ein Versehen. Der Bauplan
-nennt sie "zweiter Owner von Person -> erste echte Dublette, erster
-Merge": zwei unabhaengige Apps legen dieselbe echte Person zweimal an,
-jede unter ihrem eigenen Typ (Kontaktperson hier, Mitarbeiter dort),
-weil keine von der anderen weiss -- exakt das Problem, das RFC-0031
-selbst als Motivation nennt ("vier Apps, vier Meinungen, was ein Kunde
-ist"). Das Aufloesen (Merge/Unmerge) ist eine Aufgabe des Zwillings-
-Browsers (Schritt 5) und wird hier bewusst NICHT gebaut -- diese App
-erzeugt den Fall, sie loest ihn nicht.
+Kontaktperson) -- das ist der Punkt, nicht ein Versehen: zwei unabhängige
+Apps legen dieselbe echte Person zweimal an (Kontaktperson dort,
+Mitarbeiter hier). Das Zusammenführen ist Aufgabe des Zwillings-Browsers.
 
-Sonst wie jede andere Referenz-App: kein eigener Login, ein HTTP-Port,
-Persistenz nur als eigener Index (id + type, kein Titel, kein
-Attribut -- der Zwilling ist die einzige Quelle), Konfiguration ueber
-deklarierte Variablen, Logs nach stdout, Gesundheitspfad, nur
-Standardbibliothek (plus twin.py).
+Die Liste liest den Zwilling frisch (GET /twin/objects?type=Mitarbeiter
+-- alle Mitarbeiter des Mandanten in EINER Anfrage mit Titeln und
+Gruppen). Der alte Index unter /data (nur id + type) wird weiter
+fortgeschrieben, aber nicht mehr gelesen.
 
-RFC-0035 (App-Design-Kontrakt Teil A): bindet /platform/theme.css ein
-und benutzt dessen Variablen mit lokalen Fallback-Werten; die
-Kopfzeile folgt der Mini-Konvention aus D4 (App-Name links, Link
-zurueck zum Portal rechts) statt einer eigenen Marke.
+Kein eigener Login, ein HTTP-Port, Gesundheitspfad, nur
+Standardbibliothek plus twin.py, appframe/ und mcpdoor/ (Kopien aus lib/).
 """
 import html
 import json
@@ -32,9 +23,13 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
+import appframe as af
+import mcpdoor
 import twin
 
-VERSION = "0.1.2"
+APP_NAME = "Mitarbeiterverwaltung"
+APP_ID = "mitarbeiterverwaltung"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MITARBEITERVERWALTUNG_DATA_DIR", "/data")
@@ -45,11 +40,30 @@ esc = html.escape
 MITARBEITER_TYPE = "Mitarbeiter"
 HR_GROUP = "hr.core"
 
+APP_NAMES = {"partnerverwaltung": "Partnerverwaltung",
+             "mitarbeiterverwaltung": "Mitarbeiterverwaltung",
+             "projekt": "Projekte", "raci": "Zuständigkeiten (RACI)"}
+ATTR_TITLES = {"Email": "E-Mail", "Phone": "Telefon", "Department": "Abteilung"}
+GROUP_TITLES = {"hr.core": "Personaldaten"}
 
-# --------------------------------------------------------- der eigene Index
+
+def made_by(origin):
+    o = str(origin or "")
+    if o.startswith("app:"):
+        return APP_NAMES.get(o[4:], "einer anderen App")
+    return "einer anderen Stelle" if o else ""
+
+
+def attr(obj, key, group_key=HR_GROUP):
+    g = (obj.get("groups") or {}).get(group_key) or {}
+    v = (g.get("attributes") or {}).get(key) or {}
+    return str(v.get("value")) if v.get("value") is not None else ""
+
+
+# --------------------------------------------------------- der alte Index
 
 def remember(obj_id, type_key):
-    """id + type, NICHTS sonst -- wie Partnerverwaltung's eigener Index."""
+    """id + type, nichts sonst -- fortgeschrieben, nicht mehr gelesen."""
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(INDEX_PATH, "a", encoding="utf-8") as fh:
@@ -74,143 +88,164 @@ def known(type_key):
     return list(seen.keys())
 
 
+def load():
+    try:
+        objs, truncated = twin.list_objects(MITARBEITER_TYPE)
+    except twin.TwinError as exc:
+        return [], f"Die Liste ist gerade nicht lesbar ({exc.status or 'keine Verbindung'})."
+    return objs, ("Es werden die ersten 500 angezeigt." if truncated else "")
+
+
 # --------------------------------------------------------------- Optik
 
-STYLE = """<link rel="stylesheet" href="/platform/theme.css">
-<style>
-  *{box-sizing:border-box}
-  body{font-family:var(--oaap-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
-       font-size:var(--oaap-font-size-base, 15px);margin:0;
-       background:var(--oaap-color-bg, #fff);color:var(--oaap-color-text, #1a1d21)}
-  main{max-width:52rem;margin:1.6rem auto;padding:0 var(--oaap-space-3, 16px)}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-color-surface, #f4f5f7);
-       border:1px solid var(--oaap-color-border, #d8dbe0);
-       border-radius:var(--oaap-radius, 6px);padding:1.4rem;margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:#fff;color:var(--oaap-color-primary, #2f6fed);white-space:nowrap;
-       border:1px solid var(--oaap-color-border, #d8dbe0)}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;
-       border-radius:var(--oaap-radius, 6px);
-       background:var(--oaap-color-primary, #2f6fed);
-       color:var(--oaap-color-primary-text, #fff);text-decoration:none;
-       font-size:.95rem;cursor:pointer;min-height:44px}
-  .hint{font-size:.8rem;color:var(--oaap-color-text-muted, #5b616b);margin:0 0 .6rem}
-  .muted{color:var(--oaap-color-text-muted, #5b616b);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;
-       border-bottom:1px solid var(--oaap-color-border, #d8dbe0);font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;
-       color:var(--oaap-color-text-muted, #5b616b)}
-  code{background:var(--oaap-color-surface, #f4f5f7);border-radius:.25rem;
-       padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
-  form.stack{display:flex;flex-direction:column;gap:.6rem;max-width:26rem}
-  form.stack label{font-size:.82rem;color:var(--oaap-color-text-muted, #5b616b)}
-  input{padding:.5rem .6rem;border-radius:var(--oaap-radius, 6px);
-       border:1px solid var(--oaap-color-border, #d8dbe0);font-size:.95rem;min-height:40px}
-  .cols{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
-  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
-</style>"""
-
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Ccircle cx='50' cy='36' r='18' fill='%232f6fed'/%3E%3Cpath "
-           "d='M18 90c0-22 14-36 32-36s32 14 32 36' fill='%232f6fed'/%3E%3C/svg%3E")
-
-BACK_TO_PORTAL = ('href="/" onclick="location.href=location.protocol+\'//\'+'
-                  "location.hostname+'/';return false;\"")
+STYLE = (".mv-kennung code{overflow-wrap:anywhere}"
+         ".mv-kennung button{margin-left:8px;padding:2px 8px;font-size:.85em}")
 
 
-def page(body, user, roles, title="Mitarbeiterverwaltung"):
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} -- OAAP Mitarbeiterverwaltung</title>
-{STYLE}
-<header class="oaap-header">
-  <span class="oaap-header-title">Mitarbeiterverwaltung</span>
-  <a class="oaap-header-back" {BACK_TO_PORTAL}>&larr; Portal</a>
-</header>
-<main>{body}</main>
-<footer style="max-width:52rem;margin:2rem auto 1.2rem;padding:0 var(--oaap-space-3, 16px);
-  color:var(--oaap-color-text-muted, #5b616b);font-size:.8rem">
-  OAAP Mitarbeiterverwaltung {VERSION} -- Owner von Mitarbeiter (RFC-0031 Schritt 4, zweite Welle)
-</footer>
-</html>"""
+def render(title, body, obj=None, obj_title=None):
+    # eine einzige Fläche -- keine Reiterleiste (RFC-0118 §6.1)
+    return af.page(title, body, app=APP_NAME, version=VERSION, product=APP_ID,
+                   obj=obj, obj_title=obj_title, style=STYLE)
 
 
-def not_configured_card():
-    return """<div class="card attention">
-  <h2>Kein Zwilling-Zugang</h2>
-  <p class="hint">Diese Instanz hat weder <code>OAAP_TWIN_URL</code> noch
-    <code>OAAP_PLATFORM_KEY</code> -- entweder traegt dieser Knoten das
-    Profil <code>store</code> nicht, oder diese Instanz ist eine
-    Generalprobe, die RFC-0031 SS2.2 bewusst keinen Zwilling-Schluessel
-    gibt.</p>
-</div>"""
+def not_configured():
+    return af.card("Keine Verbindung zum Zwilling",
+                   "<p>Diese Instanz ist nicht mit dem Zwilling des Mandanten verbunden. "
+                   "Ohne ihn kann die Mitarbeiterverwaltung nichts anzeigen oder anlegen. "
+                   "Bitte die Betreuung der Plattform fragen.</p>", "oaap-warn")
 
 
-def group_html(group_key, group):
-    rows = []
-    for k, v in (group.get("attributes") or {}).items():
-        rows.append(f"<tr><td>{esc(k)}</td><td>{esc(str(v.get('value')))}</td></tr>")
-    attr_table = (f"<table><tr><th>Attribut</th><th>Wert</th></tr>{''.join(rows)}</table>"
-                  if rows else "<p class='muted' style='margin:0'>keine Attribute</p>")
-    return f"""<div class="card">
-  <h2><code>{esc(group_key)}</code> <span class="badge">Herkunft: {esc(group.get('origin', '?'))}</span></h2>
-  {attr_table}
-</div>"""
+def kennung(obj_id):
+    return (f'<span class="mv-kennung"><code id="kennung">{esc(obj_id)}</code>'
+            '<button type="button" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText('
+            "document.getElementById('kennung').textContent)\">Kopieren</button></span>")
 
 
-def render_object(obj, notice=""):
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
-    parts.append(f"""<div class="card">
-  <h2>{esc(obj['title'])} <span class="badge">{esc(obj['type'])}</span></h2>
-  <p class="hint">ID:</p>
-  <p><code>{esc(obj['id'])}</code></p>
-  <p class="muted">Owner: {esc(obj['owner'])}</p>
-</div>""")
+def page_list(params):
+    rows, note = load()
+    depts = sorted({attr(o, "Department") for o in rows if attr(o, "Department")}, key=str.lower)
+    q = af.Query(params, filters=("abteilung",), default_sort="name")
+    if q.filters.get("abteilung"):
+        rows = [o for o in rows if attr(o, "Department") == q.filters["abteilung"]]
+    cols = [("Name", "name", lambda o: o.get("title") or "", ""),
+            ("Abteilung", "abteilung", lambda o: attr(o, "Department"), ""),
+            ("E-Mail", "email", lambda o: attr(o, "Email"), "oaap-minor"),
+            ("Telefon", "tel", lambda o: attr(o, "Phone"), "oaap-minor")]
+
+    def row(o):
+        return (f'<tr><td><a href="object?id={esc(o["id"])}">{esc(o.get("title") or "")}</a></td>'
+                f'<td>{esc(attr(o, "Department"))}</td>'
+                f'<td class="oaap-minor">{esc(attr(o, "Email"))}</td>'
+                f'<td class="oaap-minor">{esc(attr(o, "Phone"))}</td></tr>')
+    body = (af.pagehead("Mitarbeiter", '<a class="oaap-btn primary" href="neu">Neuer Mitarbeiter</a>')
+            + (af.msg(note, error=True) if note else "")
+            + af.list_report(q, rows, cols, row, noun="Mitarbeiter", placeholder="Name, Abteilung, E-Mail",
+                             choices=[("abteilung", "Abteilung", [(d, d) for d in depts])],
+                             empty_text="Noch keine Mitarbeiter. <b>Neuer Mitarbeiter</b> legt den ersten an."))
+    return render("Mitarbeiter", body)
+
+
+def page_neu(notice="", form=None):
+    form = form or {}
+    fields = [("title", "Name", True), ("Email", "E-Mail", False), ("Phone", "Telefon", False),
+              ("Department", "Abteilung", False)]
+    inputs = "".join(f'<label>{esc(label)}<input type="text" name="{k}" value="{esc(form.get(k, ""))}"'
+                     f'{" required" if req else ""}></label>' for k, label, req in fields)
+    body = (af.back("./", "Zurück zur Liste") + af.pagehead("Neuer Mitarbeiter") + af.msg(notice, error=True)
+            + f'<form class="oaap-form" method="post" action="create">{inputs}'
+              '<div><button type="submit" class="primary">Anlegen</button></div></form>')
+    return render("Neuer Mitarbeiter", body)
+
+
+def page_object(obj):
+    pairs = [("Art", "Mitarbeiter"), ("Abteilung", esc(attr(obj, "Department"))),
+             ("Angelegt von", esc(made_by(obj.get("owner")))), ("Kennung", kennung(obj["id"]))]
+    parts = [af.back("./", "Zurück zur Liste"),
+             f'<div class="oaap-objhead"><h1>{esc(obj["title"])}</h1>{af.facts(pairs)}</div>']
     for gk, g in sorted((obj.get("groups") or {}).items()):
-        parts.append(group_html(gk, g))
-    return "".join(parts)
+        rows = "".join(f"<dt>{esc(ATTR_TITLES.get(k, k))}</dt><dd>{esc(str(v.get('value') or ''))}</dd>"
+                       for k, v in (g.get("attributes") or {}).items())
+        inner = f'<dl class="oaap-kv">{rows}</dl>' if rows else '<p class="oaap-muted">Keine Angaben.</p>'
+        if g.get("origin") and g.get("origin") != "app:" + APP_ID:
+            inner = f'<p class="oaap-muted">angelegt von {esc(made_by(g.get("origin")))}</p>' + inner
+        parts.append(af.card(GROUP_TITLES.get(gk.split("+", 1)[0], "Weitere Angaben"), inner))
+    return render(obj["title"], "".join(parts), obj=f"Mitarbeiter:{obj['id']}", obj_title=obj["title"])
 
 
-def render_home(notice=""):
+# ------------------------------------------------------------- MCP-Tür
+
+door = mcpdoor.Door(f"oaap-{APP_ID}", VERSION,
+                    "Mitarbeiter des Mandanten suchen und lesen: Name, Abteilung, E-Mail, Telefon.")
+
+
+def _need_session(who):
+    # dieselbe Prüfung wie die Seiten: ohne Rollen keine Daten
+    if not who.get("roles"):
+        raise mcpdoor.Refused("Dafür braucht es eine angemeldete Sitzung.")
     if not twin.configured():
-        return not_configured_card()
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
+        raise mcpdoor.Refused("Diese Instanz ist nicht mit dem Zwilling verbunden.")
 
-    rows = []
-    for obj_id in known(MITARBEITER_TYPE):
-        obj = twin.get_object(obj_id)
-        if obj is None:
-            continue
-        rows.append(f"<tr><td><a href='/object?id={esc(obj_id)}'>{esc(obj['title'])}</a></td>"
-                    f"<td class='muted'><code>{esc(obj_id)}</code></td></tr>")
-    table = (f"<table><tr><th>Name</th><th>ID</th></tr>{''.join(rows)}</table>"
-             if rows else "<p class='muted' style='margin:0'>noch keine angelegt</p>")
 
-    parts.append(f"""<div class="cols">
-  <div class="card">
-    <h2>Mitarbeiter</h2>
-    {table}
-  </div>
-  <div class="card">
-    <h2>Mitarbeiter anlegen</h2>
-    <form class="stack" method="post" action="/create">
-      <label>Name<input type="text" name="title" required></label>
-      <label>E-Mail<input type="text" name="Email"></label>
-      <label>Telefon<input type="text" name="Phone"></label>
-      <label>Abteilung<input type="text" name="Department"></label>
-      <button type="submit">Anlegen</button>
-    </form>
-  </div>
-</div>""")
-    return "".join(parts)
+def _short(o):
+    d = {"kennung": o["id"], "name": o.get("title"), "abteilung": attr(o, "Department"),
+         "email": attr(o, "Email"), "telefon": attr(o, "Phone")}
+    return {k: v for k, v in d.items() if v}
+
+
+@door.tool("mitarbeiterverwaltung_search", "Mitarbeiter suchen",
+           "Sucht Mitarbeiter nach Name, Abteilung oder E-Mail. Ohne Suchwort liefert es die ersten Einträge.",
+           {"q": {"type": "string", "description": "Suchwort(e), leer für alle"},
+            "abteilung": {"type": "string", "description": "nur diese Abteilung (genauer Name)"},
+            "limit": {"type": "integer", "description": "höchstens so viele Treffer (1–50, Standard 20)"}})
+def _mcp_search(args, who):
+    _need_session(who)
+    try:
+        objs, trunc = twin.list_objects(MITARBEITER_TYPE)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Der Zwilling antwortet nicht ({exc.status or 'keine Verbindung'}).") from None
+    try:
+        limit = max(1, min(50, int(args.get("limit") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    dept = str(args.get("abteilung") or "").strip().lower()
+    q = af.Query({"q": str(args.get("q") or "")})
+    hits = [_short(o) for o in objs
+            if (not dept or attr(o, "Department").lower() == dept)
+            and q.matches(o.get("title"), attr(o, "Department"), attr(o, "Email"))]
+    return {"treffer": hits[:limit], "anzahl": len(hits), "gekuerzt": len(hits) > limit or trunc}
+
+
+@door.tool("mitarbeiterverwaltung_read", "Mitarbeiter lesen",
+           "Liest einen Mitarbeiter mit allen Angaben.",
+           {"kennung": {"type": "string", "description": "Kennung aus mitarbeiterverwaltung_search"}},
+           required=("kennung",))
+def _mcp_read(args, who):
+    _need_session(who)
+    oid = str(args.get("kennung") or "").strip()
+    if not oid:
+        raise mcpdoor.Refused("Welche Kennung?")
+    try:
+        obj = twin.get_object(oid)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Nicht lesbar ({exc.status or 'keine Verbindung'}).") from None
+    if not obj or obj.get("type") != MITARBEITER_TYPE:
+        raise mcpdoor.Refused("Kein Mitarbeiter mit dieser Kennung.")
+    angaben = {}
+    for g in (obj.get("groups") or {}).values():
+        for k, v in (g.get("attributes") or {}).items():
+            angaben[ATTR_TITLES.get(k, k)] = v.get("value")
+    return {"kennung": obj["id"], "name": obj["title"], "angelegt_von": made_by(obj.get("owner")),
+            "angaben": angaben}
+
+
+door.prompt("mitarbeiterverwaltung_abteilung", "Wer arbeitet in einer Abteilung?",
+            "Listet die Mitarbeiter einer Abteilung mit ihren Kontaktdaten.",
+            "Welche Mitarbeiter gehören zur Abteilung „{abteilung}“? Nutze mitarbeiterverwaltung_search "
+            "und nenne Name, E-Mail und Telefon.", arguments=("abteilung",))
+door.prompt("mitarbeiterverwaltung_kontakt", "Kontaktdaten eines Mitarbeiters",
+            "Findet E-Mail, Telefon und Abteilung eines Mitarbeiters.",
+            "Wie erreiche ich „{name}“? Suche in der Mitarbeiterverwaltung und nenne Abteilung, "
+            "E-Mail und Telefon.", arguments=("name",))
 
 
 # --------------------------------------------------------------- HTTP
@@ -254,77 +289,83 @@ class Handler(BaseHTTPRequestHandler):
                 form[unquote_plus(k)] = unquote_plus(v)
         return form
 
+    def refuse(self):
+        self.send_html(403, render("Anmeldung nötig", af.card(
+            "", "<p>Diese Seite braucht eine angemeldete Sitzung.</p>")))
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            door.serve(self)
+            return
         path = parsed.path.rstrip("/") or "/"
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION,
                                   "twin": twin.configured()})
             return
-        user, roles = self.identity()
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
+            return
+        if not twin.configured() and path in ("/", "/object", "/neu"):
+            self.send_html(200, render("Keine Verbindung", not_configured()))
             return
         if path == "/object":
-            qs = parse_qs(parsed.query)
-            obj_id = (qs.get("id") or [""])[0]
+            obj_id = (parse_qs(parsed.query).get("id") or [""])[0].strip()
             try:
                 obj = twin.get_object(obj_id) if obj_id else None
             except twin.TwinError as exc:
-                self.send_html(200, page(
-                    f'<div class="card attention"><p>{esc(exc.detail or str(exc))}</p></div>',
-                    user, roles))
+                self.send_html(200, render("Nicht lesbar", af.back("./") + af.msg(
+                    f"Dieser Eintrag ist nicht lesbar ({exc.status or 'keine Verbindung'}).", error=True)))
                 return
             if obj is None:
-                self.send_html(404, page(
-                    '<div class="card attention"><p>Kein Objekt mit dieser ID.</p></div>',
-                    user, roles))
+                self.send_html(404, render("Nicht gefunden", af.back("./") + af.msg(
+                    "Kein Eintrag mit dieser Kennung.", error=True)))
                 return
-            self.send_html(200, page(render_object(obj), user, roles, obj["title"]))
+            self.send_html(200, page_object(obj))
             return
         if path == "/":
-            self.send_html(200, page(render_home(), user, roles))
+            self.send_html(200, page_list(parse_qs(parsed.query)))
             return
-        self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+        if path == "/neu":
+            self.send_html(200, page_neu())
+            return
+        self.send_html(404, render("Nicht gefunden", af.empty(
+            'Diese Seite gibt es nicht. <a href="./">Zur Liste</a>')))
 
     def do_POST(self):
-        path = self.path.split("?")[0].rstrip("/") or "/"
-        user, roles = self.identity()
+        path = self.path.split("?")[0]
+        if path == "/mcp":
+            door.serve(self)
+            return
+        path = path.rstrip("/") or "/"
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
             return
         if path != "/create":
-            self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+            self.send_html(404, render("Nicht gefunden", af.empty("Diese Aktion gibt es nicht.")))
             return
         form = self.read_form()
-        notice = ""
-        redirect = "/"
         title = (form.get("title") or "").strip()
         if not title:
-            notice = "Ohne Namen kann ich nichts anlegen."
-        else:
-            attrs = {k: form[k] for k in ("Email", "Phone", "Department") if form.get(k)}
-            try:
-                result = twin.create_object(MITARBEITER_TYPE, title, HR_GROUP,
-                                             attributes=attrs or None)
-                remember(result["id"], MITARBEITER_TYPE)
-                redirect = f"/object?id={result['id']}"
-            except twin.TwinError as exc:
-                notice = exc.detail or str(exc)
-
-        if notice:
-            self.send_html(200, page(render_home(notice), user, roles))
+            self.send_html(200, page_neu("Ohne Namen kann ich nichts anlegen.", form))
             return
+        attrs = {k: form[k].strip() for k in ("Email", "Phone", "Department") if (form.get(k) or "").strip()}
+        try:
+            result = twin.create_object(MITARBEITER_TYPE, title, HR_GROUP, attributes=attrs or None)
+        except twin.TwinError as exc:
+            self.send_html(200, page_neu(f"Anlegen abgelehnt: {exc.detail or exc}", form))
+            return
+        remember(result["id"], MITARBEITER_TYPE)
         self.send_response(303)
-        self.send_header("Location", redirect)
+        self.send_header("Location", f"/object?id={result['id']}")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
 
 def main():
-    sys.stdout.write(f"OAAP Mitarbeiterverwaltung {VERSION} auf Port {PORT} -- "
+    sys.stdout.write(f"{APP_NAME} {VERSION} auf Port {PORT} -- "
                      f"Zwilling: {'konfiguriert' if twin.configured() else 'FEHLT'}\n")
     sys.stdout.flush()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

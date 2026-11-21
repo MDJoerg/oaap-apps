@@ -1,4 +1,4 @@
-"""Paketkatalog 0.4 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
+"""Paketkatalog 0.5 — freigegebene ZIP-Pakete mit Versionsverlauf (RFC-0050),
 seit 0.2 auch als Spiegel eines Marketplace-Feeds (RFC-0077 §7.2, upstream.py).
 
 Der Betreiber lädt Pakete hoch, gibt Versionen frei und kann jede
@@ -12,20 +12,26 @@ selbst nachprüft (Größe, SHA-256, Id und Version im Manifest).
 Ein Weg, eine Rolle: alles ist `admin` (Manifest), und die App prüft es
 noch einmal. Ein Paket ist Code, den ein Knoten baut und ausführt -- wer
 hier hochlädt, bestimmt, was Mandanten installieren können.
+
+Seit 0.5 (RFC-0118): der Rahmen der Plattform (appframe), die Pakete als
+Listenbericht, die Handlungen je Paket auf seiner Objektseite
+(/paket/<id>), Hilfe unter docs/ und eine lesende MCP-Tür (/mcp).
 """
-import html
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import appframe as af
 import catalog as cat
+import mcpdoor
 import multipart
 import upstream
 import zipinfo
 
-VERSION = "0.4.1"
+APP_NAME = "Paketkatalog"
+VERSION = "0.5.0"
 PORT = 8000
 DATA_DIR = os.environ.get("CATALOG_DATA_DIR", "/data")
 try:
@@ -36,159 +42,345 @@ MAX_BYTES = MAX_MB * 1024 * 1024
 MAX_FORM = 16 * 1024
 ALLOWED_ROLES = {"admin", "server_admin"}
 
-esc = html.escape
+esc = af.esc
 CATALOG = None
 MIRROR = None
 
-
-STYLE = """<style>
-  :root{--blue:#1e3a8a;--bg:#f4f6fa;--text:#1f2937;--muted:#6b7280;
-        --border:#e5e7eb;--ok:#15803d;--err:#b91c1c}
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;
-       background:var(--bg);color:var(--text)}
-  header{background:var(--blue);color:#fff;padding:.7rem 1.2rem;font-weight:600}
-  main{max-width:60rem;margin:1.4rem auto;padding:0 1.2rem}
-  .card{background:#fff;border:1px solid var(--border);border-radius:.6rem;
-        padding:1.2rem;margin-bottom:1.1rem}
-  h1{font-size:1.3rem;margin:.1rem 0 .8rem} h2{font-size:1.02rem;margin:0 0 .7rem}
-  table{border-collapse:collapse;width:100%;font-size:.92rem}
-  th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid var(--border);
-        vertical-align:top}
-  .muted{color:var(--muted)} .ok{color:var(--ok)} .err{color:var(--err)}
-  .badge{font-size:.72rem;padding:.1rem .5rem;border-radius:1rem;background:#dbeafe;
-         color:#1e3a8a}
-  .badge.on{background:#dcfce7;color:#166534}
-  button,.btn{padding:.35rem .8rem;border:0;border-radius:.35rem;background:var(--blue);
-        color:#fff;cursor:pointer;font-size:.88rem;text-decoration:none}
-  button.quiet{background:#e5e7eb;color:var(--text)}
-  button.danger{background:var(--err)}
-  input[type=text],input[type=file]{padding:.35rem;border:1px solid var(--border);
-        border-radius:.3rem;max-width:100%}
-  form.inline{display:inline}
-  code{background:#f3f4f6;padding:.05rem .3rem;border-radius:.2rem}
-</style>"""
+# Nur, was dieser App eigen ist; Farben aus dem Kit.
+STYLE = """
+.pc-inline{display:flex;flex-wrap:wrap;gap:var(--oaap-space-2);align-items:end;margin:0}
+.pc-inline label{display:grid;gap:2px;font-size:.9em}
+.pc-sub{display:block;font-size:.85em;color:var(--oaap-color-text-muted)}
+.pc-sel td{background:var(--oaap-badge-info-bg)}
+"""
 
 
-def page(body, msg="", ok=True):
-    note = (f'<div class="card"><p class="{"ok" if ok else "err"}" style="margin:0">'
-            f"{esc(msg)}</p></div>") if msg else ""
-    return ("<!doctype html><html lang=de><meta charset=utf-8>"
-            "<meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>Paketkatalog</title>{STYLE}<header>Paketkatalog</header>"
-            f"<main>{note}{body}</main></html>")
+# ------------------------------------------------------------- Rahmen
+def tabs():
+    t = [("/", "Übersicht"), ("/neu", "Neue Version")]
+    if MIRROR and MIRROR.enabled:
+        t.append(("/spiegel", "Spiegel"))
+    t.append(("/einrichtung", "Einrichtung"))
+    return t
 
 
-def render_index():
-    rows = []
-    for app_id, name, versions in CATALOG.apps():
-        for i, r in enumerate(versions):
-            rel = r["released"]
-            ver, aid = esc(r["version"]), esc(app_id)
-            q = f'<input type=hidden name=app value="{aid}"><input type=hidden name=version value="{ver}">'
-            actions = [
-                f'<a class="btn quiet" href="/download/{quote(app_id)}/{quote(r["version"])}">Laden</a>',
-                f'<form class="inline" method=post action="/release">{q}'
-                f'<input type=hidden name=released value="{0 if rel else 1}">'
-                f'<button class="{"quiet" if rel else ""}">'
-                f'{"Zurückziehen" if rel else "Freigeben"}</button></form>',
-                f'<form class="inline" method=post action="/delete">{q}'
-                f'<input type=text name=reason placeholder="{"Grund (nötig)" if rel else "Grund"}" size=14 '
-                f'{"required" if rel else ""}>'
-                f'<button class="danger">Löschen</button></form>']
-            vis = CATALOG.visible_to(app_id)
-            vis_form = (
-                f'<form method=post action="/visible" style="margin:.4rem 0 0">'
-                f'<input type=hidden name=app value="{aid}">'
-                f'<input type=text name=visible_to size=12 value="{esc(", ".join(vis))}" '
-                f'placeholder="alle" title="Mandanten-Kennungen, durch Komma getrennt; leer = alle">'
-                f' <button class=quiet>Sichtbar für</button></form>'
-                f'<span class=muted>{"nur " + esc(", ".join(vis)) if vis else "alle Mandanten"}</span>')
-            origin = r.get("origin") or {}
-            rows.append(
-                f"<tr><td>{esc(name) if i == 0 else ''}"
-                f"{'<br><span class=muted><code>' + aid + '</code></span>' + vis_form if i == 0 else ''}</td>"
-                f"<td><strong>{ver}</strong> "
-                f'<span class="badge {"on" if rel else ""}">'
-                f'{"freigegeben" if rel else "nicht freigegeben"}</span></td>'
-                f'<td class=muted>{r["size"] / 1048576:.1f} MB<br>'
-                f'<code>{esc(r["sha256"][:12])}</code></td>'
-                f'<td class=muted>{esc(r["uploaded_at"][:10])}<br>{esc(r["uploaded_by"])}'
-                + ('<br><span class=badge>vom Knoten übernommen</span>' if origin else '')
-                + '</td>'
-                f'<td>{esc(r.get("note", ""))}'
-                + (f'<br><span class=err>im Marketplace zurückgerufen: '
-                   f'{esc(r["withdrawn_upstream"])}</span>' if r.get("withdrawn_upstream") else "")
-                + f'</td><td>{" ".join(actions)}</td></tr>')
-    table = ("<table><tr><th>App</th><th>Version</th><th>Paket</th><th>Hochgeladen</th>"
-             "<th>Notiz</th><th></th></tr>" + "".join(rows) + "</table>") if rows else \
-            '<p class="muted">Noch kein Paket. Lade unten die erste ZIP hoch.</p>'
-    body = (
-        "<h1>Pakete</h1>"
-        + mirror_card() +
-        f'<div class="card">{table}</div>'
-        '<div class="card"><h2>Neue Version hochladen</h2>'
-        '<form method=post action="/upload" enctype="multipart/form-data">'
-        '<p><input type=file name=file accept=".zip,application/zip" required></p>'
-        '<p><input type=text name=note placeholder="Notiz (optional)" size=40></p>'
-        f'<p><button>Hochladen</button> <span class=muted>bis {MAX_MB} MB. '
-        'Eine Version wird nie überschrieben; hochgeladen heißt noch nicht freigegeben.'
-        '</span></p></form></div>'
-        '<div class="card"><h2>Als Store-Quelle des Knotens</h2>'
-        '<p style="margin:0">Der Knoten liest die freigegebenen Pakete direkt aus dem '
-        'Speicher dieser Instanz. Einmal eintragen, auf dem Knoten:</p>'
-        '<p><code>sudo oaap store add-catalog &lt;Name dieser Instanz&gt;</code></p>'
-        '<p class="muted" style="margin:0">Danach erscheinen die freigegebenen Apps im Store '
-        'jedes Mandanten-Administrators; Installieren und Aktualisieren gehen wie bei jeder '
-        'anderen Quelle. Der Knoten prüft jedes Paket vor dem Entpacken noch einmal.</p>'
-        '<p class="muted" style="margin:.5rem 0 0">Ein getestetes Paket kommt ohne Herunter- und '
-        'Hochladen hierher: im Portal auf der Instanz, Reiter Deployment, „In den Katalog '
-        'übernehmen“ (oder <code>sudo oaap app catalog-put &lt;Instanz&gt;</code>). Es landet als '
-        '<strong>nicht freigegeben</strong>; freigeben bleibt hier Deine Entscheidung. Mit „Sichtbar '
-        'für“ erscheint eine App nur im Store der genannten Mandanten.</p></div>')
-    return page(body)
+def page(title, body, active="/", msg="", ok=True, obj=None, obj_title=None):
+    note = af.msg(msg, error=not ok) if msg else ""
+    return af.page(title, note + body, app=APP_NAME, version=VERSION,
+                   product="package-catalog", tabs=tabs(), active=active,
+                   obj=obj, obj_title=obj_title, style=STYLE)
+
+
+def plain(title, text=""):
+    return page(title, af.pagehead(title) + (f"<p>{esc(text)}</p>" if text else ""), active=None)
+
+
+# ------------------------------------------------------------- Sichten
+def summary(app_id, name, versions):
+    """Eine Zeile je App für Liste und MCP."""
+    newest = versions[0] if versions else {}
+    released = [r["version"] for r in versions if r.get("released")]
+    return {"id": app_id, "name": name,
+            "newest": newest.get("version", ""),
+            "released": released[0] if released else "",
+            "versions": len(versions),
+            "unreleased": sum(1 for r in versions if not r.get("released")),
+            "visible_to": CATALOG.visible_to(app_id),
+            "uploaded_at": (newest.get("uploaded_at") or "")[:10],
+            "from_node": any(r.get("origin") for r in versions),
+            "withdrawn_upstream": any(r.get("withdrawn_upstream") for r in versions)}
+
+
+def all_summaries():
+    return [summary(*a) for a in CATALOG.apps()]
+
+
+STATUS_CHOICES = [("frei", "mit freigegebener Version"),
+                  ("offen", "wartet auf Freigabe"),
+                  ("ohne", "nichts freigegeben")]
+
+
+def status_ok(s, want):
+    if want == "frei":
+        return bool(s["released"])
+    if want == "offen":
+        return s["unreleased"] > 0
+    if want == "ohne":
+        return not s["released"]
+    return True
+
+
+def status_badge(s):
+    out = []
+    if s["released"]:
+        out.append(af.badge(f"freigegeben {s['released']}", "ok"))
+    else:
+        out.append(af.badge("nichts freigegeben"))
+    if s["unreleased"] and s["newest"] != s["released"]:
+        out.append(af.badge(f"{s['newest']} wartet", "warn"))
+    if s["withdrawn_upstream"]:
+        out.append(af.badge("im Marktplatz zurückgerufen", "err"))
+    return " ".join(out)
+
+
+def vis_text(labels):
+    return "nur " + ", ".join(labels) if labels else "alle Mandanten"
+
+
+def render_index(params, msg="", ok=True):
+    query = af.Query(params, filters=("status",), default_sort="name")
+    rows = [s for s in all_summaries() if status_ok(s, query.filters.get("status"))]
+    columns = [("App", "name", lambda s: f"{s['name']} {s['id']}", ""),
+               ("Neueste Version", "newest", lambda s: cat.version_key(s["newest"]), ""),
+               ("Status", "", None, ""),
+               ("Sichtbar für", "", None, "oaap-minor"),
+               ("Hochgeladen", "uploaded", lambda s: s["uploaded_at"], "oaap-minor")]
+
+    def row(s):
+        href = "/paket/" + quote(s["id"])
+        return (f'<tr><td><a href="{esc(href)}"><strong>{esc(s["name"])}</strong></a>'
+                f'<span class="pc-sub"><code>{esc(s["id"])}</code></span></td>'
+                f'<td>{esc(s["newest"])} <span class="oaap-muted">({s["versions"]} '
+                f'{"Version" if s["versions"] == 1 else "Versionen"})</span></td>'
+                f'<td>{status_badge(s)}</td>'
+                f'<td class="oaap-minor">{esc(vis_text(s["visible_to"]))}</td>'
+                f'<td class="oaap-minor">{esc(s["uploaded_at"])}'
+                + (" " + af.badge("vom Knoten", "info") if s["from_node"] else "") + '</td></tr>')
+
+    # Die Suche geht über Name und Kennung; list_report sucht danach noch
+    # einmal über die Sortierschlüssel -- die enthalten Name und Kennung,
+    # also ändert das nichts mehr.
+    rows = [s for s in rows if query.matches(s["name"], s["id"])]
+    report = af.list_report(query, rows, columns, row, base="/?", noun="Apps",
+                            empty_text='Noch kein Paket. <a href="/neu">Neue Version</a> '
+                                       'lädt die erste ZIP hoch.',
+                            choices=[("status", "Status", STATUS_CHOICES)],
+                            placeholder="Name oder Kennung")
+    body = af.pagehead("Pakete", '<a class="oaap-btn primary" href="/neu">Neue Version</a>') + report
+    return page("Übersicht", body, "/", msg, ok)
+
+
+def render_package(app_id, params, msg="", ok=True):
+    entry = next((a for a in CATALOG.apps() if a[0] == app_id), None)
+    if not entry:
+        return None
+    _id, name, versions = entry
+    s = summary(*entry)
+    want = (params.get("version") or [""])[0]
+    sel = next((r for r in versions if r["version"] == want), versions[0])
+    aid = esc(app_id)
+
+    head = (af.back("/", "Zurück zur Liste")
+            + f'<div class="oaap-objhead"><h1>{esc(name)}</h1>'
+            + af.facts([("Kennung", f"<code>{aid}</code>"),
+                        ("Freigegeben", esc(s["released"]) or "keine Version"),
+                        ("Versionen", str(len(versions))),
+                        ("Sichtbar für", esc(vis_text(s["visible_to"])))])
+            + "</div>")
+
+    vrows = []
+    for r in versions:
+        origin = r.get("origin") or {}
+        cls = ' class="pc-sel"' if r is sel else ""
+        href = f"/paket/{quote(app_id)}?version={quote(r['version'])}"
+        vrows.append(
+            f'<tr{cls}><td><a href="{esc(href)}"><strong>{esc(r["version"])}</strong></a></td>'
+            f'<td>{af.badge("freigegeben", "ok") if r["released"] else af.badge("nicht freigegeben")}'
+            + (" " + af.badge("im Marktplatz zurückgerufen", "err") if r.get("withdrawn_upstream") else "")
+            + f'</td><td class="oaap-minor">{r["size"] / 1048576:.1f} MB</td>'
+            f'<td>{esc(r["uploaded_at"][:10])} <span class="pc-sub">{esc(r["uploaded_by"])}'
+            + (" · vom Knoten übernommen" if origin else "") + '</span></td>'
+            f'<td class="oaap-minor">{esc(r.get("note", ""))}</td></tr>')
+    vtable = af.table("<th>Version</th><th>Status</th><th class=\"oaap-minor\">Größe</th>"
+                      "<th>Hochgeladen</th><th class=\"oaap-minor\">Notiz</th>", vrows)
+
+    ver = esc(sel["version"])
+    hidden = f'<input type="hidden" name="app" value="{aid}"><input type="hidden" name="version" value="{ver}">'
+    rel = sel["released"]
+    facts = [("Prüfsumme (SHA-256)", f'<code>{esc(sel["sha256"])}</code>'),
+             ("Größe", f'{sel["size"] / 1048576:.1f} MB'),
+             ("Hochgeladen", esc(f'{sel["uploaded_at"][:16]} von {sel["uploaded_by"]}')),
+             ("Freigegeben", esc(f'{(sel.get("released_at") or "")[:16]} von {sel.get("released_by", "")}')
+              if rel else ""),
+             ("Beschreibung", esc(sel.get("description") or "")),
+             ("Notiz", esc(sel.get("note") or ""))]
+    if sel.get("withdrawn_upstream"):
+        facts.append(("Im Marktplatz zurückgerufen", esc(sel["withdrawn_upstream"])))
+    actions = (
+        f'<a class="oaap-btn" href="/download/{quote(app_id)}/{quote(sel["version"])}">Laden</a> '
+        f'<form class="pc-inline" style="display:inline-flex" method="post" action="/release">{hidden}'
+        f'<input type="hidden" name="released" value="{0 if rel else 1}">'
+        f'<button class="{"" if rel else "primary"}">{"Zurückziehen" if rel else "Freigeben"}</button></form>')
+    delete = (
+        f'<form class="pc-inline" method="post" action="/delete">{hidden}'
+        f'<label>Grund{" (nötig, die Version ist freigegeben)" if rel else " (freiwillig)"}'
+        f'<input type="text" name="reason" size="30"{" required" if rel else ""}></label>'
+        '<button class="danger">Löschen</button></form>')
+    version_card = af.card(f"Version {sel['version']}",
+                           af.facts(facts) + f'<p style="margin-top:1rem">{actions}</p>'
+                           '<h3>Löschen</h3>' + delete
+                           + '<p class="oaap-muted">Eine gelöschte Version ist weg; '
+                             'eine Version wird nie überschrieben.</p>')
+    vis = CATALOG.visible_to(app_id)
+    vis_card = af.card("Sichtbar für",
+                       f'<form class="pc-inline" method="post" action="/visible">'
+                       f'<input type="hidden" name="app" value="{aid}">'
+                       f'<label>Mandanten-Kennungen, durch Komma getrennt; leer = alle'
+                       f'<input type="text" name="visible_to" size="30" value="{esc(", ".join(vis))}" '
+                       'placeholder="alle"></label><button>Speichern</button></form>'
+                       f'<p class="oaap-muted">Heute: {esc(vis_text(vis))}. Die App erscheint nur im '
+                       'Store der genannten Mandanten.</p>')
+    body = head + af.card("Versionen", vtable) + version_card + vis_card
+    return page(name, body, None, msg, ok, obj=f"Paket:{app_id}", obj_title=name)
+
+
+def render_upload(msg="", ok=True):
+    body = (af.pagehead("Neue Version hochladen")
+            + af.card("", '<form class="oaap-form" method="post" action="/upload" enctype="multipart/form-data">'
+                      '<label>ZIP-Paket<input type="file" name="file" accept=".zip,application/zip" required></label>'
+                      '<label>Notiz (freiwillig)<input type="text" name="note"></label>'
+                      '<div><button class="primary">Hochladen</button></div></form>'
+                      f'<p class="oaap-muted">Bis {MAX_MB} MB. Eine Version wird nie überschrieben; '
+                      'hochgeladen heißt noch nicht freigegeben.</p>'))
+    return page("Neue Version", body, "/neu", msg, ok)
+
+
+def render_setup(msg="", ok=True):
+    body = (af.pagehead("Einrichtung")
+            + af.card("Als Store-Quelle des Knotens",
+                      '<p>Der Knoten liest die freigegebenen Pakete direkt aus dem Speicher dieser '
+                      'Instanz. Einmal eintragen, auf dem Knoten:</p>'
+                      '<p><code>sudo oaap store add-catalog &lt;Name dieser Instanz&gt;</code></p>'
+                      '<p class="oaap-muted">Danach erscheinen die freigegebenen Apps im Store jedes '
+                      'Mandanten-Administrators; Installieren und Aktualisieren gehen wie bei jeder '
+                      'anderen Quelle. Der Knoten prüft jedes Paket vor dem Entpacken noch einmal.</p>')
+            + af.card("Ein getestetes Paket übernehmen",
+                      '<p>Ein getestetes Paket kommt ohne Herunter- und Hochladen hierher: im Portal auf '
+                      'der Instanz, Reiter Deployment, „In den Katalog übernehmen“ (oder '
+                      '<code>sudo oaap app catalog-put &lt;Instanz&gt;</code>). Es landet als '
+                      '<strong>nicht freigegeben</strong>; freigeben bleibt hier Deine Entscheidung. '
+                      'Mit „Sichtbar für“ auf der Seite eines Pakets erscheint eine App nur im Store '
+                      'der genannten Mandanten.</p>'))
+    return page("Einrichtung", body, "/einrichtung", msg, ok)
 
 
 def mirror_card():
-    """Der Spiegel (RFC-0077 §7.2) -- nur, wenn eine Destination zugeordnet ist."""
+    """Der Spiegel eines Marktplatzes -- nur, wenn eine Destination zugeordnet ist."""
     if not MIRROR or not MIRROR.enabled:
         return ""
     st = MIRROR.status()
     err = st.get("last_error") or ""
     taken = ", ".join(st.get("taken") or []) or "noch keine"
-    return ('<div class="card"><h2>Spiegel eines Marketplace</h2>'
-            f'<p style="margin:0">Feed <strong>{esc(st.get("feed_name") or "?")}</strong>, '
-            f'Kanal <code>{esc(MIRROR.channel)}</code>, Freigabe '
-            f'<code>{esc(MIRROR.mode)}</code>, alle {MIRROR.interval} min.</p>'
-            f'<p class=muted style="margin:.4rem 0">Zuletzt abgerufen {esc(st.get("last_poll") or "nie")}'
-            f' · zuletzt erfolgreich {esc(st.get("last_ok") or "nie")}'
-            f'{"<br><span class=err>" + esc(err) + "</span>" if err else ""}'
-            f'<br>Übernommen: {esc(taken)}</p>'
-            '<form method=post action="/upstream/poll" style="margin:0">'
-            '<button>Jetzt abrufen</button></form>'
-            + follow_block(st) + '</div>')
+    inner = (af.facts([("Feed", esc(st.get("feed_name") or "?")),
+                       ("Kanal", f"<code>{esc(MIRROR.channel)}</code>"),
+                       ("Freigabe", "beim Eintreffen" if MIRROR.mode == "auto" else "durch den Betreiber"),
+                       ("Abstand", f"alle {MIRROR.interval} min"),
+                       ("Zuletzt abgerufen", esc(st.get("last_poll") or "nie")),
+                       ("Zuletzt erfolgreich", esc(st.get("last_ok") or "nie")),
+                       ("Übernommen", esc(taken))])
+             + (af.msg(err, error=True) if err else "")
+             + '<form method="post" action="/upstream/poll" style="margin-top:1rem">'
+               '<button class="primary">Jetzt abrufen</button></form>')
+    return af.card("Spiegel eines Marktplatzes", inner) + follow_block(st)
 
 
 def follow_block(st):
-    """§15.8.7: Aus Zwischenablage hinzufügen -- ein Link aus dem Marketplace."""
+    """Aus Zwischenablage hinzufügen -- ein Link aus dem Marktplatz."""
     offered = set(st.get("offered") or [])
-    rows = "".join(
-        f'<tr><td><code>{esc(f["id"])}</code></td><td>'
-        f'{"<span class=ok>beziehbar</span>" if f["id"] in offered else "<span class=muted>(noch) nicht beziehbar</span>"}'
-        f'</td><td class=muted>{esc(f.get("added") or "")}</td><td><form class=inline method=post '
-        f'action="/upstream/unfollow"><input type=hidden name=app value="{esc(f["id"])}">'
-        f'<button class=quiet>Nicht mehr folgen</button></form></td></tr>' for f in MIRROR.follows())
+    follows = MIRROR.follows()
+    rows = [f'<tr><td><code>{esc(f["id"])}</code></td><td>'
+            + (af.badge("beziehbar", "ok") if f["id"] in offered else af.badge("(noch) nicht beziehbar"))
+            + f'</td><td class="oaap-minor">{esc(f.get("added") or "")}</td></tr>' for f in follows]
     scope = ("nur die Folgen-Liste" if MIRROR.scope == "followed"
-             else "alles Beziehbare (CATALOG_UPSTREAM_SCOPE=all)")
-    return ('<h2 style="margin-top:1.2rem">Aus Zwischenablage hinzufügen</h2>'
-            f'<p class=muted style="margin:.2rem 0">Gespiegelt wird: {esc(scope)}. Den Link einer Detailseite '
-            'im Marketplace („Teilen“ → „Link kopieren“) hier einfügen. Der Katalog ruft den Link nicht '
-            'auf; er prüft nur, dass er zum angebundenen Marketplace gehört.</p>'
-            '<form method=post action="/upstream/follow"><input type=text name=link size=60 '
-            'placeholder="https://market.example/assets/kennung" required> <button>Folgen</button></form>'
-            + (f'<table style="margin-top:.6rem">{rows}</table>' if rows else ""))
+             else "alles Beziehbare")
+    unfollow = ""
+    if follows:
+        opts = "".join(f'<option value="{esc(f["id"])}">{esc(f["id"])}</option>' for f in follows)
+        unfollow = ('<form class="pc-inline" method="post" action="/upstream/unfollow" style="margin-top:.6rem">'
+                    f'<label>App<select name="app">{opts}</select></label>'
+                    '<button>Nicht mehr folgen</button></form>')
+    return af.card("Aus Zwischenablage hinzufügen",
+                   f'<p class="oaap-muted">Gespiegelt wird: {esc(scope)}. Den Link einer Detailseite '
+                   'im Marktplatz („Teilen“ → „Link kopieren“) hier einfügen. Der Katalog ruft den Link nicht '
+                   'auf; er prüft nur, dass er zum angebundenen Marktplatz gehört.</p>'
+                   '<form class="pc-inline" method="post" action="/upstream/follow">'
+                   '<label>Link<input type="text" name="link" size="50" '
+                   'placeholder="https://market.example/assets/kennung" required></label>'
+                   '<button>Folgen</button></form>'
+                   + (af.table("<th>App</th><th>Stand</th><th class=\"oaap-minor\">Seit</th>", rows)
+                      if rows else "") + unfollow)
 
 
+def render_mirror(msg="", ok=True):
+    body = af.pagehead("Spiegel") + (mirror_card() or af.empty(
+        "Kein Spiegel eingerichtet. Ordne im Portal der Instanz die Destination „upstream“ zu."))
+    return page("Spiegel", body, "/spiegel", msg, ok)
+
+
+# --------------------------------------------------------------- MCP
+def allowed(who):
+    return bool(set(who.get("roles") or []) & ALLOWED_ROLES)
+
+
+door = mcpdoor.Door(
+    "oaap-package-catalog", VERSION,
+    "Der Paketkatalog des Betreibers: welche App-Pakete in welchen Versionen da sind, "
+    "was freigegeben ist und für wen es sichtbar ist. Nur lesen.")
+
+
+def _guard(who):
+    if not allowed(who):
+        raise mcpdoor.Refused("Der Paketkatalog ist Sache des Betreibers (Rolle admin).")
+
+
+@door.tool("package_catalog_list", "Pakete auflisten",
+           "Listet die Apps im Paketkatalog mit neuester und freigegebener Version, "
+           "Sichtbarkeit und offenen Freigaben. Optional nach Wort oder Status filtern.",
+           {"q": {"type": "string", "description": "Wort in Name oder Kennung"},
+            "status": {"type": "string", "enum": ["frei", "offen", "ohne"],
+                       "description": "frei = mit freigegebener Version, offen = wartet auf Freigabe, "
+                                      "ohne = nichts freigegeben"}})
+def _mcp_list(args, who):
+    _guard(who)
+    q = af.Query({"q": str(args.get("q") or "")})
+    want = str(args.get("status") or "")
+    hits = [s for s in all_summaries() if status_ok(s, want) and q.matches(s["name"], s["id"])]
+    return {"count": len(hits), "apps": hits[:200]}
+
+
+@door.tool("package_catalog_read", "Paket lesen",
+           "Liest eine App im Paketkatalog mit allen Versionen: Status, Größe, Prüfsumme, "
+           "wer wann hochgeladen und freigegeben hat, Notiz.",
+           {"app": {"type": "string", "description": "Kennung der App, z. B. wegweiser"}},
+           required=("app",))
+def _mcp_read(args, who):
+    _guard(who)
+    app_id = str(args.get("app") or "").strip()
+    entry = next((a for a in CATALOG.apps() if a[0] == app_id), None)
+    if not entry:
+        raise mcpdoor.Refused(f"Die App „{app_id}“ steht nicht im Katalog.")
+    keep = ("version", "released", "released_at", "released_by", "size", "sha256",
+            "description", "type", "uploaded_by", "uploaded_at", "note", "withdrawn_upstream")
+    out = summary(*entry)
+    out["versions"] = [{k: r[k] for k in keep if k in r} | {"from_node": bool(r.get("origin"))}
+                       for r in entry[2]]
+    return out
+
+
+door.prompt("package_catalog_review", "Offene Freigaben prüfen",
+            "Welche hochgeladenen Versionen warten auf Freigabe?",
+            "Prüfe im Paketkatalog (package_catalog_list mit status offen, dann "
+            "package_catalog_read je App), welche Versionen noch nicht freigegeben sind. "
+            "Nenne je App die wartende Version, wer sie wann hochgeladen hat und die Notiz, "
+            "und was heute freigegeben ist. Gib nichts frei; das bleibt beim Betreiber.")
+door.prompt("package_catalog_app", "Stand einer App",
+            "Versionen, Freigabe und Sichtbarkeit einer App im Katalog",
+            "Beschreibe den Stand der App {app} im Paketkatalog (package_catalog_read): "
+            "welche Versionen es gibt, welche freigegeben ist, für welche Mandanten sie sichtbar ist.",
+            arguments=("app",))
+
+
+# ------------------------------------------------------------ Handler
 class Handler(BaseHTTPRequestHandler):
     server_version = f"package-catalog/{VERSION}"
 
@@ -208,9 +400,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def back(self, msg, ok=True):
-        self.send(303, "", extra={"Location": "/?" + ("ok=1&" if ok else "")
+    def back(self, msg, ok=True, to="/"):
+        self.send(303, "", extra={"Location": to + "?" + ("ok=1&" if ok else "")
                                   + "m=" + quote(msg)})
+
+    def back_to(self, app_id, msg, ok=True):
+        """Zurück auf die Seite des Pakets, wenn es es noch gibt, sonst zur Liste."""
+        to = "/paket/" + quote(app_id) if app_id and CATALOG.state["apps"].get(app_id) else "/"
+        return self.back(msg, ok, to)
+
+    def drain(self):
+        """Einen kleinen, abgelehnten Rumpf noch lesen: sonst bricht Windows die
+        Verbindung ab, bevor der Client die Ablehnung liest."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
+        if 0 < n <= MAX_FORM:
+            self.rfile.read(n)
+        else:
+            self.close_connection = True
 
     def user(self):
         roles = {r.strip() for r in (self.headers.get("X-OAAP-Roles", "") or "").split(",")
@@ -231,29 +440,39 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             return self.send(200, json.dumps({"status": "ok", "version": VERSION}),
                              "application/json")
+        if path == "/mcp":
+            return door.serve(self)
         who = self.user()
         if who is None:
-            return self.send(403, page("<h1>Kein Zugriff</h1><p>Der Paketkatalog ist "
-                                       "Sache des Betreibers (Rolle admin).</p>"))
+            return self.send(403, plain("Kein Zugriff", "Der Paketkatalog ist Sache des "
+                                        "Betreibers (Rolle admin)."))
+        q = parse_qs(u.query)
+        msg = (q.get("m") or [""])[0][:300]
+        ok = bool(q.get("ok"))
         if path == "/":
-            q = parse_qs(u.query)
-            msg = (q.get("m") or [""])[0][:300]
             CATALOG.ingest_inbox(MAX_BYTES)     # was der Knoten gerade gebracht hat
-            body = render_index()
-            if msg:
-                body = body.replace("<main>", "<main>" + (
-                    f'<div class="card"><p class="{"ok" if q.get("ok") else "err"}" '
-                    f'style="margin:0">{esc(msg)}</p></div>'), 1)
-            return self.send(200, body)
+            return self.send(200, render_index(q, msg, ok))
+        if path == "/neu":
+            return self.send(200, render_upload(msg, ok))
+        if path == "/einrichtung":
+            return self.send(200, render_setup(msg, ok))
+        if path == "/spiegel":
+            return self.send(200, render_mirror(msg, ok))
+        if path.startswith("/paket/"):
+            app_id = unquote(path[len("/paket/"):])
+            html_ = render_package(app_id, q, msg, ok) if "/" not in app_id else None
+            if html_ is None:
+                return self.send(404, plain("Nicht gefunden", "Diese App steht nicht im Katalog."))
+            return self.send(200, html_)
         if path.startswith("/download/"):
             parts = [unquote(p) for p in path.split("/")[2:]]
             if len(parts) != 2 or CATALOG.get(*parts) is None:
-                return self.send(404, page("<h1>Nicht gefunden</h1>"))
+                return self.send(404, plain("Nicht gefunden"))
             fp = CATALOG.path_of(*parts)
             try:
                 f = open(fp, "rb")
             except OSError:
-                return self.send(404, page("<h1>Die Datei fehlt</h1>"))
+                return self.send(404, plain("Die Datei fehlt"))
             with f:
                 size = os.fstat(f.fileno()).st_size
                 self.send_response(200)
@@ -266,15 +485,19 @@ class Handler(BaseHTTPRequestHandler):
                 for block in iter(lambda: f.read(1 << 20), b""):
                     self.wfile.write(block)
             return
-        self.send(404, page("<h1>Nicht gefunden</h1>"))
+        self.send(404, plain("Nicht gefunden"))
 
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/")
+        if path == "/mcp":
+            return door.serve(self)
         who = self.user()
         if who is None:
-            return self.send(403, page("<h1>Kein Zugriff</h1>"))
+            self.drain()
+            return self.send(403, plain("Kein Zugriff"))
         if self.cross_site():
-            return self.send(403, page("<h1>Anfrage von fremder Seite abgelehnt</h1>"))
+            self.drain()
+            return self.send(403, plain("Anfrage von fremder Seite abgelehnt"))
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -283,11 +506,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.upload(who, length)
         if path == "/upstream/poll":
             if not MIRROR or not MIRROR.enabled:
-                return self.back("Keine Destination „upstream“ zugeordnet (Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“).", False)
+                return self.back("Keine Destination „upstream“ zugeordnet (Portal: Seite der Instanz, Reiter Netz & Adressen, Destinationen, „Zuordnen“).", False, "/spiegel")
             st = MIRROR.poll()
             return self.back(("Abgerufen." if not st.get("last_error")
                               else "Abruf fehlgeschlagen: " + st["last_error"]),
-                             not st.get("last_error"))
+                             not st.get("last_error"), "/spiegel")
         if length > MAX_FORM:
             return self.back("Das Formular ist zu groß.", False)
         form = {k: v[0] for k, v in parse_qs(
@@ -296,29 +519,29 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/upstream/follow":
             good, msg = (MIRROR.follow(form.get("link", ""), who) if MIRROR else
                          (False, "Kein Spiegel."))
-            return self.back(msg, good)
+            return self.back(msg, good, "/spiegel")
         if path == "/upstream/unfollow" and MIRROR:
             MIRROR.unfollow(app)
-            return self.back(f"{app} wird nicht mehr gefolgt (Vorhandenes bleibt).")
+            return self.back(f"{app} wird nicht mehr gefolgt (Vorhandenes bleibt).", True, "/spiegel")
         if path == "/visible":
             try:
                 labels = cat.parse_labels(form.get("visible_to", ""))
                 CATALOG.set_visible(app, labels, who)
             except cat.CatalogError as e:
-                return self.back(str(e), False)
-            return self.back(f"{app}: sichtbar für "
-                             + (", ".join(labels) if labels else "alle Mandanten"))
+                return self.back_to(app, str(e), False)
+            return self.back_to(app, f"{app}: sichtbar für "
+                                + (", ".join(labels) if labels else "alle Mandanten"))
         try:
             if path == "/release":
                 CATALOG.set_released(app, version, form.get("released") == "1", who)
-                return self.back(("Freigegeben: " if form.get("released") == "1"
-                                  else "Zurückgezogen: ") + f"{app} {version}")
+                return self.back_to(app, ("Freigegeben: " if form.get("released") == "1"
+                                          else "Zurückgezogen: ") + f"{app} {version}")
             if path == "/delete":
                 CATALOG.delete(app, version, form.get("reason", ""), who)
-                return self.back(f"Gelöscht: {app} {version}")
+                return self.back_to(app, f"Gelöscht: {app} {version}")
         except cat.CatalogError as e:
-            return self.back(str(e), False)
-        self.send(404, page("<h1>Nicht gefunden</h1>"))
+            return self.back_to(app, str(e), False)
+        self.send(404, plain("Nicht gefunden"))
 
     def upload(self, who, length):
         files = {}
@@ -328,14 +551,15 @@ class Handler(BaseHTTPRequestHandler):
                 MAX_BYTES + 1024 * 1024, tmpdir=CATALOG.tmp_dir())
             up = files.get("file")
             if not up:
-                return self.back("Es kam keine Datei an.", False)
+                return self.back("Es kam keine Datei an.", False, "/neu")
             rec = CATALOG.add(up["path"], MAX_BYTES, who, fields.get("note", ""))
             files.pop("file", None)          # moved into the store
-            return self.back(f"Aufgenommen: {rec['version']} — noch nicht freigegeben.")
+            app_id = rec["file"].split("/")[1]
+            return self.back_to(app_id, f"Aufgenommen: {rec['version']} — noch nicht freigegeben.")
         except multipart.MultipartError as e:
-            return self.back(str(e), False)
+            return self.back(str(e), False, "/neu")
         except (zipinfo.PackageError, cat.CatalogError) as e:
-            return self.back(str(e), False)
+            return self.back(str(e), False, "/neu")
         finally:
             multipart.cleanup(files)
 

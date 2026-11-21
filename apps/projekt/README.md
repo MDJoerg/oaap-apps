@@ -1,4 +1,6 @@
-# OAAP Projekt-App
+# Projekte
+
+> **Seit 0.2.0 (RFC-0118):** Name ohne „OAAP“; Seiten im Rahmen der Plattform (`appframe/`, Kit `/platform/theme.css`, Rahmenskript `/platform/app.js`); Listenbericht mit Suche, Filtern, Sortierung und Blättern; alle Projekte aus `GET /twin/objects?type=Projekt` (auch die der Partnerverwaltung, Spalte „Angelegt von“), Kunde als Auswahl aus den Firmen des Zwillings; Kennung nur noch einmal im Objektkopf, kopierbar; Anwenderhilfe in `docs/`; MCP-Tür `/mcp` mit Lesewerkzeugen (`mcpdoor/`). Der Text unten beschreibt die Entstehung und ist in Teilen überholt (z. B. „keine Liste/Suche im Zwilling“).
 
 Die **dritte** der zweiten Welle (RFC-0031, Bauplan Schritt 4). Owner
 von `Projekt`, Consumer von `Firma` (Referenz, D6). Genau das Beispiel

@@ -1,4 +1,4 @@
-oaap_manifest: "0.15"
+oaap_manifest: "0.18"
 
 # ---------------------------------------------------------------------
 # Starter-Paket: das kleinste Manifest, das durch die Prüfung geht —
@@ -6,7 +6,7 @@ oaap_manifest: "0.15"
 # von der Plattform bekommen KANN.
 #
 # Zum Anpassen: app.id, app.name, app.version und app.description
-# ändern — der Rest des aktiven Teils passt für die allermeisten Apps
+# ändern (und docs.product/title unten mit) — der Rest des aktiven Teils passt für die allermeisten Apps
 # unverändert. Die auskommentierten Abschnitte nimmst Du nur, wenn Du
 # sie brauchst. Jeder ist optional, und keiner gewährt etwas von
 # selbst: Die App ERKLÄRT, ein Mensch im Mandanten GEWÄHRT.
@@ -21,11 +21,14 @@ app:
   # abgelehnt, weil es eine andere App wäre. Der Name der INSTANZ ist
   # davon unabhängig — den wählt, wer sie anlegt, und er ist änderbar.
   id: starter
-  name: OAAP Starter
+  # Der Name sagt, was die App tut -- deutsch, kurz, OHNE „OAAP“ (RFC-0118
+  # §3: OAAP ist der Rahmen, nicht Teil jedes Bildes). Derselbe Name steht
+  # auf der Seite, in der Kachel und in docs.title.
+  name: Starter
   # Muss bei JEDEM Deployment steigen (1.2.3). Unveränderte Version =
   # harte Ablehnung. Einzige Ausnahme: das erneute Anmelden desselben
   # Pakets, nachdem ein Mensch den erweiterten Rahmen bestätigt hat.
-  version: 0.2.0
+  version: 0.3.0
   # native = Quellcode, die Plattform baut das Image auf dem Zielknoten
   # (also auf amd64 UND arm64 — keine architekturgebundenen Basisimages).
   type: native
@@ -85,6 +88,22 @@ launchpad:
   # Überschrift, unter der die Kachel im Portal erscheint. Nur Anzeige —
   # wer die Kachel sieht, entscheiden die Rollen oben.
   group: Werkzeuge
+
+docs:
+  # Hilfe ist Pflicht für jede App mit Oberfläche (RFC-0118 §9): Der Knoten
+  # gibt diese Markdown-Dateien an die Hilfe des Mandanten weiter; „Hilfe“
+  # in der Kopfleiste öffnet sie, und der Chat antwortet daraus. Mindestens
+  # eine Übersicht, eine Anleitung je Hauptaufgabe und häufige Fragen --
+  # in der Sprache der Anwender, ohne Entwicklerwörter.
+  - product: starter
+    title: "Starter"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user, keyuser, admin]
+    readers: [user]
+    kinds:
+      index.md: overview
 
 # =====================================================================
 # OPTIONAL — Fähigkeiten der Plattform. Einkommentieren, was Du nutzt.
@@ -186,8 +205,11 @@ launchpad:
 #   submit: true
 
 # --- MCP: die App als Werkzeugquelle für KI (RFC-0073) ----------------
-# Die App bedient MCP (Streamable HTTP) unter diesem Pfad, der unter
-# einer ihrer Routen liegen muss. Das MCP-Gateway des Mandanten bietet
+# Hält Deine App Daten (Aufträge, Geräte, Einträge …), gehört eine MCP-Tür
+# dazu (RFC-0118 §9): Lesewerkzeuge `<app>_list`, `<app>_search`,
+# `<app>_read`, Schreibwerkzeuge nur, wo die Seite dieselbe Handlung
+# anbietet. Die App bedient MCP (Streamable HTTP) unter diesem Pfad, der
+# unter einer ihrer Routen liegen muss. Das MCP-Gateway des Mandanten bietet
 # die Werkzeuge KI-Assistenten an — im Namen der Person, die fragt: Die
 # App sieht dieselben X-OAAP-*-Kopfzeilen und prüft dieselben Rechte
 # wie auf ihren Seiten.

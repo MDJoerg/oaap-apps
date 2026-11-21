@@ -1,4 +1,4 @@
-"""Marketplace 0.3 -- digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen
+"""Marktplatz 0.4 -- digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen
 (RFC-0077 Stufen 1 und 2, abgeschlossen in §15.8).
 
 Ein Asset hat unveränderliche Releases und Kanäle (stable, beta), die auf
@@ -7,7 +7,9 @@ Fragen -- beide beantwortet `access.py`, an genau einer Stelle. Neu in 0.3:
 Landschaften und Kategorien, Texte je Sprache, der Typ oaap-profile
 (Aufbau-Vorlage), die Geheimnis-Sperre vor jedem Speichern (`secretguard.py`),
 das Review mit vier Augen, die Detailseite als ObjectPage mit Teilen-Link und
-QR-Code, Partner light.
+QR-Code, Partner light. Neu in 0.4 (RFC-0118): Verwaltung und „Meine Assets“
+im Rahmen der Plattform (admin_views.py) mit Listenberichten und Objektseiten,
+eine MCP-Tür zum Lesen (/mcp), die Hilfe in docs/.
 
 Wege (Manifest):
   /, /assets/*, /d/*, /img/*, /logo/*, /static/*, /api/public/v1/*   öffentlich
@@ -15,6 +17,7 @@ Wege (Manifest):
   /api/v1/*                     Suche, Details, Veröffentlichen, Review (Sitzung oder API-Schlüssel)
   /feed/v1/*                    Empfänger, z. B. ein Paketkatalog im Spiegelmodus
   /admin/*                      Verwaltung (admin)
+  /mcp                          MCP-Tür (lesen; dieselben Regeln wie die Seiten)
 
 Die App führt nichts Hochgeladenes aus und entpackt nichts außer dem Manifest
 eines OAAP-Pakets und den Textdateien, die die Sperre liest (im Speicher).
@@ -28,20 +31,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import access
+import admin_views
 import blobs
 import db
 import i18n
 import images
+import mcpdoor
 import multipart
 import profileinfo
 import secretguard
 import views
 import zipinfo
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 PORT = 8000
 DATA_DIR = os.environ.get("MARKET_DATA_DIR", "/data")
-NAME = (os.environ.get("MARKET_NAME") or "Marketplace").strip()[:60]
+APP_NAME = "Marktplatz"          # RFC-0118 §3: derselbe Name wie im Manifest
+# Leer = der Name der App (auf Englisch „Marketplace“ im Schaufenster).
+NAME = (os.environ.get("MARKET_NAME") or "").strip()[:60]
 try:
     MAX_MB = max(1, min(1024, int(os.environ.get("MARKET_MAX_FILE_MB") or 256)))
 except ValueError:
@@ -164,7 +171,7 @@ def feed_doc(p, channel):
         for r in M.withdrawn(a["id"], channel):
             withdrawn.append({"id": a["id"], "version": r["version"],
                               "reason": r.get("yank_reason") or ""})
-    return {"schema": "oaap.marketplace.feed/0.1", "name": NAME, "channel": channel,
+    return {"schema": "oaap.marketplace.feed/0.1", "name": NAME or APP_NAME, "channel": channel,
             "apps": apps, "withdrawn": withdrawn}
 
 
@@ -214,8 +221,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy",
-                         "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; "
-                         "script-src 'self'; form-action 'self'; frame-ancestors 'none'")
+                         "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                         "script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'")
         if getattr(self, "set_lang", None):
             self.send_header("Set-Cookie", f"market_lang={self.set_lang}; Path=/; Max-Age=31536000; "
                                            "SameSite=Lax")
@@ -229,13 +236,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send(status, json.dumps(doc, ensure_ascii=False, indent=1),
                   "application/json; charset=utf-8", extra)
 
+    def redirect(self, where, msg):
+        sep = "&" if "?" in where else "?"
+        return self.send(303, "", extra={"Location": f"{where}{sep}m=" + quote(msg)})
+
     def ctx(self, p, base, path="/", query=""):
         settings_lang = M.settings().get("default_lang") or DEFAULT_LANG
         q = parse_qs(query)
         lang, set_cookie = i18n.choose((q.get("lang") or [""])[0], self.headers.get("Cookie"),
                                        self.headers.get("Accept-Language"), settings_lang)
         self.set_lang = lang if set_cookie else None
-        return views.Ctx(M, NAME, p, base, lang, self.origin(), path, query)
+        return views.Ctx(M, NAME, p, base, lang, self.origin(), path, query,
+                         app_name=APP_NAME, version=VERSION)
 
     def origin(self):
         fixed = (os.environ.get("MARKET_PUBLIC_URL") or "").strip().rstrip("/")
@@ -324,6 +336,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(200, {"status": "ok", "version": VERSION})
         if path == "/static/market.js":
             return self.send(200, views.JS, "text/javascript; charset=utf-8")
+        if path == "/mcp":
+            return DOOR.serve(self)
         p = self.who(path)
         try:
             chosen = {k: one(k)[:40] for k, _l in views.FACETS}
@@ -335,10 +349,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not one("q") and not any(chosen.values()) and not one("all"):
                     return self.send(200, views.render_home(c))
                 return self.send(200, views.render_list(c, one("q")[:80], chosen))
-            if path == "/my/manage":
+            if path == "/my/manage" or path.startswith("/my/manage/"):
                 if p["anon"]:
                     return self.not_found()
-                return self.send(200, views.render_manage(self.ctx(p, "/my", path, u.query), one("m")[:300]))
+                return self.manage_page(p, path, u.query)
             for base in ("", "/my"):
                 if path.startswith(base + "/assets/"):
                     aid = unquote(path[len(base + "/assets/"):]).strip("/")
@@ -362,21 +376,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/admin" or path.startswith("/admin/"):
                 if not access.is_admin(p):
                     return self.not_found()
-                c = self.ctx(p, "/my", path, u.query)
-                if path.startswith("/admin/assets/"):
-                    a = M.asset(unquote(path[len("/admin/assets/"):]).strip("/"))
-                    if not a:
-                        return self.not_found()
-                    lang = one("lang", "en")
-                    lang = lang if db.LANG_RE.match(lang) else "en"
-                    return self.send(200, views.render_asset_edit(c, a, one("m")[:300], lang))
-                if path == "/admin/reviews":
-                    return self.send(200, views.render_reviews(c, one("m")[:300], REVIEW, REVIEW_HOURS))
-                if path == "/admin/taxonomy":
-                    return self.send(200, views.render_taxonomy(c, one("m")[:300]))
-                if path == "/admin/settings":
-                    return self.send(200, views.render_settings(c, one("m")[:300]))
-                return self.send(200, views.render_admin(c, one("m")[:300], REVIEW, REVIEW_HOURS))
+                return self.admin_page(p, path, u.query, one)
             lang = one("lang") if db.LANG_RE.match(one("lang")) else DEFAULT_LANG
             if path in ("/api/public/v1/assets", "/api/v1/assets"):
                 items = [asset_view(p, a, e, lang=lang) for a, e in visible_assets(p, one("q")[:80], chosen)]
@@ -406,6 +406,83 @@ class Handler(BaseHTTPRequestHandler):
         except db.Refused as e:
             return self.json(e.status, {"error": str(e)})
         return self.not_found(api=path.startswith(("/api/", "/feed/")))
+
+    # -- Verwaltung und „Meine Assets“ im Rahmen (RFC-0118) -------------------------
+    def admin_page(self, p, path, query, one):
+        """Die Seiten unter /admin -- access.is_admin ist schon geprüft."""
+        c = self.ctx(p, "/my", path, query)
+        rest = path[len("/admin"):].strip("/")
+        parts = [unquote(x) for x in rest.split("/")] if rest else []
+        if not parts:
+            return self.send(200, admin_views.render_admin(c, REVIEW, REVIEW_HOURS))
+        head, key = parts[0], (parts[1] if len(parts) > 1 else "")
+        if head == "assets":
+            if not key:
+                return self.send(200, admin_views.render_assets(c))
+            a = M.asset(key)
+            if not a:
+                return self.not_found()
+            lang = one("lang", "en")
+            lang = lang if db.LANG_RE.match(lang) else "en"
+            return self.send(200, admin_views.render_asset(c, a, one("tab", "texte"), lang))
+        if head == "requests":
+            if not key:
+                return self.send(200, admin_views.render_requests(c))
+            r = next((x for x in M.requests() if str(x["id"]) == key), None)
+            return self.send(200, admin_views.render_request(c, r)) if r else self.not_found()
+        if head == "rights" and not key:
+            return self.send(200, admin_views.render_rights(c))
+        if head == "grants" and key:
+            e = next((x for x in M.entitlements() if str(x["id"]) == key), None)
+            return self.send(200, admin_views.render_grant(c, e)) if e else self.not_found()
+        if head == "publishers" and key:
+            r = next((x for x in M.publishers() if str(x["id"]) == key), None)
+            return self.send(200, admin_views.render_publisher(c, r)) if r else self.not_found()
+        if head == "reviews":
+            if not key:
+                return self.send(200, admin_views.render_reviews(c, REVIEW, REVIEW_HOURS))
+            r = M.review(key) if key.isdigit() else None
+            return self.send(200, admin_views.render_review(c, r)) if r else self.not_found()
+        if head == "reviewers" and key:
+            r = next((x for x in M.reviewers() if str(x["id"]) == key), None)
+            return self.send(200, admin_views.render_reviewer(c, r)) if r else self.not_found()
+        if head == "taxonomy" and not key:
+            return self.send(200, admin_views.render_taxonomy(c))
+        if head in ("landscapes", "categories") and key:
+            rows = M.landscapes() if head == "landscapes" else M.categories()
+            row = next((x for x in rows if x["id"] == key), None)
+            if not row:
+                return self.not_found()
+            return self.send(200, admin_views.render_taxon(c, head[:-1] if head == "landscapes" else "category", row))
+        if head == "settings" and not key:
+            return self.send(200, admin_views.render_settings(c))
+        return self.not_found()
+
+    def manage_page(self, p, path, query):
+        """Partner light: nur Assets, in die diese Person einstellen darf --
+        alles andere ist 404, wie auf jeder Seite (verborgen heißt 404)."""
+        c = self.ctx(p, "/my", path, query)
+        pubs = M.publishers()
+        own = lambda aid: bool(M.asset(aid)) and access.can_manage(p, aid, pubs)  # noqa: E731
+        rest = path[len("/my/manage"):].strip("/")
+        parts = [unquote(x) for x in rest.split("/")] if rest else []
+        if not parts:
+            mine = [a for a in M.assets() if access.can_manage(p, a["id"], pubs)]
+            return self.send(200, admin_views.render_manage(c, mine))
+        if len(parts) != 2:
+            return self.not_found()
+        head, key = parts
+        if head == "assets" and own(key):
+            return self.send(200, admin_views.render_manage_asset(c, M.asset(key)))
+        if head == "requests":
+            r = next((x for x in M.requests() if str(x["id"]) == key), None)
+            if r and own(r["asset"]):
+                return self.send(200, admin_views.render_manage_request(c, r))
+        if head == "grants":
+            e = next((x for x in M.entitlements() if str(x["id"]) == key), None)
+            if e and own(e["asset"]):
+                return self.send(200, admin_views.render_grant(c, e, partner=True))
+        return self.not_found()
 
     def download(self, p, sha, api=False):
         if not blobs.SHA_RE.match(sha or ""):
@@ -513,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def write(self, method):
         path = urlparse(self.path).path
+        if path == "/mcp":                  # vor der Anmeldeprüfung: die Tür prüft je Werkzeug
+            return DOOR.serve(self)
         p = self.who(path)
         if p["anon"]:
             return self.json(401, {"error": "Anmeldung oder API-Schlüssel nötig."})
@@ -543,6 +622,12 @@ class Handler(BaseHTTPRequestHandler):
                 back = "/admin/settings"
             elif path.startswith(("/admin/review",)):
                 back = "/admin/reviews"
+            elif path.startswith("/admin/request"):
+                back = "/admin/requests"
+            elif path.startswith(("/admin/grant", "/admin/revoke", "/admin/publisher")):
+                back = "/admin/rights"
+            elif path == "/admin/asset":
+                back = "/admin/assets"
             elif path.startswith("/admin/"):
                 back = "/admin"
             elif path.startswith("/my/manage/"):
@@ -551,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
                 aid = path[len("/my/assets/"):].split("/")[0]
                 return self.send(303, "", extra={"Location": f"/my/assets/{aid}?err=1&m=" + quote(str(e))})
             if back:
-                return self.send(303, "", extra={"Location": f"{back}?m=" + quote(str(e))})
+                return self.send(303, "", extra={"Location": f"{back}?err=1&m=" + quote(str(e))})
             return self.json(e.status, {"error": str(e)})
         return self.not_found(api=True)
 
@@ -839,7 +924,7 @@ class Handler(BaseHTTPRequestHandler):
                 msg = "Abgelehnt."
         else:
             return self.not_found()
-        return self.send(303, "", extra={"Location": "/my/manage?m=" + quote(msg)})
+        return self.redirect(_back(form, "/my/manage", ("/my/manage",)), msg)
 
     # -- Verwaltung ----------------------------------------------------------------------
     def admin_form(self, p, path):
@@ -858,27 +943,27 @@ class Handler(BaseHTTPRequestHandler):
         back = "/admin"
         if path == "/admin/grant":
             M.grant(form.get("kind"), form.get("name"), form.get("asset"), chans, p["user"])
-            msg = "Berechtigt."
+            msg, back = "Berechtigt.", "/admin/rights"
         elif path == "/admin/revoke":
             M.revoke(form.get("id", "0"), p["user"])
-            msg = "Entzogen."
+            msg, back = "Entzogen.", "/admin/rights"
         elif path == "/admin/publisher":
             M.add_publisher(form.get("kind"), form.get("name"), form.get("pattern"), chans, p["user"])
-            msg = "Erlaubt."
+            msg, back = "Erlaubt.", "/admin/rights"
         elif path == "/admin/publisher-remove":
             M.remove_publisher(form.get("id", "0"), p["user"])
-            msg = "Entfernt."
+            msg, back = "Entfernt.", "/admin/rights"
         elif path == "/admin/request-grant":
             M.decide_request(form.get("id", "0"), True, p["user"], chans or None, form.get("answer", ""))
-            msg = "Freigeschaltet."
+            msg, back = "Freigeschaltet.", "/admin/requests"
         elif path == "/admin/request-reject":
             M.decide_request(form.get("id", "0"), False, p["user"], answer=form.get("answer", ""))
-            msg = "Abgelehnt."
+            msg, back = "Abgelehnt.", "/admin/requests"
         elif path == "/admin/asset":
             free = [c.strip() for c in form.get("free", "").split(",") if c.strip()]
             M.update_asset(form.get("asset", ""), {"visibility": {"mode": form.get("mode", "anyone")},
                                                    "free_channels": free}, p["user"])
-            msg = "Gesetzt."
+            msg, back = "Gesetzt.", f"/admin/assets/{quote(form.get('asset', ''))}?tab=zugang"
         elif path in ("/admin/landscape", "/admin/category"):
             texts = {}
             for code in ("en", "de"):
@@ -925,17 +1010,17 @@ class Handler(BaseHTTPRequestHandler):
             msg, back = "Entfernt.", "/admin/reviews"
         else:
             return self.not_found()
-        return self.send(303, "", extra={"Location": f"{back}?m=" + quote(msg)})
+        return self.redirect(_back(form, back, ("/admin",)), msg)
 
     def admin_asset(self, p, path):
         parts = path[len("/admin/assets/"):].split("/")
         aid, action = unquote(parts[0]), (parts[1] if len(parts) > 1 else "")
         if not M.asset(aid):
             return self.not_found()
-        lang = "en"
+        lang, tab = "en", "texte"
         if action == "image":
             self.take_image(p, aid)
-            msg = "Bild aufgenommen."
+            msg, tab = "Bild aufgenommen.", "bilder"
         else:
             form = self.form(512 * 1024)
             first = {k: (v if isinstance(v, str) else v[0]) for k, v in form.items()}
@@ -958,15 +1043,16 @@ class Handler(BaseHTTPRequestHandler):
                                          "publisher": first.get("publisher", ""),
                                          "license": first.get("license", ""),
                                          "links": links}, p["user"])
-                    msg = "Gespeichert."
+                    msg, tab = "Gespeichert.", "merkmale"
                 elif action == "image-remove":
                     self.drop_image(p, aid, first.get("sha", ""))
-                    msg = "Bild entfernt."
+                    msg, tab = "Bild entfernt.", "bilder"
                 else:
                     return self.not_found()
             except secretguard.Leak as e:
                 raise leak(e)
-        return self.send(303, "", extra={"Location": f"/admin/assets/{quote(aid)}?lang={lang}&m=" + quote(msg)})
+        return self.send(303, "", extra={"Location": f"/admin/assets/{quote(aid)}?tab={tab}&lang={lang}&m="
+                                                     + quote(msg)})
 
 
 def _links_from_text(text):
@@ -977,6 +1063,118 @@ def _links_from_text(text):
         label, _, url = line.rpartition("|") if "|" in line else ("", "", line)
         out.append({"label": label.strip() or url.strip(), "url": url.strip()})
     return out
+
+
+def _back(form, default, prefixes):
+    """Wohin nach einem Formular: das Feld back, wenn es ein eigener Weg ist."""
+    v = str(form.get("back") or "")
+    if v.startswith(prefixes) and "//" not in v and "\\" not in v and not any(ch in v for ch in "\r\n"):
+        return v
+    return default
+
+
+# ------------------------------------------------------------- MCP-Tür ---
+# RFC-0118 §9, RFC-0073: lesen, was die Person auch auf den Seiten sieht.
+# Dieselbe Regel (access.py) wie Liste, Detailseite und „Meine Assets“;
+# keine Datei-Inhalte, keine Schlüssel. Schreibende Werkzeuge gibt es nicht.
+DOOR = mcpdoor.Door(
+    "oaap-marketplace", VERSION,
+    "Der Marktplatz des Mandanten: Assets (OAAP-Apps, Aufbau-Vorlagen, Dateien) suchen und lesen, "
+    "so wie die Person sie im Katalog sieht. Betreiber und Partner sehen offene Freischalt-Anfragen; "
+    "entschieden wird in der Verwaltung, nicht hier.")
+
+
+def _principal(who):
+    """Die Person aus der Tür als Prinzipal von access.py -- wie im Browser."""
+    if not who.get("user"):
+        return access.ANON
+    return {"anon": False, "user": who["user"], "groups": frozenset(), "roles": frozenset(who.get("roles") or [])}
+
+
+def _short(v):
+    return {"id": v["id"], "title": v["title"], "summary": v["summary"], "type": v["type"],
+            "content": v["content"], "state": v["state"],
+            "versions": {ch: x["version"] for ch, x in v["channels"].items()},
+            "obtainable": sorted(ch for ch, x in v["channels"].items() if x["obtainable"]),
+            "landscapes": v["landscapes"], "categories": v["categories"], "tags": v["tags"],
+            "publisher": v["publisher"]}
+
+
+@DOOR.tool("marketplace_search", "Assets suchen",
+           "Sucht Assets im Marktplatz nach Wort, Landschaft, Kategorie oder Inhaltstyp. Liefert nur, "
+           "was die fragende Person im Katalog sehen darf, mit Version je Kanal und ob sie es laden darf.",
+           {"q": {"type": "string", "description": "Suchwort (Name, Beschreibung, Schlagwort); leer = alle"},
+            "landschaft": {"type": "string", "description": "Kennung einer Landschaft, z. B. oaap"},
+            "kategorie": {"type": "string", "description": "Kennung einer Kategorie"},
+            "inhalt": {"type": "string", "description": "app, template, pdf, json, image, text, archive oder file"},
+            "sprache": {"type": "string", "description": "Sprache der Texte, z. B. de oder en"}})
+def _mcp_search(args, who):
+    p = _principal(who)
+    lang = str(args.get("sprache") or "de")[:2].lower()
+    lang = lang if db.LANG_RE.match(lang) else DEFAULT_LANG
+    chosen = {"ls": str(args.get("landschaft") or "")[:40], "cat": str(args.get("kategorie") or "")[:40],
+              "content": str(args.get("inhalt") or "")[:40]}
+    items = visible_assets(p, str(args.get("q") or "")[:80], chosen)
+    hits = [_short(asset_view(p, a, e, lang=lang)) for a, e in items[:50]]
+    return {"count": len(items), "shown": len(hits), "assets": hits}
+
+
+@DOOR.tool("marketplace_read", "Asset lesen",
+           "Liest ein Asset mit Beschreibung, Fakten und Versionsverlauf -- nur, wenn die fragende "
+           "Person es im Katalog sehen darf.",
+           {"id": {"type": "string", "description": "Kennung des Assets"},
+            "sprache": {"type": "string", "description": "Sprache der Texte, z. B. de oder en"}},
+           required=("id",))
+def _mcp_read(args, who):
+    p = _principal(who)
+    aid = str(args.get("id") or "").strip()
+    a = M.asset(aid) if aid else None
+    ents = M.entitlements(aid) if a else []
+    if not a or not access.can_see(p, a, ents):
+        raise mcpdoor.Refused(f"Ein Asset „{aid[:80]}“ gibt es für dich nicht.")
+    lang = str(args.get("sprache") or "de")[:2].lower()
+    lang = lang if db.LANG_RE.match(lang) else DEFAULT_LANG
+    v = asset_view(p, a, ents, detail=True, lang=lang)
+    v.pop("texts", None)                       # alle Sprachen: zu viel; die gewählte steht oben
+    return v
+
+
+@DOOR.tool("marketplace_requests", "Offene Anfragen",
+           "Listet offene Freischalt-Anfragen: dem Betreiber alle, wer in Assets einstellen darf, "
+           "die Anfragen zu diesen Assets. Entschieden wird auf der Seite, nicht hier.",
+           {"asset": {"type": "string", "description": "Nur die Anfragen zu diesem Asset (Kennung)"}})
+def _mcp_requests(args, who):
+    p = _principal(who)
+    if p["anon"]:
+        raise mcpdoor.Refused("Anfragen sieht nur, wer angemeldet ist.")
+    admin = access.is_admin(p)
+    pubs = M.publishers()
+    only = str(args.get("asset") or "").strip()
+    out = []
+    for r in M.requests("open", only or None):
+        if admin or access.can_manage(p, r["asset"], pubs):
+            try:
+                chans = json.loads(r["channels"] or "[]")
+            except ValueError:
+                chans = []
+            out.append({"id": r["id"], "asset": r["asset"], "principal": r["principal"],
+                        "channels": chans, "note": r.get("note") or "", "since": _date(r["at"])})
+    if not out and not admin and not any(access.can_manage(p, a["id"], pubs) for a in M.assets()):
+        raise mcpdoor.Refused("Anfragen sehen der Betreiber und wer in ein Asset einstellen darf.")
+    return {"count": len(out), "requests": out}
+
+
+DOOR.prompt("marketplace_find", "Asset finden",
+            "Sucht im Marktplatz nach Assets zu einer Frage.",
+            "Suche im Marktplatz mit marketplace_search nach Assets zu: {frage}. Nenne zu jedem Treffer "
+            "Titel, Inhaltstyp, aktuelle Version und ob ich es laden darf. Lies bei Bedarf Details mit "
+            "marketplace_read.", arguments=("frage",))
+DOOR.prompt("marketplace_requests_review", "Offene Anfragen durchgehen",
+            "Fasst die offenen Freischalt-Anfragen zusammen.",
+            "Hole mit marketplace_requests die offenen Freischalt-Anfragen und fasse sie zusammen: wer, "
+            "für welches Asset, welche Kanäle, welche Nachricht, seit wann. Lies zu jedem Asset mit "
+            "marketplace_read nach, ob es frei, gesperrt oder in Prüfung ist. Entscheide nichts selbst -- "
+            "freigeschaltet oder abgelehnt wird in der Verwaltung.")
 
 
 def make_server(data_dir=None, port=PORT):

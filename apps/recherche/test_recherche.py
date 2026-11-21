@@ -369,6 +369,18 @@ ok("Status nennt Destination und web_fetch, nie einen Suchbegriff", st["search_d
    and st["fetch"] is True and "Zyx314" not in json.dumps(st), st)
 ok("die Seite zeigt Destination und Zählung, keinen Suchbegriff", "zugeordnet" in page
    and "web_search" in page and "Zyx314" not in page)
+ok("Rahmen: Kit, Rahmenskript und der Name ohne OAAP", "/platform/theme.css" in page
+   and "/platform/app.js" in page and 'class="oaap-appname">Recherche<' in page
+   and "OAAP Recherche" not in page and "RFC-" not in page, page[:300])
+with contextlib.redirect_stdout(io.StringIO()):
+    pf = urllib.request.urlopen(f"http://127.0.0.1:{s.server_port}/?tool=web_fetch").read().decode()
+    ps = urllib.request.urlopen(f"http://127.0.0.1:{s.server_port}/?sort=tool").read().decode()
+    csp = urllib.request.urlopen(f"http://127.0.0.1:{s.server_port}/").headers["Content-Security-Policy"]
+ok("Listenbericht: Filter Werkzeug zeigt nur web_fetch", "<td>web_fetch</td>" in pf
+   and "<td>web_search</td>" not in pf and "1 Zeile<" in pf, pf[-800:])
+ok("Listenbericht: Sortieren nach Werkzeug markiert die Spalte", 'aria-sort="ascending"' in ps
+   and ps.index("<td>web_fetch</td>") < ps.index("<td>web_search</td>"))
+ok("CSP erlaubt Kit und Rahmen vom eigenen Ursprung", "style-src 'self'" in csp and "script-src 'self'" in csp, csp)
 
 s2 = door(dict(ENV, OAAP_EGRESS="closed"))
 tools = rpc(s2, "tools/list")["result"]["tools"]

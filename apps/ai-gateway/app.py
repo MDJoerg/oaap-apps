@@ -1,4 +1,4 @@
-"""OAAP KI-Gateway 0.6 — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
+"""KI-Gateway — eine Bezugsquelle für alle, ein Schlüssel je Verbraucher.
 
 Umsetzung der Capability `oaap.ai.gateway` 0.5 (RFC-0023, RFC-0064). Das Gateway
 bietet **einen OpenAI-kompatiblen Endpunkt** an und bedient sich bei
@@ -61,7 +61,10 @@ import templates
 import supply
 import vault
 
-VERSION = "0.12.0"
+import appframe as af
+import mcpdoor
+
+VERSION = "0.13.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")
@@ -299,195 +302,127 @@ def allowed_aliases(row):
 
 # ------------------------------------------------------------------- Optik
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:72rem;margin:1.4rem auto;padding:0 1.2rem}
+APP_NAME = "KI-Gateway"
+PRODUCT = "ai-gateway"
+
+# Nur, was dieser App eigen ist (Kacheln, Balken, Testergebnisse, Formular-
+# Raster). Rahmen, Reiter, Tabellen, Badges und Farben kommen aus dem Kit der
+# Plattform (/platform/theme.css); Farben hier nur über dessen Variablen.
+STYLE = """
   h1{font-size:1.35rem;margin:.2rem 0 1rem}
   h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .card.secretbox{border-color:#86efac;background:#f0fdf4}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.green{background:#dcfce7;color:#166534}
-  .badge.yellow{background:#fef3c7;color:#92400e}
-  .badge.red{background:#fee2e2;color:#991b1b}
-  .badge.pbd{background:#ede9fe;color:#5b21b6}
-  .badge.off{background:#f3f4f6;color:#6b7280}
-  .badge.err{background:#fee2e2;color:#991b1b}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  button.quiet{background:#f3f4f6;color:#374151;min-height:36px;padding:.35rem .9rem;
-       font-size:.85rem}
-  button.quiet:hover{background:#e5e7eb}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .err{color:var(--err)}.muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;border-bottom:1px solid var(--oaap-border);
+  .card{background:var(--oaap-color-surface);border:1px solid var(--oaap-color-border);
+       border-radius:var(--oaap-radius);padding:1.2rem 1.4rem;margin-bottom:1.2rem}
+  .card.attention{border-left:4px solid var(--oaap-color-warning)}
+  .card.secretbox{border-left:4px solid var(--oaap-color-success)}
+  .card.danger{border-left:4px solid var(--oaap-color-danger)}
+  .badge{display:inline-block;font-size:.72rem;font-weight:600;padding:.15rem .55rem;border-radius:1rem;
+       background:var(--oaap-badge-info-bg);color:var(--oaap-badge-info);white-space:nowrap}
+  .badge.green,.badge.st-good{background:var(--oaap-badge-ok-bg);color:var(--oaap-badge-ok)}
+  .badge.yellow,.badge.st-warning,.badge.st-serious{background:var(--oaap-badge-warn-bg);color:var(--oaap-badge-warn)}
+  .badge.red,.badge.err,.badge.st-critical{background:var(--oaap-badge-err-bg);color:var(--oaap-badge-err)}
+  .badge.pbd{background:var(--oaap-badge-info-bg);color:var(--oaap-badge-info)}
+  .badge.off{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral)}
+  a.btn{display:inline-block;padding:.45rem 1rem;border-radius:var(--oaap-radius);
+       background:var(--oaap-color-primary);color:var(--oaap-color-primary-text);text-decoration:none}
+  .hint{font-size:.82rem;color:var(--oaap-color-text-muted);margin:0 0 .6rem}
+  .err{color:var(--oaap-color-danger)}.muted{color:var(--oaap-color-text-muted);font-size:.9rem}
+  .card table{width:100%;border-collapse:collapse}
+  .card th,.card td{text-align:left;padding:.5rem .5rem;border-bottom:1px solid var(--oaap-color-border);
        vertical-align:middle;font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  code,kbd{background:#f3f4f6;border-radius:.25rem;padding:.1rem .35rem;font-size:.86rem;
-       word-break:break-all}
-  pre{background:#0f172a;color:#e2e8f0;padding:.9rem 1rem;border-radius:.5rem;
-       overflow-x:auto;font-size:.82rem}
+  .card th{font-size:.8rem;color:var(--oaap-color-text-muted)}
+  code,kbd{background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral);border-radius:.25rem;
+       padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
+  pre{background:var(--oaap-color-bg);color:var(--oaap-color-text);border:1px solid var(--oaap-color-border);
+       padding:.9rem 1rem;border-radius:var(--oaap-radius);overflow-x:auto;font-size:.82rem}
   form.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));
        gap:.8rem 1rem;align-items:end}
-  label{display:block;font-size:.82rem;color:var(--oaap-muted);margin-bottom:.25rem}
-  input[type=text],input[type=number],input[type=password]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
-       border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
-  fieldset{border:1px solid var(--oaap-border);border-radius:.4rem;padding:.5rem .8rem}
-  fieldset legend{font-size:.78rem;color:var(--oaap-muted);padding:0 .3rem}
-  fieldset label{display:inline-flex;align-items:center;gap:.35rem;margin-right:.9rem;
-       font-size:.9rem;color:var(--oaap-text)}
-  footer.oaap{max-width:72rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-       color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
+  form.grid label,.card label{display:block;font-size:.82rem;color:var(--oaap-color-text-muted);margin-bottom:.25rem}
+  .card input[type=text],.card input[type=number],.card input[type=password],.card input[type=date],
+  .card select{width:100%;box-sizing:border-box;min-height:40px}
+  fieldset{border:1px solid var(--oaap-color-border);border-radius:var(--oaap-radius);padding:.5rem .8rem}
+  fieldset legend{font-size:.78rem;color:var(--oaap-color-text-muted);padding:0 .3rem}
+  fieldset label,.card fieldset label{display:inline-flex;align-items:center;gap:.35rem;margin-right:.9rem;
+       font-size:.9rem;color:var(--oaap-color-text)}
   .legend{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:0 0 .5rem;font-size:.85rem}
   .lg{display:inline-flex;align-items:center;gap:.35rem}
   .lg i{display:inline-block;width:.8rem;height:.8rem;border-radius:2px}
   svg.chart{width:100%;height:auto;display:block}
-  svg.chart .ax{font-size:11px;fill:var(--oaap-muted)}
+  svg.chart .ax{font-size:11px;fill:var(--oaap-color-text-muted)}
   .hbar{display:grid;grid-template-columns:minmax(8rem,2fr) 3fr minmax(6rem,auto);gap:.6rem;
        align-items:center;padding:.3rem 0;font-size:.9rem}
   .hl{overflow:hidden;text-overflow:ellipsis}
   .hl code{white-space:nowrap;word-break:normal;font-size:.78rem}
-  .ht{background:#f3f4f6;border-radius:4px;height:.8rem;overflow:hidden}
+  .ht{background:var(--oaap-badge-neutral-bg);border-radius:4px;height:.8rem;overflow:hidden}
   .ht i{display:block;height:100%;border-radius:0 4px 4px 0}
-  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-muted)}
+  .hv{text-align:right;white-space:nowrap}.hv small{color:var(--oaap-color-text-muted)}
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.8rem}
-  .tile b{display:block;font-size:1.35rem}.tile span{font-size:.8rem;color:var(--oaap-muted)}
+  .tile b{display:block;font-size:1.35rem}.tile span{font-size:.8rem;color:var(--oaap-color-text-muted)}
   .scroll{overflow-x:auto}td.num{text-align:right;white-space:nowrap}
-  select{width:100%;padding:.5rem .6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
-       font-size:.95rem;min-height:44px;background:#fff}
-  input[type=date]{width:100%;padding:.5rem .6rem;border-radius:.4rem;
-       border:1px solid var(--oaap-border);font-size:.95rem;min-height:44px}
-  /* 0.6: Reiter, Kennzahlen, Testergebnisse */
-  nav.tabs{background:var(--oaap-surface);border-bottom:1px solid var(--oaap-border);
-       display:flex;gap:.2rem;padding:0 1.2rem;overflow-x:auto;position:sticky;top:0;z-index:5;
-       box-shadow:0 1px 3px rgba(23,37,84,.05)}
-  nav.tabs a{padding:.85rem .95rem .75rem;color:var(--oaap-muted);text-decoration:none;
-       font-size:.93rem;white-space:nowrap;border-bottom:3px solid transparent}
-  nav.tabs a:hover{color:var(--oaap-blue-900);background:#f8fafc}
-  nav.tabs a.on{color:var(--oaap-blue-900);border-bottom-color:var(--oaap-blue-600);font-weight:600}
-  nav.tabs .count{display:inline-block;min-width:1.4rem;padding:0 .4rem;margin-left:.25rem;
-       border-radius:1rem;background:#eef2f7;color:var(--oaap-muted);font-size:.72rem;
-       text-align:center;font-weight:500}
-  nav.tabs a.on .count{background:var(--oaap-blue-100);color:var(--oaap-blue-900)}
   .hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(12.5rem,1fr));gap:1rem;
        margin-bottom:1.2rem}
-  .kpi{position:relative;overflow:hidden;background:var(--oaap-surface);
-       border:1px solid var(--oaap-border);border-radius:.8rem;padding:1rem 1.1rem 0;
-       box-shadow:0 1px 3px rgba(23,37,84,.06);display:flex;flex-direction:column;min-height:9.2rem}
-  .kpi::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;
-       background:linear-gradient(90deg,var(--oaap-blue-600),#60a5fa)}
-  .kpi .kl{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--oaap-muted)}
-  .kpi b{font-size:1.9rem;line-height:1.15;margin:.25rem 0 .1rem;color:var(--oaap-blue-950);
+  .kpi{position:relative;overflow:hidden;background:var(--oaap-color-surface);
+       border:1px solid var(--oaap-color-border);border-radius:var(--oaap-radius);padding:1rem 1.1rem 0;
+       display:flex;flex-direction:column;min-height:9.2rem}
+  .kpi::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--oaap-color-primary)}
+  .kpi .kl{font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:var(--oaap-color-text-muted)}
+  .kpi b{font-size:1.9rem;line-height:1.15;margin:.25rem 0 .1rem;color:var(--oaap-color-text);
        font-variant-numeric:tabular-nums}
   .kpi b.small{font-size:1.35rem}
-  .kpi .ks{font-size:.8rem;color:var(--oaap-muted)}
+  .kpi .ks{font-size:.8rem;color:var(--oaap-color-text-muted)}
   .kpi svg.spark{display:block;width:calc(100% + 2.2rem);height:2.6rem;margin:auto -1.1rem 0}
   .kpi.ringed{flex-direction:row;align-items:center;justify-content:space-between;
        padding-bottom:1rem;gap:.6rem}
   .kpi.ringed>div{display:flex;flex-direction:column}
   .kpi .chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:auto 0 1rem;text-decoration:none;
        padding-top:.5rem}
-  .delta{font-weight:600}.delta.up{color:var(--ok)}.delta.down{color:var(--warn)}
+  .delta{font-weight:600}.delta.up{color:var(--oaap-color-success)}.delta.down{color:var(--oaap-color-warning)}
   .cardhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;
        gap:.4rem 1rem;margin-bottom:.6rem}
   .cardhead h2{margin:0}
-  .pills{display:inline-flex;background:#eef2f7;border-radius:2rem;padding:.2rem}
-  .pill{padding:.3rem .8rem;border-radius:2rem;text-decoration:none;color:var(--oaap-muted);
+  .pills{display:inline-flex;background:var(--oaap-badge-neutral-bg);border-radius:2rem;padding:.2rem}
+  .pill{padding:.3rem .8rem;border-radius:2rem;text-decoration:none;color:var(--oaap-color-text-muted);
        font-size:.85rem;font-variant-numeric:tabular-nums}
-  .pill.on{background:var(--oaap-surface);color:var(--oaap-blue-900);font-weight:600;
-       box-shadow:0 1px 2px rgba(23,37,84,.12)}
-  .summary{margin:.9rem 0 0;padding:.6rem .8rem;background:#f8fafc;border-radius:.4rem;
+  .pill.on{background:var(--oaap-color-surface);color:var(--oaap-color-primary);font-weight:600}
+  .summary{margin:.9rem 0 0;padding:.6rem .8rem;background:var(--oaap-color-bg);border-radius:var(--oaap-radius);
        font-size:.9rem}
   .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1.2rem}
   td:first-child>code{word-break:normal;white-space:nowrap}
-  .rank{display:inline-block;width:1.3rem;color:var(--oaap-muted);font-size:.78rem;
+  .rank{display:inline-block;width:1.3rem;color:var(--oaap-color-text-muted);font-size:.78rem;
        font-variant-numeric:tabular-nums}
   .empty{padding:.8rem 0}
-  .badge.st-good{background:#dcfce7;color:#166534}
-  .badge.st-warning{background:#fef3c7;color:#92400e}
-  .badge.st-serious{background:#ffedd5;color:#9a3412}
-  .badge.st-critical{background:#fee2e2;color:#991b1b}
-  .probe{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem .7rem;border-radius:.45rem;
-       margin-bottom:.45rem;border:1px solid var(--oaap-border)}
+  .probe{display:flex;gap:.7rem;align-items:flex-start;padding:.6rem .7rem;border-radius:var(--oaap-radius);
+       margin-bottom:.45rem;border:1px solid var(--oaap-color-border)}
   .probe .pm{font-weight:700;width:1.2rem;text-align:center}
-  .probe.good{background:#f0fdf4;border-color:#bbf7d0}.probe.good .pm{color:#15803d}
-  .probe.warning{background:#fffbeb;border-color:#fde68a}.probe.warning .pm{color:#b45309}
-  .probe.serious{background:#fff7ed;border-color:#fed7aa}.probe.serious .pm{color:#c2410c}
-  .probe.critical{background:#fef2f2;border-color:#fecaca}.probe.critical .pm{color:#b91c1c}
+  .probe.good{background:var(--oaap-badge-ok-bg);color:var(--oaap-badge-ok)}
+  .probe.warning,.probe.serious{background:var(--oaap-badge-warn-bg);color:var(--oaap-badge-warn)}
+  .probe.critical{background:var(--oaap-badge-err-bg);color:var(--oaap-badge-err)}
+  .probe a{color:inherit}
   .rowactions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
   .rowactions form{margin:0}
   th.num{text-align:right}.nowrap{white-space:nowrap}
   tr.dim td{opacity:.6}
-  textarea{width:100%;padding:.6rem;border-radius:.4rem;border:1px solid var(--oaap-border);
-       font:.86rem/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}
-  textarea[readonly]{background:#f8fafc}
+  textarea{width:100%;box-sizing:border-box;font:.86rem/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
+       resize:vertical}
+  textarea[readonly]{background:var(--oaap-color-bg)}
   code.key{white-space:nowrap;word-break:normal;font-size:.8rem}
-  .cohort{border:1px solid var(--oaap-border);border-radius:.6rem;padding:1rem;margin-top:.8rem}
   form.inline{display:inline-flex;gap:.4rem;align-items:center;flex-wrap:wrap}
-  form.inline input[type=date]{width:auto;min-height:36px;padding:.25rem .5rem}
+  form.inline input[type=date]{width:auto}
   form.inline label{display:inline-flex;gap:.3rem;align-items:center;margin:0;font-size:.85rem}
-  table tr:hover td{background:#fafbfd}
-  @media (max-width:640px){ .userbox .who{display:none} .hbar{grid-template-columns:1fr 1fr}
+  @media (max-width:640px){ .hbar{grid-template-columns:1fr 1fr}
        .grid2{grid-template-columns:1fr} .kpi b{font-size:1.6rem} }
-</style>"""
-
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
-
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="34,6 58,20 58,48 34,62 10,48 10,20" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/>'
-            '<polygon points="72,30 92,41 92,64 72,76 52,64 52,41" fill="#fff" opacity=".85"/>'
-            '<polygon points="42,58 66,72 66,94 42,96 22,84 22,70" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
+"""
 
 
-def page(title, body, user, roles, tab=None, refresh=0):
-    nav = tabs_nav(tab) if tab else ""
-    meta = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">{meta}
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} — OAAP KI-Gateway</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="./">{LOGO_SVG}
-    <span><b>OAAP KI-GATEWAY</b><small>Ein Zweck, ein Schlüssel, eine Rechnung</small></span>
-  </a>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-{nav}
-<main>{body}</main>
-<footer class="oaap">
-  <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
-    <polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="#2563eb"/></svg>
-  OAAP KI-Gateway {VERSION} — zählt Verbräuche, speichert keine Inhalte
-</footer>
-</html>"""
+def page(title, body, user="", roles="", tab=None, refresh=0, obj=None):
+    """Eine Seite im Rahmen der Plattform. `user`/`roles` bleiben in der
+    Unterschrift, stehen aber nicht mehr auf der Seite: das Benutzermenü des
+    Rahmens zeigt, wer angemeldet ist."""
+    head = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    href = dict((k, h) for k, h, _t in TABS).get(tab)
+    return af.page(title, body, app=APP_NAME, version=VERSION, product=PRODUCT,
+                   tabs=tab_items() if tab else None, active=href, obj=obj,
+                   style=STYLE, head=head)
 
 
 def light_badge(light, short=False):
@@ -665,7 +600,7 @@ def props_summary(values):
             f'{props.short("output", values["output"])} aus')
 
 
-def props_forms(alias, tab):
+def props_forms(alias, tab, alias_name=""):
     """Je Ziel ein Formular mit den vier Angaben, Herkunft und Meldung (RFC-0106 §2.3)."""
     out = []
     for target in alias["targets"]:
@@ -686,9 +621,10 @@ def props_forms(alias, tab):
                      f'</span>' if origin else "")
             fields.append(f'<div><label>{props.LABEL_DE[prop]}</label>{inp}{where}</div>')
             seen = cell.get("seen", "")
+            back = f'<input type="hidden" name="alias" value="{esc(alias_name)}">' if alias_name else ""
             if origin == "operator" and seen and seen != value:
                 notes.append(
-                    f'<form method="post" action="model-props-take" style="margin:.2rem 0">'
+                    f'<form method="post" action="model-props-take" style="margin:.2rem 0">{back}'
                     f'<input type="hidden" name="supplier" value="{esc(key[0])}">'
                     f'<input type="hidden" name="model" value="{esc(key[1])}">'
                     f'<input type="hidden" name="prop" value="{prop}">'
@@ -696,9 +632,10 @@ def props_forms(alias, tab):
                     f'{props.ORIGIN_DE.get(cell.get("seen_origin"), "")} gemeldet '
                     f'<code>{esc(props.short(prop, seen))}</code>, gesetzt '
                     f'<code>{esc(props.short(prop, value))}</code></span> '
-                    f'<button class="quiet" type="submit">übernehmen</button></form>')
+                    f'<button type="submit">übernehmen</button></form>')
         out.append(
-            f'<form class="grid" method="post" action="model-props" style="margin-top:.6rem">'
+            '<form class="grid" method="post" action="model-props" style="margin-top:.6rem">'
+            + (f'<input type="hidden" name="alias" value="{esc(alias_name)}">' if alias_name else "") +
             f'<input type="hidden" name="supplier" value="{esc(key[0])}">'
             f'<input type="hidden" name="model" value="{esc(key[1])}">'
             f'<div style="grid-column:1/-1"><b><code>{esc(key[0])} · {esc(key[1])}</code></b></div>'
@@ -707,71 +644,70 @@ def props_forms(alias, tab):
     return "".join(out)
 
 
-def aliases_card():
+def alias_href(name):
+    return "modelle?" + urlencode({"name": name})
+
+
+def alias_info(name, tab, stored):
+    """Was Liste und Objektseite über einen Modellnamen sagen."""
+    alias = ALIASES.get(name)
+    if alias:
+        targets = []
+        for target in alias["targets"]:
+            src = SUPPLIERS.get(target["supplier"])
+            if src is None:          # zwischen zwei Neuladungen gelesen
+                continue
+            targets.append(f'{light_badge(src["light"], short=True)} '
+                           f'<code>{esc(src["name"])} · {esc(target["model"])}</code>')
+        # Die Farbe eines Alias ist die schlechteste seiner Ziele — einer,
+        # der auf einen roten Anbieter ausweichen kann, ist nicht grün,
+        # auch wenn sein erstes Ziel es ist.
+        light = supply.alias_light(alias, SUPPLIERS, "red")
+        worst = light_badge(light)
+        order_listed = alias["order_listed"]
+        text = supply.targets_text(alias)
+        traits = props_summary(props.of_alias(alias, tab))
+    else:
+        light = ""
+        traits = ""
+        targets = [f'<code>{esc(stored[name]["targets"])}</code>']
+        worst = '<span class="badge err">unbenutzbar</span>'
+        order_listed = bool(stored[name]["order_listed"])
+        text = stored[name]["targets"]
+    return {"alias": alias, "targets": targets, "light": light, "worst": worst,
+            "order_listed": order_listed, "text": text, "traits": traits,
+            "order": "wie aufgeführt" if order_listed else "grün vor gelb vor rot"}
+
+
+def aliases_card(params=None):
     editable = MODE == "app"
-    rows = []
     tab = props.table(DB)
     stored = {r["name"]: r for r in catalog.alias_rows(DB)} if editable else {}
     names = sorted(set(ALIASES) | set(stored))
-    for name in names:
-        alias = ALIASES.get(name)
-        if alias:
-            targets = []
-            for target in alias["targets"]:
-                src = SUPPLIERS.get(target["supplier"])
-                if src is None:          # zwischen zwei Neuladungen gelesen
-                    continue
-                targets.append(f'{light_badge(src["light"], short=True)} '
-                               f'<code>{esc(src["name"])} · {esc(target["model"])}</code>')
-            # Die Farbe eines Alias ist die schlechteste seiner Ziele — einer,
-            # der auf einen roten Anbieter ausweichen kann, ist nicht grün,
-            # auch wenn sein erstes Ziel es ist.
-            worst = light_badge(supply.alias_light(alias, SUPPLIERS, "red"))
-            order_listed = alias["order_listed"]
-            text = supply.targets_text(alias)
-            traits = props_summary(props.of_alias(alias, tab))
-        else:
-            traits = ""
-            targets = [f'<code>{esc(stored[name]["targets"])}</code>']
-            worst = '<span class="badge err">unbenutzbar</span>'
-            order_listed = bool(stored[name]["order_listed"])
-            text = stored[name]["targets"]
-        action = ""
-        if editable and alias:
-            action = (f'<details><summary class="muted">Eigenschaften</summary>'
-                      f'<p class="hint" style="margin:.4rem 0 0">Je Ziel; der Modellname bekommt je '
-                      f'Angabe das schwächste seiner Ziele. Leer heißt unbekannt — geraten wird '
-                      f'nicht; meldet die Quelle etwas, gilt dann wieder ihr Wert.</p>{props_forms(alias, tab)}</details>')
-        if editable:
-            action += (f'<details><summary class="muted">ändern</summary>'
-                      f'<form class="grid" method="post" action="alias" style="margin-top:.6rem">'
-                      f'<input type="hidden" name="name" value="{esc(name)}">'
-                      f'<div><label>Ziele (quelle:modell, …)</label>'
-                      f'<input name="targets" type="text" value="{esc(text)}"></div>'
-                      f'<div><fieldset><legend>Reihenfolge</legend><label>'
-                      f'<input type="checkbox" name="order_listed" value="1"'
-                      f'{" checked" if order_listed else ""}> wie aufgeführt</label></fieldset></div>'
-                      f'<div><button class="quiet" type="submit">speichern</button></div></form>'
-                      f'<form method="post" action="alias-delete" style="margin:.4rem 0 0">'
-                      f'<input type="hidden" name="name" value="{esc(name)}">'
-                      f'<button class="quiet" type="submit">löschen</button></form></details>')
-        test = (f'<form method="post" action="alias-test">'
-                f'<input type="hidden" name="name" value="{esc(name)}">'
-                f'<button class="quiet" type="submit" title="Jedes Ziel mit einer Mini-Anfrage '
-                f'prüfen">testen</button></form>'
-                f'<form method="post" action="alias-tooltest">'
-                f'<input type="hidden" name="name" value="{esc(name)}">'
-                f'<button class="quiet" type="submit" title="Je Ziel eine kleine Anfrage mit einem '
-                f'harmlosen Werkzeug — kostet bei der Quelle ein paar Token">Werkzeugaufruf '
-                f'probieren</button></form>' if alias else "")
-        order = "wie aufgeführt" if order_listed else "grün vor gelb vor rot"
-        rows.append(f'<tr><td><code>{esc(name)}</code></td><td>{worst}</td>'
-                    f'<td>{"<br>".join(targets)}</td><td class="muted">{esc(order)}</td>'
-                    f'<td class="muted">{esc(traits)}</td>'
-                    f'<td><div class="rowactions">{test}{action}</div></td></tr>')
-    table = (f'<table><tr><th>Modellname</th><th>Ampel</th><th>Bezugsquellen</th>'
-             f'<th>Reihenfolge</th><th>Eigenschaften</th><th></th></tr>{"".join(rows)}</table>' if rows else
-             '<p class="muted">Noch kein Modellname — ohne ihn kann kein Verbraucher etwas anfragen.</p>')
+    info = {n: alias_info(n, tab, stored) for n in names}
+    q = af.Query(params or {}, filters=("ampel",), default_sort="name")
+    rows = [n for n in names if not q.filters["ampel"] or info[n]["light"] == q.filters["ampel"]
+            or (q.filters["ampel"] == "kaputt" and not info[n]["alias"])]
+    columns = [
+        ("Modellname", "name", lambda n: n, ""),
+        ("Ampel", "light", lambda n: supply.LIGHT_RANK.get(info[n]["light"], 9), ""),
+        ("Bezugsquellen", "targets", lambda n: info[n]["text"], ""),
+        ("Reihenfolge", "", None, "oaap-minor"),
+        ("Eigenschaften", "", None, "oaap-minor"),
+    ]
+
+    def row_html(n):
+        i = info[n]
+        return (f'<tr><td><a href="{esc(alias_href(n))}"><code>{esc(n)}</code></a></td><td>{i["worst"]}</td>'
+                f'<td>{"<br>".join(i["targets"])}</td><td class="oaap-minor muted">{esc(i["order"])}</td>'
+                f'<td class="oaap-minor muted">{esc(i["traits"])}</td></tr>')
+    table = af.list_report(
+        q, rows, columns, row_html, base="modelle?", noun="Modellnamen",
+        empty_text="Noch kein Modellname — ohne ihn kann kein Verbraucher etwas anfragen."
+                   + (" <b>Modellname anlegen</b> unten legt den ersten an." if editable else ""),
+        choices=[("ampel", "Ampel", [("green", "grün"), ("yellow", "gelb"), ("red", "rot"),
+                                     ("kaputt", "unbenutzbar")])],
+        placeholder="Modellname oder Quelle")
     form = ""
     if editable:
         known = ", ".join(sorted(r["name"] for r in catalog.supplier_rows(DB))) or "—"
@@ -784,15 +720,66 @@ def aliases_card():
         placeholder="tsystems:llama-3.3-70b, groq:llama-3.3-70b-versatile"></div>
     <div><fieldset><legend>Reihenfolge</legend><label>
       <input type="checkbox" name="order_listed" value="1"> wie aufgeführt</label></fieldset></div>
-    <div><button type="submit">Anlegen</button></div>
+    <div><button class="primary" type="submit">Anlegen</button></div>
   </form>"""
     return f"""<div class="card">
   <h2>Modellnamen</h2>
   <p class="hint">Ein Verbraucher fragt nach einem Namen von uns, nie nach dem Modell des
     Anbieters. Ausgewichen wird nur innerhalb der hier erklärten Gruppe — und die Ampel
-    eines Modellnamens ist die <b>schlechteste</b> seiner Ziele.</p>
+    eines Modellnamens ist die <b>schlechteste</b> seiner Ziele. Ein Klick auf den Namen
+    öffnet ihn: testen, Eigenschaften, ändern, löschen.</p>
   {table}{form}
 </div>"""
+
+
+def alias_page(user, roles, name, notice="", tests=None):
+    """Die Objektseite eines Modellnamens (RFC-0118 §7.5)."""
+    editable = MODE == "app"
+    tab = props.table(DB)
+    stored = {r["name"]: r for r in catalog.alias_rows(DB)} if editable else {}
+    back = af.back("modelle", "Zurück zu den Modellnamen")
+    if name not in ALIASES and name not in stored:
+        return page("Unbekannter Modellname", back + "".join(top_cards(notice))
+                    + af.empty(f"Einen Modellnamen „{esc(name)}“ gibt es nicht. "
+                               '<a href="modelle">Zur Liste</a>'), user, roles, tab="modelle")
+    i = alias_info(name, tab, stored)
+    alias = i["alias"]
+    facts = af.facts([("Ampel", i["worst"]), ("Bezugsquellen", "<br>".join(i["targets"])),
+                      ("Reihenfolge", esc(i["order"])), ("Eigenschaften", esc(i["traits"]))])
+    parts = [back] + top_cards(notice) + [f'<div class="oaap-objhead"><h1><code>{esc(name)}</code></h1>{facts}</div>']
+    if tests:
+        parts.append(tests)
+    if alias:
+        parts.append(f"""<div class="card"><h2>Testen</h2>
+  <p class="hint">„Testen“ schickt jedem Ziel eine Mini-Anfrage. „Werkzeugaufruf probieren“
+    schickt je Ziel eine kleine Anfrage mit einem harmlosen Werkzeug — kostet bei der Quelle
+    ein paar Token.</p>
+  <div class="rowactions">
+    <form method="post" action="alias-test"><input type="hidden" name="name" value="{esc(name)}">
+      <button type="submit">Testen</button></form>
+    <form method="post" action="alias-tooltest"><input type="hidden" name="name" value="{esc(name)}">
+      <button type="submit">Werkzeugaufruf probieren</button></form>
+  </div></div>""")
+    if editable and alias:
+        parts.append(f"""<div class="card"><h2>Eigenschaften</h2>
+  <p class="hint">Je Ziel; der Modellname bekommt je Angabe das schwächste seiner Ziele. Leer
+    heißt unbekannt — geraten wird nicht; meldet die Quelle etwas, gilt dann wieder ihr Wert.</p>
+  {props_forms(alias, tab, name)}</div>""")
+    if editable:
+        parts.append(f"""<div class="card"><h2>Ändern</h2>
+  <form class="grid" method="post" action="alias">
+    <input type="hidden" name="name" value="{esc(name)}">
+    <div><label>Ziele (quelle:modell, …)</label>
+      <input name="targets" type="text" value="{esc(i["text"])}"></div>
+    <div><fieldset><legend>Reihenfolge</legend><label>
+      <input type="checkbox" name="order_listed" value="1"{" checked" if i["order_listed"] else ""}> wie aufgeführt</label></fieldset></div>
+    <div><button type="submit">Speichern</button></div></form></div>
+<div class="card danger"><h2>Löschen</h2>
+  <p class="hint">Schlüssel, die auf diesen Namen beschränkt sind, erreichen ihn danach nicht mehr.</p>
+  <form method="post" action="alias-delete" onsubmit="return confirm('{esc(name)} wirklich löschen?')">
+    <input type="hidden" name="name" value="{esc(name)}">
+    <button class="danger" type="submit">Modellname löschen</button></form></div>""")
+    return page(name, "".join(parts), user, roles, tab="modelle", obj=f"Modellname:{name}")
 
 
 DEST_ENV = re.compile(r"^OAAP_DESTINATION_([A-Z0-9_]+)_URL$")
@@ -843,64 +830,49 @@ def destinations_form(rows, dests):
                    'schon Bezugsquelle.</p>')
 
 
+def supplier_entries():
+    """[(name, url, light, has_cred, usable, drop_sampling)] -- aus der Datenbank,
+    wenn die App pflegt, sonst aus der Konfiguration."""
+    if MODE == "app":
+        return [(r["name"], r["url"], r["light"], bool(r["credential"]),
+                 r["name"] in SUPPLIERS, bool(r["drop_sampling"])) for r in catalog.supplier_rows(DB)]
+    return [(n, s["url"], s["light"], bool(s["credential"]), True, False)
+            for n, s in sorted(SUPPLIERS.items())]
+
+
+def supplier_cred(entry, dests):
+    name, url, light, has_cred, usable, sampling = entry
+    via = destination_of(url, dests)
+    cred = ("hinterlegt" if has_cred else
+            f'<span class="muted">meldet die Plattform an (Destination {esc(via)})</span>' if via else
+            '<span class="muted">keine (z. B. lokal)</span>')
+    forced = relay.is_anthropic(url)
+    if forced or sampling:
+        cred += ('<br><span class="badge off" title="temperature, top_p und top_k werden '
+                 'nicht weitergegeben">ohne temperature/top_p</span>')
+    if not usable:
+        cred = '<span class="badge err">nicht lesbar</span>'
+    return cred
+
+
+def supplier_href(name):
+    return "quellen?" + urlencode({"name": name})
+
+
 def suppliers_card():
     editable = MODE == "app"
     dests = bound_destinations()
+    entries = supplier_entries()
     rows = []
-    if editable:
-        entries = [(r["name"], r["url"], r["light"], bool(r["credential"]),
-                    r["name"] in SUPPLIERS) for r in catalog.supplier_rows(DB)]
-        sampling = {r["name"]: bool(r["drop_sampling"]) for r in catalog.supplier_rows(DB)}
-    else:
-        entries = [(n, s["url"], s["light"], bool(s["credential"]), True)
-                   for n, s in sorted(SUPPLIERS.items())]
-        sampling = {}
-    for name, url, light, has_cred, usable in entries:
-        via = destination_of(url, dests)
-        cred = ("hinterlegt" if has_cred else
-                f'<span class="muted">meldet die Plattform an (Destination {esc(via)})</span>' if via else
-                '<span class="muted">keine (z. B. lokal)</span>')
-        forced = relay.is_anthropic(url)
-        drops = forced or sampling.get(name, False)
-        if drops:
-            cred += ('<br><span class="badge off" title="temperature, top_p und top_k werden '
-                     'nicht weitergegeben">ohne temperature/top_p</span>')
-        if not usable:
-            cred = '<span class="badge err">nicht lesbar</span>'
-        test = (f'<form method="post" action="supplier-test">'
-                f'<input type="hidden" name="name" value="{esc(name)}">'
-                f'<button class="quiet" type="submit" title="Modellliste abfragen: erreichbar? '
-                f'Anmeldung gültig?">testen</button></form>' if usable else "")
-        action = ""
-        if editable:
-            action = (f'<details><summary class="muted">ändern</summary>'
-                      f'<form class="grid" method="post" action="supplier" style="margin-top:.6rem">'
-                      f'<input type="hidden" name="name" value="{esc(name)}">'
-                      f'<div><label>Adresse</label>'
-                      f'<input name="url" type="text" value="{esc(url)}"></div>'
-                      f'{light_radios(light, name)}'
-                      f'<div><label>Neue Zugangsdaten (leer = unverändert)</label>'
-                      f'<input name="credential" type="password" autocomplete="new-password"></div>'
-                      f'<div><fieldset><legend>Zugangsdaten</legend><label>'
-                      f'<input type="checkbox" name="drop_credential" value="1"> entfernen'
-                      f'</label></fieldset></div>'
-                      f'<div><fieldset><legend>temperature/top_p</legend><label>'
-                      f'<input type="checkbox" name="drop_sampling" value="1"'
-                      f'{" checked" if drops else ""}{" disabled" if forced else ""}> '
-                      f'nicht weitergeben{" (Anthropic: immer)" if forced else ""}'
-                      f'</label></fieldset></div>'
-                      f'<div><button class="quiet" type="submit">speichern</button></div></form>'
-                      f'<form method="post" action="supplier-delete" style="margin:.4rem 0 0">'
-                      f'<input type="hidden" name="name" value="{esc(name)}">'
-                      f'<button class="quiet" type="submit">löschen</button></form></details>')
-        rows.append(f'<tr><td><code>{esc(name)}</code></td>'
+    for e in entries:
+        name, url, light = e[0], e[1], e[2]
+        rows.append(f'<tr><td><a href="{esc(supplier_href(name))}"><code>{esc(name)}</code></a></td>'
                     f'<td>{light_badge(light)}<br>'
                     f'<span class="muted">{esc(supply.LIGHT_RULES.get(light, ""))}</span></td>'
-                    f'<td><code>{esc(url)}</code></td><td>{cred}</td>'
-                    f'<td><div class="rowactions">{test}{action}</div></td></tr>')
-    table = (f'<table><tr><th>Name</th><th>Ampel</th><th>Adresse</th><th>Zugangsdaten</th>'
-             f'<th></th></tr>{"".join(rows)}</table>' if rows else
-             '<p class="muted">Noch keine Bezugsquelle.</p>')
+                    f'<td class="oaap-minor"><code>{esc(url)}</code></td><td>{supplier_cred(e, dests)}</td></tr>')
+    table = af.table("<th>Name</th><th>Ampel</th><th class=\"oaap-minor\">Adresse</th><th>Zugangsdaten</th>",
+                     rows, "Noch keine Bezugsquelle."
+                     + (" <b>Bezugsquelle anlegen</b> unten legt die erste an." if editable else ""))
     form = ""
     if editable:
         form = f"""<h2 style="margin-top:1.2rem">Bezugsquelle anlegen</h2>
@@ -915,7 +887,7 @@ def suppliers_card():
       <input id="src-cred" name="credential" type="password" autocomplete="new-password"></div>
     <div><fieldset><legend>temperature/top_p</legend><label>
       <input type="checkbox" name="drop_sampling" value="1"> nicht weitergeben</label></fieldset></div>
-    <div><button type="submit">Anlegen</button></div>
+    <div><button class="primary" type="submit">Anlegen</button></div>
   </form>
   <p class="hint" style="margin-top:.8rem">Anthropic: Adresse <code>https://api.anthropic.com/v1</code>,
     der API-Key von Anthropic als Zugangsdaten, Modelle wie <code>claude-sonnet-5-5</code>.
@@ -923,29 +895,87 @@ def suppliers_card():
     Ohne Angabe gilt <b>rot</b> — unbekannte Herkunft
     ist nicht souverän. Eine Quelle auf demselben Knoten wird über eine App-zu-App-Verbindung
     erreichbar (<code>oaap app link add</code>).</p>
-  {destinations_form(entries, dests)}"""
+  {destinations_form([(e[0], e[1]) for e in entries], dests)}"""
     test_all = ('<form method="post" action="supplier-test" style="margin:0">'
                 '<input type="hidden" name="name" value="*">'
-                '<button class="quiet" type="submit">Alle testen</button></form>'
+                '<button type="submit">Alle testen</button></form>'
                 if len(entries) > 1 else "")
     return f"""<div class="card">
   <div class="cardhead"><h2>Bezugsquellen</h2>{test_all}</div>
   <p class="hint">Zugangsdaten werden nur verschlüsselt gespeichert, lassen sich setzen
     oder ersetzen, aber <b>nie wieder anzeigen</b> — weder hier noch in einer Messzeile,
-    Fehlermeldung oder der Prüfspur.</p>
+    Fehlermeldung oder der Prüfspur. Ein Klick auf den Namen öffnet die Quelle: testen,
+    ändern, löschen.</p>
   {table}{form}
 </div>"""
 
 
+def supplier_page(user, roles, name, notice="", tests=None):
+    """Die Objektseite einer Bezugsquelle (RFC-0118 §7.5)."""
+    editable = MODE == "app"
+    dests = bound_destinations()
+    entry = next((e for e in supplier_entries() if e[0] == name), None)
+    if entry is None and name in SUPPLIERS:      # gelesen, aber (noch) nicht gepflegt
+        s = SUPPLIERS[name]
+        entry = (name, s["url"], s["light"], bool(s["credential"]), True, False)
+    back = af.back("quellen", "Zurück zu den Bezugsquellen")
+    if entry is None:
+        return page("Unbekannte Bezugsquelle", back + "".join(top_cards(notice))
+                    + af.empty(f"Eine Bezugsquelle „{esc(name)}“ gibt es nicht. "
+                               '<a href="quellen">Zur Liste</a>'), user, roles, tab="quellen")
+    _n, url, light, _has, usable, sampling = entry
+    used_by = sorted(a for a, alias in ALIASES.items()
+                     if any(t["supplier"] == name for t in alias["targets"]))
+    facts = af.facts([
+        ("Ampel", light_badge(light) + f'<br><span class="muted">{esc(supply.LIGHT_RULES.get(light, ""))}</span>'),
+        ("Adresse", f"<code>{esc(url)}</code>"),
+        ("Zugangsdaten", supplier_cred(entry, dests)),
+        ("Benutzt von", ", ".join(f'<a href="{esc(alias_href(a))}"><code>{esc(a)}</code></a>' for a in used_by)
+         or '<span class="muted">keinem Modellnamen</span>'),
+    ])
+    parts = [back] + top_cards(notice) + [f'<div class="oaap-objhead"><h1><code>{esc(name)}</code></h1>{facts}</div>']
+    if tests:
+        parts.append(tests)
+    if usable:
+        parts.append(f"""<div class="card"><h2>Testen</h2>
+  <p class="hint">Fragt die Modellliste ab: erreichbar? Anmeldung gültig? Lässt nichts rechnen.</p>
+  <div class="rowactions">
+    <form method="post" action="supplier-test"><input type="hidden" name="name" value="{esc(name)}">
+      <button type="submit">Testen</button></form>
+    <a class="oaap-btn" href="modelle?{esc(urlencode({"quelle": name}))}#import">Modellnamen daraus anlegen</a>
+  </div></div>""")
+    if editable:
+        forced = relay.is_anthropic(url)
+        drops = forced or sampling
+        parts.append(f"""<div class="card"><h2>Ändern</h2>
+  <form class="grid" method="post" action="supplier">
+    <input type="hidden" name="name" value="{esc(name)}">
+    <div><label>Adresse</label><input name="url" type="text" value="{esc(url)}"></div>
+    {light_radios(light, name)}
+    <div><label>Neue Zugangsdaten (leer = unverändert)</label>
+      <input name="credential" type="password" autocomplete="new-password"></div>
+    <div><fieldset><legend>Zugangsdaten</legend><label>
+      <input type="checkbox" name="drop_credential" value="1"> entfernen</label></fieldset></div>
+    <div><fieldset><legend>temperature/top_p</legend><label>
+      <input type="checkbox" name="drop_sampling" value="1"{" checked" if drops else ""}{" disabled" if forced else ""}>
+      nicht weitergeben{" (Anthropic: immer)" if forced else ""}</label></fieldset></div>
+    <div><button type="submit">Speichern</button></div></form></div>
+<div class="card danger"><h2>Löschen</h2>
+  <form method="post" action="supplier-delete" onsubmit="return confirm('{esc(name)} wirklich löschen?')">
+    <input type="hidden" name="name" value="{esc(name)}">
+    <button class="danger" type="submit">Bezugsquelle löschen</button></form></div>""")
+    return page(name, "".join(parts), user, roles, tab="quellen", obj=f"Bezugsquelle:{name}")
+
+
 # ------------------------------------------------------------ Betreiber-Seiten
 
-# Die Reiter (0.6), in der Reihenfolge, in der ein Betreiber fragt: Was
-# passiert gerade? Was kam zuletzt? Wie viel war es? Wer darf? Was wird
-# angeboten? Woher kommt es? — Einrichten steht hinten, Beobachten vorn.
-TABS = (("dashboard", "./", "Dashboard"), ("anfragen", "anfragen", "Letzte Anfragen"),
+# Die Reiter, in der Reihenfolge, in der ein Betreiber fragt: Was passiert
+# gerade? Was kam zuletzt? Wie viel war es? Wer darf? — Einrichten
+# (Modellnamen, Bezugsquellen) steht hinten, Beobachten vorn (RFC-0118 §6).
+TABS = (("dashboard", "./", "Übersicht"), ("anfragen", "anfragen", "Letzte Anfragen"),
         ("auswertung", "auswertung", "Auswertung"), ("schluessel", "schluessel", "Schlüssel"),
-        ("kohorten", "kohorten", "Kohorten"), ("modelle", "modelle", "Modelle"),
-        ("quellen", "quellen", "Bezugsquellen"), ("vorlagen", "vorlagen", "Vorlagen"))
+        ("kohorten", "kohorten", "Kohorten"), ("vorlagen", "vorlagen", "Vorlagen"),
+        ("modelle", "modelle", "Modelle"), ("quellen", "quellen", "Bezugsquellen"))
 
 
 def tab_counts():
@@ -959,14 +989,9 @@ def tab_counts():
             "quellen": len(SUPPLIERS)}
 
 
-def tabs_nav(current):
+def tab_items():
     counts = tab_counts()
-    out = []
-    for key, href, text in TABS:
-        on = ' class="on" aria-current="page"' if key == current else ""
-        count = f' <span class="count">{counts[key]}</span>' if key in counts else ""
-        out.append(f'<a href="{href}"{on}>{esc(text)}{count}</a>')
-    return f'<nav class="tabs" aria-label="Bereiche">{"".join(out)}</nav>'
+    return [(href, text, counts.get(key)) for key, href, text in TABS]
 
 
 def top_cards(notice="", secret=None, host=""):
@@ -1131,7 +1156,7 @@ def dashboard_page(user, roles, host, params, now=None):
     body = "".join(config_cards()) + hero + chart + analysis + (
         f'<p class="hint">Aktualisiert sich jede Minute · Stand {esc(now.astimezone(dash.LOCAL).strftime("%H:%M:%S"))} '
         f'{esc(dash.LOCAL_NAME)} · Rechnungen und lange Zeiträume: <a href="auswertung">Auswertung</a></p>')
-    return page("Dashboard", body, user, roles, tab="dashboard", refresh=60)
+    return page("Übersicht", body, user, roles, tab="dashboard", refresh=60)
 
 
 def _supply_chips():
@@ -1145,33 +1170,38 @@ def _supply_chips():
     return f'<a class="chips" href="quellen" title="Bezugsquellen ansehen und testen">{chips}</a>'
 
 
-REQUEST_LIMITS = ("50", "100", "200")
+REQUEST_SORT = {"time": "u.id", "key": "key_label", "model": "u.alias", "supplier": "u.supplier",
+                "tokens": "COALESCE(u.in_tokens,0)+COALESCE(u.out_tokens,0)", "ms": "u.ms",
+                "outcome": "u.outcome"}
 
 
 def requests_page(user, roles, params):
-    filters = {d: params[d] for d in ("model", "key", "supplier") if params.get(d) not in (None, "", "*")}
-    state = params.get("ausgang", "*")
-    limit = params.get("anzahl", "50")
-    if limit not in REQUEST_LIMITS:
-        limit = "50"
+    """Die letzten Anfragen als Listenbericht (RFC-0118 §7): gefiltert,
+    sortiert und geblättert in der Datenbank -- nie eine stille Grenze."""
+    q = af.Query(params, filters=("key", "model", "supplier", "ausgang"), default_sort="-time")
+    filters = {d: q.filters[d] for d in ("model", "key", "supplier") if q.filters[d] not in ("", "*")}
     where, args = dash._where("", None, filters)
+    state = q.filters["ausgang"]
     if state == "ok":
         where += f" AND {dash.ANSWERED}"
     elif state == "fehler":
         where += f" AND NOT ({dash.ANSWERED})"
-    else:
-        state = "*"
+    for word in q.q.lower().split():
+        where += (" AND (LOWER(u.alias) LIKE ? OR LOWER(COALESCE(k.label, u.key_id)) LIKE ?"
+                  " OR LOWER(COALESCE(u.supplier,'')) LIKE ? OR LOWER(COALESCE(u.model,'')) LIKE ?)")
+        args += [f"%{word}%"] * 4
+    total = DB.execute(f"SELECT COUNT(*) AS n {dash.FROM} WHERE {where}", args).fetchone()["n"]
+    if q.offset >= total:
+        q.offset = 0
+    col = q.sort.lstrip("-")
+    order = REQUEST_SORT.get(col, "u.id")
+    direction = "DESC" if q.sort.startswith("-") or col not in REQUEST_SORT else "ASC"
     rows = list(DB.execute(
         f"SELECT u.*, COALESCE(k.label, u.key_id) AS key_label {dash.FROM} WHERE {where} "
-        f"ORDER BY u.id DESC LIMIT ?", args + [int(limit)]))
-    since = ""
-    selects = []
-    for dim in ("key", "model", "supplier"):
-        vals = dash.values(DB, dim, since)
-        current = filters.get(dim, "*")
-        selects.append(f'<div><label for="r-{dim}">{esc(dash.DIMS[dim][1])}</label>'
-                       f'<select id="r-{dim}" name="{dim}"><option value="*">alle</option>'
-                       f'{options(vals, current, {v: v for v in vals})}</select></div>')
+        f"ORDER BY {order} {direction}, u.id DESC LIMIT ? OFFSET ?", args + [q.size, q.offset]))
+    choices = [(dim, dash.DIMS[dim][1], [(v, v) for v in dash.values(DB, dim, "")])
+               for dim in ("key", "model", "supplier")]
+    choices.append(("ausgang", "Ausgang", [("ok", "beantwortet"), ("fehler", "nicht beantwortet")]))
     lines = []
     for row in rows:
         lines.append(
@@ -1180,54 +1210,26 @@ def requests_page(user, roles, params):
             f'<td><code>{esc(row["alias"])}</code></td>'
             f'<td>{esc(row["supplier"] or "—")}<br>'
             f'<span class="muted">{esc(row["model"] or "")}</span></td>'
-            f'<td class="num">{fmt_tokens(row["in_tokens"])} / {fmt_tokens(row["out_tokens"])}</td>'
-            f'<td class="num">{fmt_bytes(row["bytes_up"])} / {fmt_bytes(row["bytes_down"])}</td>'
-            f'<td class="num">{charts.fmt_num(row["ms"])} ms</td><td>{outcome_badge(row["outcome"])}</td></tr>')
-    body = f"""<div class="card">
-  <form class="grid" method="get" action="anfragen">
-    {"".join(selects)}
-    <div><label for="r-ausgang">Ausgang</label><select id="r-ausgang" name="ausgang">
-      {options(["*", "ok", "fehler"], state, {"*": "alle", "ok": "beantwortet", "fehler": "nicht beantwortet"})}</select></div>
-    <div><label for="r-anzahl">Anzahl</label><select id="r-anzahl" name="anzahl">
-      {options(list(REQUEST_LIMITS), limit, {v: v for v in REQUEST_LIMITS})}</select></div>
-    <div><button type="submit">Anzeigen</button></div>
-  </form>
-</div>
-<div class="card">
-  <p class="hint">Gezählt wird, nicht mitgeschrieben: Zeit, Schlüssel, Modellname,
-    <b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher,
-    Dauer und Ausgang. Prompts und Antworten stehen in keiner Zeile und in keiner Datei.
-    Zeiten in {esc(dash.LOCAL_NAME)}.</p>
-  <div class="scroll"><table><tr><th>Zeit</th><th>Schlüssel</th><th>Modellname</th><th>Quelle</th>
-    <th class="num">Token ein/aus</th><th class="num">Bytes ↑/↓</th><th class="num">Dauer</th><th>Ausgang</th></tr>{"".join(lines) or
-    '<tr><td colspan="8" class="muted">Keine Anfrage passt.</td></tr>'}</table></div>
-</div>"""
+            f'<td class="oaap-num">{fmt_tokens(row["in_tokens"])} / {fmt_tokens(row["out_tokens"])}</td>'
+            f'<td class="oaap-num oaap-minor">{fmt_bytes(row["bytes_up"])} / {fmt_bytes(row["bytes_down"])}</td>'
+            f'<td class="oaap-num">{charts.fmt_num(row["ms"])} ms</td><td>{outcome_badge(row["outcome"])}</td></tr>')
+    head = "".join([
+        af.th("Zeit", "time", q, "anfragen?"), af.th("Schlüssel", "key", q, "anfragen?"),
+        af.th("Modellname", "model", q, "anfragen?"), af.th("Quelle", "supplier", q, "anfragen?"),
+        af.th("Token ein/aus", "tokens", q, "anfragen?", "oaap-num"),
+        af.th("Bytes ↑/↓", "", q, cls="oaap-num oaap-minor"),
+        af.th("Dauer", "ms", q, "anfragen?", "oaap-num"), af.th("Ausgang", "outcome", q, "anfragen?")])
+    nothing = ("Keine Anfrage passt zu dieser Auswahl." if (q.q or any(q.filters.values()))
+               else "Noch keine Anfrage. Sobald ein Verbraucher mit einem Schlüssel fragt, steht sie hier.")
+    body = (af.pagehead("Letzte Anfragen")
+            + f'<p class="hint">Gezählt wird, nicht mitgeschrieben: Zeit, Schlüssel, Modellname, '
+              f'<b>die tatsächlich benutzte Quelle</b>, Token-Zahlen, Bytes am Verbraucher, '
+              f'Dauer und Ausgang. Prompts und Antworten stehen in keiner Zeile und in keiner Datei. '
+              f'Zeiten in {esc(dash.LOCAL_NAME)}.</p>'
+            + af.filter_bar(q, choices, "anfragen", placeholder="Schlüssel, Modellname, Quelle")
+            + af.countline(q.offset + 1, q.offset + len(rows), total, "Anfragen")
+            + af.table(head, lines, nothing) + af.paging(q, total, "anfragen?"))
     return page("Letzte Anfragen", body, user, roles, tab="anfragen")
-
-
-def renew_link(row):
-    return (f'<a class="quiet" href="schluessel?{urlencode({"neu_wie": row["label"]})}#ausstellen">'
-            f'neu ausstellen</a><br><span class="muted">mit denselben Angaben</span>')
-
-
-def aliases_form(row):
-    """Modellnamen eines Schlüssels ändern (0.8.0) -- ein Ankreuzfeld je
-    Modellname; keins angekreuzt heißt wie beim Ausstellen: alle."""
-    have = {a for a in (row["aliases"] or "").split(",") if a}
-    boxes = "".join(
-        f'<label style="display:block"><input type="checkbox" name="alias" value="{esc(n)}"'
-        f'{" checked" if n in have else ""}> <code>{esc(n)}</code></label>'
-        for n in sorted(set(ALIASES) | have))
-    gone = sorted(have - set(ALIASES))
-    return (f'<details><summary class="muted">Modellnamen ändern</summary>'
-            f'<form method="post" action="key-aliases" style="margin-top:.6rem">'
-            f'<input type="hidden" name="label" value="{esc(row["label"])}">'
-            f'<p class="hint">Gilt ab der nächsten Anfrage, das Geheimnis bleibt. Ampel und '
-            f'Freigabe bleiben, wie beim Ausstellen entschieden. Nichts angekreuzt = alle.</p>'
-            f'{boxes}'
-            + (f'<p class="hint">Gibt es nicht mehr: {esc(", ".join(gone))} -- Haken entfernen.</p>'
-               if gone else "")
-            + '<div><button class="quiet" type="submit">speichern</button></div></form></details>')
 
 
 def change_key_aliases(label, names, user):
@@ -1248,85 +1250,126 @@ def change_key_aliases(label, names, user):
             "-- gilt ab der nächsten Anfrage, das Geheimnis bleibt." + (" " + warn if warn else ""))
 
 
-def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from=""):
+def renew_link(row):
+    return (f'<a class="oaap-btn" href="schluessel?{urlencode({"neu_wie": row["label"]})}#ausstellen">'
+            f'Neu ausstellen</a> <span class="muted">mit denselben Angaben</span>')
+
+
+def key_href(label):
+    return "schluessel?" + urlencode({"etikett": label})
+
+
+def aliases_form(row):
+    """Modellnamen eines Schlüssels ändern (0.8.0) -- ein Ankreuzfeld je
+    Modellname; keins angekreuzt heißt wie beim Ausstellen: alle."""
+    have = {a for a in (row["aliases"] or "").split(",") if a}
+    boxes = "".join(
+        f'<label style="display:block"><input type="checkbox" name="alias" value="{esc(n)}"'
+        f'{" checked" if n in have else ""}> <code>{esc(n)}</code></label>'
+        for n in sorted(set(ALIASES) | have))
+    gone = sorted(have - set(ALIASES))
+    return (f'<div class="card"><h2>Modellnamen ändern</h2>'
+            f'<form method="post" action="key-aliases">'
+            f'<input type="hidden" name="label" value="{esc(row["label"])}">'
+            f'<p class="hint">Gilt ab der nächsten Anfrage, das Geheimnis bleibt. Ampel und '
+            f'Freigabe bleiben, wie beim Ausstellen entschieden. Nichts angekreuzt = alle.</p>'
+            f'{boxes}'
+            + (f'<p class="hint">Gibt es nicht mehr: {esc(", ".join(gone))} — Haken entfernen.</p>'
+               if gone else "")
+            + '<div><button type="submit">Speichern</button></div></form></div>')
+
+
+def key_state(row):
+    """(Wort, Badge-Art) des Zustands eines Schlüssels."""
+    if row["revoked"]:
+        return "widerrufen", "err"
+    if store.expired(row):
+        return "abgelaufen", ""
+    return "gültig", "ok"
+
+
+def key_view(row, totals):
+    """Was Liste und Objektseite über einen Schlüssel sagen."""
+    t = totals.get(row["id"])
+    used = (int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0
+    budget = (f'{fmt_tokens(used)} / {fmt_tokens(row["budget_tokens"])}'
+              if row["budget_tokens"] else f'{fmt_tokens(used)} <span class="muted">/ frei</span>')
+    aliases = esc(row["aliases"]) if row["aliases"] else "alle"
+    never = unreachable_aliases([a for a in (row["aliases"] or "").split(",") if a],
+                                ceiling_of(row), pbd_of(row))
+    warn = ""
+    if never:
+        warn = (' <span class="badge yellow" title="die Obergrenze des Schlüssels lässt '
+                'kein Ziel dieser Modellnamen zu">nie erreichbar: ' + esc(", ".join(never)) + '</span>')
+    light = light_badge(ceiling_of(row), short=True) + " und besser"
+    if pbd_of(row):
+        light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
+    word, kind = key_state(row)
+    until = (f' <span class="muted">bis {esc(dash.until(row["expires"]))}</span>'
+             if row["expires"] and word != "widerrufen" else "")
+    last = t["last"] if t else ""
+    return {"t": t, "used": used, "budget": budget, "aliases": aliases, "warn": warn,
+            "light": light, "state": af.badge(word, kind) + until, "word": word,
+            "calls": int(t["calls"]) if t else 0, "last": last,
+            "is_grant": row["kind"] == "client"}
+
+
+def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="", params=None):
     """`keep` füllt das Ausstell-Formular wieder (nach einer Ablehnung oder aus
     `renew_values`); `renew_from` nennt den Schlüssel, aus dem es stammt."""
     keep = keep or {}
     parts = top_cards(notice, secret, host)
     totals = store.totals(DB)
     all_keys = store.keys(DB)
-    rows = []
-    in_cohorts = 0
-    for row in all_keys:
-        if row["cohort"]:
-            in_cohorts += 1
-            continue
-        t = totals.get(row["id"])
-        used = (int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0
-        budget = (f'{fmt_tokens(used)} / {fmt_tokens(row["budget_tokens"])}'
-                  if row["budget_tokens"] else f'{fmt_tokens(used)} <span class="muted">/ frei</span>')
-        aliases = esc(row["aliases"]) if row["aliases"] else "alle"
-        never = unreachable_aliases([a for a in (row["aliases"] or "").split(",") if a],
-                                    ceiling_of(row), pbd_of(row))
-        if never:
-            aliases += (' <span class="badge yellow" title="die Obergrenze des Schlüssels lässt '
-                        'kein Ziel dieser Modellnamen zu">nie erreichbar: '
-                        + esc(", ".join(never)) + '</span>')
-        light = light_badge(ceiling_of(row), short=True) + " und besser"
-        if pbd_of(row):
-            light += ' <span class="badge pbd">pbD freigegeben → nie rot</span>'
-        # 0.10.0 (RFC-0104 §4): eine Freigabe für einen Chat ist kein Schlüssel zum
-        # Weitergeben -- es gibt keinen Wert, also auch nichts „neu auszustellen“.
-        is_grant = row["kind"] == "client"
-        kind_note = ('<br><span class="badge" title="Kein Schlüsselwert: gilt nur für Aufrufe '
-                     'dieses Chats durch die via-Tür der Plattform (RFC-0104)">Freigabe für '
-                     'Chat</span>' if is_grant else "")
-        if row["revoked"]:
-            state = '<span class="badge err">widerrufen</span>'
-            action = "" if is_grant else renew_link(row)
-        elif store.expired(row):
-            state = (f'<span class="badge off">abgelaufen</span><br><span class="muted">'
-                     f'{esc(dash.until(row["expires"]))}</span>')
-            action = "" if is_grant else renew_link(row)
-        else:
-            state = '<span class="badge green">gültig</span>' + (
-                f'<br><span class="muted">bis {esc(dash.until(row["expires"]))}</span>'
-                if row["expires"] else "")
-            action = (f'<form method="post" action="revoke" style="margin:0">'
-                      f'<input type="hidden" name="label" value="{esc(row["label"])}">'
-                      f'<button class="quiet" type="submit">widerrufen</button></form>'
-                      f'<details><summary class="muted">Kontext ändern</summary>'
-                      f'<form class="grid" method="post" action="context" style="margin-top:.6rem">'
-                      f'<input type="hidden" name="label" value="{esc(row["label"])}">'
-                      f'{context_inputs(row, prefix=row["id"] + "-")}'
-                      f'<div><button class="quiet" type="submit">speichern</button></div>'
-                      f'</form></details>'
-                      f'{aliases_form(row)}')
-        last = t["last"] if t else ""
-        rows.append(
-            f'<tr{" class=dim" if not store.usable(row) else ""}><td><b>{esc(row["label"])}</b>'
-            f'{kind_note}<br><span class="muted">{esc(context_line(row))}</span></td>'
-            f'<td>{state}</td><td><code>{aliases}</code></td><td>{light}</td>'
-            f'<td class="num">{budget}</td>'
-            f'<td class="num">{t["calls"] if t else 0}<br><span class="muted" title="{esc(last or "")}">'
-            f'{esc(dash.ago(last)) if last else "noch nie"}</span></td>'
-            f'<td class="num">{fmt_bytes(t["bytes_up"] if t else 0)} / '
-            f'{fmt_bytes(t["bytes_down"] if t else 0)}</td>'
-            f'<td>{action}</td></tr>')
+    own = [r for r in all_keys if not r["cohort"]]
+    in_cohorts = len(all_keys) - len(own)
+    views = {r["id"]: key_view(r, totals) for r in own}
+    q = af.Query(params or {}, filters=("zustand", "art", "ampel"), default_sort="label")
+    rows = [r for r in own
+            if (not q.filters["zustand"] or views[r["id"]]["word"] == q.filters["zustand"])
+            and (not q.filters["art"] or (r["kind"] == "client") == (q.filters["art"] == "freigabe"))
+            and (not q.filters["ampel"] or ceiling_of(r) == q.filters["ampel"])]
+    columns = [
+        ("Etikett · Kontext", "label", lambda r: f'{r["label"]} {context_line(r)}', ""),
+        ("Zustand", "state", lambda r: views[r["id"]]["word"], ""),
+        ("Modellnamen", "aliases", lambda r: r["aliases"] or "alle", "oaap-minor"),
+        ("Ampel", "", None, "oaap-minor"),
+        ("Token", "tokens", lambda r: views[r["id"]]["used"], "oaap-num"),
+        ("Aufrufe", "calls", lambda r: views[r["id"]]["calls"], "oaap-num"),
+        ("zuletzt", "last", lambda r: views[r["id"]]["last"] or "", "oaap-minor"),
+    ]
+
+    def row_html(r):
+        v = views[r["id"]]
+        grant = ' ' + af.badge("Freigabe für Chat", "info") if v["is_grant"] else ""
+        return (f'<tr{" class=dim" if not store.usable(r) else ""}>'
+                f'<td><a href="{esc(key_href(r["label"]))}"><b>{esc(r["label"])}</b></a>{grant}<br>'
+                f'<span class="muted">{esc(context_line(r))}</span></td>'
+                f'<td>{v["state"]}</td><td class="oaap-minor"><code>{v["aliases"]}</code>{v["warn"]}</td>'
+                f'<td class="oaap-minor">{v["light"]}</td>'
+                f'<td class="oaap-num">{v["budget"]}</td><td class="oaap-num">{v["calls"]}</td>'
+                f'<td class="oaap-minor muted" title="{esc(v["last"] or "")}">'
+                f'{esc(dash.ago(v["last"])) if v["last"] else "noch nie"}</td></tr>')
+    choices = [("zustand", "Zustand", [("gültig", "gültig"), ("abgelaufen", "abgelaufen"),
+                                       ("widerrufen", "widerrufen")]),
+               ("art", "Art", [("schluessel", "Schlüssel"), ("freigabe", "Freigabe für Chat")]),
+               ("ampel", "Höchstens", [("green", "grün"), ("yellow", "gelb"), ("red", "rot")])]
+    report_html = af.list_report(
+        q, rows, columns, row_html, base="schluessel?", noun="Schlüssel",
+        empty_text='Noch kein Schlüssel ausgestellt. <a href="#ausstellen">Schlüssel ausstellen</a> '
+                   'legt den ersten an.', choices=choices, placeholder="Etikett oder Kontext")
     parts.append(f"""<div class="card">
-  <h2>Schlüssel</h2>
+  <div class="cardhead"><h2>Schlüssel</h2><a class="oaap-btn primary" href="#ausstellen">Schlüssel ausstellen</a></div>
   <p class="hint">Wer ein Gateway betreibt, gibt die Erlaubnis — ein Recht wird
     gegeben, nicht gehalten. Ausstellen, Widerrufen und jede Änderung am Kontext
-    stehen in der Prüfspur; einzelne Anfragen stehen dort nicht. Ein geänderter
-    Kontext gilt <b>ab der nächsten Anfrage</b> — gezählte Anfragen behalten den,
-    mit dem sie kamen.</p>
-  <p class="hint">Eine <b>Freigabe für Chat</b> legt der Aufbau eines Profils an
-    (RFC-0104): Sie hat keinen Schlüsselwert und gilt nur für Aufrufe dieses Chats
-    durch die via-Tür der Plattform. Widerrufen, Modellnamen und Kontext wie bei
-    einem Schlüssel; gezählt wird der Chat, nie die Person.</p>
-  <div class="scroll"><table><tr><th>Etikett · Kontext</th><th>Zustand</th><th>Aliasse</th><th>Ampel</th>
-    <th class="num">Token</th><th class="num">Aufrufe</th><th class="num">Daten ↑/↓</th><th></th></tr>{"".join(rows) or
-    '<tr><td colspan="8" class="muted">Noch kein Schlüssel ausgestellt.</td></tr>'}</table></div>
+    stehen in der Prüfspur; einzelne Anfragen stehen dort nicht. Ein Klick auf das
+    Etikett öffnet den Schlüssel: dort Kontext und Modellnamen ändern, widerrufen
+    oder neu ausstellen.</p>
+  <p class="hint">Eine <b>Freigabe für Chat</b> legt der Aufbau eines Profils an:
+    Sie hat keinen Schlüsselwert und gilt nur für Aufrufe dieses Chats über die
+    Plattform. Widerrufen, Modellnamen und Kontext wie bei einem Schlüssel; gezählt
+    wird der Chat, nie die Person.</p>
+  {report_html}
   {f'<p class="hint" style="margin:.8rem 0 0">Dazu {in_cohorts} Schlüssel aus Kohorten — '
    f'die stehen im Reiter <a href="kohorten">Kohorten</a>.</p>' if in_cohorts else ""}
 </div>""")
@@ -1364,7 +1407,7 @@ def keys_page(user, roles, host, notice="", secret=None, keep=None, renew_from="
     <div><fieldset><legend>Personenbezogene Daten</legend>
       <label><input type="checkbox" name="personal_data" value="1"{" checked" if keep.get("personal_data") == "1" else ""}> freigegeben</label>
     </fieldset></div>
-    <div><button type="submit">Ausstellen</button></div>
+    <div><button class="primary" type="submit">Ausstellen</button></div>
   </form>
   <p class="hint" style="margin-top:.8rem">Die Kontextfelder schlagen vor, was schon
     benutzt wird — einmal angetippt, steht der Wert genau so da wie bei den anderen
@@ -1394,15 +1437,65 @@ curl https://{esc(host)}/v1/chat/completions \\
     return page("Schlüssel", "".join(parts), user, roles, tab="schluessel")
 
 
+def key_page(user, roles, label, notice="", error=False):
+    """Die Objektseite eines Schlüssels: Kennzahlen und alle Handlungen, die
+    früher in der Tabellenzeile standen (RFC-0118 §7.5)."""
+    row = next((r for r in store.keys(DB) if r["label"] == label), None)
+    if row is None:
+        return page("Unbekannter Schlüssel", af.back("schluessel", "Zurück zu den Schlüsseln")
+                    + af.empty(f"Einen Schlüssel „{esc(label)}“ gibt es nicht. "
+                               '<a href="schluessel">Zur Liste</a>'), user, roles, tab="schluessel")
+    v = key_view(row, store.totals(DB))
+    back = (af.back("kohorten?" + urlencode({"kohorte": row["cohort"]}), "Zurück zur Kohorte")
+            if row["cohort"] else af.back("schluessel", "Zurück zu den Schlüsseln"))
+    t = v["t"]
+    facts = af.facts([
+        ("Zustand", v["state"]),
+        ("Art", "Freigabe für Chat (kein Schlüsselwert)" if v["is_grant"] else "Schlüssel"),
+        ("Kontext", esc(context_line(row))),
+        ("Modellnamen", f'<code>{v["aliases"]}</code>{v["warn"]}'),
+        ("Ampel", v["light"]),
+        ("Token", v["budget"]),
+        ("Anfragen je Minute", esc(str(row["rate_per_min"] or f"Standard {DEFAULT_RATE}"))),
+        ("Aufrufe", f'{v["calls"]} · {esc(dash.ago(v["last"])) if v["last"] else "noch nie"}'),
+        ("Daten ↑/↓", f'{fmt_bytes(t["bytes_up"] if t else 0)} / {fmt_bytes(t["bytes_down"] if t else 0)}'),
+    ])
+    parts = [back, af.msg(notice, error) if notice else "",
+             f'<div class="oaap-objhead"><h1>{esc(row["label"])}</h1>{facts}</div>']
+    if store.usable(row):
+        parts.append(f"""<div class="card"><h2>Kontext ändern</h2>
+  <p class="hint">Ein geänderter Kontext gilt <b>ab der nächsten Anfrage</b> — gezählte Anfragen
+    behalten den, mit dem sie kamen.</p>
+  {context_datalists(store.keys(DB))}
+  <form class="grid" method="post" action="context">
+    <input type="hidden" name="label" value="{esc(row["label"])}">
+    {context_inputs(row, prefix=row["id"] + "-")}
+    <div><button type="submit">Speichern</button></div>
+  </form></div>""")
+        parts.append(aliases_form(row))
+        parts.append(f"""<div class="card danger"><h2>Widerrufen</h2>
+  <p class="hint">Ab sofort abgelehnt. Gezählte Anfragen bleiben in der Auswertung.</p>
+  <form method="post" action="revoke" onsubmit="return confirm('{esc(row["label"])} wirklich widerrufen?')">
+    <input type="hidden" name="label" value="{esc(row["label"])}">
+    {'<input type="hidden" name="back" value="kohorten">' if row["cohort"] else ""}
+    <button class="danger" type="submit">Widerrufen</button></form></div>""")
+    elif not v["is_grant"] and not row["cohort"]:
+        parts.append(f'<div class="card"><h2>Neu ausstellen</h2><p class="hint">Ein widerrufener oder '
+                     f'abgelaufener Schlüssel gilt nicht wieder. Ein neuer übernimmt Kontext, Aliasse, '
+                     f'Grenzen, Ampel und Freigabe.</p><p>{renew_link(row)}</p></div>')
+    return page(row["label"], "".join(parts), user, roles, tab="kohorten" if row["cohort"] else "schluessel",
+                obj=f"Schlüssel:{row['label']}")
+
+
 def models_page(user, roles, notice="", tests=None, params=None):
     parts = top_cards(notice) + config_cards()
     if tests:
         parts.append(tests)
     # Wer gerade Modelle abruft, sieht die Auswahl oben; sonst steht die Liste vorn.
     if (params or {}).get("quelle"):
-        parts += [import_card(params), aliases_card()]
+        parts += [import_card(params), aliases_card(params)]
     else:
-        parts += [aliases_card(), import_card({})]
+        parts += [aliases_card(params), import_card({})]
     return page("Modelle", "".join(parts), user, roles, tab="modelle")
 
 
@@ -1578,64 +1671,89 @@ def cohorts_page(user, roles, notice="", result=None, keep=None):
 </div>""")
 
     totals = store.totals(DB)
-    blocks = []
+    rows = []
     for c in existing:
-        rows = store.cohort_keys(DB, c["cohort"])
-        calls = sum(int(totals[r["id"]]["calls"]) for r in rows if r["id"] in totals)
-        tokens = sum(int(totals[r["id"]]["in_tokens"]) + int(totals[r["id"]]["out_tokens"])
-                     for r in rows if r["id"] in totals)
-        live = int(c["live"] or 0)
-        ended = bool(c["expires"]) and c["expires"] <= store.now()
-        state = (f'<span class="badge green">{live} von {c["seats"]} gültig</span>' if live else
-                 '<span class="badge off">abgelaufen</span>' if ended else
-                 '<span class="badge err">widerrufen</span>')
-        seats = []
-        for r in rows:
-            t = totals.get(r["id"])
-            kennung = r["label"][len(c["cohort"]) + len(cohort.SEAT) + 2:]
-            st = ('<span class="badge err">widerrufen</span>' if r["revoked"] else
-                  '<span class="badge off">abgelaufen</span>' if store.expired(r) else
-                  '<span class="badge green">gültig</span>')
-            act = ("" if not store.usable(r) else
-                   f'<form method="post" action="revoke" style="margin:0">'
-                   f'<input type="hidden" name="label" value="{esc(r["label"])}">'
-                   f'<input type="hidden" name="back" value="kohorten">'
-                   f'<button class="quiet" type="submit">widerrufen</button></form>')
-            seats.append(f'<tr{"" if store.usable(r) else " class=dim"}><td><code>{esc(kennung)}</code></td>'
-                         f'<td>{esc(r["owner"])}</td><td>{st}</td>'
-                         f'<td class="num">{t["calls"] if t else 0}</td>'
-                         f'<td class="num">{fmt_tokens((int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0)}</td>'
-                         f'<td class="muted">{esc(dash.ago(t["last"])) if t else "noch nie"}</td>'
-                         f'<td>{act}</td></tr>')
-        report_link = f'auswertung?{urlencode({"project": c["project"], "nach": "key", "top": "key"})}'
-        blocks.append(f"""<div class="cohort">
-  <div class="cardhead"><h2 style="margin:0">{esc(c['cohort'])}</h2>{state}</div>
-  <p class="muted" style="margin:.2rem 0 .6rem">bis {esc(dash.until(c['expires'])) if c['expires'] else 'unbefristet'}
-    · Projekt {esc(c['project'] or '—')} · {charts.fmt_num(calls)} Aufrufe · {charts.fmt_num(tokens)} Token
-    · <a href="{esc(report_link)}">Auswertung</a></p>
-  <div class="rowactions">
-    <form method="post" action="cohort-extend" class="inline">
-      <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
-      <input type="date" name="bis" required value="{esc(_today_plus(7))}" aria-label="neues Ende">
-      <button class="quiet" type="submit">verlängern</button></form>
-    {f'''<form method="post" action="cohort-revoke" class="inline">
-      <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
-      <label><input type="checkbox" name="confirm" value="1"> wirklich</label>
-      <button class="quiet" type="submit">alle widerrufen</button></form>''' if live else ""}
-  </div>
-  <details style="margin-top:.6rem"><summary class="muted">{c['seats']} Teilnehmer</summary>
-    <div class="scroll"><table><tr><th>Kennung</th><th>Name</th><th>Zustand</th><th class="num">Aufrufe</th>
-      <th class="num">Token</th><th>zuletzt</th><th></th></tr>{"".join(seats)}</table></div>
-  </details>
-</div>""")
-    parts.append(f"""<div class="card">
+        s = cohort_summary(c, totals)
+        rows.append(f'<tr><td><a href="kohorten?{esc(urlencode({"kohorte": c["cohort"]}))}">'
+                    f'<b>{esc(c["cohort"])}</b></a></td><td>{s["state"]}</td>'
+                    f'<td class="muted">{esc(dash.until(c["expires"])) if c["expires"] else "unbefristet"}</td>'
+                    f'<td class="oaap-minor">{esc(c["project"] or "—")}</td>'
+                    f'<td class="oaap-num">{charts.fmt_num(s["calls"])}</td>'
+                    f'<td class="oaap-num oaap-minor">{charts.fmt_num(s["tokens"])}</td></tr>')
+    parts.insert(len(parts) - 1, f"""<div class="card">
   <h2>Kohorten</h2>
-  <p class="hint">Verlängern gilt für alle nicht widerrufenen Schlüssel der Kohorte — auch
-    abgelaufene gelten danach wieder. Ein abgelaufener Schlüssel bekommt dieselbe Antwort wie
-    ein widerrufener.</p>
-  {"".join(blocks) or '<p class="muted">Noch keine Kohorte.</p>'}
+  <p class="hint">Ein Klick auf eine Kohorte zeigt ihre Teilnehmer; dort wird verlängert oder
+    widerrufen. Verlängern gilt für alle nicht widerrufenen Schlüssel der Kohorte — auch
+    abgelaufene gelten danach wieder.</p>
+  {af.table('<th>Kohorte</th><th>Zustand</th><th>bis</th><th class="oaap-minor">Projekt</th>'
+            '<th class="oaap-num">Aufrufe</th><th class="oaap-num oaap-minor">Token</th>', rows,
+            "Noch keine Kohorte. <b>Kohorte anlegen</b> unten erzeugt die ersten Schlüssel.")}
 </div>""")
     return page("Kohorten", "".join(parts), user, roles, tab="kohorten")
+
+
+def cohort_summary(c, totals):
+    rows = store.cohort_keys(DB, c["cohort"])
+    calls = sum(int(totals[r["id"]]["calls"]) for r in rows if r["id"] in totals)
+    tokens = sum(int(totals[r["id"]]["in_tokens"]) + int(totals[r["id"]]["out_tokens"])
+                 for r in rows if r["id"] in totals)
+    live = int(c["live"] or 0)
+    ended = bool(c["expires"]) and c["expires"] <= store.now()
+    state = (af.badge(f'{live} von {c["seats"]} gültig', "ok") if live else
+             af.badge("abgelaufen") if ended else af.badge("widerrufen", "err"))
+    return {"rows": rows, "calls": calls, "tokens": tokens, "live": live, "state": state}
+
+
+def cohort_page(user, roles, name, notice=""):
+    """Die Objektseite einer Kohorte: Teilnehmer, verlängern, alle widerrufen."""
+    c = next((x for x in store.cohorts(DB) if x["cohort"] == name), None)
+    back = af.back("kohorten", "Zurück zu den Kohorten")
+    if c is None:
+        return page("Unbekannte Kohorte", back + "".join(top_cards(notice))
+                    + af.empty(f"Eine Kohorte „{esc(name)}“ gibt es nicht. "
+                               '<a href="kohorten">Zur Liste</a>'), user, roles, tab="kohorten")
+    totals = store.totals(DB)
+    s = cohort_summary(c, totals)
+    seats = []
+    for r in s["rows"]:
+        t = totals.get(r["id"])
+        kennung = r["label"][len(c["cohort"]) + len(cohort.SEAT) + 2:]
+        word, kind = key_state(r)
+        seats.append(f'<tr{"" if store.usable(r) else " class=dim"}>'
+                     f'<td><a href="{esc(key_href(r["label"]))}"><code>{esc(kennung)}</code></a></td>'
+                     f'<td>{esc(r["owner"])}</td><td>{af.badge(word, kind)}</td>'
+                     f'<td class="oaap-num">{t["calls"] if t else 0}</td>'
+                     f'<td class="oaap-num">{fmt_tokens((int(t["in_tokens"]) + int(t["out_tokens"])) if t else 0)}</td>'
+                     f'<td class="muted oaap-minor">{esc(dash.ago(t["last"])) if t else "noch nie"}</td></tr>')
+    report_link = f'auswertung?{urlencode({"project": c["project"], "nach": "key", "top": "key"})}'
+    facts = af.facts([
+        ("Zustand", s["state"]),
+        ("gültig bis", esc(dash.until(c["expires"])) if c["expires"] else "unbefristet"),
+        ("Projekt", esc(c["project"] or "—")),
+        ("Aufrufe", charts.fmt_num(s["calls"])), ("Token", charts.fmt_num(s["tokens"])),
+        ("Auswertung", f'<a href="{esc(report_link)}">ansehen</a>'),
+    ])
+    parts = [back] + top_cards(notice) + [f'<div class="oaap-objhead"><h1>{esc(c["cohort"])}</h1>{facts}</div>']
+    parts.append(f"""<div class="card"><h2>Verlängern</h2>
+  <p class="hint">Gilt für alle nicht widerrufenen Schlüssel der Kohorte — auch abgelaufene gelten
+    danach wieder. Ein abgelaufener Schlüssel bekommt dieselbe Antwort wie ein widerrufener.</p>
+  <form method="post" action="cohort-extend" class="inline">
+    <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
+    <input type="date" name="bis" required value="{esc(_today_plus(7))}" aria-label="neues Ende">
+    <button type="submit">Verlängern</button></form></div>""")
+    if s["live"]:
+        parts.append(f"""<div class="card danger"><h2>Alle widerrufen</h2>
+  <form method="post" action="cohort-revoke" class="inline">
+    <input type="hidden" name="kohorte" value="{esc(c['cohort'])}">
+    <label><input type="checkbox" name="confirm" value="1"> wirklich</label>
+    <button class="danger" type="submit">Alle widerrufen</button></form></div>""")
+    parts.append(f"""<div class="card"><h2>{c['seats']} Teilnehmer</h2>
+  <p class="hint">Ein Klick auf die Kennung öffnet den Schlüssel — dort lässt sich ein einzelner
+    widerrufen.</p>
+  {af.table('<th>Kennung</th><th>Name</th><th>Zustand</th><th class="oaap-num">Aufrufe</th>'
+            '<th class="oaap-num">Token</th><th class="oaap-minor">zuletzt</th>', seats, "Keine Teilnehmer.")}
+</div>""")
+    return page(c["cohort"], "".join(parts), user, roles, tab="kohorten", obj=f"Kohorte:{c['cohort']}")
 
 
 # ---- Modellnamen aus einer Bezugsquelle (0.6)
@@ -2039,7 +2157,7 @@ def client_file(tpl, names, host):
     """(text, fehlende) für diese Modellnamen; die Adresse ist die dieses Gateways."""
     tab = props.table(DB)
     models = [{"id": n, "props": props.of_alias(ALIASES[n], tab)} for n in names if n in ALIASES]
-    return templates.render(tpl, models, f"https://{host}/v1", f"OAAP KI-Gateway {host}")
+    return templates.render(tpl, models, f"https://{host}/v1", f"{APP_NAME} {host}")
 
 
 def templates_result(params, picked, host):
@@ -2288,6 +2406,106 @@ def charts_page(user, roles, host, params):
 
 # --------------------------------------------------------------- HTTP
 
+# ------------------------------------------------------------ MCP-Tür (RFC-0118 §9)
+
+# Nur lesen, und nur, was die Betreiberseite derselben Person zeigt: Verbrauch
+# und Modellnamen. Nie ein Schlüsselwert, nie Zugangsdaten einer Quelle, nie
+# eine Adresse mit Geheimnis, nie Inhalte (es gibt keine).
+door = mcpdoor.Door(
+    "oaap-ai-gateway", VERSION,
+    "Liest den Verbrauch des KI-Gateways (Anfragen, Token, Ausgänge, Ranglisten) und die "
+    "angebotenen Modellnamen mit Ampel und Eigenschaften. Nur für die Serververwaltung; "
+    "Schlüssel und Zugangsdaten gibt diese Tür nie heraus.")
+
+USAGE_WINDOWS = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
+
+
+def _admin_only(who):
+    # Dieselbe Regel wie die Seite: nur die Rolle admin.
+    if "admin" not in who.get("roles", []):
+        raise mcpdoor.Refused("Das KI-Gateway zeigt seinen Verbrauch nur der Serververwaltung.")
+
+
+@door.tool("ai_gateway_usage", "Verbrauch",
+           "Fasst den Verbrauch eines Zeitfensters zusammen: Anfragen, Token ein und aus, nicht "
+           "beantwortete Anfragen, mittlere Dauer, und die Ranglisten nach Modellname, "
+           "Bezugsquelle, Schlüssel-Etikett und Ausgang. Ohne Inhalte.",
+           {"window": {"type": "string", "enum": list(USAGE_WINDOWS),
+                       "description": "Zeitfenster: 24h, 7d oder 30d (Standard 24h)"},
+            "model": {"type": "string", "description": "nur dieser Modellname"},
+            "supplier": {"type": "string", "description": "nur diese Bezugsquelle"}})
+def _tool_usage(args, who):
+    _admin_only(who)
+    win = str(args.get("window") or "24h")
+    if win not in USAGE_WINDOWS:
+        raise mcpdoor.Refused("window kennt 24h, 7d und 30d.")
+    since = dash.stamp(datetime.now(timezone.utc) - timedelta(hours=USAGE_WINDOWS[win]))
+    filters = {d: str(args[d]).strip() for d in ("model", "supplier") if str(args.get(d) or "").strip()}
+    tot = dash.totals(DB, since, None, filters)
+
+    def ranking(dim, metric="calls"):
+        rows, more = dash.top(DB, since, dim, metric, filters)
+        return {"top": [{"name": n, metric: v} for n, v in rows], "more": more}
+    return {"window": win, "filters": filters,
+            "calls": int(tot["calls"]), "answered": int(tot["answered"]),
+            "failed": int(tot["failed"]), "input_tokens": int(tot["in_tokens"]),
+            "output_tokens": int(tot["out_tokens"]), "avg_ms": int(tot["avg_ms"]),
+            "active_keys": int(tot["keys"]),
+            "by_model": ranking("model", "tokens"), "by_supplier": ranking("supplier", "tokens"),
+            "by_key": ranking("key", "tokens"), "by_outcome": ranking("outcome")}
+
+
+@door.tool("ai_gateway_models", "Modellnamen",
+           "Listet die Modellnamen, die das Gateway anbietet: Ampel (die schlechteste ihrer "
+           "Ziele), die Bezugsquellen mit deren Ampel, Reihenfolge und die bekannten "
+           "Eigenschaften (Werkzeuge, Bilder, Kontext, Ausgabe).",
+           {"q": {"type": "string", "description": "Suchwort im Modellnamen oder Ziel"}})
+def _tool_models(args, who):
+    _admin_only(who)
+    tab = props.table(DB)
+    words = str(args.get("q") or "").lower().split()
+    out = []
+    for name, alias in sorted(ALIASES.items()):
+        text = supply.targets_text(alias)
+        if not all(w in f"{name} {text}".lower() for w in words):
+            continue
+        out.append({"name": name, "light": supply.alias_light(alias, SUPPLIERS, "red"),
+                    "order": "listed" if alias["order_listed"] else "green-first",
+                    "targets": [{"supplier": t["supplier"], "model": t["model"],
+                                 "light": SUPPLIERS.get(t["supplier"], {}).get("light", "")}
+                                for t in alias["targets"]],
+                    "properties": props_summary(props.of_alias(alias, tab))})
+    return {"models": out, "count": len(out)}
+
+
+@door.tool("ai_gateway_suppliers", "Bezugsquellen",
+           "Listet die Bezugsquellen mit Namen und Ampel und welche Modellnamen sie benutzen. "
+           "Ohne Adressen und ohne Zugangsdaten.")
+def _tool_suppliers(args, who):
+    _admin_only(who)
+    out = []
+    for name, src in sorted(SUPPLIERS.items()):
+        out.append({"name": name, "light": src["light"],
+                    "light_meaning": supply.LIGHT_LABELS.get(src["light"], ""),
+                    "used_by": sorted(a for a, alias in ALIASES.items()
+                                      if any(t["supplier"] == name for t in alias["targets"]))})
+    return {"suppliers": out, "count": len(out)}
+
+
+door.prompt("ai_gateway_verbrauch_berichten", "Verbrauch berichten",
+            "Ein kurzer Bericht über den Verbrauch des KI-Gateways.",
+            "Fasse den Verbrauch des KI-Gateways im Zeitfenster {fenster} zusammen (Standard 7d): "
+            "Nutze ai_gateway_usage. Nenne Anfragen, Token, die größten Verbraucher nach "
+            "Modellname und Schlüssel-Etikett und auffällige Fehler. Kurz, in einfachen Worten.",
+            arguments=("fenster",))
+door.prompt("ai_gateway_modell_empfehlen", "Modellnamen empfehlen",
+            "Empfiehlt einen Modellnamen für eine Aufgabe und eine Datenlage.",
+            "Welcher Modellname des KI-Gateways passt für diese Aufgabe: {aufgabe}? Lies "
+            "ai_gateway_models. Achte auf die Ampel (grün: Daten bleiben im Unternehmen) und "
+            "auf die Eigenschaften, zum Beispiel Werkzeuge oder Bilder.",
+            arguments=("aufgabe",))
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "oaap-ai-gateway/" + VERSION
@@ -2448,6 +2666,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == SETUP_PATH:
             self.handle_setup_get()
             return
+        if path == "/mcp":
+            door.serve(self)
+            return
         if path == "/oaap/assets":
             # RFC-0087 §8.2: der Knoten fragt über seinen internen Endpunkt;
             # von außen liegt der Pfad unter `/` und damit hinter `admin`.
@@ -2524,8 +2745,7 @@ class Handler(BaseHTTPRequestHandler):
         # Betreiber-Sicht
         if not self.is_admin():
             self.send_html(403, page("Kein Zugriff",
-                                     '<div class="card"><p>Diese Seite ist der '
-                                     'Serververwaltung vorbehalten.</p></div>', "", ""))
+                                     af.empty('Diese Seite ist der Serververwaltung vorbehalten.')))
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
@@ -2536,7 +2756,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, requests_page(user, roles, params))
         elif path == "/schluessel":
             source = params.get("neu_wie", "")
-            if source:
+            if params.get("etikett"):
+                self.send_html(200, key_page(user, roles, params["etikett"]))
+            elif source:
                 all_keys = store.keys(DB)
                 row = next((r for r in all_keys if r["label"] == source), None)
                 if row is None:
@@ -2546,13 +2768,22 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_html(200, keys_page(user, roles, host, renew_from=source,
                                                   keep=renew_values(row, all_keys)))
             else:
-                self.send_html(200, keys_page(user, roles, host))
+                self.send_html(200, keys_page(user, roles, host, params=params))
         elif path == "/kohorten":
-            self.send_html(200, cohorts_page(user, roles))
+            if params.get("kohorte"):
+                self.send_html(200, cohort_page(user, roles, params["kohorte"]))
+            else:
+                self.send_html(200, cohorts_page(user, roles))
         elif path == "/modelle":
-            self.send_html(200, models_page(user, roles, params=params))
+            if params.get("name"):
+                self.send_html(200, alias_page(user, roles, params["name"]))
+            else:
+                self.send_html(200, models_page(user, roles, params=params))
         elif path == "/quellen":
-            self.send_html(200, sources_page(user, roles))
+            if params.get("name"):
+                self.send_html(200, supplier_page(user, roles, params["name"]))
+            else:
+                self.send_html(200, sources_page(user, roles))
         elif path == "/vorlagen":
             picked = [v for k, v in parse_qsl(self.path.partition("?")[2]) if k == "m"]
             built = templates_result(params, picked, host)
@@ -2563,8 +2794,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/":
             self.send_html(200, dashboard_page(user, roles, host, params))
         else:
-            self.send_html(404, page("Unbekannt", '<div class="card"><p>Diese Seite gibt es '
-                                     'nicht. <a href="./">Zum Dashboard</a></p></div>',
+            self.send_html(404, page("Unbekannt", af.empty('Diese Seite gibt es nicht. '
+                                                           '<a href="./">Zur Übersicht</a>'),
                                      user, roles, tab="dashboard"))
 
     def handle_report(self, path):
@@ -2652,6 +2883,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == SETUP_PATH:
             self.handle_setup_post()
             return
+        if path == "/mcp":
+            door.serve(self)
+            return
         if path in ("/v1/chat/completions", "/v1/embeddings"):
             self.handle_inference(path)
             return
@@ -2672,8 +2906,7 @@ class Handler(BaseHTTPRequestHandler):
         # der Aufrufer sieht statt der 403 einen Abbruch.
         raw = self.read_body() or b""
         if not self.is_admin():
-            self.send_html(403, page("Kein Zugriff", '<div class="card"><p>Nicht erlaubt.</p>'
-                                     '</div>', "", ""))
+            self.send_html(403, page("Kein Zugriff", af.empty("Nicht erlaubt.")))
             return
         user, roles = self.identity()
         host = self.headers.get("Host", "<gateway>")
@@ -2697,8 +2930,11 @@ class Handler(BaseHTTPRequestHandler):
                                                  notice="Noch keine Bezugsquelle zum Testen."))
                 return
             title = "Verbindungstest" + ("" if name == "*" else f" „{name}“")
-            self.send_html(200, sources_page(user, roles,
-                                             tests=probe_card(probe_all(names), title)))
+            tests = probe_card(probe_all(names), title)
+            if name != "*" and name in SUPPLIERS:
+                self.send_html(200, supplier_page(user, roles, name, tests=tests))
+            else:
+                self.send_html(200, sources_page(user, roles, tests=tests))
             return
         if path.startswith("/cohort-"):
             self.send_html(200, self.handle_cohort(path, form, multi, user, roles))
@@ -2708,16 +2944,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/alias-tooltest":
             name = form.get("name", "")
-            self.send_html(200, models_page(user, roles,
-                                            tests=tool_test_card(name, tool_test(name))))
+            self.send_html(200, alias_page(user, roles, name,
+                                           tests=tool_test_card(name, tool_test(name))))
             return
         if path in ("/model-props", "/model-props-take"):
-            self.send_html(200, models_page(user, roles, notice=change_props(form, user)))
+            notice = change_props(form, user)
+            if form.get("alias"):
+                self.send_html(200, alias_page(user, roles, form["alias"], notice=notice))
+            else:
+                self.send_html(200, models_page(user, roles, notice=notice))
             return
         if path == "/alias-test":
             name = form.get("name", "")
-            self.send_html(200, models_page(user, roles,
-                                            tests=alias_test_card(name, test_alias(name))))
+            self.send_html(200, alias_page(user, roles, name,
+                                           tests=alias_test_card(name, test_alias(name))))
             return
         if path == "/issue":
             ceiling = form.get("ceiling") or supply.DEFAULT_CEILING
@@ -2768,7 +3008,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/alias", "/alias-delete"):
             self.send_html(200, models_page(user, roles, notice=notice))
         elif path == "/revoke" and form.get("back") == "kohorten":
-            self.send_html(200, cohorts_page(user, roles, notice=notice))
+            row = next((r for r in store.keys(DB) if r["label"] == form.get("label", "")), None)
+            if row is not None and row["cohort"]:
+                self.send_html(200, cohort_page(user, roles, row["cohort"], notice=notice))
+            else:
+                self.send_html(200, cohorts_page(user, roles, notice=notice))
+        elif path in ("/context", "/key-aliases"):
+            self.send_html(200, key_page(user, roles, form.get("label", ""), notice=notice))
         elif path == "/issue" and not secret:
             # abgelehnt: das Formular kommt mit allem zurück, was eingetippt war
             self.send_html(200, keys_page(user, roles, host, notice=notice, keep=form))
@@ -2780,17 +3026,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/cohort-extend":
             try:
                 n = store.extend_cohort(DB, name, end_of_day(form.get("bis", "")), user)
-                return cohorts_page(user, roles, notice=f"Kohorte „{name}“: {n} Schlüssel gelten "
-                                                         f"jetzt bis {dash.until(end_of_day(form.get('bis', '')))}.")
+                return cohort_page(user, roles, name, notice=f"Kohorte „{name}“: {n} Schlüssel gelten "
+                                                             f"jetzt bis {dash.until(end_of_day(form.get('bis', '')))}.")
             except ValueError as exc:
-                return cohorts_page(user, roles, notice=str(exc))
+                return cohort_page(user, roles, name, notice=str(exc))
         if path == "/cohort-revoke":
             if form.get("confirm") != "1":
-                return cohorts_page(user, roles, notice="Nicht widerrufen: Für eine ganze Kohorte "
-                                                        "bitte „wirklich“ anhaken.")
+                return cohort_page(user, roles, name, notice="Nicht widerrufen: Für eine ganze Kohorte "
+                                                             "bitte „wirklich“ anhaken.")
             labels = store.revoke_cohort(DB, name, user)
-            return cohorts_page(user, roles, notice=f"Kohorte „{name}“: {len(labels)} Schlüssel "
-                                                    "widerrufen — ab sofort abgelehnt.")
+            return cohort_page(user, roles, name, notice=f"Kohorte „{name}“: {len(labels)} Schlüssel "
+                                                         "widerrufen — ab sofort abgelehnt.")
         return cohorts_page(user, roles, result=issue_cohort(form, multi, user), keep=form)
 
     def change_supply(self, path, form, user):
@@ -3107,7 +3353,7 @@ def main():
     for problem in CONFIG_ERRORS:
         sys.stdout.write(f"Konfiguration: {problem}\n")
     sys.stdout.write(
-        f"OAAP KI-Gateway {VERSION} auf Port {PORT} — "
+        f"{APP_NAME} {VERSION} auf Port {PORT} — "
         f"{len(SUPPLIERS)} Bezugsquelle(n), {len(ALIASES)} Alias(se)\n")
     sys.stdout.flush()
     threading.Thread(target=check_destination_sources, daemon=True).start()

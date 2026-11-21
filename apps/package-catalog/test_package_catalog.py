@@ -358,7 +358,7 @@ s, _h, d = call("GET", "/", headers=ADMIN)
 ok("die Seite zeigt App und Version, die Notiz maskiert",
    b"meinapp" in d and b"1.0.0" in d)
 s, h, _d = upload(pkg("xss", "1.0.0"), note="<script>alert(1)</script>")
-s, _h, d = call("GET", "/", headers=ADMIN)
+s, _h, d = call("GET", "/paket/xss", headers=ADMIN)
 ok("eine Notiz mit Markup steht als Text da", b"<script>alert" not in d
    and b"&lt;script&gt;" in d)
 s, h, _d = call("POST", "/release", b"app=meinapp&version=1.0.0&released=1",
@@ -404,6 +404,83 @@ s, _h, _d = call("POST", "/visible", b"app=sichtbar&visible_to=",
 ok("... ohne admin: 403", s == 403 and appmod.CATALOG.visible_to("sichtbar") == ["bec", "pxx"])
 ok("kein Upload-Rest im tmp-Verzeichnis",
    os.listdir(appmod.CATALOG.tmp_dir()) == [], os.listdir(appmod.CATALOG.tmp_dir()))
+
+print("\n=== 0.5: Rahmen, Listenbericht, Objektseite (RFC-0118) ===")
+s, _h, d = call("GET", "/", headers=ADMIN)
+t = d.decode()
+ok("die Seite lädt Kit und Rahmen der Plattform",
+   "/platform/theme.css" in t and "/platform/app.js" in t)
+ok("der App-Name ohne OAAP im Kopf", 'class="oaap-appname">Paketkatalog<' in t and "OAAP Paket" not in t)
+ok("keine eigene Palette, keine Rollen im Text", "#1e3a8a" not in t and "X-OAAP" not in t)
+ok("eine Reiterleiste, Übersicht zuerst, Einrichtung zuletzt",
+   t.index(">Übersicht<") < t.index(">Neue Version<") < t.index(">Einrichtung<"))
+ok("keine Formulare in Zeilen der Liste", "/release" not in t and "/delete" not in t)
+ok("die Zeile öffnet die Seite des Pakets", 'href="/paket/sichtbar"' in t)
+s, _h, d = call("GET", "/paket/sichtbar", headers=ADMIN)
+t = d.decode()
+ok("Objektseite: zurück zur Liste, Handlungen der Version",
+   s == 200 and "oaap-back" in t and 'action="/release"' in t and 'action="/delete"' in t
+   and 'action="/visible"' in t and "/download/sichtbar/1.0.0" in t)
+ok("Objektseite einer unbekannten App: 404", call("GET", "/paket/gibtsnicht", headers=ADMIN)[0] == 404)
+ok("ohne Rolle keine Objektseite", call("GET", "/paket/sichtbar")[0] == 403)
+s, h, _d = call("POST", "/release", b"app=sichtbar&version=1.0.0&released=1",
+                dict(ADMIN, **{"Content-Type": "application/x-www-form-urlencoded"}))
+ok("nach einer Handlung zurück auf die Seite des Pakets", h["location"].startswith("/paket/sichtbar?"), h)
+for i in range(55):
+    upload(pkg(f"viele{i:02d}", "1.0.0"))
+s, _h, d = call("GET", "/", headers=ADMIN)
+t = d.decode()
+ok("Listenbericht: Zählzeile und Blättern ab 50",
+   "oaap-countline" in t and "Weitere 50" in t and "offset=50" in t, t[-800:])
+s, _h, d = call("GET", "/?q=viele0", headers=ADMIN)
+t = d.decode()
+ok("Listenbericht: Suche filtert", "/paket/viele03" in t and "/paket/sichtbar" not in t
+   and "/paket/viele13" not in t)
+s, _h, d = call("GET", "/?status=frei", headers=ADMIN)
+t = d.decode()
+ok("Listenbericht: Status-Filter", "/paket/sichtbar" in t and "/paket/viele01" not in t)
+s, _h, d = call("GET", "/?sort=-name", headers=ADMIN)
+t = d.decode()
+ok("Listenbericht: absteigend sortiert", 'aria-sort="descending"' in t
+   and t.index("/paket/xss") < t.index("/paket/viele54") < t.index("/paket/viele10"))
+for p in ("/neu", "/einrichtung", "/spiegel"):
+    ok(f"{p} antwortet im Rahmen", b"/platform/app.js" in call("GET", p, headers=ADMIN)[2])
+
+
+def mcp(body, headers):
+    h = dict(headers, **{"Content-Type": "application/json"})
+    s, _h, d = call("POST", "/mcp", json.dumps(body).encode(), h)
+    return s, json.loads(d) if d else None
+
+
+print("\n=== 0.5: MCP-Tür ===")
+ok("GET /mcp: 405", call("GET", "/mcp", headers=ADMIN)[0] == 405)
+s, r = mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, ADMIN)
+names = [x["name"] for x in r["result"]["tools"]]
+ok("tools/list nennt die Lesewerkzeuge", names == ["package_catalog_list", "package_catalog_read"], names)
+ok("alle Werkzeuge nur lesend", all(x["annotations"]["readOnlyHint"] for x in r["result"]["tools"]))
+s, r = mcp({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}, ADMIN)
+ok("prompts/list nennt Vorlagen", len(r["result"]["prompts"]) >= 1)
+s, r = mcp({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "package_catalog_list", "arguments": {"status": "frei"}}}, ADMIN)
+res = json.loads(r["result"]["content"][0]["text"])
+ok("package_catalog_list als admin: die freigegebene App",
+   not r["result"]["isError"] and [a["id"] for a in res["apps"]] == ["sichtbar"], res)
+s, r = mcp({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "package_catalog_read", "arguments": {"app": "sichtbar"}}}, ADMIN)
+res = json.loads(r["result"]["content"][0]["text"])
+ok("package_catalog_read: Versionen ohne Dateipfad",
+   res["versions"][0]["version"] == "1.0.0" and res["versions"][0]["released"]
+   and "file" not in res["versions"][0] and res["visible_to"] == ["bec", "pxx"], res)
+s, r = mcp({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "params": {"name": "package_catalog_read", "arguments": {"app": "gibtsnicht"}}}, ADMIN)
+ok("package_catalog_read einer unbekannten App: abgelehnt", r["result"]["isError"])
+USER = {"X-OAAP-Roles": "user", "X-OAAP-User": "x"}
+for tool, args in (("package_catalog_list", {}), ("package_catalog_read", {"app": "sichtbar"})):
+    s, r = mcp({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                "params": {"name": tool, "arguments": args}}, USER)
+    ok(f"{tool} ohne admin: abgelehnt, nichts verraten",
+       r["result"]["isError"] and "sichtbar" not in r["result"]["content"][0]["text"])
 SRV.shutdown()
 
 print("\nFAILS:", fails)

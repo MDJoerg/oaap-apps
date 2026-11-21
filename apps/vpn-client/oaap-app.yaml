@@ -1,12 +1,12 @@
-oaap_manifest: "0.14"
+oaap_manifest: "0.18"
 
 app:
   id: vpn-client
   name: VPN-Client
-  version: 0.2.0
+  version: 0.3.0
   type: native
   class: service
-  description: "Ein Tunnel als App (RFC-0060): hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
+  description: "Ein Tunnel als App: hält eine OpenVPN-Verbindung zu einer fremden Gegenstelle in seinem eigenen Container und macht benannte Ziele dahinter als Destination erreichbar (through:<instanz>/<name>). Traut der Gegenseite nichts (keine geschobenen Routen, kein DNS, keine Skripte), leitet keine Pakete weiter, hält keinen Schlüssel des Ziels."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Beim Bau kommen nur Pakete aus dem Archiv der Basis dazu — ein Neubau ändert nur die Basis-Schicht.
@@ -59,6 +59,28 @@ config:
   - key: VPN_TIMEOUT_SECONDS
     label: "Geduld gegenüber dem Ziel in Sekunden (10–3600)"
     default: "600"
+
+# RFC-0118 §9: eine MCP-Tür mit einem Lesewerkzeug (vpn_state) -- Zustand von
+# Tunnel und Zielen, nur Namen und ok/down, nie Adressen, nie die Datei.
+# Unter der Route / und damit nur für admin, wie die Seite.
+mcp:
+  path: /mcp
+
+# RFC-0118 §9 / RFC-0094: die Hilfe für die Betreiber des Tunnels.
+docs:
+  - product: vpn-client
+    title: "VPN-Client"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin]
+    readers: [admin, operator]
+    kinds:
+      index.md: overview
+      tunnel-einrichten.md: howto
+      ziele-und-destinationen.md: howto
+      zustand-pruefen.md: howto
+      faq.md: faq
 
 # Manifest 0.14 (RFC-0087 §8.1, Plattform ab 0.1.288): hier fragt der Knoten,
 # wie Tunnel und Ziele stehen -- für sein Statusdokument und so für die

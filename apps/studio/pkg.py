@@ -58,7 +58,9 @@ KNOWN_MANIFEST_MAJOR = 0
 # schema/oaap-app.schema.json). Bis 0.4.5 stand hier 0.2 — jedes Paket
 # mit Zwilling, Berechtigungen, MCP usw. bekam einen Hinweis „unbekannt“,
 # den ein Knoten so nie gegeben hätte. Steigt das Schema, hier nachziehen.
-KNOWN_MANIFEST_MINOR = 15
+# Studio 0.7.0: 0.19 (RFC-0118 macht `docs:` zur Pflicht -- ein Paket, das die
+# Regel erfüllt, darf hier keinen Hinweis „unbekannt“ bekommen).
+KNOWN_MANIFEST_MINOR = 19
 APP_TYPES = ("native", "image", "wrapped")
 APP_CLASSES = ("frontend", "service")
 # `support` seit RFC-0039 -- der Dienstleister, der einen Knoten
@@ -73,7 +75,11 @@ TOP_LEVEL = ("oaap_manifest", "must_understand", "app", "services", "routes",
              "data_model", "contributes", "consumes", "launchpad",
              "destinations", "authorization", "cases", "care", "mcp",
              "mcp_sources", "mcp_client", "ui_sandbox", "link_state",
-             "assets")
+             "assets",
+             # 0.16 Identität, 0.17 Hilfe (RFC-0094), 0.18 Einrichtung und
+             # KI-Türen (RFC-0104), 0.19 fremder Inhalt (RFC-0116).
+             "identity", "docs", "docs_sources", "setup", "ai_client",
+             "ai_gateway", "mcp_content")
 
 # Was ein Paket von der Plattform anfordert, in Worten für den Menschen,
 # der es prüft — in der Reihenfolge des Briefings.

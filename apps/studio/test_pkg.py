@@ -287,7 +287,7 @@ ok("und ohne jeden Befund", sum(r_starter["counts"].values()) == 0,
    str([f["text"] for f in r_starter["findings"]]))
 ok("sein Manifest nennt Kennung, Version, Typ und Klasse",
    r_starter["summary"]["id"] == "starter"
-   and r_starter["summary"]["version"] == "0.2.0"
+   and r_starter["summary"]["version"] == "0.3.0"
    and r_starter["summary"]["type"] == "native"
    and r_starter["summary"]["class"] == "frontend")
 ok("es deklariert einen Speicher und einen Gesundheitspfad",

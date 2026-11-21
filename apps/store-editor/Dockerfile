@@ -27,7 +27,11 @@ RUN pip install --no-cache-dir "PyYAML==6.0.3"
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin editor
 
 WORKDIR /srv
-COPY app.py checker.py editor.py /srv/
+COPY app.py checker.py editor.py helpdocs.py /srv/
+# RFC-0118: Rahmen, MCP-Tür und die Hilfe (eine Quelle mit docs: im Manifest).
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
+COPY docs/ /srv/docs/
 
 USER 10001
 EXPOSE 8000

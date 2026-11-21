@@ -5,20 +5,19 @@ the machine-principal key appctl mints at install (OAAP_PLATFORM_KEY) --
 both platform-owned (RESERVED_ENV), never something this app invents,
 shows or edits.
 
+The same file is copied into partnerverwaltung, mitarbeiterverwaltung,
+projekt and raci on purpose -- small, independent apps without a shared
+package. A change here belongs in the three sibling copies too.
+
 Both are ABSENT on a node without the 'store' profile, or on a
 rehearsal instance (RFC-0031 SS2.2: a rehearsal gets neither, on
 purpose -- D8's own schema copy is not built yet). `configured()` is
 how the rest of this app tells that apart from a real outage.
-
-Identical to partnerverwaltung's twin.py on purpose -- both are small,
-independent reference apps (RFC-0031 Schritt 4) with no shared package
-to import from, same as every other app in this monorepo owning its own
-copy of a small helper module (see ollama-models/ollama.py, store-
-editor/checker.py). A change here belongs in the sibling copy too.
 """
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 
 TWIN_URL = os.environ.get("OAAP_TWIN_URL", "").rstrip("/")
@@ -68,6 +67,44 @@ def _call(method, path, body=None):
         raise TwinError(exc.code, detail) from None
     except urllib.error.URLError as exc:
         raise TwinError(0, str(exc.reason)) from None
+
+
+def create_object(type_key, title, group_key, attributes=None, relations=None,
+                   activities=None, source_key=None, attr_valid_from=None,
+                   attr_valid_to=None):
+    """POST /twin/objects (oaap.data.twin 0.1 SS2.5) -- refused unless the
+    caller owns 'type_key'. 'attributes' applies attr_valid_from/_to to
+    EVERY attribute in this one call (the service reads it at group-
+    payload level); each entry of 'relations' carries its own
+    valid_from/valid_to instead, because the service reads THOSE per
+    relation, not from the group payload -- the two loops in
+    services/twin/app.py's _write_group_content are not symmetric, and
+    this client follows that exactly rather than a tidier guess."""
+    group = {"key": group_key}
+    if attributes:
+        group["attributes"] = attributes
+        if attr_valid_from:
+            group["valid_from"] = attr_valid_from
+        if attr_valid_to:
+            group["valid_to"] = attr_valid_to
+    if relations:
+        group["relations"] = relations
+    if activities:
+        group["activities"] = activities
+    body = {"type": type_key, "title": title, "group": group}
+    if source_key:
+        body["source_key"] = source_key
+    return _call("POST", "/objects", body)
+
+
+def list_objects(type_key):
+    """GET /twin/objects?type=... (oaap.data.twin 0.7 SS2.6a) -- every
+    object of one type in this tenant, each with title, owner and groups
+    (one request, no per-row read). Refused unless the caller contributes
+    or consumes the type. Returns (objects, truncated): the service
+    answers at most 500 and says so instead of cutting silently."""
+    doc = _call("GET", "/objects?" + urllib.parse.urlencode({"type": type_key})) or {}
+    return list(doc.get("objects") or []), bool(doc.get("truncated"))
 
 
 def get_object(obj_id):

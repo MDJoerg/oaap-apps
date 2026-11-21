@@ -18,6 +18,7 @@ WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
 COPY app.py library.py index.py sources.py render.py mcp_door.py apps_source.py \
      guide_requests.py maint_door.py setup_door.py /srv/
+COPY appframe/ /srv/appframe/
 # Die Doku im Paket (seed): antwortet bis zum ersten Abruf, und ohne Destination.
 COPY seed/ /srv/seed/
 

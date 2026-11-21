@@ -1,4 +1,4 @@
-"""OAAP Studio 0.4 — Entwicklungsvorhaben, Briefings und Pakete.
+"""Studio — Entwicklungsvorhaben, Briefings und Pakete.
 
 Zweite Ausbaustufe (siehe program/studio/ideas.md). 0.1 verwaltete
 Vorhaben und erzeugte daraus **Briefings**; 0.2 nimmt die andere Seite
@@ -68,9 +68,10 @@ ablehnt. Dieselbe Begründung wie beim Store Editor. PyYAML braucht
 keinen Übersetzer: ohne libyaml fällt es auf reines Python zurück, der
 Bau auf arm64 hat also nichts zu kompilieren.
 
-Optik nach oaap-design/docs/design-guidelines.md v0.1 — Blau-Palette,
-Hexagon-Marke, deutsche Oberfläche, Floorplans (Listenbericht,
-Objektseite, Dialogseite), keine externen Ressourcen.
+Seit 0.7 (RFC-0118) im Rahmen der Plattform: Kit /platform/theme.css,
+Rahmenskript /platform/app.js, eine Reiterleiste, ein Listenbericht der
+Vorhaben, die Hilfe aus docs/ (auch unter /hilfe) und eine lesende
+MCP-Tür unter /mcp.
 """
 
 import html
@@ -85,8 +86,11 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
+import appframe as af
 import deployer
 import fleet
+import helpdocs
+import mcpdoor
 import multipart
 import pkg
 
@@ -109,7 +113,7 @@ TMP_DIR = os.environ.get("STUDIO_TMP_DIR", "/tmp")
 # durch den auch fremde Pakete gehen.
 STARTER_DIR = os.environ.get(
     "STUDIO_STARTER_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "starter"))
-STARTER_FILES = ("oaap-app.yaml", "Dockerfile", "app.py", "README.md")
+STARTER_FILES = ("oaap-app.yaml", "Dockerfile", "app.py", "README.md", "docs/index.md")
 
 # Declared configuration (manifest `config`)
 CONTRACT_URL = os.environ.get(
@@ -390,139 +394,55 @@ def esc(v):
     return html.escape(str(v or ""), quote=True)
 
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  nav.main{display:flex;gap:.25rem;margin-left:1rem;flex:1}
-  nav.main a{color:#fff;text-decoration:none;padding:.55rem .9rem;border-radius:.4rem;
-       opacity:.85;border-bottom:3px solid transparent}
-  nav.main a:hover{background:rgba(255,255,255,.12);opacity:1}
-  nav.main a.active{border-bottom-color:var(--oaap-blue-100);opacity:1;font-weight:600}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 1.2rem}
-  h1{font-size:1.35rem;margin:.2rem 0 1rem}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .pagehead{display:flex;align-items:center;justify-content:space-between;gap:1rem;
-       flex-wrap:wrap;margin-bottom:1rem}
-  .pagehead h1{margin:0}
-  .back{display:inline-block;margin-bottom:.8rem;color:var(--oaap-blue-600);text-decoration:none}
-  .back:hover{text-decoration:underline}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.danger{border-color:#fecaca}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.test{background:#fef3c7;color:#92400e}
-  .badge.off{background:#f3f4f6;color:#6b7280}
-  .badge.ok{background:#dcfce7;color:#166534}
-  .badge.err{background:#fee2e2;color:#991b1b}
-  .badge.warn{background:#fef3c7;color:#92400e}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  a.btn.ghost{background:transparent;color:var(--oaap-blue-600);
-       border:1px solid var(--oaap-blue-600)}
-  a.btn.ghost:hover{background:var(--oaap-blue-100)}
-  button.danger{background:var(--err)} button.danger:hover{background:#991b1b}
-  label{display:block;font-size:.85rem;color:var(--oaap-muted);margin-top:.9rem}
-  input,select,textarea{width:100%;padding:.55rem;margin:.25rem 0 .2rem;
-       border:1px solid var(--oaap-border);border-radius:.4rem;font-size:.95rem;
-       font-family:inherit}
+APP_NAME = "Studio"
+
+# Nur, was dem Studio eigen ist -- Farben ausschließlich über das Kit
+# (/platform/theme.css). Kopfleiste, Reiter, Karten, Tabellen, Badges und
+# Knöpfe kommen aus dem Rahmen (RFC-0118 §4).
+STYLE = """
+  .oaap-card label{display:block;font-size:.85rem;color:var(--oaap-color-text-muted);margin-top:.9rem}
+  .oaap-card input,.oaap-card select,.oaap-card textarea{width:100%;box-sizing:border-box;margin:.25rem 0 .2rem}
+  .oaap-card input[type=checkbox],.oaap-card input[type=radio]{width:auto}
   textarea{min-height:5.5rem;resize:vertical}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .err{color:var(--err)}.ok{color:var(--ok)}.muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.6rem .5rem;border-bottom:1px solid var(--oaap-border);
-       vertical-align:middle}
-  th{font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  tr.rowlink:hover td{background:#f8fafc}
-  td a.rowaction{color:var(--oaap-blue-600);text-decoration:none;white-space:nowrap}
-  td a.rowaction:hover{text-decoration:underline}
+  .hint{font-size:.8rem;color:var(--oaap-color-text-muted);margin:0 0 .6rem}
+  .muted{color:var(--oaap-color-text-muted);font-size:.9rem}
+  .err{color:var(--oaap-color-danger)} .ok{color:var(--oaap-color-success)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 1.2rem}
   .actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1.1rem;align-items:center}
-  dl.facts{margin:0;display:grid;grid-template-columns:11rem 1fr;gap:.45rem 1rem}
-  dl.facts dt{color:var(--oaap-muted);font-size:.85rem}
-  dl.facts dd{margin:0;word-break:break-word}
-  pre.briefing{background:#0f172a;color:#e2e8f0;padding:1.1rem;border-radius:.5rem;
-       overflow-x:auto;font-size:.82rem;line-height:1.5;white-space:pre-wrap;
-       word-break:break-word}
-  footer.oaap{max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-       color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
-  @media (max-width:640px){
-    nav.main{order:3;flex-basis:100%;margin-left:0}
-    .userbox .who{display:none}
-    .grid2{grid-template-columns:1fr}
-    dl.facts{grid-template-columns:1fr;gap:.1rem .5rem}
-    dl.facts dd{margin-bottom:.5rem}
-  }
-</style>"""
+  .actions form{margin:0}
+  pre.briefing{background:var(--oaap-color-bg);color:var(--oaap-color-text);
+       border:1px solid var(--oaap-color-border);padding:1.1rem;border-radius:var(--oaap-radius);
+       overflow-x:auto;font-size:.82rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .oaap-main article{max-width:75ch}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+"""
 
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
-
-# Hexagon cluster = apps/ecosystem/studio (design guidelines 1), inline
-# because OAAP UIs load nothing from outside.
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="34,6 58,20 58,48 34,62 10,48 10,20" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/>'
-            '<polygon points="72,30 92,41 92,64 72,76 52,64 52,41" fill="#fff" opacity=".85"/>'
-            '<polygon points="42,58 66,72 66,94 42,96 22,84 22,70" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
+# Die Bereiche des Studios -- eine Reiterleiste (RFC-0118 §6). Absolut,
+# nicht relativ: Die Leiste steht auf JEDER Seite, auch auf
+# /vorhaben/<id>/briefing (ein relatives ./hilfe landete dort im Nichts).
+TABS = [("/", "Übersicht"), ("/briefing", "Onboarding")]
+ACTIVE = {"projects": "/", "onboarding": "/briefing"}
 
 
-def page(title, body, user, roles, active=""):
-    """Shared chrome: header with mark, navigation, user box, footer.
-
-    Mirrors the portal layout so a Studio page and a portal page look
-    like one product (the App-UI-Kit idea, hand-rolled until the
-    platform ships a real kit).
-    """
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} — OAAP Studio</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="/">{LOGO_SVG}
-    <span><b>OAAP STUDIO</b><small>Entwicklungsvorhaben und Briefings</small></span>
-  </a>
-  <!-- Absolut, nicht relativ: Der Kopf steht auf JEDER Seite, auch auf
-       /vorhaben/<id>/briefing. Ein relatives ./hilfe landete dort im
-       Nichts — aufgefallen beim Einbau des Onboarding-Eintrags in 0.4. -->
-  <nav class="main">
-    <a href="/" class="{'active' if active == 'projects' else ''}">Vorhaben</a>
-    <a href="/briefing" class="{'active' if active == 'onboarding' else ''}">Onboarding</a>
-    <a href="/hilfe" class="{'active' if active == 'help' else ''}">Hilfe</a>
-  </nav>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-<main>{body}</main>
-<footer class="oaap">
-  <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
-    <polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="#2563eb"/></svg>
-  OAAP Studio {VERSION} — Vorhaben verwalten, Briefings erzeugen, Pakete prüfen und ausrollen
-</footer>
-</html>"""
+def page(title, body, user="", roles="", active="", obj=None, obj_title=None):
+    """Der Rahmen der Plattform (appframe): Kopfleiste, Reiter, Fußzeile.
+    Wer angemeldet ist, zeigt das Benutzermenü des Rahmens -- nie die
+    Rollen (user/roles bleiben nur für die Aufrufer stehen)."""
+    return af.page(title, body, app=APP_NAME, version=VERSION, product="studio",
+                   tabs=TABS, active=ACTIVE.get(active), obj=obj, obj_title=obj_title,
+                   style=STYLE)
 
 
-VERSION = "0.6.0"
+def project_tabs(p, active):
+    """Die Reiter eines Vorhabens (RFC-0118 §6.5) -- Unterseiten, die es
+    schon gab; die Adressen bleiben."""
+    base = f"/vorhaben/{p['id']}"
+    return af.tabs([(base, "Übersicht"), (f"{base}/paket", "Paket"),
+                    (f"{base}/briefing", "Briefing"), (f"{base}/zettel", "Deployment-Zettel")],
+                   base + active)
+
+
+VERSION = "0.7.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -543,7 +463,7 @@ def field(label, name, value, hint="", kind="text", rows=0, options=None, requir
 def project_form(p, submit_label):
     """Object page sections (design guidelines 6.2): grouped cards."""
     return f"""
-<div class="card">
+<div class="oaap-card">
   <h2>Vorhaben</h2>
   {field("Name des Vorhabens", "name", p["name"], required=True,
          hint="So sprecht ihr über die App, z. B. „Reklamationen“.")}
@@ -560,7 +480,7 @@ def project_form(p, submit_label):
   {field("Entwickelt mit", "agent", p["agent"],
          hint="Welche KI oder wer entwickelt? z. B. Claude Code, Codex, Team Müller.")}
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Fachlicher Inhalt (wird zum Briefing)</h2>
   {field("Zielanwender", "target_users", p["target_users"], rows=3,
          hint="Wer benutzt die App, in welcher Situation, auf welchem Gerät?")}
@@ -569,22 +489,22 @@ def project_form(p, submit_label):
   {field("Was muss die erste Version können?", "scope", p["scope"], rows=5,
          hint="Eine Liste knapper Sätze. Alles Weitere kommt später.")}
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Technische Anbindung</h2>
   {field("Weg auf die Test-Instanz", "deploy_way", p["deploy_way"] or "git",
          options=DEPLOY_WAYS,
          hint="Git: der Knoten holt sich den Stand selbst — dafür braucht er "
               "Zugang zum Repository. Paket: die KI liefert eine ZIP ab, die "
-              "Plattform hält dann keinen fremden Schlüssel (RFC-0019).")}
+              "Plattform hält dann keinen fremden Schlüssel.")}
   {field("Repository (Git-URL)", "repo_url", p["repo_url"],
          hint="Das Projekt-Repo, z. B. auf dem eigenen Forgejo. Default-Branch: main.")}
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Zielknoten und Instanzen</h2>
   <p class="hint">Der <b>Zielknoten</b> ist die Plattform, auf der die Instanzen
   dieses Vorhabens laufen — nicht zwangsläufig die, auf der dieses Studio
   läuft. Test und Produktiv liegen auf demselben Knoten: Die Übernahme nach
-  Produktiv (RFC-0020) findet dort statt und reicht dieselben Bytes weiter.</p>
+  Produktiv findet dort statt und reicht dieselben Bytes weiter.</p>
   {field("Zielknoten (Adresse)", "node_url", p["node_url"],
          hint="z. B. https://oaap.joomp.de. Leer = dieser Knoten. Sobald ein "
               "Deploy-Hook eingetragen ist, gilt dessen Knoten — das Feld "
@@ -604,46 +524,51 @@ def project_form(p, submit_label):
               "Es wird im Portal erzeugt, gehört Dir und wird bei jedem "
               "Upload einzeln eingegeben.")}
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Notizen</h2>
   {field("Notizen / nächste Schritte", "notes", p["notes"], rows=4)}
 </div>
-<div class="actions"><button type="submit">{esc(submit_label)}</button></div>
+<div class="actions"><button type="submit" class="primary">{esc(submit_label)}</button></div>
 """
 
 
-def list_page(rows, user, roles, msg=""):
-    if rows:
-        body_rows = "".join(f"""
-  <tr class="rowlink">
-    <td><a class="rowaction" href="./vorhaben/{esc(r['id'])}">{esc(r['name'])}</a></td>
-    <td>{esc(r['context']) or '<span class="muted">—</span>'}</td>
-    <td>{esc(r['app_type'])}</td>
-    <td><span class="badge {STATUS_BADGE.get(r['status'], '')}">{esc(STATUSES.get(r['status'], r['status']))}</span></td>
-    <td>{esc(r['agent']) or '<span class="muted">—</span>'}</td>
-  </tr>""" for r in rows)
-        table = f"""<div class="card" style="overflow-x:auto;padding:.4rem 1.4rem"><table>
-  <tr><th>Vorhaben</th><th>Kontext</th><th>Typ</th><th>Status</th><th>Entwickelt mit</th></tr>
-  {body_rows}
-</table></div>"""
-    else:
-        table = """<div class="card"><p class="muted">Noch kein Vorhaben erfasst.
-        Legt eines an — daraus entsteht das Briefing, mit dem die KI startet.</p></div>"""
-    msg_html = f'<p class="ok">{esc(msg)}</p>' if msg else ""
+def list_page(rows, user, roles, msg="", params=None):
+    """Der Listenbericht der Vorhaben (RFC-0118 §7): Suche, Status und
+    App-Typ als Filter, sortierbare Spalten, Blättern ab 50."""
+    query = af.Query(params or {}, filters=("status", "typ"), default_sort="name")
+    rows = [r for r in rows
+            if (not query.filters["status"] or r["status"] == query.filters["status"])
+            and (not query.filters["typ"] or r["app_type"] == query.filters["typ"])]
+    cols = [("Vorhaben", "name", lambda r: r["name"] or "", ""),
+            ("Kontext", "kontext", lambda r: r["context"] or "", ""),
+            ("Typ", "typ", lambda r: r["app_type"] or "", "oaap-minor"),
+            ("Status", "status", lambda r: list(STATUSES).index(r["status"])
+             if r["status"] in STATUSES else 99, ""),
+            ("Entwickelt mit", "agent", lambda r: r["agent"] or "", "oaap-minor")]
+
+    def row(r):
+        return (f'<tr><td><a href="/vorhaben/{esc(r["id"])}">{esc(r["name"])}</a></td>'
+                f'<td>{esc(r["context"]) or "<span class=muted>—</span>"}</td>'
+                f'<td class="oaap-minor">{esc(r["app_type"])}</td>'
+                f'<td>{af.badge(STATUSES.get(r["status"], r["status"]), STATUS_BADGE.get(r["status"], ""))}</td>'
+                f'<td class="oaap-minor">{esc(r["agent"]) or "<span class=muted>—</span>"}</td></tr>')
+    choices = [("status", "Status", list(STATUSES.items())),
+               ("typ", "App-Typ", [(k, k) for k in APP_TYPES])]
+    report = af.list_report(query, rows, cols, row, base="/?", noun="Vorhaben",
+                            choices=choices, placeholder="Name, Kontext, Entwickler",
+                            empty_text="Noch kein Vorhaben erfasst. <b>Vorhaben anlegen</b> legt "
+                                       "das erste an — daraus entsteht das Briefing, mit dem die KI startet.")
     body = f"""
-<div class="pagehead">
-  <h1>Entwicklungsvorhaben</h1>
-  <a class="btn" href="./vorhaben/neu">Vorhaben anlegen</a>
-</div>
-{msg_html}
-{table}
-<div class="card">
+{af.pagehead("Entwicklungsvorhaben", '<a class="oaap-btn primary" href="/vorhaben/neu">Vorhaben anlegen</a>')}
+{af.msg(msg)}
+{report}
+<div class="oaap-card">
   <h2>Projekt onboarden — ohne Vorhaben</h2>
   <p class="muted">Ein Projekt läuft schon und es fehlt nur das Deployment?
   Dann braucht es keinen fachlichen Auftrag, sondern nur die Regeln der
   Plattform: <b>Plattform-Briefing</b> und <b>Starter-Paket</b> herunterladen,
   der KI des Projekts geben, fertiges Paket hier hochladen.</p>
-  <p><a class="btn" href="./briefing">Briefing und Starter-Paket</a></p>
+  <p><a class="oaap-btn" href="/briefing">Briefing und Starter-Paket</a></p>
 </div>"""
     return page("Vorhaben", body, user, roles, "projects")
 
@@ -663,15 +588,15 @@ def _instance_row(kanal, name, node, st, hint="", found_only=False):
         return (f'<tr><td>{esc(kanal)}</td><td colspan="4" class="muted">'
                 f'{esc(hint)}</td></tr>')
     link = instance_url(node, name)
-    label = (f'<a class="rowaction" href="{esc(link)}" target="_blank" '
+    label = (f'<a href="{esc(link)}" target="_blank" '
              f'rel="noopener">{esc(name)}</a>' if link else esc(name))
     if found_only:
-        label += (' <span class="badge warn">der Knoten hat sie, das '
+        label += (' <span class="oaap-badge warn">der Knoten hat sie, das '
                   'Vorhaben nennt sie nicht</span>')
     row = fleet.instance(st.get("doc"), name)
     if row:
         state = row.get("state", "unknown")
-        zustand = (f'<span class="badge {fleet.STATE_BADGE.get(state, "off")}">'
+        zustand = (f'<span class="oaap-badge {fleet.STATE_BADGE.get(state, "off")}">'
                    f'{esc(fleet.STATE_LABELS.get(state, state))}</span>')
         version = esc(row.get("version") or "—")
         # Eigene Adresse (RFC-0009), sonst der automatische Name aus
@@ -682,13 +607,13 @@ def _instance_row(kanal, name, node, st, hint="", found_only=False):
         addr = row.get("address") or ""
         auto = row.get("auto_address") or ""
         if addr:
-            adresse = (f'<a class="rowaction" href="https://{esc(addr)}" '
+            adresse = (f'<a href="https://{esc(addr)}" '
                        f'target="_blank" rel="noopener">{esc(addr)}</a>')
         elif auto:
             a_state = row.get("auto_state", "unknown")
-            adresse = (f'<a class="rowaction" href="https://{esc(auto)}" '
+            adresse = (f'<a href="https://{esc(auto)}" '
                        f'target="_blank" rel="noopener">{esc(auto)}</a>'
-                       f' <span class="badge {fleet.STATE_BADGE.get(a_state, "off")}">'
+                       f' <span class="oaap-badge {fleet.STATE_BADGE.get(a_state, "off")}">'
                        f'{esc(fleet.AUTO_LABELS.get(a_state, a_state))}</span>')
         else:
             adresse = '<span class="muted">—</span>' 
@@ -697,11 +622,11 @@ def _instance_row(kanal, name, node, st, hint="", found_only=False):
         # ist das eine Nachricht — z. B. eine Test-Instanz, die in
         # Wahrheit produktiv läuft.
         if kanal_doc and kanal_doc != kanal:
-            kanal = f'{esc(kanal)} <span class="badge warn">Knoten sagt: {esc(kanal_doc)}</span>'
+            kanal = f'{esc(kanal)} <span class="oaap-badge warn">Knoten sagt: {esc(kanal_doc)}</span>'
         else:
             kanal = esc(kanal)
     elif st.get("doc") is not None:
-        zustand = ('<span class="badge off">auf dem Knoten nicht vorhanden</span>')
+        zustand = ('<span class="oaap-badge off">auf dem Knoten nicht vorhanden</span>')
         version, adresse, kanal = "—", '<span class="muted">—</span>', esc(kanal)
     else:
         zustand = '<span class="muted">—</span>'
@@ -723,7 +648,7 @@ def _names_note(st, names):
             state = n.get("state", "unknown")
             rows.append(
                 f'<li><code>{esc(n.get("name"))}</code> '
-                f'<span class="badge {fleet.STATE_BADGE.get(state, "off")}">'
+                f'<span class="oaap-badge {fleet.STATE_BADGE.get(state, "off")}">'
                 f'{esc(fleet.STATE_LABELS.get(state, state))}</span> '
                 f'<span class="muted">({esc(n.get("kind"))}, {esc(name)})</span></li>')
     if not rows:
@@ -748,7 +673,7 @@ def node_card(p, node, st):
 
     if node["base"]:
         node_dd = (f'<code>{esc(node["host"])}</code> '
-                   + ('<span class="badge test">anderer Knoten</span> '
+                   + ('<span class="oaap-badge test">anderer Knoten</span> '
                       if node["remote"] else "")
                    + f'<span class="muted">— {esc(node["source_label"])}</span>')
         portal_dd = (f'<a href="{esc(node["base"])}/instances" target="_blank" '
@@ -774,9 +699,9 @@ def node_card(p, node, st):
             found_prod = proposal
 
     prod_hint = ("Noch nicht produktiv. Die Übernahme geschieht im Portal des "
-                 "Zielknotens auf der Seite der Test-Instanz (RFC-0020)"
+                 "Zielknotens auf der Seite der Test-Instanz"
                  + (f" — üblicher Name wäre „{proposal}“." if proposal else "."))
-    table = f"""<table style="margin-top:1rem">
+    table = f"""<table class="oaap-table" style="margin-top:1rem">
   <tr><th>Kanal</th><th>Instanz</th><th>Version</th><th>Zustand</th><th>Adresse</th></tr>
   {_instance_row("Test", test_name, node, st,
                  "Noch keine Test-Instanz benannt. Sie entsteht mit dem ersten "
@@ -795,7 +720,7 @@ def node_card(p, node, st):
     att_html = ""
     if att:
         items = "".join(
-            f'<li><span class="badge warn">{esc(a["label"])}</span> '
+            f'<li><span class="oaap-badge warn">{esc(a["label"])}</span> '
             f'{esc(a["instance"])} <span class="muted">{esc(a["detail"])}</span></li>'
             for a in att)
         att_html = (f'<p style="margin:1rem 0 .3rem"><b>Der Knoten meldet '
@@ -816,12 +741,12 @@ sudo oaap fleet key issue studio@&lt;dein-studio-knoten&gt;
 sudo oaap app config set &lt;studio-instanz&gt; STUDIO_FLEET_KEYS \\
   --append '{label}=&lt;schlüssel&gt;'</pre>
     <p class="muted">Der Schlüssel kann <b>ausschließlich</b> diese eine
-    Auskunft lesen — keine Sitzung, keine Rollen, kein Schreibweg
-    (<code>oaap.fleet.status</code> §2). Ohne ihn funktioniert alles Übrige
+    Auskunft lesen — keine Sitzung, keine Rollen, kein Schreibweg.
+    Ohne ihn funktioniert alles Übrige
     unverändert; es fehlt nur die Ampel.</p>"""
     elif st.get("error"):
         foot = f"""<p class="muted" style="margin-top:1rem">
-    <span class="badge err">keine Auskunft</span> {esc(st['error'])} —
+    <span class="oaap-badge err">keine Auskunft</span> {esc(st['error'])} —
     <a href="?frisch=1">noch einmal versuchen</a>. Das Studio hebt keinen
     letzten bekannten Stand auf; dafür ist FleetView da.</p>"""
     else:
@@ -834,10 +759,10 @@ sudo oaap app config set &lt;studio-instanz&gt; STUDIO_FLEET_KEYS \\
     · <a href="?frisch=1">neu abfragen</a></p>"""
 
     return f"""
-<div class="card">
+<div class="oaap-card">
   <h2>Zielknoten und Instanzen</h2>
   {conflict}
-  <dl class="facts">
+  <dl class="oaap-kv">
     <dt>Zielknoten</dt><dd>{node_dd}</dd>
     <dt>Instanzen im Portal</dt><dd>{portal_dd}</dd>
   </dl>
@@ -856,19 +781,19 @@ def package_card(p):
                 "gegen die Plattformregeln und rollt es auf Wunsch über den "
                 "Deploy-Hook aus.</p>")
     else:
-        text = f"""<dl class="facts">
+        text = f"""<dl class="oaap-kv">
     <dt>Zuletzt geprüft</dt><dd>{esc(p['pkg_file'])} — Version
       <b>{esc(p['pkg_version'])}</b>, {esc(mb(p['pkg_bytes']))}</dd>
     <dt>Prüfsumme</dt><dd><code>{esc(p['pkg_sha256'][:16])}…</code></dd>
     <dt>Am</dt><dd>{esc(p['pkg_at'])} von {esc(p['pkg_by'])}</dd>
   </dl>"""
     return f"""
-<div class="card">
+<div class="oaap-card">
   <h2>Paket und Deployment</h2>
   {text}
   <div class="actions">
-    <a class="btn" href="./{esc(p['id'])}/paket">Paket prüfen und ausrollen …</a>
-    <a class="btn ghost" href="./{esc(p['id'])}/zettel">Deployment-Zettel …</a>
+    <a class="oaap-btn primary" href="./{esc(p['id'])}/paket">Paket prüfen und ausrollen …</a>
+    <a class="oaap-btn" href="./{esc(p['id'])}/zettel">Deployment-Zettel …</a>
   </div>
 </div>"""
 
@@ -878,25 +803,25 @@ def object_page(p, user, roles, msg="", error="", is_admin=False,
     danger = ""
     if is_admin:
         danger = f"""
-<div class="card danger">
+<div class="oaap-card oaap-danger">
   <h2>Vorhaben löschen</h2>
   <p class="muted">Entfernt das Vorhaben mitsamt Briefing-Daten. Das Repository
   und installierte Instanzen bleiben unberührt.</p>
-  <a class="btn ghost" href="./{esc(p['id'])}/loeschen">Löschen …</a>
+  <a class="oaap-btn" href="./{esc(p['id'])}/loeschen">Löschen …</a>
 </div>"""
-    msg_html = f'<p class="ok">{esc(msg)}</p>' if msg else ""
-    err_html = f'<p class="err">{esc(error)}</p>' if error else ""
     body = f"""
-<a class="back" href="../">← Zurück zur Liste</a>
-<div class="pagehead">
+{af.back("/", "Zurück zur Liste")}
+<div class="oaap-objhead">
+<div class="oaap-pagehead">
   <h1>{esc(p['name'])}
-    <span class="badge {STATUS_BADGE.get(p['status'], '')}">{esc(STATUSES.get(p['status'], p['status']))}</span>
+    {af.badge(STATUSES.get(p['status'], p['status']), STATUS_BADGE.get(p['status'], ''))}
   </h1>
-  <a class="btn" href="./{esc(p['id'])}/briefing">Briefing erzeugen</a>
-</div>
-{msg_html}{err_html}
-<div class="card">
-  <dl class="facts">
+  <a class="oaap-btn primary" href="/vorhaben/{esc(p['id'])}/briefing">Briefing erzeugen</a>
+</div></div>
+{project_tabs(p, "")}
+{af.msg(msg)}{af.msg(error, error=True)}
+<div class="oaap-card">
+  <dl class="oaap-kv">
     <dt>Kennung</dt><dd><code>{esc(p['id'])}</code></dd>
     <dt>Angelegt</dt><dd>{esc(p['created_at'])} von {esc(p['created_by'])}</dd>
     <dt>Zuletzt geändert</dt><dd>{esc(p['updated_at'])} von {esc(p['updated_by'])}</dd>
@@ -908,15 +833,15 @@ def object_page(p, user, roles, msg="", error="", is_admin=False,
 {project_form(p, "Speichern")}
 </form>
 {danger}"""
-    return page(p["name"], body, user, roles, "projects")
+    return page(p["name"], body, user, roles, "projects",
+                obj=f"Vorhaben:{p['id']}", obj_title=p["name"])
 
 
 def new_page(p, user, roles, error=""):
-    err_html = f'<p class="err">{esc(error)}</p>' if error else ""
     body = f"""
-<a class="back" href="../">← Zurück zur Liste</a>
-<h1>Neues Vorhaben</h1>
-{err_html}
+{af.back("/", "Zurück zur Liste")}
+{af.pagehead("Neues Vorhaben")}
+{af.msg(error, error=True)}
 <p class="muted">Alles, was hier steht, landet später im Briefing für die KI.
 Kurze, klare Sätze sind besser als Fachjargon.</p>
 <form method="post" action="../vorhaben">
@@ -927,9 +852,9 @@ Kurze, klare Sätze sind besser als Fachjargon.</p>
 
 def delete_page(p, user, roles):
     body = f"""
-<a class="back" href="../{esc(p['id'])}">← Zurück zum Vorhaben</a>
-<h1>Vorhaben löschen</h1>
-<div class="card danger">
+{af.back(f"/vorhaben/{p['id']}", "Zurück zum Vorhaben")}
+{af.pagehead("Vorhaben löschen")}
+<div class="oaap-card oaap-danger">
   <p>Soll das Vorhaben <b>{esc(p['name'])}</b> wirklich gelöscht werden?
   Erfasste Angaben und Briefing-Inhalte gehen dabei verloren.</p>
   <p class="muted">Repository, Deploy-Token und installierte App-Instanzen
@@ -937,7 +862,7 @@ def delete_page(p, user, roles):
   <form method="post" action="../{esc(p['id'])}/loeschen">
     <div class="actions">
       <button class="danger" type="submit">Endgültig löschen</button>
-      <a class="btn ghost" href="../{esc(p['id'])}">Abbrechen</a>
+      <a class="oaap-btn" href="../{esc(p['id'])}">Abbrechen</a>
     </div>
   </form>
 </div>"""
@@ -946,12 +871,13 @@ def delete_page(p, user, roles):
 
 def briefing_page(p, text, user, roles):
     body = f"""
-<a class="back" href="../{esc(p['id'])}">← Zurück zum Vorhaben</a>
-<div class="pagehead">
-  <h1>Briefing: {esc(p['name'])}</h1>
-  <a class="btn" href="./briefing.md" download>Als Datei herunterladen</a>
+{af.back("/", "Zurück zur Liste")}
+<div class="oaap-pagehead">
+  <h1>{esc(p['name'])}</h1>
+  <a class="oaap-btn primary" href="/vorhaben/{esc(p['id'])}/briefing.md" download>Briefing als Datei herunterladen</a>
 </div>
-<div class="card">
+{project_tabs(p, "/briefing")}
+<div class="oaap-card">
   <h2>So geht es weiter</h2>
   <ol class="muted" style="margin:0;padding-left:1.2rem;line-height:1.7">
     <li>Briefing herunterladen und im Projektverzeichnis als
@@ -966,7 +892,7 @@ def briefing_page(p, text, user, roles):
   </ol>
 </div>
 <pre class="briefing">{esc(text)}</pre>"""
-    return page("Briefing", body, user, roles, "projects")
+    return page("Briefing", body, user, roles, "projects", obj=f"Vorhaben:{p['id']}", obj_title=p["name"])
 
 
 def onboarding_page(text, user, roles):
@@ -977,12 +903,11 @@ def onboarding_page(text, user, roles):
     muss, legt eine Karteileiche an.
     """
     body = f"""
-<a class="back" href="./">← Zurück zu den Vorhaben</a>
-<div class="pagehead">
+<div class="oaap-pagehead">
   <h1>Projekt onboarden</h1>
-  <a class="btn" href="./briefing.md" download>Plattform-Briefing (MD)</a>
+  <a class="oaap-btn primary" href="./briefing.md" download>Plattform-Briefing (MD)</a>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Für Projekte, die es schon gibt</h2>
   <p>Diese beiden Dateien sind alles, was eine fremde Entwicklerin oder eine
   fremde KI braucht, um aus einer bestehenden Anwendung ein Paket zu machen,
@@ -998,12 +923,12 @@ def onboarding_page(text, user, roles):
         Test-Instanz — oder die KI geht denselben Weg selbst über den
         Deploy-Hook.</li>
   </ol>
-  <p><a class="btn" href="./starter.zip" download>Starter-Paket (ZIP)</a></p>
+  <p><a class="oaap-btn primary" href="./starter.zip" download>Starter-Paket (ZIP)</a></p>
   <p class="muted">Beide Dateien enthalten <b>nichts Privilegiertes</b>:
   keinen Token, keine Anlege-Erlaubnis, keine Adresse einer Instanz. Sie
   dürfen weitergegeben werden; einen Zugang gibt das nicht.</p>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Wenn daraus doch ein Vorhaben wird</h2>
   <p class="muted">Sobald es einen fachlichen Auftrag gibt, leg ein Vorhaben
   an: Das Briefing dort enthält <b>denselben</b> Plattformteil wie dieses
@@ -1015,7 +940,7 @@ def onboarding_page(text, user, roles):
 
 
 LEVEL_LABEL = {pkg.FEHLER: "Fehler", pkg.BEFUND: "Befund", pkg.HINWEIS: "Hinweis"}
-LEVEL_BADGE = {pkg.FEHLER: "err", pkg.BEFUND: "test", pkg.HINWEIS: "off"}
+LEVEL_BADGE = {pkg.FEHLER: "err", pkg.BEFUND: "warn", pkg.HINWEIS: ""}
 
 
 def findings_html(findings):
@@ -1027,7 +952,7 @@ def findings_html(findings):
         hint = (f'<br><span class="muted">{esc(f["hint"])}</span>'
                 if f.get("hint") else "")
         items.append(
-            f'<li style="margin:.5rem 0"><span class="badge '
+            f'<li style="margin:.5rem 0"><span class="oaap-badge '
             f'{LEVEL_BADGE.get(f["level"], "off")}">'
             f'{esc(LEVEL_LABEL.get(f["level"], f["level"]))}</span> '
             f'{esc(f["text"])}{hint}</li>')
@@ -1038,7 +963,7 @@ def manifest_html(s):
     """Das Manifest als Tatsachen — was ein Betreiber daran wissen muss."""
     routes = "".join(
         f"<tr><td><code>{esc(r['path'])}</code></td>"
-        f"<td>{'<span class=\"badge test\">ohne Anmeldung</span> ' if 'public' in r['roles'] else ''}"
+        f"<td>{'<span class=\"oaap-badge test\">ohne Anmeldung</span> ' if 'public' in r['roles'] else ''}"
         f"{esc(', '.join(r['roles']))}</td></tr>"
         for r in s.get("routes", []))
     storage = ", ".join(f"{x['name']} → {x['mount']}"
@@ -1052,7 +977,7 @@ def manifest_html(s):
         for e in s.get("endpoints", [])) or "—"
     services = ", ".join(f"{x['name']} :{x['port']} ({x['from']})"
                          for x in s.get("services", [])) or "—"
-    return f"""<dl class="facts">
+    return f"""<dl class="oaap-kv">
   <dt>App</dt><dd><b>{esc(s.get('name'))}</b> — <code>{esc(s.get('id'))}</code>,
     Version <b>{esc(s.get('version'))}</b>, Typ {esc(s.get('type'))},
     Art {esc(s.get('class'))}</dd>
@@ -1064,7 +989,7 @@ def manifest_html(s):
   <dt>Plattform</dt><dd>{esc(", ".join(s.get("capabilities") or []) or "—")}</dd>
   <dt>Gesundheit</dt><dd><code>{esc(s.get('health', {}).get('path'))}</code></dd>
 </dl>
-<table style="margin-top:1rem"><tr><th>Route</th><th>Rollen</th></tr>{routes}</table>"""
+<table class="oaap-table" style="margin-top:1rem"><tr><th>Route</th><th>Rollen</th></tr>{routes}</table>"""
 
 
 def report_card(rep):
@@ -1086,38 +1011,38 @@ def report_card(rep):
                 "<p><b>Erweitert den Rahmen — braucht eine Bestätigung durch "
                 'einen <code>server_admin</code> im Portal:</b></p><ul>'
                 + "".join(f"<li>{esc(x)}</li>" for x in confirm) + "</ul>")
-        envelope = f"""<div class="card">
-  <h2>Rahmen (RFC-0019 §3)</h2>
+        envelope = f"""<div class="oaap-card">
+  <h2>Rahmen der Instanz</h2>
   {''.join(blocks)}
   <p class="muted">Verglichen wird mit dem <b>zuletzt von hier ausgerollten</b>
   Paket. Was tatsächlich installiert ist, weiß nur der Knoten — er
   entscheidet, und seine Antwort steht im Deployment-Protokoll.</p>
 </div>"""
     elif rep.get("compared"):
-        envelope = """<div class="card">
-  <h2>Rahmen (RFC-0019 §3)</h2>
+        envelope = """<div class="oaap-card">
+  <h2>Rahmen der Instanz</h2>
   <p class="ok">Nichts, was den Rahmen erweitert — verglichen mit dem zuletzt
   von hier ausgerollten Paket. Das ist der Normalfall und läuft ohne
   Rückfrage durch.</p>
 </div>"""
     else:
-        envelope = """<div class="card">
-  <h2>Rahmen (RFC-0019 §3)</h2>
+        envelope = """<div class="oaap-card">
+  <h2>Rahmen der Instanz</h2>
   <p class="muted">Noch kein Vergleich möglich: Aus diesem Vorhaben wurde
   hier noch nichts ausgerollt. Was den Rahmen erweitert, entscheidet dann
   der Knoten gegen den <b>installierten</b> Stand — er allein kennt ihn.</p>
 </div>"""
 
-    badge = ('<span class="badge ok">bereit</span>' if rep.get("deployable")
-             else '<span class="badge err">nicht bereit</span>')
+    badge = ('<span class="oaap-badge ok">bereit</span>' if rep.get("deployable")
+             else '<span class="oaap-badge err">nicht bereit</span>')
     return f"""
-<div class="pagehead" style="margin-top:2rem">
+<div class="oaap-pagehead" style="margin-top:2rem">
   <h1 style="font-size:1.1rem">Letzte Prüfung {badge}</h1>
   <span class="muted">{esc(rep.get('at'))} von {esc(rep.get('by'))}</span>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Paket</h2>
-  <dl class="facts">
+  <dl class="oaap-kv">
     <dt>Datei</dt><dd>{esc(rep.get('file'))} ({esc(mb(rep.get('bytes')))})</dd>
     <dt>Prüfsumme (SHA-256)</dt><dd><code>{esc(rep.get('sha256'))}</code></dd>
     <dt>Inhalt</dt><dd>{esc(rep.get('entries'))} Dateien, entpackt
@@ -1125,11 +1050,11 @@ def report_card(rep):
     <dt>Paketwurzel</dt><dd><code>{esc(rep.get('root') or '(Archivwurzel)')}</code></dd>
   </dl>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Manifest</h2>
   {manifest_html(s)}
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Prüfung — {counts.get(pkg.FEHLER, 0)} Fehler,
       {counts.get(pkg.BEFUND, 0)} Befunde, {counts.get(pkg.HINWEIS, 0)} Hinweise</h2>
   {findings_html(rep.get('findings') or [])}
@@ -1143,10 +1068,10 @@ def report_card(rep):
 UNKLAR = 2  # Ergebnis eines Versuchs ohne Antwort (siehe record_deploy)
 
 DEPLOY_VERDICT = {
-    1: '<span class="badge ok">angenommen</span>',
-    0: '<span class="badge err">abgelehnt</span>',
+    1: '<span class="oaap-badge ok">angenommen</span>',
+    0: '<span class="oaap-badge err">abgelehnt</span>',
     # Ohne Antwort weiß das Studio es nicht — und behauptet es nicht.
-    UNKLAR: '<span class="badge warn">Ausgang unklar</span>',
+    UNKLAR: '<span class="oaap-badge warn">Ausgang unklar</span>',
 }
 
 
@@ -1159,9 +1084,9 @@ def deployments_card(rows):
         f"<td>{DEPLOY_VERDICT.get(r['ok'], DEPLOY_VERDICT[0])}</td>"
         f"<td>{esc(r['message'])}</td><td>{esc(r['by'])}</td></tr>"
         for r in rows)
-    return f"""<div class="card" style="overflow-x:auto">
+    return f"""<div class="oaap-card" style="overflow-x:auto">
   <h2>Vom Studio ausgerollt</h2>
-  <table><tr><th>Wann</th><th>Version</th><th>Prüfsumme</th><th>Ergebnis</th>
+  <table class="oaap-table"><tr><th>Wann</th><th>Version</th><th>Prüfsumme</th><th>Ergebnis</th>
     <th>Antwort des Knotens</th><th>Wer</th></tr>{items}</table>
   <p class="muted" style="margin-top:.8rem">Dieses Verzeichnis ist die Sicht
   des Studios. Das verbindliche Protokoll führt der Knoten — im Portal unter
@@ -1177,7 +1102,7 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
     if hook:
         try:
             urls = deployer.hook_urls(hook)
-            hook_html = f"""<dl class="facts">
+            hook_html = f"""<dl class="oaap-kv">
       <dt>Anmelden</dt><dd><code>POST {esc(urls['announce'])}</code></dd>
       <dt>Hochladen</dt><dd><code>PUT {esc(urls['artifact'])}</code></dd>
     </dl>"""
@@ -1195,7 +1120,7 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
     portal_link = (f'<p class="muted">Instanz im Portal des Zielknotens: '
                    f'<a href="{esc(target)}" target="_blank" rel="noopener">'
                    f'{esc(target)}</a>'
-                   + (' <span class="badge test">anderer Knoten</span>'
+                   + (' <span class="oaap-badge test">anderer Knoten</span>'
                       if node["remote"] else "")
                    + '</p>') if target else ""
     node_line = (f'<p class="hint">Zielknoten: <code>{esc(node["host"])}</code>'
@@ -1203,17 +1128,13 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
                  if node["host"] else "")
     conflict = (f'<p class="err">{esc(node["conflict"])}</p>'
                 if node["conflict"] else "")
-    msg_html = f'<p class="ok">{esc(msg)}</p>' if msg else ""
-    err_html = f'<p class="err">{esc(error)}</p>' if error else ""
     body = f"""
-<a class="back" href="../{esc(p['id'])}">← Zurück zum Vorhaben</a>
-<div class="pagehead">
-  <h1>Paket: {esc(p['name'])}</h1>
-  <a class="btn ghost" href="./zettel">Deployment-Zettel …</a>
-</div>
-{msg_html}{err_html}
+{af.back("/", "Zurück zur Liste")}
+{af.pagehead(p['name'])}
+{project_tabs(p, "/paket")}
+{af.msg(msg)}{af.msg(error, error=True)}
 <form method="post" action="./paket" enctype="multipart/form-data">
-<div class="card">
+<div class="oaap-card">
   <h2>Paket prüfen</h2>
   <p class="hint">Die ZIP, wie die KI sie abliefert — mit
   <code>oaap-app.yaml</code> in der Wurzel oder in einem einzelnen
@@ -1227,14 +1148,14 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
   </label>
   <div class="actions"><button type="submit" name="action" value="pruefen">Nur prüfen</button></div>
 </div>
-<div class="card">
+<div class="oaap-card">
   <h2>Auf die Test-Instanz ausrollen</h2>
   {conflict}
   {node_line}
   {hook_html}
   {portal_link}
-  <p class="hint">Das Studio läuft damit genau den Weg, den auch die KI geht
-  (RFC-0019 §2): anmelden, Freigabe abholen, hochladen. Es bekommt dafür
+  <p class="hint">Das Studio läuft damit genau den Weg, den auch die KI geht:
+  anmelden, Freigabe abholen, hochladen. Es bekommt dafür
   <b>kein Sonderrecht</b> — der Token ist das Recht, und der gehört Dir.</p>
   <label>Deploy-Token oder Anlege-Erlaubnis
     <input type="password" name="token" autocomplete="off" autocapitalize="off"
@@ -1248,7 +1169,7 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
   unter „Instanzen“ eine <b>Anlege-Erlaubnis</b> für genau diesen Namen
   ausstellen und trage sie hier ein. Sie gilt einmal und eine halbe Stunde;
   danach entsteht die Test-Instanz aus diesem Paket. Für alles Weitere erzeugst
-  Du auf der Instanzseite ein normales Deploy-Token (RFC-0019).</p>
+  Du auf der Instanzseite ein normales Deploy-Token.</p>
   <div class="actions">
     <button type="submit" name="action" value="deployen">Prüfen und ausrollen</button>
   </div>
@@ -1256,7 +1177,7 @@ def package_page(p, rep, deploys, user, roles, msg="", error="", node=None):
 </form>
 {report_card(rep)}
 {deployments_card(deploys)}"""
-    return page("Paket", body, user, roles, "projects")
+    return page("Paket", body, user, roles, "projects", obj=f"Vorhaben:{p['id']}", obj_title=p["name"])
 
 
 def deploy_result_page(p, result, user, roles):
@@ -1266,9 +1187,9 @@ def deploy_result_page(p, result, user, roles):
               deployer.STATUS: "3 · Nachsehen"}
     for st in result.get("steps", []):
         details = "".join(f"<li>{esc(d)}</li>" for d in (st.get("details") or []))
-        rows.append(f"""<div class="card">
+        rows.append(f"""<div class="oaap-card">
   <h2>{esc(labels.get(st['phase'], st['phase']))}
-    <span class="badge {'ok' if st['ok'] else 'err'}">HTTP {esc(st['status'])}</span></h2>
+    <span class="oaap-badge {'ok' if st['ok'] else 'err'}">HTTP {esc(st['status'])}</span></h2>
   <p>{esc(st.get('message') or '—')}</p>
   {f'<ul>{details}</ul>' if details else ''}
   {f'<p class="muted">{esc(st["hint"])}</p>' if st.get('hint') else ''}
@@ -1277,24 +1198,24 @@ def deploy_result_page(p, result, user, roles):
     final = ""
     if result.get("ok"):
         url = res.get("url") or (p["test_url"] or "")
-        final = f"""<div class="card">
+        final = f"""<div class="oaap-card">
   <h2 class="ok">Ausgerollt</h2>
-  <dl class="facts">
+  <dl class="oaap-kv">
     <dt>Version</dt><dd>{esc(res.get('version') or '—')}</dd>
     <dt>Stand</dt><dd><code>{esc(res.get('revision') or '—')}</code></dd>
     <dt>Erreichbar unter</dt><dd>{f'<a href="{esc(url)}">{esc(url)}</a>' if url else '—'}</dd>
   </dl>
 </div>"""
     elif result.get("pending"):
-        final = """<div class="card">
+        final = """<div class="oaap-card">
   <h2>Läuft noch</h2>
   <p>Der Knoten baut das Paket. Das dauert bei einem Bau auf dem Gerät
   Minuten — auf einem Raspi auch länger. Der Stand steht im Portal auf der
   Instanzseite; die Antwort des Hooks lautet dann „fertig".</p>
 </div>"""
     body = f"""
-<a class="back" href="./paket">← Zurück zum Paket</a>
-<h1>Deployment: {esc(p['name'])}</h1>
+{af.back(f"/vorhaben/{p['id']}/paket", "Zurück zum Paket")}
+{af.pagehead("Deployment: " + p['name'])}
 {''.join(rows)}
 {final}
 <p class="muted">Der eingegebene Token ist mit dieser Anfrage vergangen —
@@ -1304,7 +1225,7 @@ wieder gebraucht.</p>"""
 
 
 def sheet_page(p, text, user, roles, with_token=False):
-    warn = ("""<div class="card danger">
+    warn = ("""<div class="oaap-card oaap-danger">
   <h2>Dieses Blatt enthält den Token</h2>
   <p>Er steht hier <b>einmalig</b> — das Studio hat ihn nicht gespeichert.
   Kopiere das Blatt jetzt zur KI (oder in den Passwortmanager) und lade die
@@ -1314,7 +1235,7 @@ def sheet_page(p, text, user, roles, with_token=False):
   hat.</p>
 </div>""" if with_token else "")
     token_form = ("" if with_token else """
-<div class="card">
+<div class="oaap-card">
   <h2>Token mit aufnehmen (einmalig)</h2>
   <p class="hint">Die KI braucht den Deploy-Token, um selbst ausrollen zu
   können. Gib ihn hier ein, wenn er im Blatt stehen soll — er wird
@@ -1325,17 +1246,18 @@ def sheet_page(p, text, user, roles, with_token=False):
     <label>Deploy-Token
       <input type="password" name="token" autocomplete="off" spellcheck="false"
              placeholder="optional — wird nicht gespeichert"></label>
-    <div class="actions"><button type="submit">Blatt mit Token anzeigen</button></div>
+    <div class="actions"><button type="submit" class="primary">Blatt mit Token anzeigen</button></div>
   </form>
 </div>""")
     body = f"""
-<a class="back" href="../{esc(p['id'])}">← Zurück zum Vorhaben</a>
-<div class="pagehead">
-  <h1>Deployment-Zettel: {esc(p['name'])}</h1>
-  <a class="btn" href="./zettel.md" download>Als Datei herunterladen</a>
+{af.back("/", "Zurück zur Liste")}
+<div class="oaap-pagehead">
+  <h1>{esc(p['name'])}</h1>
+  <a class="oaap-btn primary" href="/vorhaben/{esc(p['id'])}/zettel.md" download>Zettel als Datei herunterladen</a>
 </div>
+{project_tabs(p, "/zettel")}
 {warn}
-<div class="card">
+<div class="oaap-card">
   <h2>Wofür das Blatt ist</h2>
   <p class="muted">Es beantwortet der Projekt-KI genau eine Frage: „Wie
   bekomme ich meinen getesteten Stand auf die Test-Instanz?" — Adressen,
@@ -1344,146 +1266,7 @@ def sheet_page(p, text, user, roles, with_token=False):
 </div>
 <pre class="briefing">{esc(text)}</pre>
 {token_form}"""
-    return page("Deployment-Zettel", body, user, roles, "projects")
-
-
-HELP_BODY = f"""
-<h1>Hilfe</h1>
-<div class="card">
-  <h2>Wozu das Studio da ist</h2>
-  <p>Das Studio ist das Verzeichnis eurer App-Vorhaben — und der Ort, an dem
-  aus euren Antworten ein <b>Briefing</b> für eine KI entsteht. Das Briefing
-  enthält den fachlichen Auftrag und alle technischen Regeln, die eine App
-  auf dieser Plattform erfüllen muss. Ihr müsst diese Regeln nicht kennen;
-  das Studio schreibt sie mit.</p>
-  <p class="muted">Ausführlicher steht diese Hilfe seit Studio 0.6 auch in
-  der Hilfe eures Mandanten und ist damit im Chat zu finden (für keyuser und
-  admin).</p>
-</div>
-<div class="card">
-  <h2>Ein Projekt, das es schon gibt</h2>
-  <p>Wenn eine Anwendung bereits entwickelt wird und nur noch das Deployment
-  fehlt, braucht es dafür <b>kein Vorhaben</b>. Unter <a href="/briefing">
-  Onboarding</a> gibt es zwei Dateien zum Herunterladen:</p>
-  <ul style="line-height:1.8">
-    <li><b>Plattform-Briefing</b> — alle verbindlichen Regeln, ohne
-    fachlichen Auftrag und ohne Adressen.</li>
-    <li><b>Starter-Paket (ZIP)</b> — das kleinste vollständige Paket mit
-    kommentiertem Manifest, als Vorlage zum Umbauen.</li>
-  </ul>
-  <p class="muted">Der Plattformteil ist derselbe Text, der auch in jedem
-  Vorhaben-Briefing steht — er wird an einer Stelle gepflegt, damit die
-  beiden Blätter nicht auseinanderlaufen können. Beide Dateien enthalten
-  nichts Privilegiertes und dürfen weitergegeben werden.</p>
-</div>
-<div class="card">
-  <h2>Der Weg von der Idee zur App</h2>
-  <ol style="line-height:1.8;padding-left:1.2rem">
-    <li><b>Vorhaben anlegen</b> — Name, wer es benutzt, was es können muss.</li>
-    <li><b>Briefing erzeugen</b> — herunterladen, ins Projektverzeichnis legen.</li>
-    <li><b>KI starten</b> und mit dem Briefing arbeiten lassen.</li>
-    <li><b>Testen</b> — die KI rollt getestete Stände über den Deploy-Hook
-        selbst auf die Test-Instanz aus.</li>
-    <li><b>Produktiv setzen</b> — bleibt bewusst Handarbeit eines Menschen
-        (mit Versions-Sprung).</li>
-  </ol>
-</div>
-<div class="card">
-  <h2>Zwei Wege auf die Test-Instanz</h2>
-  <p><b>Git</b> — der Knoten holt sich den Stand selbst aus dem Repository.
-  Der gewohnte Weg, richtig überall dort, wo das Repository erreichbar ist
-  und der Zugang Dir gehört.</p>
-  <p><b>Paket (ZIP)</b> — die KI liefert ein fertiges Paket ab, Du lädst es
-  hier hoch. Der richtige Weg bei einem <b>privaten Repository</b>: Beim
-  Git-Weg müsste die Plattform einen fremden Zugangs-Token im Klartext
-  aufbewahren (und damit in jedem Backup). Beim Paket-Weg bekommt sie ein
-  Artefakt statt eines Zugangsrechts — sie hält nichts Fremdes.
-  Er funktioniert außerdem ganz ohne Internet: Datei vom Stick, Browser im
-  LAN. Nachzulesen in RFC-0019.</p>
-</div>
-<div class="card">
-  <h2>Wie ein Paket ankommt (drei Phasen)</h2>
-  <ol style="line-height:1.8;padding-left:1.2rem">
-    <li><b>Anmelden</b> — Version, vollständiges Manifest, Prüfsumme und
-    Größe. Der Knoten prüft das, <i>bevor</i> irgendetwas übertragen wird.</li>
-    <li><b>Freigabe</b> — bei Erfolg gibt er ein Einmal-Token zurück,
-    15 Minuten gültig, an genau diese Instanz und genau diese Prüfsumme
-    gebunden.</li>
-    <li><b>Hochladen</b> — nur damit. Danach prüft er erneut: Größe,
-    Prüfsumme, und ob das Manifest <i>in</i> der ZIP zeichengleich zum
-    angemeldeten ist.</li>
-  </ol>
-  <p class="muted">Abgelehnt wird hart bei geänderter App-Kennung, ungültigem
-  Manifest und <b>unveränderter Version</b>. Wer den Rahmen erweitert — neue
-  öffentliche Routen, neue Speicher, neue Ports am Gateway vorbei —, braucht
-  die Bestätigung eines <code>server_admin</code> im Portal. Alles andere
-  läuft durch; das ist der Normalfall.</p>
-  <p><b>Nach einer Bestätigung wird die Version <i>nicht</i> hochgezählt.</b>
-  Die Bestätigung gilt für genau das Manifest, das abgelehnt wurde. Die KI
-  meldet danach dasselbe Paket unverändert erneut an — zählt sie hoch, ist es
-  ein anderes Manifest, die Bestätigung deckt es nicht, und beide drehen sich
-  im Kreis (am 24.08.2026 real passiert). Die Regel „unveränderte Version wird
-  abgelehnt" vergleicht mit dem, was <i>installiert</i> ist — das abgelehnte
-  Paket ist es nicht.</p>
-</div>
-<div class="card">
-  <h2>Der Zielknoten — wenn die Instanz woanders läuft</h2>
-  <p>Das Studio muss <b>nicht</b> auf demselben Server laufen wie die App,
-  um die es sich kümmert. Der <b>Zielknoten</b> eines Vorhabens ist die
-  Plattform, auf der seine Instanzen leben; das Studio erkennt ihn am
-  Deploy-Hook (dorthin gehen die Pakete tatsächlich) und zeigt ihn auf der
-  Seite des Vorhabens an. Bevor es einen Hook gibt, kann man ihn im Feld
-  „Zielknoten“ eintragen.</p>
-  <p><b>Test und Produktiv liegen auf demselben Knoten.</b> Die Übernahme
-  nach Produktiv (RFC-0020) reicht <i>dieselben Bytes</i> weiter, die getestet
-  wurden — das geht nur dort, wo sie liegen. Ein Vorhaben hat deshalb einen
-  Zielknoten und zwei Instanzen darauf, und beide verlinkt das Studio auf
-  ihre Seite im Portal <i>dieses</i> Knotens.</p>
-  <p>Über die Knotengrenze reisen dagegen die <b>Pakete</b>: Eine
-  Anlege-Erlaubnis oder ein Deploy-Token aus dem Portal des Zielknotens
-  gilt hier genauso — das Studio ist für den Knoten ein Client wie jeder
-  andere, egal wo es steht.</p>
-</div>
-<div class="card">
-  <h2>Zustand der Instanzen (optional)</h2>
-  <p>Ist für den Zielknoten ein <b>Flotten-Schlüssel</b> hinterlegt, zeigt
-  die Seite des Vorhabens, was der Knoten über beide Instanzen sagt:
-  Version, Kanal, Ampel, veröffentlichte Adressen samt DNS-Urteil und
-  offene Punkte, die einen Menschen brauchen. Ohne Schlüssel fehlt genau
-  diese Anzeige und sonst nichts.</p>
-  <p>Der Schlüssel wird <b>auf dem Zielknoten</b> ausgestellt
-  (<code>sudo oaap fleet key issue studio@&lt;knoten&gt;</code>) und in der
-  Konfiguration dieser Studio-Instanz eingetragen
-  (<code>STUDIO_FLEET_KEYS</code>, geheim). Er kann <b>ausschließlich</b>
-  diese eine Auskunft lesen: keine Sitzung, keine Rollen, kein Schreibweg
-  — und die Auskunft selbst enthält Fakten, nie Geheimnisse (Spec
-  <code>oaap.fleet.status</code>). Das Recht zu <i>handeln</i> bleibt beim
-  Anwender: Der Deploy-Token wird weiterhin bei jedem Upload eingegeben.</p>
-  <p class="muted">Das Studio ist damit kein zweites FleetView: Es fragt
-  beim Aufschlagen der Seite nach, hebt nichts auf und alarmiert nicht.
-  Wer die ganze Landschaft über die Zeit beobachten will, nimmt
-  FleetView.</p>
-</div>
-<div class="card">
-  <h2>Wichtig zum Deploy-Token</h2>
-  <p>Das Token ist ein Schlüssel: Es erlaubt, die <b>Test</b>-Instanz neu
-  auszurollen. Es wird im <b>Portal</b> auf der Instanzseite erzeugt,
-  einmalig angezeigt und gehört <b>Dir</b> — Passwortmanager ist der
-  richtige Ort.</p>
-  <p><b>Das Studio speichert es nicht.</b> Wenn Du hier ein Paket ausrollst,
-  gibst Du den Token bei jedem Upload einzeln ein; er wird für die Dauer
-  dieser einen Anfrage gehalten und danach vergessen. Damit steckt in jedem
-  Deployment über das Studio ein Mensch — und im Ruhezustand gibt es hier
-  nichts zu holen. Ist der Token abhandengekommen: im Portal widerrufen und
-  ein neues erzeugen (<code>sudo oaap app token revoke &lt;instanz&gt;</code>
-  tut dasselbe auf der Maschine).</p>
-</div>
-<div class="card">
-  <h2>Die verbindlichen Regeln</h2>
-  <p class="muted">Der App Deployment Contract beschreibt technisch, was eine
-  App mitbringen muss. Das Briefing verweist darauf:
-  <br><code>{esc(CONTRACT_URL)}</code></p>
-</div>"""
+    return page("Deployment-Zettel", body, user, roles, "projects", obj=f"Vorhaben:{p['id']}", obj_title=p["name"])
 
 
 # ------------------------------------------------------- deployment sheet
@@ -1548,7 +1331,7 @@ def deployment_sheet(p, token=""):
     lines = [
         f"# Deployment-Zettel: {p['name']}",
         "",
-        f"Erzeugt vom OAAP Studio am {now()} — Vorhaben `{p['id']}`,",
+        f"Erzeugt vom Studio am {now()} — Vorhaben `{p['id']}`,",
         f"Test-Instanz `{instance}`"
         + (f" auf `{fleet.host_of(node)}`." if node else "."),
         "",
@@ -1812,7 +1595,7 @@ def _sec_platform(app_type=None):
         "**Pflege des Abbilds:** Das Dockerfile spielt beim Bau Debians",
         "Korrekturen ein (`apt-get update && apt-get -y upgrade`, siehe",
         "Starter-Paket), alle Abhängigkeiten sind **fest gepinnt**, und das",
-        "Manifest trägt `oaap_manifest: \"0.15\"` sowie `care: {rebuild: self}`.",
+        "Manifest trägt `oaap_manifest: \"0.18\"` sowie `care: {rebuild: self}`.",
         "Dann darf der Knoten bei Sicherheitsmeldungen selbst neu bauen,",
         "ohne auf Deine nächste Version zu warten. Kannst Du das nicht",
         "zusagen, schreib `rebuild: release`.",
@@ -1954,21 +1737,114 @@ def _sec_capabilities():
 
 
 def _sec_ui():
-    return ("Oberfläche", [
-        "Die App soll sich neben dem Portal nicht fremd anfühlen. Verbindlich:",
+    """Oberfläche, Hilfe, MCP und Zwilling nach RFC-0118 („Ein Gesicht für
+    alle OAAP-Apps“, Studio 0.7.0). Bis 0.6 waren Farben und Rahmen nur
+    empfohlen -- seither sind sie die Regel, und eine fremde App soll sie
+    von Anfang an einhalten statt später umgebaut zu werden."""
+    return ("Oberfläche, Hilfe und KI", [
+        "Die App soll aussehen wie ein Teil der Plattform, nicht wie ein",
+        "eigenes Projekt. Verbindlich (RFC-0118):",
         "",
+        "**Name.** `app.name` sagt auf Deutsch, was die App tut, kurz und",
+        "**ohne „OAAP“** (*Aufträge*, nicht *OAAP Auftragsverwaltung*); ein",
+        "Fremdprodukt steht in Klammern hinter der Funktion. Derselbe Name",
+        "steht im Seitentitel, in der Kopfleiste und in `docs.title`.",
+        "",
+        "**Rahmen.** Jede Seite lädt das Kit und das Rahmenskript der",
+        "Plattform — beide liefert das Gateway unter dem eigenen Namen der",
+        "Instanz aus, es sind also keine fremden Ressourcen:",
+        "",
+        "```html",
+        '<link rel="stylesheet" href="/platform/theme.css">',
+        '<script src="/platform/app.js" defer></script>',
+        '<body class="oaap-app">',
+        '<header class="oaap-header" data-oaap-product="<app-id>">',
+        '  <a class="oaap-brand" href="./" data-oaap-portal>',
+        '    <span class="oaap-logo"><!-- Sechseck-SVG --></span>',
+        '    <span class="oaap-tenant"></span><span class="oaap-appname">Aufträge</span></a>',
+        '  <span class="oaap-actions"></span>',
+        "</header>",
+        '<nav class="oaap-tabs">…Reiter als Links…</nav>',
+        '<main class="oaap-main">…</main>',
+        '<footer class="oaap-footer"><span>Aufträge 1.2.0</span><span class="oaap-platform"></span></footer>',
+        "```",
+        "",
+        "Die App schreibt Kopfleiste und Fußzeile selbst (Name, Weg zurück);",
+        "das Skript ergänzt Mandant, **Hilfe**, **Fragen** (Chat mit dem",
+        "Kontext der Seite), das **Benutzermenü** und **Feedback**. Ohne das",
+        "Skript bleibt die Seite ganz. Das Starter-Paket zeigt es lauffähig.",
+        "",
+        "- **Keine eigene Farbpalette**: Farben nur über die Variablen des",
+        "  Kits (`var(--oaap-color-…)`, `var(--oaap-badge-…)`), Dunkelmodus",
+        "  inklusive. Klassen des Kits: `oaap-card`, `oaap-table` in",
+        "  `oaap-tablewrap`, `oaap-badge` (ok/warn/err/info/test),",
+        "  `oaap-filter`, `oaap-btn primary/danger`, `oaap-msg`, `oaap-kv`,",
+        "  `oaap-pagehead`, `oaap-back`, `oaap-empty`.",
+        "- **Keine Rollen und keine Kopfzeilen** auf der Seite — wer",
+        "  angemeldet ist, zeigt das Benutzermenü. Kein Slogan, keine",
+        "  Großbuchstaben im Kopf, keine Versionsnummer außer in der Fußzeile.",
         "- **Keine externen Ressourcen** im Browser (keine Webfonts, keine",
-        "  CDNs, keine Tracker) — alles wird von der App selbst ausgeliefert.",
-        "- Deutsch als Oberflächensprache.",
+        "  CDNs, keine Tracker).",
+        "- Deutsch als Oberflächensprache, echte Umlaute (ä ö ü ß), keine",
+        "  Entwicklerwörter (keine RFC-Nummern, keine internen Kennungen).",
         "- **Tablet zuerst**: Bedienelemente mindestens 44 px hoch.",
-        "- **Listen zeigen, Objektseiten pflegen** — Formulare gehören nie",
-        "  in Tabellenzeilen. Nach dem Speichern umleiten (kein erneutes",
-        "  Absenden beim Neuladen).",
         "",
-        "Empfohlen, nicht verbindlich: die Plattformfarben (`#2563eb`,",
-        "dunkler Kopf `#1e3a8a`) und Systemschriften. Eine App mit eigener,",
-        "stimmiger Gestaltung — etwa ein SAP-Fiori-Look oder Vereinsfarben",
-        "auf einer Anzeige — ist ausdrücklich in Ordnung.",
+        "**Navigation.** Die Bereiche der App sind **eine** Reiterleiste aus",
+        "Links unter der Kopfleiste (Unterpfad wie `/bereiche` oder `?tab=`),",
+        "nie Knöpfe mit Skript, keine Seitenleiste. Der erste Reiter liest",
+        "(*Übersicht*), Einstellungen und Verwaltung kommen zuletzt. Eine",
+        "Objektseite hat „← Zurück zur Liste“ über dem Titel.",
+        "",
+        "**Listen.** Ab einer Handvoll Zeilen ein Listenbericht: oben eine",
+        "Filterleiste als GET-Formular (Suche `q` zuerst, höchstens vier",
+        "Auswahlen, *Zurücksetzen*), eine Zählzeile („23 von 340“),",
+        "sortierbare Spalten (`sort=spalte`/`sort=-spalte`), Blättern ab 50",
+        "(`offset`, nie eine stille Grenze). **Eine** Zeilenaktion: die Zeile",
+        "öffnet die Objektseite — Formulare und Knopfreihen gehören nie in",
+        "Tabellenzeilen. Status als Badge. Eine leere Liste sagt, was zu tun",
+        "ist. Nach dem Speichern umleiten (kein erneutes Absenden).",
+        "",
+        "**Hilfe (`docs:`) ist Pflicht.** Lege einen Ordner `docs/` mit",
+        "Markdown an: `index.md` (was die App tut, für wen), eine Anleitung",
+        "je Hauptaufgabe, `faq.md` — für die echten Anwender, in einfacher",
+        "Sprache. Im Manifest (ab `oaap_manifest: \"0.17\"`):",
+        "",
+        "```yaml",
+        "docs:",
+        "  - product: <app-id>",
+        "    title: \"Aufträge\"",
+        "    path: docs/",
+        "    entry: index.md",
+        "    lang: de",
+        "    audience: [user, keyuser, admin]",
+        "    readers: [user]",
+        "    kinds: {index.md: overview, auftrag-anlegen.md: howto, faq.md: faq}",
+        "```",
+        "",
+        "Die Plattform gibt die Dateien an die Hilfe des Mandanten; *Hilfe*",
+        "in der Kopfleiste öffnet sie, und der Chat antwortet daraus. Keine",
+        "eigene Hilfeseite daneben — eine Quelle.",
+        "",
+        "**MCP (`mcp:`) für jede App, die Daten hält.** Die App bedient",
+        "`mcp: {path: /mcp}` mit **Lesewerkzeugen** für ihre Hauptobjekte",
+        "(`<app>_list`, `<app>_search`, `<app>_read`, deutsche",
+        "Beschreibungen, kleine JSON-Antworten, nie Geheimnisse) und ein bis",
+        "drei Vorlagen (*prompts*) für die Hauptaufgaben. Jedes Werkzeug",
+        "prüft dieselben Rollen wie die Seite — es zeigt nie mehr, als die",
+        "Seite derselben Person zeigt. **Schreibwerkzeuge** nur dort, wo die",
+        "Seite dieselbe Handlung anbietet. `/mcp` beantwortest Du vor jeder",
+        "eigenen Prüfung, die ein Browserformular erwartet; die Route im",
+        "Manifest muss `/mcp` für die berechtigten Rollen abdecken. Keine",
+        "App baut einen eigenen Chat — KI kommt über diese Tür und über",
+        "*Fragen* in der Kopfleiste.",
+        "",
+        "**Zwilling.** Kennt die App Geschäftsobjekte, die es auch außerhalb",
+        "von ihr gibt — eine Firma, eine Person, ein Projekt, eine Maschine —,",
+        "legt sie sie **in den Zwilling** (`contributes`) oder **liest die des",
+        "Zwillings** (`consumes`), statt eine Privatkopie daneben zu führen.",
+        "Zeige Zwillingsobjekte mit ihrem Titel, nie mit der URN. Hat die",
+        "App keine solchen Objekte, deklariert sie nichts — ein leeres",
+        "Datenmodell erfüllt keine Pflicht.",
     ])
 
 
@@ -2142,7 +2018,7 @@ def platform_briefing():
     lines = [
         "# OAAP — Plattform-Briefing",
         "",
-        f"Erzeugt vom OAAP Studio {VERSION} am {now()}.",
+        f"Erzeugt vom Studio {VERSION} am {now()}.",
         f"Verbindlich ist der App Deployment Contract: {CONTRACT_URL}",
         "",
         "Dieses Blatt ist für die KI oder die Entwicklerin eines Projekts,",
@@ -2311,7 +2187,7 @@ def briefing(p):
     lines = [
         f"# Briefing: {p['name']}",
         "",
-        f"Erzeugt vom OAAP Studio am {now()} — Vorhaben `{p['id']}`.",
+        f"Erzeugt vom Studio am {now()} — Vorhaben `{p['id']}`.",
         "",
         "Du bist der KI-Entwicklungsagent für dieses Vorhaben. Dieses",
         "Dokument ist deine Arbeitsanweisung: fachlicher Auftrag, geltende",
@@ -2353,6 +2229,113 @@ def briefing(p):
 
 
 # ------------------------------------------------------------------ server
+
+# ------------------------------------------------------------- MCP-Tür
+#
+# RFC-0118 §9: die Assistenten des Mandanten lesen, was die Seiten zeigen --
+# Vorhaben und Briefings. Dieselben Rollen wie die Seite (keyuser, admin).
+# Nie ein Token: Das Studio hält keinen, und die Paketprüfung gibt nur ihre
+# Zusammenfassung heraus. Kein Schreibwerkzeug in dieser Stufe.
+
+PAGE_ROLES = {"keyuser", "admin"}
+
+DOOR = mcpdoor.Door(
+    "oaap-studio", VERSION,
+    "App-Vorhaben dieses Studios lesen: welche es gibt, ihren Stand, ihr Briefing "
+    "für die KI und das Plattform-Briefing für neue Apps. Nur lesend.")
+
+
+def _may_read(who):
+    if not PAGE_ROLES & set(who.get("roles") or []):
+        raise mcpdoor.Refused("Das Studio ist nur für keyuser und admin.")
+
+
+def _project(con, pid):
+    p = con.execute("SELECT * FROM projects WHERE id = ?", (str(pid or "").strip(),)).fetchone()
+    if not p:
+        raise mcpdoor.Refused("Dieses Vorhaben gibt es nicht. studio_projects nennt die Vorhaben.")
+    return p
+
+
+@DOOR.tool("studio_projects", "Vorhaben suchen",
+           "Nennt die App-Vorhaben mit Kennung, Name, Kontext, Status, App-Typ und wer "
+           "entwickelt. Optional nach Suchwort und Status gefiltert.",
+           {"q": {"type": "string", "description": "Suchwort in Name, Kontext, Auftraggeber oder Entwickler"},
+            "status": {"type": "string", "description": "idee, briefing, entwicklung, test, produktiv oder ruht"}})
+def _mcp_projects(args, who):
+    _may_read(who)
+    q = str(args.get("q") or "").lower().split()
+    status = str(args.get("status") or "").strip()
+    con = db()
+    try:
+        rows = con.execute("SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        hay = f"{r['id']} {r['name']} {r['context']} {r['owner']} {r['agent']}".lower()
+        if (q and not all(w in hay for w in q)) or (status and r["status"] != status):
+            continue
+        out.append({"id": r["id"], "name": r["name"], "kontext": r["context"],
+                    "status": STATUSES.get(r["status"], r["status"]), "typ": r["app_type"],
+                    "entwickelt_mit": r["agent"]})
+    return {"vorhaben": out, "anzahl": len(out)}
+
+
+@DOOR.tool("studio_project_read", "Vorhaben lesen",
+           "Liest ein Vorhaben: fachlicher Inhalt (Zielanwender, Ziel, erste Version), "
+           "Zielknoten, Test- und Produktiv-Instanz und das zuletzt geprüfte Paket.",
+           {"id": {"type": "string", "description": "Kennung des Vorhabens"}}, required=("id",))
+def _mcp_project(args, who):
+    _may_read(who)
+    con = db()
+    try:
+        p = _project(con, args.get("id"))
+    finally:
+        con.close()
+    return {"id": p["id"], "name": p["name"], "kontext": p["context"], "auftraggeber": p["owner"],
+            "status": STATUSES.get(p["status"], p["status"]), "typ": p["app_type"],
+            "entwickelt_mit": p["agent"], "zielanwender": p["target_users"], "ziel": p["goal"],
+            "erste_version": p["scope"], "weg": p["deploy_way"], "repository": p["repo_url"],
+            "zielknoten": p["node_url"], "test_instanz": p["instance"],
+            "produktiv_instanz": p["prod_instance"], "test_adresse": p["test_url"],
+            "paket": {"datei": p["pkg_file"], "version": p["pkg_version"],
+                      "geprueft_am": p["pkg_at"]} if p["pkg_file"] else None,
+            "notizen": p["notes"], "geaendert": p["updated_at"]}
+
+
+@DOOR.tool("studio_briefing", "Briefing lesen",
+           "Liest das Briefing für die KI: zu einem Vorhaben (Auftrag und Regeln der "
+           "Plattform) oder ohne Kennung das Plattform-Briefing für ein Projekt, das es "
+           "schon gibt. Markdown-Text.",
+           {"id": {"type": "string", "description": "Kennung des Vorhabens (leer = Plattform-Briefing)"}})
+def _mcp_briefing(args, who):
+    _may_read(who)
+    if not str(args.get("id") or "").strip():
+        return platform_briefing()
+    con = db()
+    try:
+        p = _project(con, args.get("id"))
+    finally:
+        con.close()
+    return briefing(p)
+
+
+DOOR.prompt("studio_new_app", "Neue App beschreiben",
+            "Hilft, ein neues App-Vorhaben so zu beschreiben, dass ein gutes Briefing entsteht.",
+            "Ich möchte im Studio ein neues App-Vorhaben anlegen: {idee}. Frag mich nach "
+            "den Zielanwendern, dem Problem in meinen Worten und dem, was die erste Version "
+            "können muss — kurz und ohne Fachjargon. Fasse am Ende die Felder Name, "
+            "Zielanwender, Ziel und erste Version zusammen, damit ich sie ins Studio "
+            "übernehmen kann. Das Plattform-Briefing (studio_briefing ohne Kennung) "
+            "nennt die Regeln, die jede App erfüllen muss.", ("idee",))
+DOOR.prompt("studio_project_status", "Stand eines Vorhabens",
+            "Fasst den Stand eines Vorhabens zusammen und nennt den nächsten Schritt.",
+            "Lies das Vorhaben {id} im Studio (studio_project_read) und fasse zusammen: "
+            "Wofür ist die App, wo steht sie (Status, Paket, Instanzen) und was ist der "
+            "nächste sinnvolle Schritt auf dem Weg Idee → Briefing → Test → Produktiv.",
+            ("id",))
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "oaap-studio/" + VERSION
@@ -2410,15 +2393,11 @@ class Handler(BaseHTTPRequestHandler):
         The app never renders a login (contract rule 1); running it
         outside OAAP is a configuration mistake, not a use case.
         """
-        self.send_html(
-            "<!doctype html><meta charset='utf-8'><title>OAAP Studio</title>"
-            + STYLE +
-            "<main style='max-width:34rem;margin:4rem auto;padding:0 1.2rem'>"
-            "<div class='card'><h2>Diese App läuft nur hinter dem OAAP-Gateway</h2>"
-            "<p class='muted'>Es sind keine geprüften Identitätsdaten angekommen. "
+        self.send_html(page("Nur hinter dem Gateway", af.card(
+            "Diese App läuft nur hinter dem OAAP-Gateway",
+            '<p class="muted">Es sind keine geprüften Identitätsdaten angekommen. '
             "Das Studio hat bewusst keinen eigenen Login — die Anmeldung erledigt "
-            "die Plattform. Bitte über das Portal-Launchpad öffnen.</p></div></main>",
-            status=403)
+            "die Plattform. Bitte über das Portal-Launchpad öffnen.</p>")), status=403)
 
     def read_form(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -2455,12 +2434,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(json.dumps({"status": "ok", "version": VERSION}),
                            content_type="application/json")
             return
+        if path == "/mcp":
+            return DOOR.serve(self)
 
         user, roles = self.identity()
         if not user:
             return self.deny_without_gateway()
         if not roles & {"keyuser", "admin"}:
-            return self.send_html("<p>Keine Berechtigung für das Studio.</p>", status=403)
+            return self.send_html(page("Keine Berechtigung", af.msg(
+                "Das Studio ist für keyuser und admin.", error=True)), status=403)
         roles_label = ", ".join(sorted(roles))
         con = db()
         try:
@@ -2468,9 +2450,20 @@ class Handler(BaseHTTPRequestHandler):
                 rows = con.execute(
                     "SELECT * FROM projects ORDER BY name COLLATE NOCASE").fetchall()
                 return self.send_html(list_page(rows, user, roles_label,
-                                                (query.get("msg") or [""])[0]))
-            if path == "/hilfe":
-                return self.send_html(page("Hilfe", HELP_BODY, user, roles_label, "help"))
+                                                (query.get("msg") or [""])[0], query))
+            if path == "/hilfe" or path.startswith("/hilfe/"):
+                # Die Hilfe aus docs/ -- dieselben Dateien, die über `docs:`
+                # an die Hilfe des Mandanten gehen (eine Quelle, RFC-0118 §9).
+                got = helpdocs.load(path[len("/hilfe/"):] if path != "/hilfe" else "")
+                if not got:
+                    return self.send_html(page("Nicht gefunden", af.msg(
+                        "Diese Hilfeseite gibt es nicht.", error=True), user, roles_label), status=404)
+                title, html_ = got
+                return self.send_html(page(title, (
+                    f'<div class="grid2" style="grid-template-columns:3fr 1fr;align-items:start">'
+                    f'<article class="oaap-card">{html_}</article>'
+                    f'<aside class="oaap-card"><h2>Hilfe</h2>{helpdocs.toc(path[7:])}</aside></div>'),
+                    user, roles_label))
             # Onboarding: beide Blätter hängen an KEINEM Vorhaben — das ist
             # der Sinn der Sache (siehe onboarding_page).
             if path == "/briefing":
@@ -2507,7 +2500,8 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 p = con.execute("SELECT * FROM projects WHERE id = ?", (m.group(1),)).fetchone()
                 if not p:
-                    return self.send_html("<p>Vorhaben nicht gefunden.</p>", status=404)
+                    return self.send_html(page("Nicht gefunden", af.back("/", "Zurück zur Liste") + af.msg(
+                        "Dieses Vorhaben gibt es nicht.", error=True), user, roles_label), status=404)
                 sub = m.group(2) or ""
                 if sub == "/briefing":
                     return self.send_html(briefing_page(p, briefing(p), user, roles_label))
@@ -2554,17 +2548,23 @@ class Handler(BaseHTTPRequestHandler):
                                                   (query.get("msg") or [""])[0],
                                                   is_admin="admin" in roles,
                                                   node=node, st=st))
-            self.send_html("<p>Seite nicht gefunden.</p>", status=404)
+            self.send_html(page("Nicht gefunden", af.back("/", "Zur Übersicht") + af.msg(
+                "Diese Seite gibt es nicht.", error=True), user, roles_label), status=404)
         finally:
             con.close()
 
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/mcp":
+            # Vor dem Herkunftsschutz: MCP kommt vom Gateway, nicht aus
+            # einem Browserformular; die Tür prüft die Rollen selbst.
+            return DOOR.serve(self)
         user, roles = self.identity()
         if not user:
             return self.deny_without_gateway()
         if not roles & {"keyuser", "admin"}:
-            return self.send_html("<p>Keine Berechtigung für das Studio.</p>", status=403)
+            return self.send_html(page("Keine Berechtigung", af.msg(
+                "Das Studio ist für keyuser und admin.", error=True)), status=403)
         if self.cross_site_post():
             return self.send_html("<p>Abgelehnt: Anfrage kam von einer fremden Seite.</p>",
                                   status=403)
@@ -2819,7 +2819,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     db().close()  # fail fast if /data is not writable
-    print(f"OAAP Studio {VERSION} listening on 0.0.0.0:{PORT}, data in {DATA_DIR}",
+    print(f"Studio {VERSION} listening on 0.0.0.0:{PORT}, data in {DATA_DIR}",
           flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

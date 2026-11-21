@@ -1,4 +1,4 @@
-"""OAAP FleetView 1.0 — die Flotten-Übersicht (RFC-0021, RFC-0085 §10).
+"""Flotte (fleetview) — die Flotten-Übersicht (RFC-0021, RFC-0085 §10).
 
 Strikt lesend. Seit 1.0.0 liest FleetView die Flotte aus dem Zwilling
 seines Mandanten auf der Zentrale (meist `oaap-ops`): Der Flottendienst
@@ -29,11 +29,14 @@ import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 
+import appframe as af
 import fleet
+import mcpdoor
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+APP_NAME = "Flotte"
 PORT = 8000
 
 DATA_DIR = os.environ.get("FLEETVIEW_DATA_DIR", "/data")
@@ -88,115 +91,34 @@ def _poller():
 
 
 # ------------------------------------------------------------ layout
-# Gemeinsame Optik mit Portal und Studio (App-UI-Kit von Hand, bis die
-# Plattform ein echtes liefert) — identische Palette und Bausteine.
+# Der Rahmen kommt aus appframe (Kit und Rahmenskript der Plattform);
+# hier steht nur, was der Flotte eigen ist.
 
-STYLE = """<style>
-  :root{
-    --oaap-blue-950:#172554; --oaap-blue-900:#1e3a8a; --oaap-blue-700:#1d4ed8;
-    --oaap-blue-600:#2563eb; --oaap-blue-100:#dbeafe;
-    --oaap-bg:#f4f6fa; --oaap-surface:#fff; --oaap-text:#1f2937;
-    --oaap-muted:#6b7280; --oaap-border:#e5e7eb;
-    --ok:#15803d; --err:#b91c1c; --warn:#b45309;
-  }
-  *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-       margin:0;background:var(--oaap-bg);color:var(--oaap-text)}
-  header.oaap{background:linear-gradient(135deg,var(--oaap-blue-900),var(--oaap-blue-950));
-       color:#fff;display:flex;align-items:center;gap:1rem;flex-wrap:wrap;padding:.6rem 1.2rem}
-  .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#fff}
-  .brand b{font-size:1.15rem;letter-spacing:.08em}
-  .brand small{display:block;font-size:.62rem;opacity:.75;letter-spacing:.02em}
-  .userbox{display:flex;align-items:center;gap:.7rem;font-size:.9rem;margin-left:auto}
-  .userbox .who{text-align:right;line-height:1.2}
-  .userbox .who small{opacity:.75}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 1.2rem}
-  h1{font-size:1.35rem;margin:.2rem 0 1rem}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .pagehead{display:flex;align-items:center;justify-content:space-between;gap:1rem;
-       flex-wrap:wrap;margin-bottom:1rem}
-  .pagehead h1{margin:0}
-  .back{display:inline-block;margin-bottom:.8rem;color:var(--oaap-blue-600);text-decoration:none}
-  .back:hover{text-decoration:underline}
-  .card{background:var(--oaap-surface);border:1px solid var(--oaap-border);
-       border-radius:.6rem;padding:1.4rem;box-shadow:0 1px 3px rgba(23,37,84,.06);
-       margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:var(--oaap-blue-100);color:var(--oaap-blue-900);white-space:nowrap}
-  .badge.test{background:#fef3c7;color:#92400e}
-  .badge.off{background:#f3f4f6;color:#6b7280}
-  .badge.ok{background:#dcfce7;color:#166534}
-  .badge.err{background:#fee2e2;color:#991b1b}
-  .badge.warn{background:#fef3c7;color:#92400e}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;border-radius:.4rem;
-       background:var(--oaap-blue-600);color:#fff;text-decoration:none;font-size:.95rem;
-       cursor:pointer;min-height:44px}
-  a.btn:hover,button:hover{background:var(--oaap-blue-700)}
-  .hint{font-size:.8rem;color:var(--oaap-muted);margin:0 0 .6rem}
-  .err{color:var(--err)}.muted{color:var(--oaap-muted);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.6rem .5rem;border-bottom:1px solid var(--oaap-border);
-       vertical-align:middle}
-  th{font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;color:var(--oaap-muted)}
-  tr.rowlink:hover td{background:#f8fafc}
-  td a{color:var(--oaap-blue-600);text-decoration:none}
-  td a:hover{text-decoration:underline}
-  dl.facts{margin:0;display:grid;grid-template-columns:11rem 1fr;gap:.45rem 1rem}
-  dl.facts dt{color:var(--oaap-muted);font-size:.85rem}
-  dl.facts dd{margin:0;word-break:break-word}
-  ul.attn{margin:.2rem 0 0;padding-left:1.2rem}
-  ul.attn li{margin:.25rem 0}
-  footer.oaap{max-width:62rem;margin:2rem auto 1.2rem;padding:0 1.2rem;
-       color:var(--oaap-muted);font-size:.8rem;display:flex;gap:.5rem;align-items:center}
-  @media (max-width:640px){
-    .userbox .who{display:none}
-    dl.facts{grid-template-columns:1fr;gap:.1rem .5rem}
-    dl.facts dd{margin-bottom:.5rem}
-  }
-</style>"""
-
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Cpolygon points='50,4 90,27 90,73 50,96 10,73 10,27' fill='%232563eb'/%3E%3C/svg%3E")
-
-LOGO_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
-            '<polygon points="34,6 58,20 58,48 34,62 10,48 10,20" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round"/>'
-            '<polygon points="72,30 92,41 92,64 72,76 52,64 52,41" fill="#fff" opacity=".85"/>'
-            '<polygon points="42,58 66,72 66,94 42,96 22,84 22,70" fill="none" stroke="#fff" '
-            'stroke-width="6" stroke-linejoin="round" opacity=".6"/></svg>')
+PAGE_STYLE = (".fv-attn{border-left:4px solid var(--oaap-color-warning)}"
+              ".fv-attn ul{margin:.2rem 0 0;padding-left:1.2rem}.fv-attn li{margin:.25rem 0}"
+              ".fv-actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}"
+              ".fv-actions form{display:inline}")
 
 
-def page(title, body, user, roles):
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} — OAAP FleetView</title>
-{STYLE}
-<header class="oaap">
-  <a class="brand" href="./">{LOGO_SVG}
-    <span><b>OAAP FLEETVIEW</b><small>Die Flotte auf einen Blick — aus dem Zwilling der Zentrale</small></span>
-  </a>
-  <div class="userbox"><span class="who">{esc(user)}<br><small>{esc(roles)}</small></span></div>
-</header>
-<main>{body}</main>
-<footer class="oaap">
-  <svg viewBox="0 0 100 100" width="14" height="14" aria-hidden="true">
-    <polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="#2563eb"/></svg>
-  OAAP FleetView {VERSION} — zeigt die Flotte; gehandelt wird im Portal des Knotens
-</footer>
-</html>"""
+def tabs_for(root):
+    return [(root or "./", "Übersicht"), (root + "instanzen", "Instanzen")]
 
 
-STATE_BADGE = {"ok": "ok", "warn": "warn", "error": "err", "unknown": "off",
-               "silent": "err", "removed": "off", "standby": "off"}
+def page(title, body, root="", active=None, obj=None, obj_title=None):
+    return af.page(title, body, app=APP_NAME, version=VERSION, product="fleetview",
+                   tabs=tabs_for(root), active=active, obj=obj, obj_title=obj_title,
+                   style=PAGE_STYLE)
+
+
+STATE_BADGE = {"ok": "ok", "warn": "warn", "error": "err", "unknown": "",
+               "silent": "err", "removed": "", "standby": ""}
 
 
 def badge(state, extra=""):
     label = fleet.STATE_LABELS.get(state, state)
     if extra:
         label += f" · {extra}"
-    return f'<span class="badge {STATE_BADGE.get(state, "off")}">{esc(label)}</span>'
+    return af.badge(label, STATE_BADGE.get(state, ""))
 
 
 def fmt_age(age):
@@ -219,10 +141,10 @@ def fmt_time(iso):
 
 def name_cell(r, href):
     """Der Name im Verbund (Alias), der feste Knotenname klein daneben,
-    solange beide abweichen (RFC-0082)."""
+    solange beide abweichen."""
     out = f'<a href="{esc(href)}">{esc(r["label"])}</a>'
     if r["renamed"]:
-        out += f' <span class="muted">({esc(r["name"])})</span>'
+        out += f' <span class="oaap-muted">({esc(r["name"])})</span>'
     return out
 
 
@@ -233,8 +155,7 @@ def attention_card(items):
         f'<li><strong>{esc(i["node"])}</strong>: {esc(i["label"])}'
         + (f' — {esc(i["detail"])}' if i["detail"] else "") + "</li>"
         for i in items)
-    return (f'<div class="card attention"><h2>Braucht einen Menschen '
-            f'({len(items)})</h2><ul class="attn">{lis}</ul></div>')
+    return af.card(f"Braucht einen Menschen ({len(items)})", f"<ul>{lis}</ul>", "fv-attn")
 
 
 def _snapshot():
@@ -248,98 +169,169 @@ def read_card(state):
     """Wann zuletzt gelesen, und was beim letzten Lesen schiefging."""
     out = []
     if state.get("error"):
-        out.append('<div class="card attention"><h2>Zwilling nicht gelesen</h2>'
-                   f'<p>{esc(state["error"])}</p>'
-                   + ('<p class="hint">Unten steht der zuletzt gelesene Stand '
-                      f'({esc(fmt_age(fleet.age_seconds(state.get("read"))))}).</p>'
-                      if state.get("read") else "")
-                   + "</div>")
+        out.append(af.card("Zwilling nicht gelesen",
+                           f'<p>{esc(state["error"])}</p>'
+                           + ('<p class="oaap-muted">Unten steht der zuletzt gelesene Stand '
+                              f'({esc(fmt_age(fleet.age_seconds(state.get("read"))))}).</p>'
+                              if state.get("read") else ""), "fv-attn"))
     if state.get("truncated"):
-        out.append('<p class="hint">Der Zwilling hat die Liste gekürzt (mehr als '
+        out.append('<p class="oaap-muted">Der Zwilling hat die Liste gekürzt (mehr als '
                    "500 Objekte eines Typs) — nicht alles ist zu sehen.</p>")
     return "".join(out)
 
 
-def overview(user, roles):
+STATE_CHOICES = [(k, fleet.STATE_LABELS[k]) for k in
+                 ("ok", "warn", "error", "silent", "unknown", "removed")]
+
+
+def overview(params):
     state, rows = _snapshot()
     attn = fleet.fleet_attention(rows)
     note = fleet.version_note(rows)
     hubs = fleet.pairing_targets(rows)
     pair_btns = "".join(
-        f'<a class="btn" href="{esc(h["url"])}" rel="noopener">Knoten koppeln'
-        + (f' ({esc(h["name"])})' if len(hubs) > 1 else "") + "</a> "
+        f'<a class="oaap-btn" href="{esc(h["url"])}" rel="noopener">Knoten koppeln'
+        + (f' ({esc(h["name"])})' if len(hubs) > 1 else "") + "</a>"
         for h in hubs)
-    body = ['<div class="pagehead"><h1>Flotte</h1><div>' + pair_btns +
-            '<form method="post" action="poll" style="display:inline">'
-            "<button>Jetzt aktualisieren</button></form></div></div>"]
+    actions = (f'<div class="fv-actions">{pair_btns}'
+               '<form method="post" action="poll"><button class="primary">Jetzt aktualisieren</button></form></div>')
+    body = [af.pagehead("Flotte", actions)]
     body.append(read_card(state))
     body.append(attention_card(attn))
     if note:
-        body.append(f'<p class="hint">{esc(note)} — während eines '
+        body.append(f'<p class="oaap-muted">{esc(note)} — während eines '
                     "Flotten-Updates normal.</p>")
     dups = fleet.duplicate_instances(rows)
     if dups:
         lis = "".join(
             f'<li><strong>{esc(d["instance"])}</strong> auf: '
             f'{esc(", ".join(d["nodes"]))}</li>' for d in dups)
-        body.append('<div class="card"><h2>Mehrfach vorhandene '
-                    f'Instanznamen ({len(dups)})</h2><ul class="attn">{lis}</ul>'
-                    '<p class="hint">Kann gewollt sein (z. B. Monitoring je '
-                    "Knoten) — nach einem Umzug ist es oft ein Rest, der "
-                    "aufgeräumt gehört.</p></div>")
+        body.append(af.card(f"Mehrfach vorhandene Instanznamen ({len(dups)})",
+                            f"<ul>{lis}</ul>"
+                            '<p class="oaap-muted">Kann gewollt sein (z. B. Monitoring je '
+                            "Knoten) — nach einem Umzug ist es oft ein Rest, der "
+                            "aufgeräumt gehört.</p>"))
     if not rows:
-        body.append('<div class="card"><h2>Noch keine Knoten</h2>'
-                    "<p>Im Zwilling dieses Mandanten steht noch kein Knoten. "
-                    "Die Flotte schreibt dorthin, sobald auf der Zentrale "
-                    "<code>sudo oaap fleet hub twin &lt;mandant&gt;</code> "
-                    "gesetzt ist und Knoten gekoppelt sind.</p></div>")
-    else:
-        trs = []
-        for r in rows:
-            via = f'über {esc(r["via"])}' if r["via"] else "direkt"
-            portal = (f'<a href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a>'
-                      if r["url"] else "")
-            trs.append(
-                '<tr class="rowlink">'
+        body.append(af.card("Noch keine Knoten",
+                            "<p>Im Zwilling dieses Mandanten steht noch kein Knoten. "
+                            "Die Flotte schreibt dorthin, sobald auf der Zentrale "
+                            "<code>sudo oaap fleet hub twin &lt;mandant&gt;</code> "
+                            "gesetzt ist und Knoten gekoppelt sind.</p>"))
+        return page("", "".join(body), active="./")
+    q = af.Query(params, filters=("state",))
+    shown = [r for r in rows if not q.filters["state"] or r["state"] == q.filters["state"]]
+
+    def row_html(r):
+        via = f'über {esc(r["via"])}' if r["via"] else "direkt"
+        standby = f' · {r["inst_standby"]} Standby' if r["inst_standby"] else ""
+        return ("<tr>"
                 f'<td>{name_cell(r, "node/" + r["name"])}</td>'
                 f'<td>{badge(r["state"])}</td>'
                 f'<td>{esc(r["version"])}</td>'
-                f'<td>{r["inst_ok"]}/{r["inst_total"]}'
-                f'{" · " + str(r["inst_standby"]) + " Standby" if r["inst_standby"] else ""}</td>'
-                f'<td class="muted">{via}</td>'
-                f"<td>{portal}</td>"
+                f'<td class="oaap-num">{r["inst_ok"]}/{r["inst_total"]}{standby}</td>'
+                f'<td class="oaap-muted oaap-minor">{via}</td>'
                 "</tr>")
-        body.append(
-            '<div class="card"><h2>Knoten</h2><table>'
-            "<tr><th>Knoten</th><th>Zustand</th><th>Plattform</th>"
-            "<th>Instanzen gesund</th><th>Meldet</th><th></th></tr>"
-            + "".join(trs) + "</table>"
-            f'<p class="hint">Aus dem Zwilling der Zentrale, gelesen '
-            f'{esc(fmt_age(fleet.age_seconds(state.get("read"))))} (alle '
-            f"{POLL_SECONDS} s). Jeder gekoppelte Knoten erscheint hier von "
-            "selbst; der Name ist der, den der Knoten unter „Gesundheit“ trägt."
-            "</p></div>")
-    return page("Flotte", "".join(body), user, roles)
+    columns = [("Knoten", "name", lambda r: r["label"] + " " + r["name"], ""),
+               ("Zustand", "state", lambda r: fleet.STATE_LABELS.get(r["state"], r["state"]), ""),
+               ("Plattform", "version", lambda r: r["version"], ""),
+               ("Instanzen gesund", "inst", lambda r: r["inst_ok"], "oaap-num"),
+               ("Meldet", "via", lambda r: r["via"] or "direkt", "oaap-minor")]
+    report = af.list_report(q, shown, columns, row_html, noun="Knoten",
+                            empty_text="Noch keine Knoten.",
+                            choices=[("state", "Zustand", STATE_CHOICES)],
+                            placeholder="Name, Version …")
+    body.append(af.card("Knoten", report
+                        + '<p class="oaap-muted">Aus dem Zwilling der Zentrale, gelesen '
+                        f'{esc(fmt_age(fleet.age_seconds(state.get("read"))))} (alle '
+                        f"{POLL_SECONDS} s). Jeder gekoppelte Knoten erscheint hier von "
+                        "selbst; der Name ist der, den der Knoten unter „Gesundheit“ trägt. "
+                        "Gehandelt wird im Portal des Knotens.</p>"))
+    return page("", "".join(body), active="./")
 
 
-def node_page(name, user, roles):
+def all_instances(rows):
+    """Jede lebende Instanz der Flotte mit ihrem Knoten."""
+    out = []
+    for r in rows:
+        if r["liveness"] == "removed":
+            continue
+        for i in r["instances"]:
+            out.append({**i, "node": r["name"], "node_label": r["label"]})
+    return out
+
+
+INST_STATE_CHOICES = [(k, fleet.STATE_LABELS[k]) for k in
+                      ("ok", "warn", "error", "standby", "unknown")]
+
+
+def instance_columns(with_node):
+    cols = [("Instanz", "instance", lambda i: i["instance"], ""),
+            ("App", "app", lambda i: i["app"], ""),
+            ("Version", "version", lambda i: i["version"], "oaap-minor"),
+            ("Kanal", "channel", lambda i: "Test" if i["channel"] == "test" else "Produktiv", ""),
+            ("Zustand", "state", lambda i: fleet.STATE_LABELS.get(i["state"], i["state"]), "")]
+    if with_node:
+        cols.insert(1, ("Knoten", "node", lambda i: i["node_label"], ""))
+    else:
+        cols += [("Eigene Adresse", "", None, "oaap-minor"),
+                 ("Automatischer Name", "", None, "oaap-minor")]
+    return cols
+
+
+def instance_row_html(i, root, with_node):
+    test = i["channel"] == "test"
+    cells = [f'<td>{esc(i["instance"])}</td>']
+    if with_node:
+        cells.append(f'<td><a href="{esc(root + "node/" + i["node"])}">{esc(i["node_label"])}</a></td>')
+    cells += [f'<td>{esc(i["app"])}</td>',
+              f'<td class="oaap-minor">{esc(i["version"])}</td>',
+              f'<td>{af.badge("Test", "test") if test else af.badge("Produktiv")}</td>',
+              f'<td>{badge(i["state"])}</td>']
+    if not with_node:
+        addr, auto = i["address"], i["auto_address"]
+        cells.append('<td class="oaap-minor">' + (f'<a href="https://{esc(addr)}/">{esc(addr)}</a>'
+                                                   if addr else '<span class="oaap-muted">—</span>') + "</td>")
+        cells.append('<td class="oaap-minor">' + (f'<a href="https://{esc(auto)}/">{esc(auto)}</a> '
+                                                   + badge(i["auto_state"] or "unknown")
+                                                   if auto else '<span class="oaap-muted">—</span>') + "</td>")
+    return "<tr>" + "".join(cells) + "</tr>"
+
+
+def instances_page(params):
+    state, rows = _snapshot()
+    q = af.Query(params, filters=("state", "channel"), default_sort="instance")
+    insts = [i for i in all_instances(rows)
+             if (not q.filters["state"] or i["state"] == q.filters["state"])
+             and (not q.filters["channel"] or (i["channel"] == "test") == (q.filters["channel"] == "test"))]
+    report = af.list_report(
+        q, insts, instance_columns(True), lambda i: instance_row_html(i, "", True),
+        noun="Instanzen",
+        empty_text="Noch keine Instanzen. Sobald gekoppelte Knoten Apps melden, stehen sie hier.",
+        choices=[("state", "Zustand", INST_STATE_CHOICES),
+                 ("channel", "Kanal", [("production", "Produktiv"), ("test", "Test")])],
+        placeholder="Instanz, App, Knoten …")
+    body = af.pagehead("Instanzen") + read_card(state) + af.card("", report)
+    return page("Instanzen", body, active="instanzen")
+
+
+def node_page(name, params):
     state, rows = _snapshot()
     r = fleet.find_row(rows, name)
     if r is None:
         return None
+    root = "../"
     attn = fleet.fleet_attention([r])
     btns = ""
     if r["url"]:
-        btns = (f'<a class="btn" href="{esc(fleet.pairing_link(r))}" rel="noopener">Kopplung</a> '
-                f'<a class="btn" href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a>')
+        btns = (f'<div class="fv-actions"><a class="oaap-btn" href="{esc(fleet.pairing_link(r))}" rel="noopener">Kopplung</a>'
+                f'<a class="oaap-btn primary" href="{esc(r["url"])}/" rel="noopener">Portal öffnen</a></div>')
     title = r["label"] + (f" ({r['name']})" if r["renamed"] else "")
-    body = ['<a class="back" href="../">&larr; Zur Flotte</a>',
-            f'<div class="pagehead"><h1>{esc(title)}</h1><div>{btns}</div></div>']
+    body = [af.back(root, "Zur Flotte"), af.pagehead(title, btns)]
     body.append(read_card(state))
     body.append(attention_card(attn))
     live = badge(r["liveness"] if r["liveness"] != "up" else "ok")
     if r["since"]:
-        live += f' <span class="muted">seit {esc(fmt_time(r["since"]))}</span>'
+        live += f' <span class="oaap-muted">seit {esc(fmt_time(r["since"]))}</span>'
     facts = [
         ("Zustand", badge(r["state"])),
         ("Lebenszeichen", live),
@@ -362,7 +354,7 @@ def node_page(name, user, roles):
     if r["names_total"]:
         facts.append(("Veröffentlichte Namen",
                       f'{r["names_total"]}'
-                      + (f' — <span class="err">{esc(r["names_problems"])}</span>'
+                      + (" — " + af.badge(r["names_problems"], "err")
                          if r["names_problems"] else " — alle in Ordnung")))
     if r["reboot_required"] is not None:
         facts.append(("Neustart nötig", "ja" if r["reboot_required"] else "nein"))
@@ -370,49 +362,118 @@ def node_page(name, user, roles):
         facts.append(("Neustart geplant", esc(fmt_time(r["reboot_plan"]))))
     if r["advisories_open"] is not None:
         facts.append(("Offene Sicherheitsmeldungen", esc(str(r["advisories_open"]))))
-    dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in facts)
-    body.append(f'<div class="card"><h2>Überblick</h2><dl class="facts">{dl}</dl></div>')
+    body.append(af.card("Überblick", af.facts(facts)))
 
     if r["instances"]:
-        trs = []
-        for i in r["instances"]:
-            addr = i["address"]
-            addr_html = (f'<a href="https://{esc(addr)}/">{esc(addr)}</a>'
-                         if addr else '<span class="muted">—</span>')
-            auto = i["auto_address"]
-            auto_html = (f'<a href="https://{esc(auto)}/">{esc(auto)}</a> '
-                         + badge(i["auto_state"] or "unknown")
-                         if auto else '<span class="muted">—</span>')
-            test = i["channel"] == "test"
-            trs.append(
-                "<tr>"
-                f'<td>{esc(i["instance"])}</td>'
-                f'<td>{esc(i["app"])}</td>'
-                f'<td>{esc(i["version"])}</td>'
-                f'<td><span class="badge {"test" if test else ""}">'
-                f'{"Test" if test else "Produktiv"}</span></td>'
-                f'<td>{badge(i["state"])}</td>'
-                f'<td class="muted">{esc(i["origin"])}</td>'
-                f"<td>{addr_html}</td>"
-                f"<td>{auto_html}</td>"
-                "</tr>")
-        body.append('<div class="card" style="overflow-x:auto">'
-                    "<h2>Instanzen</h2><table>"
-                    "<tr><th>Instanz</th><th>App</th><th>Version</th><th>Kanal</th>"
-                    "<th>Zustand</th><th>Herkunft</th><th>Eigene Adresse</th>"
-                    "<th>Automatischer Name</th></tr>"
-                    + "".join(trs) + "</table>"
-                    '<p class="hint">Das Urteil beim <b>automatischen Namen</b> sagt, '
-                    "ob die Instanz unter diesem Namen auf diesem Knoten erreichbar "
-                    "ist (Route vorhanden, App antwortet) — nicht, ob TLS steht.</p></div>")
+        q = af.Query(params, default_sort="instance")
+        report = af.list_report(q, r["instances"], instance_columns(False),
+                                lambda i: instance_row_html(i, root, False),
+                                noun="Instanzen", empty_text="")
+        body.append(af.card("Instanzen", report
+                            + '<p class="oaap-muted">Das Urteil beim <b>automatischen Namen</b> sagt, '
+                            "ob die Instanz unter diesem Namen auf diesem Knoten erreichbar "
+                            "ist (Route vorhanden, App antwortet) — nicht, ob TLS steht.</p>"))
     else:
-        body.append('<div class="card"><h2>Instanzen</h2>'
-                    "<p>Dieser Knoten meldet keine App-Instanzen.</p></div>")
+        body.append(af.card("Instanzen", af.empty("Dieser Knoten meldet keine App-Instanzen.")))
     if r["removed_instances"]:
         names = ", ".join(i["instance"] for i in r["removed_instances"])
-        body.append(f'<p class="hint">Früher auf diesem Knoten, inzwischen entfernt: '
+        body.append(f'<p class="oaap-muted">Früher auf diesem Knoten, inzwischen entfernt: '
                     f"{esc(names)}. Ihre Geschichte bleibt im Zwilling.</p>")
-    return page(title, "".join(body), user, roles)
+    return page(title, "".join(body), root=root, active=None,
+                obj=f"FleetNode:{r['name']}", obj_title=r["label"])
+
+
+# ---------------------------------------------------------------- MCP
+# Nur lesen, mit denselben Rollen wie die Seite (admin, support). Das
+# Ergebnis ist kleiner als die Seite: keine öffentliche IP.
+
+DOOR = mcpdoor.Door("oaap-fleetview", VERSION,
+                    "Die Flotte lesen: Knoten, ihr Zustand und ihre App-Instanzen, aus dem "
+                    "Zwilling der Zentrale. Nur lesend; gehandelt wird im Portal des Knotens.")
+
+
+def _allowed_roles(roles):
+    return bool(set(roles or []) & {"admin", "support"})
+
+
+def _check(who):
+    if not _allowed_roles(who.get("roles")):
+        raise mcpdoor.Refused("Die Flotte sehen nur die Rollen admin und support.")
+
+
+def _node_brief(r):
+    return {"name": r["name"], "label": r["label"],
+            "state": r["state"], "state_text": fleet.STATE_LABELS.get(r["state"], r["state"]),
+            "platform_version": r["version"], "via": r["via"] or "",
+            "instances_ok": r["inst_ok"], "instances_total": r["inst_total"],
+            "attention": r["attention_count"]}
+
+
+def _inst_brief(i):
+    return {"instance": i["instance"], "app": i["app"], "version": i["version"],
+            "channel": i["channel"] or "production",
+            "state": i["state"], "state_text": fleet.STATE_LABELS.get(i["state"], i["state"]),
+            "node": i.get("node_label") or ""}
+
+
+@DOOR.tool("fleetview_nodes", "Knoten der Flotte",
+           "Listet die Knoten der Flotte mit Zustand, Plattformversion und Zahl der gesunden "
+           "Instanzen, dazu was einen Menschen braucht. Optional gefiltert nach Suchwort.",
+           {"q": {"type": "string", "description": "Suchwort im Knotennamen oder in der Version"}})
+def _mcp_nodes(args, who):
+    _check(who)
+    state, rows = _snapshot()
+    q = af.Query({"q": str(args.get("q") or "")})
+    hits = [r for r in rows if q.matches(r["name"], r["label"], r["version"])]
+    return {"read": state.get("read") or "", "error": state.get("error") or "",
+            "nodes": [_node_brief(r) for r in hits],
+            "attention": fleet.fleet_attention(rows)}
+
+
+@DOOR.tool("fleetview_node_read", "Einen Knoten lesen",
+           "Liest einen Knoten der Flotte (fester Name oder Name im Verbund) mit Zustand, "
+           "Lebenszeichen, Profilen, Hinweisen und seinen App-Instanzen.",
+           {"name": {"type": "string", "description": "Knotenname oder Name im Verbund"}},
+           required=("name",))
+def _mcp_node(args, who):
+    _check(who)
+    _state, rows = _snapshot()
+    r = fleet.find_row(rows, str(args.get("name") or "").strip())
+    if r is None:
+        raise mcpdoor.Refused("Diesen Knoten kennt die Flotte nicht.")
+    return {**_node_brief(r), "liveness": r["liveness"], "since": r["since"],
+            "os": r["os"], "profiles": r["profiles"], "address": r["address"],
+            "attention": fleet.fleet_attention([r]),
+            "reboot_required": r["reboot_required"], "advisories_open": r["advisories_open"],
+            "instances": [_inst_brief(i) for i in r["instances"]]}
+
+
+@DOOR.tool("fleetview_instances", "Instanzen der Flotte",
+           "Listet die App-Instanzen aller Knoten mit App, Version, Kanal und Zustand. "
+           "Optional gefiltert nach Suchwort (Instanz, App, Knoten) und Zustand.",
+           {"q": {"type": "string", "description": "Suchwort"},
+            "state": {"type": "string", "description": "ok, warn, error, standby oder unknown"}})
+def _mcp_instances(args, who):
+    _check(who)
+    _state, rows = _snapshot()
+    q = af.Query({"q": str(args.get("q") or "")})
+    want = str(args.get("state") or "").strip()
+    hits = [i for i in all_instances(rows)
+            if q.matches(i["instance"], i["app"], i["node_label"], i["node"])
+            and (not want or i["state"] == want)]
+    return {"instances": [_inst_brief(i) for i in hits[:200]], "total": len(hits)}
+
+
+DOOR.prompt("fleetview_check", "Wie steht die Flotte?",
+            "Fasst den Zustand der Flotte zusammen und nennt, was einen Menschen braucht.",
+            "Lies mit fleetview_nodes den Zustand der Flotte. Nenne zuerst, was einen Menschen "
+            "braucht (stumme oder gestörte Knoten, Hinweise), dann abweichende "
+            "Plattformversionen, in wenigen Sätzen.")
+DOOR.prompt("fleetview_where", "Wo läuft eine App?",
+            "Findet die Instanzen einer App in der Flotte.",
+            "Finde mit fleetview_instances alle Instanzen der App „{app}“ und sag, auf welchen "
+            "Knoten sie in welcher Version und in welchem Zustand laufen.",
+            arguments=("app",))
 
 
 # ------------------------------------------------------------- server
@@ -447,33 +508,37 @@ class Handler(BaseHTTPRequestHandler):
         return bool(roles & {"admin", "support"})
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path == "/healthz":
             return self._send(200, '{"status":"ok"}',
                               "application/json; charset=utf-8")
-        user, roles = self._identity()
+        if path == "/mcp":
+            return DOOR.serve(self)
+        _user, roles = self._identity()
         if not self._allowed(roles):
             return self._send(403, page(
                 "Kein Zugriff",
-                '<div class="card"><h2>Kein Zugriff</h2><p>Die Flotten-'
-                "Übersicht erfordert die Rolle <strong>admin</strong> oder "
-                "<strong>support</strong>.</p></div>", user, ",".join(sorted(roles)) or "?"))
+                af.card("Kein Zugriff", "<p>Die Flotten-Übersicht erfordert die Rolle "
+                        "<strong>admin</strong> oder <strong>support</strong>.</p>")))
+        params = parse_qs(query)
         if path == "/":
-            return self._send(200, overview(user, ",".join(sorted(roles))))
+            return self._send(200, overview(params))
+        if path == "/instanzen":
+            return self._send(200, instances_page(params))
         if path.startswith("/node/"):
             name = unquote(path[len("/node/"):]).strip("/")
-            out = node_page(name, user, ",".join(sorted(roles)))
+            out = node_page(name, params)
             if out is not None:
                 return self._send(200, out)
         return self._send(404, page(
-            "Nicht gefunden", '<div class="card"><h2>Nicht gefunden</h2>'
-            '<p><a href="/">Zur Flotte</a></p></div>',
-            user, ",".join(sorted(roles))))
+            "Nicht gefunden", af.card("Nicht gefunden", '<p><a href="/">Zur Flotte</a></p>')))
 
     do_HEAD = do_GET
 
     def do_POST(self):
-        user, roles = self._identity()
+        if self.path.split("?", 1)[0] == "/mcp":
+            return DOOR.serve(self)
+        _user, roles = self._identity()
         if not self._allowed(roles):
             return self._send(403, "Kein Zugriff")
         path = self.path.split("?", 1)[0]
@@ -495,7 +560,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     os.makedirs(DATA_DIR, exist_ok=True)
     threading.Thread(target=_poller, daemon=True).start()
-    print(f"OAAP FleetView {VERSION} auf :{PORT} — liest den Zwilling alle "
+    print(f"Flotte (fleetview) {VERSION} auf :{PORT} — liest den Zwilling alle "
           f"{POLL_SECONDS} s" + ("" if TWIN_URL and PLATFORM_KEY else " (kein Zugang)"),
           flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

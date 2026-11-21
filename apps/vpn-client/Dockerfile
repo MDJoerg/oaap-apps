@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln aufgezählt).
 COPY app.py vpnconf.py /srv/
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 # Kein USER: OpenVPN richtet das Tunnelgerät ein und setzt den Paketfilter.
 # Mehr als /dev/net/tun und NET_ADMIN hat der Container nicht (Laufzeit 2.23).

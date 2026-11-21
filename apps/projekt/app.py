@@ -1,32 +1,24 @@
-"""OAAP Projekt-App 0.1 -- Owner of Projekt, Consumer of Firma
-(RFC-0031 Schritt 4, zweite Welle; program/zielbild-datenplattform.md
-Runde 1, Punkt 5: "Projekte als Beispiel fuer 'gleiches Datenobjekt,
-verschiedene Herkunft'").
+"""Projekte -- Owner von Projekt, Consumer von Firma (RFC-0031 Schritt 4,
+zweite Welle; Oberfläche nach RFC-0118: Rahmen, Listenbericht, Auswahl
+statt URN, Hilfe, MCP).
 
-Diese App DEFINIERT den Objekttyp 'Projekt' (Herkunft 'app:projekt',
-oaap.data.model 0.1 SS2.3) -- aber sie ist nicht die einzige App, die
-Projekt-Objekte ANLEGT: Partnerverwaltung bindet sich in ihrem eigenen
-Manifest an denselben, schon registrierten Typ
-('contributes: [{type: Projekt, role: owner}]', ohne ihn neu zu
-definieren) und legt auf ihrer Firma-Seite eigene Projekt-Instanzen
-an. Das ist der "geteilte digitale Zwilling" des Zielbilds: EIN Typ,
-ZWEI unabhaengige Owner, jede Instanz mit ihrer eigenen Herkunft am
-Objekt (RFC-0031 SS3.3) -- siehe oaap-app.yaml's Kommentar fuer den
-Beweis am Code, dass das ohne RFC-0031 D1 zu verletzen geht.
+Diese App DEFINIERT den Objekttyp 'Projekt' (Herkunft 'app:projekt') --
+aber sie ist nicht die einzige App, die Projekte ANLEGT: die
+Partnerverwaltung bindet sich an denselben Typ und legt auf ihrer
+Firma-Seite eigene Projekte an. Ein Typ, zwei unabhängige Owner, jede
+Instanz mit ihrer eigenen Herkunft. Die Liste hier zeigt darum ALLE
+Projekte des Mandanten aus dem Zwilling (GET /twin/objects?type=Projekt,
+eine Anfrage mit Titeln und Gruppen), mit dem Vermerk, welche App sie
+angelegt hat.
 
-'Firma' konsumiert diese App nur als Referenz (D6) -- wie RACI, keine
-eigene Kopie, keine Suche (die kommt erst mit '/twin/references',
-RFC-0031 SS1). Die Kunde-ID kommt aus Partnerverwaltungs eigener
-Objektseite, in Klartext, genau dafuer gedacht.
+'Firma' konsumiert diese App nur als Referenz: der Kunde wird aus der
+Liste der Firmen des Zwillings gewählt (GET /twin/objects?type=Firma),
+nicht als URN eingefügt.
 
-Gebaut wie jede andere Referenz-App: kein eigener Login, ein
-HTTP-Port, ein eigener Index NUR fuer die selbst angelegten
-Projekt-IDs (id + type, kein Titel -- der Zwilling ist die einzige
-Quelle), Konfiguration ueber deklarierte Variablen, Logs nach stdout,
-Gesundheitspfad, nur Standardbibliothek (plus twin.py).
-
-RFC-0035 (App-Design-Kontrakt Teil A): /platform/theme.css, Mini-
-Kopfzeile (D4).
+Der alte Index unter /data (nur id + type) wird weiter fortgeschrieben,
+aber nicht mehr gelesen. Kein eigener Login, ein HTTP-Port,
+Gesundheitspfad, nur Standardbibliothek plus twin.py, appframe/ und
+mcpdoor/ (Kopien aus lib/).
 """
 import html
 import json
@@ -35,9 +27,13 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
+import appframe as af
+import mcpdoor
 import twin
 
-VERSION = "0.1.2"
+APP_NAME = "Projekte"
+APP_ID = "projekt"
+VERSION = "0.2.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("PROJEKT_DATA_DIR", "/data")
@@ -47,11 +43,45 @@ esc = html.escape
 
 PROJEKT_TYPE = "Projekt"
 PROJECT_GROUP = "project.core"
+FIRMA_TYPE = "Firma"
+
+APP_NAMES = {"partnerverwaltung": "Partnerverwaltung",
+             "mitarbeiterverwaltung": "Mitarbeiterverwaltung",
+             "projekt": "Projekte", "raci": "Zuständigkeiten (RACI)"}
+ATTR_TITLES = {"Status": "Status", "StartDate": "Beginn"}
+GROUP_TITLES = {"project.core": "Projektdaten"}
+REL_TITLES = {"forCustomer": "Kunde (Firma)"}
+STATUS_KIND = {"abgeschlossen": "ok", "laufend": "info", "pausiert": "warn", "abgebrochen": "err"}
 
 
-# --------------------------------------------------------- der eigene Index
+def made_by(origin):
+    o = str(origin or "")
+    if o.startswith("app:"):
+        return APP_NAMES.get(o[4:], "einer anderen App")
+    return "einer anderen Stelle" if o else ""
+
+
+def attr(obj, key):
+    g = (obj.get("groups") or {}).get(PROJECT_GROUP) or {}
+    v = (g.get("attributes") or {}).get(key) or {}
+    return str(v.get("value")) if v.get("value") is not None else ""
+
+
+def kunden_of(obj):
+    g = (obj.get("groups") or {}).get(PROJECT_GROUP) or {}
+    return [r.get("target") for r in g.get("relations") or []
+            if r.get("key") == "forCustomer" and r.get("target")]
+
+
+def status_badge(obj):
+    s = attr(obj, "Status")
+    return af.badge(s, STATUS_KIND.get(s.lower(), "")) if s else ""
+
+
+# --------------------------------------------------------- der alte Index
 
 def remember(obj_id):
+    """id + type, nichts sonst -- fortgeschrieben, nicht mehr gelesen."""
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         with open(INDEX_PATH, "a", encoding="utf-8") as fh:
@@ -76,149 +106,218 @@ def known():
     return list(seen.keys())
 
 
+def load(type_key):
+    try:
+        objs, truncated = twin.list_objects(type_key)
+    except twin.TwinError as exc:
+        label = "Projekte" if type_key == PROJEKT_TYPE else "Firmen"
+        return [], f"Die Liste der {label} ist gerade nicht lesbar ({exc.status or 'keine Verbindung'})."
+    return objs, ("Es werden die ersten 500 angezeigt." if truncated else "")
+
+
+def title_of(obj_id, known_titles):
+    if obj_id in known_titles:
+        return known_titles[obj_id]
+    try:
+        o = twin.get_object(obj_id)
+    except twin.TwinError:
+        o = None
+    t = (o or {}).get("title") or "nicht lesbare Firma"
+    known_titles[obj_id] = t
+    return t
+
+
 # --------------------------------------------------------------- Optik
 
-STYLE = """<link rel="stylesheet" href="/platform/theme.css">
-<style>
-  *{box-sizing:border-box}
-  body{font-family:var(--oaap-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
-       font-size:var(--oaap-font-size-base, 15px);margin:0;
-       background:var(--oaap-color-bg, #fff);color:var(--oaap-color-text, #1a1d21)}
-  main{max-width:52rem;margin:1.6rem auto;padding:0 var(--oaap-space-3, 16px)}
-  h2{font-size:1.02rem;margin:0 0 .8rem}
-  .card{background:var(--oaap-color-surface, #f4f5f7);
-       border:1px solid var(--oaap-color-border, #d8dbe0);
-       border-radius:var(--oaap-radius, 6px);padding:1.4rem;margin-bottom:1.2rem}
-  .card.attention{border-color:#fcd34d;background:#fffbeb}
-  .badge{font-size:.72rem;padding:.15rem .55rem;border-radius:1rem;
-       background:#fff;color:var(--oaap-color-primary, #2f6fed);white-space:nowrap;
-       border:1px solid var(--oaap-color-border, #d8dbe0)}
-  a.btn,button{display:inline-block;padding:.6rem 1.3rem;border:0;
-       border-radius:var(--oaap-radius, 6px);
-       background:var(--oaap-color-primary, #2f6fed);
-       color:var(--oaap-color-primary-text, #fff);text-decoration:none;
-       font-size:.95rem;cursor:pointer;min-height:44px}
-  .hint{font-size:.8rem;color:var(--oaap-color-text-muted, #5b616b);margin:0 0 .6rem}
-  .muted{color:var(--oaap-color-text-muted, #5b616b);font-size:.9rem}
-  table{width:100%;border-collapse:collapse}
-  th,td{text-align:left;padding:.55rem .5rem;
-       border-bottom:1px solid var(--oaap-color-border, #d8dbe0);font-size:.92rem}
-  th{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;
-       color:var(--oaap-color-text-muted, #5b616b)}
-  code{background:var(--oaap-color-surface, #f4f5f7);border-radius:.25rem;
-       padding:.1rem .35rem;font-size:.86rem;word-break:break-all}
-  form.stack{display:flex;flex-direction:column;gap:.6rem;max-width:26rem}
-  form.stack label{font-size:.82rem;color:var(--oaap-color-text-muted, #5b616b)}
-  input{padding:.5rem .6rem;border-radius:var(--oaap-radius, 6px);
-       border:1px solid var(--oaap-color-border, #d8dbe0);font-size:.95rem;min-height:40px}
-  .cols{display:grid;grid-template-columns:1fr 1fr;gap:1.2rem}
-  @media (max-width:720px){ .cols{grid-template-columns:1fr} }
-</style>"""
-
-FAVICON = ("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'"
-           "%3E%3Crect x='14' y='14' width='34' height='34' fill='%232f6fed'/%3E%3Crect "
-           "x='52' y='52' width='34' height='34' fill='%232f6fed' opacity='.5'/%3E%3C/svg%3E")
-
-BACK_TO_PORTAL = ('href="/" onclick="location.href=location.protocol+\'//\'+'
-                  "location.hostname+'/';return false;\"")
+STYLE = (".pj-kennung code{overflow-wrap:anywhere}"
+         ".pj-kennung button{margin-left:8px;padding:2px 8px;font-size:.85em}")
 
 
-def page(body, user, roles, title="Projekt-App"):
-    return f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="{FAVICON}">
-<title>{esc(title)} -- OAAP Projekt-App</title>
-{STYLE}
-<header class="oaap-header">
-  <span class="oaap-header-title">Projekt-App</span>
-  <a class="oaap-header-back" {BACK_TO_PORTAL}>&larr; Portal</a>
-</header>
-<main>{body}</main>
-<footer style="max-width:52rem;margin:2rem auto 1.2rem;padding:0 var(--oaap-space-3, 16px);
-  color:var(--oaap-color-text-muted, #5b616b);font-size:.8rem">
-  OAAP Projekt-App {VERSION} -- Owner von Projekt, Consumer von Firma (RFC-0031 Schritt 4, zweite Welle)
-</footer>
-</html>"""
+def render(title, body, obj=None, obj_title=None):
+    # eine einzige Fläche -- keine Reiterleiste (RFC-0118 §6.1)
+    return af.page(title, body, app=APP_NAME, version=VERSION, product=APP_ID,
+                   obj=obj, obj_title=obj_title, style=STYLE)
 
 
-def not_configured_card():
-    return """<div class="card attention">
-  <h2>Kein Zwilling-Zugang</h2>
-  <p class="hint">Diese Instanz hat weder <code>OAAP_TWIN_URL</code> noch
-    <code>OAAP_PLATFORM_KEY</code>.</p>
-</div>"""
+def not_configured():
+    return af.card("Keine Verbindung zum Zwilling",
+                   "<p>Diese Instanz ist nicht mit dem Zwilling des Mandanten verbunden. "
+                   "Ohne ihn kann diese App keine Projekte anzeigen oder anlegen. "
+                   "Bitte die Betreuung der Plattform fragen.</p>", "oaap-warn")
 
 
-def render_object(obj, notice=""):
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
-    group = (obj.get("groups") or {}).get(PROJECT_GROUP, {})
-    rows = [f"<tr><td>{esc(k)}</td><td>{esc(str(v.get('value')))}</td></tr>"
-            for k, v in (group.get("attributes") or {}).items()]
-    attr_table = (f"<table><tr><th>Attribut</th><th>Wert</th></tr>{''.join(rows)}</table>"
-                  if rows else "<p class='muted' style='margin:0'>keine Attribute</p>")
-    kunde_html = "<p class='muted' style='margin:0'>keinem Kunden zugeordnet</p>"
-    for rel in group.get("relations") or []:
-        if rel["key"] != "forCustomer":
-            continue
-        try:
-            kunde = twin.get_object(rel["target"])
-        except twin.TwinError:
-            kunde = None
-        who = esc(kunde["title"]) if kunde else f"<code>{esc(rel['target'])}</code>"
-        kunde_html = f"<p style='margin:0'>{who}</p>"
-    parts.append(f"""<div class="card">
-  <h2>{esc(obj['title'])} <span class="badge">{esc(obj['type'])}</span></h2>
-  <p class="hint">ID:</p>
-  <p><code>{esc(obj['id'])}</code></p>
-  <p class="muted">Owner: {esc(obj['owner'])}</p>
-</div>
-<div class="card">
-  <h2><code>{esc(PROJECT_GROUP)}</code> <span class="badge">Herkunft: {esc(group.get('origin', '?'))}</span></h2>
-  {attr_table}
-  <p class="hint" style="margin-top:.8rem"><b>Kunde (forCustomer)</b></p>
-  {kunde_html}
-</div>""")
-    return "".join(parts)
+def kennung(obj_id):
+    return (f'<span class="pj-kennung"><code id="kennung">{esc(obj_id)}</code>'
+            '<button type="button" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText('
+            "document.getElementById('kennung').textContent)\">Kopieren</button></span>")
 
 
-def render_home(notice=""):
+def page_list(params):
+    projekte, n1 = load(PROJEKT_TYPE)
+    firmen, n2 = load(FIRMA_TYPE)
+    ft = {f["id"]: f.get("title") or "" for f in firmen}
+
+    def kunde_text(o):
+        return ", ".join(title_of(k, ft) for k in kunden_of(o))
+    q = af.Query(params, filters=("status", "kunde", "von"), default_sort="titel")
+    statuses = sorted({attr(o, "Status") for o in projekte if attr(o, "Status")}, key=str.lower)
+    kunden = sorted({k for o in projekte for k in kunden_of(o) if k in ft}, key=lambda k: ft[k].lower())
+    owners = sorted({str(o.get("owner") or "") for o in projekte if o.get("owner")})
+    rows = projekte
+    if q.filters.get("status"):
+        rows = [o for o in rows if attr(o, "Status") == q.filters["status"]]
+    if q.filters.get("kunde"):
+        rows = [o for o in rows if q.filters["kunde"] in kunden_of(o)]
+    if q.filters.get("von"):
+        rows = [o for o in rows if str(o.get("owner") or "") == q.filters["von"]]
+    cols = [("Titel", "titel", lambda o: o.get("title") or "", ""),
+            ("Kunde (Firma)", "kunde", kunde_text, ""),
+            ("Status", "status", lambda o: attr(o, "Status"), ""),
+            ("Beginn", "beginn", lambda o: attr(o, "StartDate"), "oaap-minor"),
+            ("Angelegt von", "von", lambda o: made_by(o.get("owner")), "oaap-minor")]
+
+    def row(o):
+        return (f'<tr><td><a href="object?id={esc(o["id"])}">{esc(o.get("title") or "")}</a></td>'
+                f'<td>{esc(kunde_text(o))}</td><td>{status_badge(o)}</td>'
+                f'<td class="oaap-minor">{esc(attr(o, "StartDate"))}</td>'
+                f'<td class="oaap-minor">{esc(made_by(o.get("owner")))}</td></tr>')
+    body = (af.pagehead("Projekte", '<a class="oaap-btn primary" href="neu">Neues Projekt</a>')
+            + "".join(af.msg(n, error=True) for n in (n1, n2) if n)
+            + af.list_report(
+                q, rows, cols, row, noun="Projekte", placeholder="Titel, Kunde, Status",
+                choices=[("status", "Status", [(s, s) for s in statuses]),
+                         ("kunde", "Kunde (Firma)", [(k, ft[k]) for k in kunden]),
+                         ("von", "Angelegt von", [(o, made_by(o)) for o in owners])],
+                empty_text="Noch keine Projekte. <b>Neues Projekt</b> legt das erste an."))
+    return render("Projekte", body)
+
+
+def page_neu(notice="", form=None):
+    form = form or {}
+    firmen, note = load(FIRMA_TYPE)
+    cur = form.get("kunde_id", "")
+    opts = "".join(f'<option value="{esc(f["id"])}"{" selected" if f["id"] == cur else ""}>{esc(f.get("title") or "")}</option>'
+                   for f in sorted(firmen, key=lambda f: (f.get("title") or "").lower()))
+    body = (af.back("./", "Zurück zur Liste") + af.pagehead("Neues Projekt") + af.msg(notice, error=True)
+            + af.msg(note, error=True)
+            + '<form class="oaap-form" method="post" action="create">'
+              f'<label>Titel<input type="text" name="title" required value="{esc(form.get("title", ""))}"></label>'
+              f'<label>Kunde (Firma)<select name="kunde_id"><option value="">– ohne Kunde –</option>{opts}</select></label>'
+              f'<label>Status<input type="text" name="Status" placeholder="geplant" list="pj-status" value="{esc(form.get("Status", ""))}"></label>'
+              '<datalist id="pj-status"><option value="geplant"><option value="laufend">'
+              '<option value="pausiert"><option value="abgeschlossen"></datalist>'
+              f'<label>Beginn<input type="date" name="StartDate" value="{esc(form.get("StartDate", ""))}"></label>'
+              '<p class="oaap-muted">Firmen werden in der Partnerverwaltung gepflegt.</p>'
+              '<div><button type="submit" class="primary">Anlegen</button></div></form>')
+    return render("Neues Projekt", body)
+
+
+def page_object(obj):
+    known_titles = {}
+    kunden = kunden_of(obj)
+    pairs = [("Art", "Projekt"),
+             ("Kunde (Firma)", esc(", ".join(title_of(k, known_titles) for k in kunden)) or "–"),
+             ("Status", status_badge(obj)), ("Beginn", esc(attr(obj, "StartDate"))),
+             ("Angelegt von", esc(made_by(obj.get("owner")))), ("Kennung", kennung(obj["id"]))]
+    parts = [af.back("./", "Zurück zur Liste"),
+             f'<div class="oaap-objhead"><h1>{esc(obj["title"])}</h1>{af.facts(pairs)}</div>']
+    for gk, g in sorted((obj.get("groups") or {}).items()):
+        rows = [f"<dt>{esc(ATTR_TITLES.get(k, k))}</dt><dd>{esc(str(v.get('value') or ''))}</dd>"
+                for k, v in (g.get("attributes") or {}).items()]
+        rows += [f"<dt>{esc(REL_TITLES.get(r.get('key'), 'Beziehung'))}</dt>"
+                 f"<dd>{esc(title_of(r.get('target'), known_titles))}</dd>"
+                 for r in g.get("relations") or []]
+        inner = f'<dl class="oaap-kv">{"".join(rows)}</dl>' if rows else '<p class="oaap-muted">Keine Angaben.</p>'
+        if g.get("origin") and g.get("origin") != "app:" + APP_ID:
+            inner = f'<p class="oaap-muted">angelegt von {esc(made_by(g.get("origin")))}</p>' + inner
+        parts.append(af.card(GROUP_TITLES.get(gk.split("+", 1)[0], "Weitere Angaben"), inner))
+    return render(obj["title"], "".join(parts), obj=f"Projekt:{obj['id']}", obj_title=obj["title"])
+
+
+# ------------------------------------------------------------- MCP-Tür
+
+door = mcpdoor.Door(f"oaap-{APP_ID}", VERSION,
+                    "Projekte des Mandanten suchen und lesen, mit Kunde (Firma), Status und Beginn.")
+
+
+def _need_session(who):
+    # dieselbe Prüfung wie die Seiten: ohne Rollen keine Daten
+    if not who.get("roles"):
+        raise mcpdoor.Refused("Dafür braucht es eine angemeldete Sitzung.")
     if not twin.configured():
-        return not_configured_card()
-    parts = []
-    if notice:
-        parts.append(f'<div class="card attention"><p style="margin:0">{esc(notice)}</p></div>')
+        raise mcpdoor.Refused("Diese Instanz ist nicht mit dem Zwilling verbunden.")
 
-    rows = []
-    for obj_id in known():
-        obj = twin.get_object(obj_id)
-        if obj is None:
+
+def _list_or_refuse(type_key):
+    try:
+        return twin.list_objects(type_key)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Der Zwilling antwortet nicht ({exc.status or 'keine Verbindung'}).") from None
+
+
+def _short(o, ft):
+    d = {"kennung": o["id"], "titel": o.get("title"),
+         "kunde": ", ".join(ft.get(k) or "" for k in kunden_of(o)).strip(", "),
+         "status": attr(o, "Status"), "beginn": attr(o, "StartDate"),
+         "angelegt_von": made_by(o.get("owner"))}
+    return {k: v for k, v in d.items() if v}
+
+
+@door.tool("projekt_search", "Projekte suchen",
+           "Sucht Projekte nach Titel, Kunde oder Status. Ohne Suchwort liefert es die ersten Einträge.",
+           {"q": {"type": "string", "description": "Suchwort(e), leer für alle"},
+            "status": {"type": "string", "description": "nur Projekte mit diesem Status"},
+            "limit": {"type": "integer", "description": "höchstens so viele Treffer (1–50, Standard 20)"}})
+def _mcp_search(args, who):
+    _need_session(who)
+    projekte, trunc = _list_or_refuse(PROJEKT_TYPE)
+    firmen, _t = _list_or_refuse(FIRMA_TYPE)
+    ft = {f["id"]: f.get("title") or "" for f in firmen}
+    try:
+        limit = max(1, min(50, int(args.get("limit") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    status = str(args.get("status") or "").strip().lower()
+    q = af.Query({"q": str(args.get("q") or "")})
+    hits = []
+    for o in projekte:
+        s = _short(o, ft)
+        if status and attr(o, "Status").lower() != status:
             continue
-        rows.append(f"<tr><td><a href='/object?id={esc(obj_id)}'>{esc(obj['title'])}</a></td>"
-                    f"<td class='muted'><code>{esc(obj_id)}</code></td></tr>")
-    table = (f"<table><tr><th>Titel</th><th>ID</th></tr>{''.join(rows)}</table>"
-             if rows else "<p class='muted' style='margin:0'>noch keine angelegt</p>")
+        if q.matches(s.get("titel"), s.get("kunde"), s.get("status")):
+            hits.append(s)
+    return {"treffer": hits[:limit], "anzahl": len(hits), "gekuerzt": len(hits) > limit or trunc}
 
-    parts.append(f"""<div class="cols">
-  <div class="card">
-    <h2>Projekte (von dieser App angelegt)</h2>
-    {table}
-  </div>
-  <div class="card">
-    <h2>Projekt anlegen</h2>
-    <p class="hint">Die Kunde-ID kommt aus <a href="../partnerverwaltung/">Partnerverwaltung</a>s
-      Firma-Seite -- eine Referenz, keine eigene Ablage (D6).</p>
-    <form class="stack" method="post" action="/create">
-      <label>Titel<input type="text" name="title" required></label>
-      <label>Status<input type="text" name="Status" placeholder="geplant"></label>
-      <label>Beginn<input type="date" name="StartDate"></label>
-      <label>Kunde-ID<input type="text" name="kunde_id" placeholder="urn:oaap:obj:..."></label>
-      <button type="submit">Anlegen</button>
-    </form>
-  </div>
-</div>""")
-    return "".join(parts)
+
+@door.tool("projekt_read", "Projekt lesen",
+           "Liest ein Projekt mit Kunde (Firma), Status, Beginn und der App, die es angelegt hat.",
+           {"kennung": {"type": "string", "description": "Kennung aus projekt_search"}},
+           required=("kennung",))
+def _mcp_read(args, who):
+    _need_session(who)
+    oid = str(args.get("kennung") or "").strip()
+    if not oid:
+        raise mcpdoor.Refused("Welche Kennung?")
+    try:
+        obj = twin.get_object(oid)
+    except twin.TwinError as exc:
+        raise mcpdoor.Refused(f"Nicht lesbar ({exc.status or 'keine Verbindung'}).") from None
+    if not obj or obj.get("type") != PROJEKT_TYPE:
+        raise mcpdoor.Refused("Kein Projekt mit dieser Kennung.")
+    known_titles = {}
+    return {"kennung": obj["id"], "titel": obj["title"], "angelegt_von": made_by(obj.get("owner")),
+            "status": attr(obj, "Status") or None, "beginn": attr(obj, "StartDate") or None,
+            "kunde": [{"kennung": k, "name": title_of(k, known_titles)} for k in kunden_of(obj)]}
+
+
+door.prompt("projekt_stand", "Stand der Projekte",
+            "Fasst zusammen, welche Projekte laufen, geplant oder abgeschlossen sind.",
+            "Gib mir einen Überblick über die Projekte (projekt_search): gruppiert nach Status, "
+            "mit Kunde und Beginn. Nenne Firmen beim Namen, nicht bei der Kennung.")
+door.prompt("projekt_kunde", "Projekte eines Kunden",
+            "Listet die Projekte für eine Firma.",
+            "Welche Projekte gibt es für die Firma „{kunde}“? Nutze projekt_search und nenne Titel, "
+            "Status und Beginn.", arguments=("kunde",))
 
 
 # --------------------------------------------------------------- HTTP
@@ -262,79 +361,86 @@ class Handler(BaseHTTPRequestHandler):
                 form[unquote_plus(k)] = unquote_plus(v)
         return form
 
+    def refuse(self):
+        self.send_html(403, render("Anmeldung nötig", af.card(
+            "", "<p>Diese Seite braucht eine angemeldete Sitzung.</p>")))
+
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/mcp":
+            door.serve(self)
+            return
         path = parsed.path.rstrip("/") or "/"
         if path == "/healthz":
             self.send_json(200, {"status": "ok", "version": VERSION,
                                   "twin": twin.configured()})
             return
-        user, roles = self.identity()
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
+            return
+        if not twin.configured() and path in ("/", "/object", "/neu"):
+            self.send_html(200, render("Keine Verbindung", not_configured()))
             return
         if path == "/object":
-            qs = parse_qs(parsed.query)
-            obj_id = (qs.get("id") or [""])[0]
+            obj_id = (parse_qs(parsed.query).get("id") or [""])[0].strip()
             try:
                 obj = twin.get_object(obj_id) if obj_id else None
             except twin.TwinError as exc:
-                self.send_html(200, page(
-                    f'<div class="card attention"><p>{esc(exc.detail or str(exc))}</p></div>',
-                    user, roles))
+                self.send_html(200, render("Nicht lesbar", af.back("./") + af.msg(
+                    f"Dieses Projekt ist nicht lesbar ({exc.status or 'keine Verbindung'}).", error=True)))
                 return
             if obj is None:
-                self.send_html(404, page(
-                    '<div class="card attention"><p>Kein Objekt mit dieser ID.</p></div>',
-                    user, roles))
+                self.send_html(404, render("Nicht gefunden", af.back("./") + af.msg(
+                    "Kein Projekt mit dieser Kennung.", error=True)))
                 return
-            self.send_html(200, page(render_object(obj), user, roles, obj["title"]))
+            self.send_html(200, page_object(obj))
             return
         if path == "/":
-            self.send_html(200, page(render_home(), user, roles))
+            self.send_html(200, page_list(parse_qs(parsed.query)))
             return
-        self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+        if path == "/neu":
+            self.send_html(200, page_neu())
+            return
+        self.send_html(404, render("Nicht gefunden", af.empty(
+            'Diese Seite gibt es nicht. <a href="./">Zur Liste</a>')))
 
     def do_POST(self):
-        path = self.path.split("?")[0].rstrip("/") or "/"
-        user, roles = self.identity()
+        path = self.path.split("?")[0]
+        if path == "/mcp":
+            door.serve(self)
+            return
+        path = path.rstrip("/") or "/"
+        _user, roles = self.identity()
         if not roles:
-            self.send_html(403, page('<div class="card"><p>Diese Seite braucht eine '
-                                     'angemeldete Sitzung.</p></div>', "", ""))
+            self.refuse()
             return
         if path != "/create":
-            self.send_html(404, page('<div class="card"><p>Unbekannter Pfad.</p></div>', user, roles))
+            self.send_html(404, render("Nicht gefunden", af.empty("Diese Aktion gibt es nicht.")))
             return
         form = self.read_form()
-        notice = ""
-        redirect = "/"
         title = (form.get("title") or "").strip()
         kunde_id = (form.get("kunde_id") or "").strip()
         if not title:
-            notice = "Ohne Titel kann ich nichts anlegen."
-        else:
-            attrs = {k: form[k] for k in ("Status", "StartDate") if form.get(k)}
-            relations = [{"key": "forCustomer", "target": kunde_id}] if kunde_id else None
-            try:
-                result = twin.create_object(PROJEKT_TYPE, title, PROJECT_GROUP,
-                                             attributes=attrs or None, relations=relations)
-                remember(result["id"])
-                redirect = f"/object?id={result['id']}"
-            except twin.TwinError as exc:
-                notice = exc.detail or str(exc)
-
-        if notice:
-            self.send_html(200, page(render_home(notice), user, roles))
+            self.send_html(200, page_neu("Ohne Titel kann ich nichts anlegen.", form))
             return
+        attrs = {k: form[k].strip() for k in ("Status", "StartDate") if (form.get(k) or "").strip()}
+        relations = [{"key": "forCustomer", "target": kunde_id}] if kunde_id else None
+        try:
+            result = twin.create_object(PROJEKT_TYPE, title, PROJECT_GROUP,
+                                        attributes=attrs or None, relations=relations)
+        except twin.TwinError as exc:
+            self.send_html(200, page_neu(f"Anlegen abgelehnt: {exc.detail or exc}", form))
+            return
+        remember(result["id"])
         self.send_response(303)
-        self.send_header("Location", redirect)
+        self.send_header("Location", f"/object?id={result['id']}")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
 
 def main():
-    sys.stdout.write(f"OAAP Projekt-App {VERSION} auf Port {PORT} -- "
+    sys.stdout.write(f"{APP_NAME} {VERSION} auf Port {PORT} -- "
                      f"Zwilling: {'konfiguriert' if twin.configured() else 'FEHLT'}\n")
     sys.stdout.flush()
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

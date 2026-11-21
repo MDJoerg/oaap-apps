@@ -42,9 +42,9 @@ def call(method, path, person, body=None, params=None):
     """Ein Aufruf als `person` (Benutzer-ID). Gibt das JSON zurueck oder
     wirft DoorError mit dem Satz des Dienstes."""
     if not configured():
-        raise DoorError(0, "Diese Instanz hat keinen Verwaltungsschluessel "
-                           "(OAAP_AUTHZ_ADMIN_KEY). Wurde sie mit "
-                           "--confirm-administer installiert?")
+        raise DoorError(0, "Diese Instanz hat keinen Verwaltungsschlüssel. "
+                           "Der Betreiber muss ihn beim Installieren bestätigen "
+                           "(--confirm-administer).")
     if not person:
         raise DoorError(403, "Ohne angemeldete Person kein Zugriff.")
     url = os.environ["OAAP_AUTHZ_URL"].rstrip("/") + "/admin/" + path

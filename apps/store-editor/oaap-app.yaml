@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: store-editor
-  name: OAAP Store Editor
-  version: 0.3.3
+  name: Store-Editor
+  version: 0.4.0
   type: native
   # Der Editor hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da. Sie steht trotzdem hier, weil eine App,
@@ -34,6 +34,12 @@ routes:
   # den jede Textänderung soll.
   - path: /
     roles: [user, keyuser, admin]
+
+# Die MCP-Tür (RFC-0118 §9): Assistenten des Mandanten lesen Listen,
+# Einträge und Befunde -- mit denselben Rollen wie die Seite (Route / oben).
+# Nur lesend; Schreiben bleibt Sache der Seite.
+mcp:
+  path: /mcp
 
 storage:
   # Die Arbeitskopien der Listen: bearbeiteter Stand, veröffentlichter
@@ -76,6 +82,25 @@ config:
   - key: STORE_EDITOR_TOKEN_3
     label: "Lesetoken, Platz 3"
     secret: true
+
+docs:
+  # RFC-0094/RFC-0118 §9: die Anwenderhilfe geht an die Hilfe des Mandanten
+  # (und den Chat); /hilfe in der App zeigt dieselben Dateien -- eine Quelle.
+  - product: store-editor
+    title: "Store-Editor"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user, keyuser, admin]
+    readers: [power-user, admin]
+    kinds:
+      index.md: overview
+      liste-pruefen.md: howto
+      eintrag-bearbeiten.md: howto
+      entwurf.md: howto
+      nachpflege-bericht.md: howto
+      listen-und-zugang.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

@@ -1,12 +1,12 @@
-oaap_manifest: "0.11"
+oaap_manifest: "0.18"
 
 app:
   id: vorgaenge
   name: Vorgänge
-  version: 0.16.0
+  version: 0.17.0
   type: native
   class: frontend
-  description: "Melden und Klären im Mandanten (RFC-0061 Stufe 1): nimmt die Meldungen des Feedback-Knopfs der Plattform an (/platform/feedback.js in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant in „Rollen & Rechte“ als Kontext vergibt. Eine Instanz je Mandant; seit 0.3.0 kündigt der Knoten seinen Neustart hier als Vorgang an (RFC-0069), seit 0.12.0 schreibt er die Anfragen der Mandanten an den Betreiber hierher (RFC-0109); seit 0.13.0 bearbeiten KI-Spezialisten Vorgänge im Hintergrund (RFC-0105 Stufe 1, App Spezialisten): je Bereich eine Erstbearbeitung durch einen Spezialisten, eine Tür für seinen Lauf (an der Reihe, lesen, interne Schritte, zurückgeben), der dunkle Chat zugeklappt im Reiter Intern und ein Stopp-Knopf am Vorgang; seit 0.14.0 (Stufe 2) plant ein Spezialist schreibende Aufrufe und Antworten an die Meldende nur: der Vorgang wartet auf Freigabe, ein Mensch des Bereichs gibt genau diesen Schritt frei (an einen Hash gebunden) oder lehnt ab, ein freigegebener Entwurf wird öffentlich; Plattform ab 0.1.199"
+  description: "Melden und Klären im Mandanten: nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant hier oder in „Rollen & Rechte“ vergibt. Eine Instanz je Mandant. Der Knoten kündigt seinen Neustart hier als Vorgang an und schreibt die Anfragen der Mandanten an den Betreiber hierher. KI-Spezialisten (App Spezialisten) bearbeiten Vorgänge im Hintergrund: je Bereich eine Erstbearbeitung, interne Schritte, Stopp-Knopf; schreibende Aufrufe und Antworten an die Meldende nur nach Freigabe eines Menschen. Übersicht als Listenbericht mit Suche, Filtern, Sortieren und Blättern; MCP-Tür mit Suchen, Lesen, Melden und Kommentieren. Plattform ab 0.1.199"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -28,7 +28,7 @@ routes:
 
 # RFC-0061 Q4: die Vorgänge liegen in der eigenen Ablage (SQLite), nicht
 # im Zwilling -- der kann in 0.1 weder auflisten noch suchen.
-# RFC-0073 (Manifest 0.11): die MCP-Tuer unter der eigenen Route /. Ein MCP-Gateway
+# RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route /. Ein MCP-Gateway
 # desselben Mandanten findet sie in seiner Quellenliste; sie antwortet als die
 # Person, die die Plattform durchreicht -- mit den Rechten der Seite.
 mcp:
@@ -77,6 +77,24 @@ config:
   - key: VORGAENGE_ACCEPT_DAYS
     label: "Tage ohne Rückmeldung, nach denen sich ein beantworteter Vorgang von selbst schließt"
     default: "14"
+
+# RFC-0094 / RFC-0118: die Hilfe der App -- an die Hilfe des Mandanten und an den Chat.
+docs:
+  - product: vorgaenge
+    title: "Vorgänge"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin, keyuser, user]
+    readers: [end-user, power-user, admin]
+    kinds:
+      index.md: overview
+      melden.md: howto
+      bearbeiten.md: howto
+      freigeben.md: howto
+      bereiche-einrichten.md: howto
+      partner.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

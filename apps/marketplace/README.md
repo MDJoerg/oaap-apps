@@ -1,4 +1,4 @@
-# Marketplace (`marketplace`) — RFC-0077 Stufen 1 und 2 (0.3: MVP Aufbau-Vorlagen)
+# Marktplatz (`marketplace`) — RFC-0077 Stufen 1 und 2 (0.3: MVP Aufbau-Vorlagen, 0.4: RFC-0118)
 
 Digitale Assets mit **Releases** (unveränderlich, nach SHA-256 abgelegt) und
 **Kanälen** (`stable`, `beta`, global, D12). OAAP-Pakete sind ein Asset-Typ
@@ -19,6 +19,7 @@ Die Regel steht an genau einer Stelle: `access.py`.
 | `/api/v1/…` | angemeldet / API-Schlüssel | Suche, Details, Einchecken, Kanäle, Rückruf |
 | `/feed/v1/oaap-apps?channel=stable`, `/feed/v1/files/<sha256>` | angemeldet / API-Schlüssel | Empfänger, z. B. ein Paketkatalog im Spiegelmodus |
 | `/admin` | admin | Sichtbarkeit, freie Kanäle, Berechtigungen, Rechte zum Veröffentlichen, Empfänger |
+| `/mcp` | angemeldet | MCP-Tür: `marketplace_search`, `marketplace_read`, `marketplace_requests` (nur lesen, dieselben Regeln wie die Seiten) |
 
 ## Schaufenster (Stufe 2)
 
@@ -83,7 +84,7 @@ folgt dem Feed (siehe `apps/package-catalog/README.md`).
 
 | Schlüssel | Vorgabe | Bedeutung |
 |---|---|---|
-| `MARKET_NAME` | `Marketplace` | Name im Kopf und im Feed |
+| `MARKET_NAME` | leer | Name im Kopf und im Feed; leer = „Marktplatz“ (englische Seiten: „Marketplace“) |
 | `MARKET_MAX_FILE_MB` | `256` | größte Datei |
 | `MARKET_CHANNELS` | `stable,beta` | Kanäle |
 | `MARKET_TYPES` | `oaap-app,oaap-profile,file` | eingeschaltete Typen |
@@ -147,7 +148,7 @@ python3 tools/review.py --url https://market.example --key-file ~/.oaap/pruefer.
 
 ## Noch nicht (spätere Stufen)
 
-S3, MCP, Statistikseiten (Stufe 3); Partnerstufen, Kampagnen, Coupons,
+S3, Statistikseiten (Stufe 3); Partnerstufen, Kampagnen, Coupons,
 Sicherheitshinweise, Bewertungen, Support, kaskadierende Marketplaces (Folge-RFC
 „Marketplace als Plattform“, §15.8.10).
 
@@ -158,4 +159,22 @@ python3 test_marketplace.py
 python3 test_storefront.py
 python3 test_mvp.py        # §15.8: Sperre, Review, Sprachen, Landschaften, Teilen, Partner
 python3 test_tools.py      # publish.py sync, review.py
+python3 test_frame.py      # 0.4: Rahmen, Listenberichte, Objektseiten, MCP-Tür
 ```
+
+## Seit 0.4: ein Gesicht mit der Plattform (RFC-0118)
+
+- **Verwaltung und „Meine Assets“ im Rahmen** (`admin_views.py`, `appframe/`):
+  Kopfleiste mit Hilfe, Fragen und Benutzermenü, eine Reiterleiste (Übersicht,
+  Assets, Anfragen, Rechte, Prüfungen, Landschaften & Kategorien, Einstellungen),
+  Listenberichte mit Suche, Filtern, Sortierung und Blättern. Handlungen stehen auf
+  Objektseiten (`/admin/assets/<id>?tab=texte|merkmale|bilder|zugang`,
+  `/admin/requests/<id>`, `/admin/grants/<id>`, `/admin/publishers/<id>`,
+  `/admin/reviews/<id>`, `/admin/reviewers/<id>`, `/admin/landscapes/<id>`,
+  `/admin/categories/<id>`, `/my/manage/assets|requests|grants/<id>`), nicht mehr in
+  Tabellenzeilen. Die POST-Wege blieben; ein Feld `back` führt zur Seite zurück.
+- **Das Schaufenster behält sein Gesicht** (Sprache, Akzentfarbe, `MARKET_NAME`); seine
+  Farben kommen aus den Variablen des Kits.
+- **MCP-Tür** (`mcpdoor/`): drei Lesewerkzeuge und zwei Vorlagen; was die Person im
+  Katalog nicht sieht, sieht sie auch hier nicht.
+- **Hilfe** in `docs/` (Manifest `docs:`).

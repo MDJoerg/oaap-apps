@@ -19,6 +19,8 @@ WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen, sonst startet der Container
 # nicht (die Dateien werden einzeln aufgezaehlt, nicht per COPY . kopiert).
 COPY app.py twin.py /srv/
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 USER 10001
 EXPOSE 8000

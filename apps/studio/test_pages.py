@@ -485,7 +485,7 @@ ohne["instances"] = [i for i in FLEET_DOC["instances"]
 NODE["fleet"] = ohne
 st, b, _ = call("GET", f"/vorhaben/{PID}?frisch=1", USER)
 ok("dann erklärt die Seite den Weg dorthin",
-   "Noch nicht produktiv" in b and "RFC-0020" in b
+   "Noch nicht produktiv" in b and "RFC-0020" not in b
    and "üblicher Name wäre" in b)
 NODE["fleet"] = FLEET_DOC
 
@@ -608,25 +608,25 @@ with urllib.request.urlopen(req) as r:
     zip_bytes, zip_headers = r.read(), dict(r.headers)
 ok("das Starter-Paket kommt als ZIP zum Herunterladen",
    zip_headers.get("Content-Type") == "application/zip"
-   and 'filename="oaap-starter-0.2.0.zip"' in zip_headers.get("Content-Disposition", ""))
+   and 'filename="oaap-starter-0.3.0.zip"' in zip_headers.get("Content-Disposition", ""))
 zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
 ok("mit Manifest, Dockerfile und App darin",
-   {"oaap-starter-0.2.0/oaap-app.yaml", "oaap-starter-0.2.0/Dockerfile",
-    "oaap-starter-0.2.0/app.py"}
+   {"oaap-starter-0.3.0/oaap-app.yaml", "oaap-starter-0.3.0/Dockerfile",
+    "oaap-starter-0.3.0/app.py"}
    <= set(zf.namelist()))
 ok("sein Manifest ist das echte, nicht eine Beschreibung davon",
-   b"id: starter" in zf.read("oaap-starter-0.2.0/oaap-app.yaml"))
+   b"id: starter" in zf.read("oaap-starter-0.3.0/oaap-app.yaml"))
 ok("0.5.1: alles liegt in genau einem Ordner mit der Starter-Version",
-   {n.split("/")[0] for n in zf.namelist()} == {"oaap-starter-0.2.0"})
+   {n.split("/")[0] for n in zf.namelist()} == {"oaap-starter-0.3.0"})
 ok("0.5.1: das Briefing nennt den Dateinamen mit Version",
-   "`oaap-starter-0.2.0.zip`" in b)
-ok("0.5.0: das Starter-Manifest ist Format 0.15 mit care",
-   b'oaap_manifest: "0.15"' in zf.read("oaap-starter-0.2.0/oaap-app.yaml")
-   and b"rebuild: self" in zf.read("oaap-starter-0.2.0/oaap-app.yaml"))
+   "`oaap-starter-0.3.0.zip`" in b)
+ok("0.5.0: das Starter-Manifest ist Format 0.18 mit care",
+   b'oaap_manifest: "0.18"' in zf.read("oaap-starter-0.3.0/oaap-app.yaml")
+   and b"rebuild: self" in zf.read("oaap-starter-0.3.0/oaap-app.yaml"))
 ok("0.5.0: das Starter-Dockerfile spielt Debians Korrekturen ein",
-   b"apt-get -y upgrade" in zf.read("oaap-starter-0.2.0/Dockerfile"))
+   b"apt-get -y upgrade" in zf.read("oaap-starter-0.3.0/Dockerfile"))
 ok("0.5.0: die Starter-App hängt Daten an X-OAAP-User-Id",
-   b'"X-OAAP-User-Id"' in zf.read("oaap-starter-0.2.0/app.py"))
+   b'"X-OAAP-User-Id"' in zf.read("oaap-starter-0.3.0/app.py"))
 
 st, b, _ = call("GET", f"/vorhaben/{PID}/briefing", USER)
 ok("der Onboarding-Eintrag im Kopf funktioniert auch auf tiefen Seiten",

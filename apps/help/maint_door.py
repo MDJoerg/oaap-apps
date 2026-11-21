@@ -94,7 +94,7 @@ def answer(lib, version, msg):
         return ok({"protocolVersion": asked if asked in MCP_VERSIONS else MCP_VERSIONS[0],
                    "capabilities": {"tools": {}},
                    "serverInfo": {"name": "oaap-help-maint", "version": version},
-                   "instructions": "Betreuung der OAAP-Hilfe: offene Anfragen nach Anleitungen. " + UNTRUSTED})
+                   "instructions": "Betreuung der Hilfe: offene Anfragen nach Anleitungen. " + UNTRUSTED})
     if method == "ping":
         return ok({})
     if method == "tools/list":

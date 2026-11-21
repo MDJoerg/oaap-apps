@@ -1,4 +1,4 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 # Gebaut und auf oaap-test gemessen (15.10.2026) — siehe README und
 # program/schulungsarbeitsplatz-webtop-2026-10-14.md (Bauplan Stufe 1).
@@ -6,7 +6,7 @@ oaap_manifest: "0.10"
 app:
   id: webtop
   name: Desktop im Browser (Webtop)
-  version: 0.1.11
+  version: 0.2.0
   type: wrapped
   class: frontend
   description: "Ein ganzer Linux-Desktop (XFCE) im Browser, ein Container je Mensch: für Werkzeuge, die ein Fenster brauchen — Eclipse mit ABAP Development Tools und ABAP Cleaner, Claude Desktop, VS Code, Chrome und Firefox. Anmeldung übernimmt das Gateway (Webtop läuft ohne eigenes Passwort), die Sitzung lebt im Container weiter, wenn der Browser zugeht. Der schwere Bruder der code-server-App: 4 bis 6 GB je Platz. Zweite Arbeitsplatz-App der Schulungslandschaft (RFC-0046) und Arbeitsumgebung für alle, deren Laptop nichts installieren darf."
@@ -54,7 +54,7 @@ storage:
 config:
   - key: DESKTOP_TITLE
     label: "Titel der Browser-Seite"
-    default: "OAAP Desktop"
+    default: "Desktop"
   - key: DESKTOP_LANG
     label: "Sprache des Desktops (de oder en)"
     default: "de"
@@ -121,3 +121,18 @@ health:
   # Erweiterungen und startet XFCE — großzügige Anlaufzeit.
   path: /
   startup_grace_seconds: 180
+
+# RFC-0118 §9 (Typ W): Hilfe für die Menschen, die den Arbeitsplatz benutzen.
+docs:
+  - product: webtop
+    title: "Desktop im Browser (Webtop)"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user, keyuser, admin]
+    readers: [end-user, power-user, admin]
+    kinds:
+      index.md: overview
+      erste-schritte.md: howto
+      werkzeuge.md: howto
+      faq.md: faq

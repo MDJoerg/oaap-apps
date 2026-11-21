@@ -9,7 +9,7 @@ MARKER="$HOME_DIR/.oaap-init-done"
 SKEL=/defaults/oaap-skel
 
 # Bei jedem Start: Titel aus der Instanzkonfiguration (linuxserver liest TITLE).
-export TITLE="${DESKTOP_TITLE:-${TITLE:-OAAP Desktop}}"
+export TITLE="${DESKTOP_TITLE:-${TITLE:-Desktop}}"
 
 # Bei jedem Start: Verknüpfung zum Material-Mount — Symlink, damit das chown unten
 # nicht in die Ablage läuft.

@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: marketplace
-  name: Marketplace
-  version: 0.3.1
+  name: Marktplatz
+  version: 0.4.0
   type: native
   class: frontend
-  description: "Digitale Assets mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen (RFC-0077 Stufen 1 und 2): Schaufenster mit Landschaften, Kategorien, Suche und Detailseite (ObjectPage, Teilen mit QR-Code). Asset-Typen OAAP-App, Aufbau-Vorlage und Datei, Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Review zählt ein Release erst nach der Freigabe durch einen zweiten Prinzipal (z. B. eine Prüf-KI). Paketkataloge der Knoten ziehen OAAP-Apps im Spiegelmodus über einen Feed."
+  description: "Digitale Assets anbieten und beziehen: OAAP-Apps, Aufbau-Vorlagen und Dateien mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen. Ein Katalog mit Landschaften, Kategorien, Suche und Detailseite (Teilen mit QR-Code), Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Prüfung zählt ein Release erst nach der Freigabe durch eine zweite Person oder eine Prüf-KI. Paketkataloge der Knoten beziehen OAAP-Apps über einen Feed."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): PyYAML fest auf 6.0.3, Debians Korrekturen per
@@ -29,12 +29,21 @@ routes:
   # Suche, Details, Einchecken (Sitzung oder API-Schlüssel eines Maschinenbenutzers).
   - path: /api/v1
     roles: [user, admin]
+  # MCP-Tür (RFC-0118 §9): angemeldet, damit das Gateway die Person durchreicht;
+  # jedes Werkzeug prüft dieselben Regeln wie die Seiten (access.py).
+  - path: /mcp
+    roles: [user, admin]
   # Empfänger, z. B. ein Paketkatalog im Spiegelmodus (Maschinenbenutzer, D10).
   - path: /feed/v1
     roles: [user, admin]
   # Öffentlich: was `anyone` sehen darf. Die Plattform bremst je Adresse (RFC-0010).
   - path: /
     roles: [public]
+
+# RFC-0073/RFC-0118 §9: Lesewerkzeuge marketplace_search, marketplace_read,
+# marketplace_requests -- nur, was die Person auch im Katalog sieht.
+mcp:
+  path: /mcp
 
 storage:
   # market.db (SQLite, WAL) und blobs/ -- im Backup des Knotens (D9).
@@ -43,8 +52,8 @@ storage:
 
 config:
   - key: MARKET_NAME
-    label: "Name im Kopf der Seiten und im Feed"
-    default: "Marketplace"
+    label: "Name im Kopf der Seiten und im Feed (leer = Marktplatz, englisch Marketplace)"
+    default: ""
   - key: MARKET_MAX_FILE_MB
     label: "Größte Datei in MB (ein Paketkatalog nimmt höchstens 256 MB an)"
     default: "256"
@@ -78,3 +87,24 @@ health:
 
 launchpad:
   group: Werkzeuge
+
+docs:
+  # RFC-0094/RFC-0118 §9: die Hilfe geht an die Hilfe des Mandanten und an den
+  # Chat. Für alle, die den Katalog nutzen; Verwaltung und Einchecken für Admins.
+  - product: marketplace
+    title: "Marktplatz"
+    path: docs/
+    entry: index.md
+    color: "#2563eb"
+    lang: de
+    audience: [user, admin]
+    readers: [end-user, power-user, admin]
+    kinds:
+      index.md: overview
+      asset-finden.md: howto
+      freischaltung-anfragen.md: howto
+      anfragen-beantworten.md: howto
+      assets-verwalten.md: howto
+      einchecken.md: howto
+      pruefung.md: concept
+      faq.md: faq

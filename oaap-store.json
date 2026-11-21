@@ -7,9 +7,9 @@
   "apps": [
     {
       "id": "fleetview",
-      "name": "OAAP FleetView",
+      "name": "Flotte",
       "type": "native",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "released": "2026-11-15",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -56,9 +56,9 @@
     },
     {
       "id": "studio",
-      "name": "OAAP Studio",
+      "name": "Studio",
       "type": "native",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -113,9 +113,9 @@
     },
     {
       "id": "store-editor",
-      "name": "OAAP Store Editor",
+      "name": "Store-Editor",
       "type": "native",
-      "version": "0.3.3",
+      "version": "0.4.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -160,9 +160,9 @@
     },
     {
       "id": "livekit",
-      "name": "LiveKit (Echtzeit-Medien)",
+      "name": "Echtzeit-Medien (LiveKit)",
       "type": "wrapped",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "released": "2026-11-06",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -209,9 +209,9 @@
     },
     {
       "id": "ai-gateway",
-      "name": "OAAP KI-Gateway",
+      "name": "KI-Gateway",
       "type": "native",
-      "version": "0.12.0",
+      "version": "0.13.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -262,9 +262,9 @@
     },
     {
       "id": "mcp-gateway",
-      "name": "OAAP MCP-Gateway",
+      "name": "MCP-Gateway",
       "type": "native",
-      "version": "0.39.0",
+      "version": "0.40.0",
       "released": "2026-11-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -320,7 +320,7 @@
       "id": "chat",
       "name": "Chat",
       "type": "native",
-      "version": "0.19.0",
+      "version": "0.20.0",
       "released": "2026-11-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -372,7 +372,7 @@
       "id": "recherche",
       "name": "Recherche",
       "type": "native",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "released": "2026-11-21",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -416,9 +416,9 @@
     },
     {
       "id": "ollama-models",
-      "name": "OAAP Ollama-Modelle",
+      "name": "Ollama-Modelle",
       "type": "native",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -462,9 +462,9 @@
     },
     {
       "id": "keycloak",
-      "name": "Keycloak (Anmeldedienst)",
+      "name": "Anmeldedienst (Keycloak)",
       "type": "wrapped",
-      "version": "0.1.7",
+      "version": "0.2.0",
       "released": "2026-11-09",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -507,9 +507,9 @@
     },
     {
       "id": "code-server",
-      "name": "Code-Server (VS Code im Browser)",
+      "name": "Entwicklungsumgebung (VS Code)",
       "type": "wrapped",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "released": "2026-11-06",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -557,7 +557,7 @@
       "id": "webtop",
       "name": "Desktop im Browser (Webtop)",
       "type": "wrapped",
-      "version": "0.1.11",
+      "version": "0.2.0",
       "released": "2026-11-06",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -608,7 +608,7 @@
       "id": "wegweiser",
       "name": "Wegweiser",
       "type": "native",
-      "version": "0.4.2",
+      "version": "0.5.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -659,7 +659,7 @@
       "id": "package-catalog",
       "name": "Paketkatalog",
       "type": "native",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "released": "2026-11-19",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -698,9 +698,9 @@
     },
     {
       "id": "marketplace",
-      "name": "Marketplace",
+      "name": "Marktplatz",
       "type": "native",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "released": "2026-11-18",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -746,7 +746,7 @@
       "id": "vpn-client",
       "name": "VPN-Client",
       "type": "native",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "released": "2026-11-15",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -784,7 +784,7 @@
       "id": "rollen-rechte",
       "name": "Rollen & Rechte",
       "type": "native",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -825,9 +825,9 @@
     },
     {
       "id": "partnerverwaltung",
-      "name": "OAAP Partnerverwaltung",
+      "name": "Partnerverwaltung",
       "type": "native",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -868,9 +868,9 @@
     },
     {
       "id": "mitarbeiterverwaltung",
-      "name": "OAAP Mitarbeiterverwaltung",
+      "name": "Mitarbeiterverwaltung",
       "type": "native",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -910,9 +910,9 @@
     },
     {
       "id": "projekt",
-      "name": "OAAP Projekt-App",
+      "name": "Projekte",
       "type": "native",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -951,9 +951,9 @@
     },
     {
       "id": "raci",
-      "name": "OAAP RACI",
+      "name": "Zuständigkeiten (RACI)",
       "type": "native",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "released": "2026-11-11",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -995,7 +995,7 @@
       "id": "vorgaenge",
       "name": "Vorgänge",
       "type": "native",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -1042,7 +1042,7 @@
       "id": "spezialisten",
       "name": "Spezialisten",
       "type": "native",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
@@ -1085,9 +1085,9 @@
     },
     {
       "id": "help",
-      "name": "OAAP-Hilfe",
+      "name": "Hilfe",
       "type": "native",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "released": "2026-11-20",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

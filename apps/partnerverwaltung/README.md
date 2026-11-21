@@ -1,4 +1,6 @@
-# OAAP Partnerverwaltung
+# Partnerverwaltung
+
+> **Seit 0.2.0 (RFC-0118):** Name ohne „OAAP“; Seiten im Rahmen der Plattform (`appframe/`, Kit `/platform/theme.css`, Rahmenskript `/platform/app.js`); Listenbericht mit Suche, Filtern, Sortierung und Blättern; Firmen- und Kontaktpersonenliste aus `GET /twin/objects?type=…` (alle Objekte des Mandanten, auch fremder Apps), Firma als Auswahl beim Verknüpfen, Projekte beider Owner auf der Firmen-Seite; Kennung nur noch einmal im Objektkopf, kopierbar; Anwenderhilfe in `docs/`; MCP-Tür `/mcp` mit Lesewerkzeugen (`mcpdoor/`). Der Text unten beschreibt die Entstehung und ist in Teilen überholt (z. B. „keine Liste/Suche im Zwilling“).
 
 Die **erste Referenz-App** fuer den digitalen Zwilling (RFC-0031,
 Bauplan Schritt 4). Owner von `Customer` und `Person` -- legt beide an,

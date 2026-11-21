@@ -20,7 +20,10 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin market
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
 COPY app.py db.py access.py blobs.py zipinfo.py multipart.py \
-     views.py render.py images.py i18n.py profileinfo.py secretguard.py /srv/
+     views.py admin_views.py render.py images.py i18n.py profileinfo.py secretguard.py /srv/
+# Rahmen und MCP-Tür (Kopien aus lib/, RFC-0118)
+COPY appframe/ /srv/appframe/
+COPY mcpdoor/ /srv/mcpdoor/
 
 USER 10001
 EXPOSE 8000

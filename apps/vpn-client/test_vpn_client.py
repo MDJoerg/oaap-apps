@@ -281,7 +281,8 @@ ok("... und keine Adresse, kein Port, kein Grund darin",
    and "Refused" not in data.decode(), data)
 st, data, _ = call("GET", "/")
 ok("die Seite zeigt je Ziel, ob es antwortet",
-   "antwortet nicht (ConnectionRefusedError)" in data.decode() and "antwortet seit" in data.decode())
+   "antwortet nicht</span>" in data.decode() and "(ConnectionRefusedError)" in data.decode()
+   and ">antwortet</span>" in data.decode())
 app.say(state="getrennt")
 app.check_targets()
 st, data, _ = call("GET", "/oaap/links")
@@ -293,6 +294,49 @@ app.TARGETS = vpnconf.parse_targets(f"gaming = http://127.0.0.1:{tport}/base")
 app.check_targets()
 ok("ein entferntes Ziel verschwindet aus der Antwort", set(app.link_answer()["targets"]) == {"gaming"},
    app.link_answer())
+
+print("")
+print("Rahmen und MCP-Tuer (0.3.0, ein Gesicht fuer alle Apps)")
+st, data, _ = call("GET", "/")
+page_html = data.decode()
+ok("die Seite traegt Kit und Rahmen der Plattform",
+   "/platform/theme.css" in page_html and "/platform/app.js" in page_html, page_html[:300])
+ok("... und den Namen ohne OAAP, ohne eigene Palette",
+   'class="oaap-appname">VPN-Client<' in page_html and "OAAP VPN" not in page_html
+   and "#1d2433" not in page_html and "RFC-" not in page_html)
+
+
+def mcp(msg, roles="admin"):
+    hdr = {"Content-Type": "application/json", "X-OAAP-User": "anna", "X-OAAP-Roles": roles}
+    st, data, _ = call("POST", "/mcp", hdr, json.dumps(msg).encode())
+    return st, (json.loads(data) if data else {})
+
+
+st, doc = mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+names = [t["name"] for t in doc.get("result", {}).get("tools", [])]
+ok("/mcp tools/list nennt vpn_state", st == 200 and names == ["vpn_state"], doc)
+st, _d, _ = call("GET", "/mcp", {"X-OAAP-User": "anna"})
+ok("/mcp GET -> 405 (nur POST)", st == 405)
+app.TARGETS = vpnconf.parse_targets(f"gaming = http://127.0.0.1:{tport}/base")
+app.say(state="verbunden")
+app.check_targets()
+st, doc = mcp({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+               "params": {"name": "vpn_state", "arguments": {}}})
+res = doc.get("result", {})
+text = res.get("content", [{}])[0].get("text", "")
+body = json.loads(text) if text.startswith("{") else {}
+ok("vpn_state als admin: Tunnel ok, Ziel gaming ok",
+   not res.get("isError") and body.get("tunnel", {}).get("state") == "ok"
+   and body["targets"][0] == {**body["targets"][0], "name": "gaming", "state": "ok"}, doc)
+ok("... ohne Adresse, Port oder Konfiguration",
+   "127.0.0.1" not in text and str(tport) not in text and "client" not in text
+   and "remote" not in text, text)
+st, doc = mcp({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+               "params": {"name": "vpn_state", "arguments": {}}}, roles="user")
+ok("vpn_state als user: abgelehnt wie die Seite", doc.get("result", {}).get("isError") is True, doc)
+st, doc = mcp({"jsonrpc": "2.0", "id": 4, "method": "prompts/list"})
+ok("eine Vorlage fuer die Hauptaufgabe",
+   [p["name"] for p in doc["result"]["prompts"]] == ["vpn_check"], doc)
 
 print("")
 print("FAIL" if fails else "OK", f"-- {fails} Fehler" if fails else "")

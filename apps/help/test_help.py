@@ -457,6 +457,41 @@ try:
     s, b, _ = http("GET", "/public/")
     ok("öffentliche Seite: kein Link zur Verwaltung, Links mit /public", 'href="/admin"' not in b
        and 'href="/public/produkt/' in b)
+    # --- RFC-0118: angemeldet der Rahmen, öffentlich das eigene Aussehen -----
+    ok("öffentliche Seite ohne Rahmen (eigenes Aussehen bleibt)", "/platform/app.js" not in b
+       and "oaap-header" not in b and "<header>" in b, b[:300])
+    s, b, hd = http("GET", "/", headers={"X-OAAP-Roles": "user", "X-OAAP-User": "anna"})
+    ok("Rahmen: Kit, Rahmenskript, Name „Hilfe“ ohne OAAP, Suche oben", s == 200
+       and "/platform/theme.css" in b and "/platform/app.js" in b
+       and 'class="oaap-appname">Hilfe<' in b and "OAAP-Hilfe" not in b and 'class="hsearch"' in b
+       and 'data-oaap-product="help"' in b, b[:500])
+    ok("Rahmen: user sieht keinen Reiter Verwaltung, keine Rohrollen", ">Verwaltung<" not in b
+       and "X-OAAP" not in b and "anna" not in b)
+    ok("CSP erlaubt Kit und Rahmen vom eigenen Ursprung",
+       "script-src 'self'" in hd.get("Content-Security-Policy", "")
+       and "style-src 'self'" in hd.get("Content-Security-Policy", ""))
+    s, b, _ = http("GET", "/", headers={"X-OAAP-Roles": "admin"})
+    ok("Reiter: Übersicht zuerst, Verwaltung zuletzt (admin)",
+       b.index(">Übersicht<") < b.index(">Verwaltung<") and 'aria-current="page">Übersicht' in b)
+    s, b, _ = http("GET", "/admin", headers={"X-OAAP-Roles": "admin"})
+    ok("Verwaltung im Rahmen, Reiter aktiv, Tabelle aus dem Kit", 'aria-current="page">Verwaltung' in b
+       and "oaap-table" in b and "oaap-card" in b)
+    s, b, _ = http("GET", "/produkt/oaap", headers={"X-OAAP-Roles": "admin"})
+    ok("Produktseite: Zurück zur Übersicht", s == 200 and "oaap-back" in b, b[:400])
+    s, b, _ = http("GET", "/doc/oaap-docs/szenarien/backup-cli", headers={"X-OAAP-Roles": "support"})
+    ok("Leseseite im Rahmen: Zurück zum Produkt, Text in .doc", s == 200 and 'href="/produkt/' in b
+       and "oaap-back" in b and "<div class=doc>" in b, b[:400])
+    old = os.environ.get("HELP_TITLE")
+    os.environ["HELP_TITLE"] = "Handbuch"
+    s, b, _ = http("GET", "/", headers={"X-OAAP-Roles": "user"})
+    ok("HELP_TITLE ändert den Namen im Rahmen", 'class="oaap-appname">Handbuch<' in b)
+    if old is None:
+        os.environ.pop("HELP_TITLE", None)
+    else:
+        os.environ["HELP_TITLE"] = old
+    s, _, hd = http("GET", "/p/oaap")
+    ok("/p/<produkt> leitet auf die Produktseite (Hilfe-Knopf der Apps)", s == 303
+       and hd.get("Location") == "/produkt/oaap", hd.get("Location"))
 
     # --- M10: der seed antwortet ohne Destination ----------------------------
     seeddir = tempfile.mkdtemp(prefix="help-seed-")

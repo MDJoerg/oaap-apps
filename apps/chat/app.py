@@ -47,7 +47,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()

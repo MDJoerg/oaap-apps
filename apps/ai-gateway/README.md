@@ -1,4 +1,4 @@
-# OAAP KI-Gateway
+# KI-Gateway
 
 Eine Bezugsquelle für alle KI-Verbräuche: **ein OpenAI-kompatibler
 Endpunkt**, der sich bei lokalen Modellen, externen Anbietern,

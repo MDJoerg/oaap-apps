@@ -109,8 +109,10 @@ ok("eine unbekannte Farbe wird abgelehnt", st == 400, st)
 st, _ = form("/bereiche/ampel", ADMIN, {"queue": "analyse", "light": "green"})
 ok("tenant_admin setzt grün", st in (302, 303) and S.queue("analyse")["light"] == "green", st)
 st, page = call("GET", "/bereiche", ADMIN)
+st, qpage = call("GET", "/bereich/analyse", ADMIN)
 ok("Bereiche zeigen die Ampel und den Weg zum Freigabeschlüssel",
-   "Ampel grün" in page and "Ampel für Spezialisten: grün" in page and "/bereiche/freigabeschluessel" in page
+   "Ampel grün" in page and "Ampel für Spezialisten" in qpage and "<option value='green' selected>" in qpage
+   and "/bereiche/freigabeschluessel" in page
    and "Ampel grün" in page.split("Zuletzt geändert")[-1], "")
 c = S.create(kind="bug", title="Rolle fehlt", body="Bitte prüfen.", reporter="mel", reporter_name="Melanie",
              queue="analyse")

@@ -248,8 +248,11 @@ check("nach dem Abruf: Wert bleibt 100000, Meldung 128000 daneben",
       and c["seen_origin"] == "supplier", c)
 status, page = http("/modelle", headers=ADMIN)
 text = page.decode("utf-8")
-check("Seite zeigt die Meldung mit „übernehmen“", "übernehmen" in text and "128k" in text)
-check("Seite zeigt die Spalte Eigenschaften", "<th>Eigenschaften</th>" in text)
+check("Seite zeigt die Spalte Eigenschaften", ">Eigenschaften</th>" in text and "128k" not in text.split("Modellnamen")[0])
+status, page = http("/modelle?name=chat", headers=ADMIN)
+text = page.decode("utf-8")
+check("Seite des Modellnamens zeigt die Meldung mit „übernehmen“", "übernehmen" in text and "128k" in text)
+check("und führt nach dem Speichern dorthin zurück", 'name="alias" value="chat"' in text)
 status, page = admin_post("/model-props-take", {"supplier": "papier", "model": "gross",
                                                 "prop": "context"})
 c = cell("papier", "gross", "context")

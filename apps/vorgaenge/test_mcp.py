@@ -103,9 +103,9 @@ ok("initialize: Version und Name", st == 200 and d["result"]["serverInfo"]["name
    and d["result"]["protocolVersion"] == "2025-11-25", d)
 st, d = rpc("anna", "tools/list")
 tools = {t["name"]: t for t in d["result"]["tools"]}
-ok("fünf Werkzeuge; lesende mit readOnlyHint, schreibende ohne",
-   set(tools) == {"list_cases", "get_case", "list_queues", "create_case", "comment_case"}
-   and all(tools[n]["annotations"]["readOnlyHint"] for n in ("list_cases", "get_case", "list_queues"))
+ok("sechs Werkzeuge; lesende mit readOnlyHint, schreibende ohne",
+   set(tools) == {"list_cases", "search_cases", "get_case", "list_queues", "create_case", "comment_case"}
+   and all(tools[n]["annotations"]["readOnlyHint"] for n in ("list_cases", "search_cases", "get_case", "list_queues"))
    and not any(tools[n]["annotations"]["readOnlyHint"] for n in ("create_case", "comment_case")), tools)
 st, _ = raw("POST", person("anna"), {"jsonrpc": "2.0", "method": "notifications/initialized"})
 ok("Benachrichtigung: 202 ohne Rumpf", st == 202, st)
@@ -135,6 +135,15 @@ err, r = tool("anna", "create_case", {"title": ""})
 ok("leerer Betreff: Fehler", err, r)
 
 # --- bert sieht nichts von anna
+err, hit = tool("anna", "search_cases", {"query": "drucker büro"})
+ok("search_cases (RFC-0118): anna findet ihren Vorgang über Wörter im Betreff",
+   not err and [x["number"] for x in hit["cases"]] == [num], hit)
+err, hit = tool("anna", "search_cases", {"query": "drucker kaffeemaschine"})
+ok("search_cases: alle Wörter müssen vorkommen", not err and hit["count"] == 0, hit)
+err, hit = tool("bert", "search_cases", {"query": "drucker"})
+ok("search_cases: KÖDER: bert findet annas Vorgang nicht (wie auf der Seite)", not err and hit["count"] == 0, hit)
+err, r = tool("anna", "search_cases", {"query": "  "})
+ok("search_cases ohne Suchwort: ein Satz", err and "Suchwort" in str(r), r)
 err, lst = tool("bert", "list_cases")
 ok("bert ohne Rechte: annas Vorgang nicht in seiner Liste", not err and lst["count"] == 0, lst)
 err, r = tool("bert", "get_case", {"number": num})

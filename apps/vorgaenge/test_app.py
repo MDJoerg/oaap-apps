@@ -350,13 +350,17 @@ ok("0.7.0: ... auch im Kommentar", app.STORE.get(n7)["entries"][-1]["actor_name"
    app.STORE.get(n7)["entries"][-1]["actor_name"])
 st, pg, _ = call("GET", f"/v/{n7}", user("u-joerg", name="J%C3%B6rg%20M%C3%BCller"))
 ok("0.7.0: Meldende ohne Rechte: Hinweis statt fehlendem Formular -- Eingang braucht die App-Rolle admin",
-   st == 200 and "Den Status kannst du hier nicht ändern" in pg and "<code>admin</code>" in pg
-   and "tenant_admin" in pg and "Als Meldende kannst du im Reiter <a href='#verlauf'>Verlauf</a> kommentieren" in pg, pg[-1500:])
-ok("0.7.0: OAAP-Kopfzeile mit Benutzermenü: dekodierter Name, Abmelden als POST",
-   "<header class=oaap>" in pg and "<summary id=uname>Jörg Müller</summary>" in pg
-   and '<form method=post action="/auth/logout">' in pg, None)
-ok("0.7.0: Fußzeile mit Version und den eigenen Rechten",
-   f"<footer class=oaap><b>Vorgänge {app.VERSION}</b>" in pg and "Bearbeiten in keinem Bereich" in pg, None)
+   st == 200 and "Den Status kannst du hier nicht ändern" in pg and "Administratoren der App" in pg
+   and "Mandanten-Administrator" in pg and "Als Meldende kannst du im Reiter <a href='#verlauf'>Verlauf</a> kommentieren" in pg, pg[-1500:])
+ok("RFC-0118: Rahmen der Plattform statt eigener Kopfzeile -- Kit, Rahmenskript, Name ohne OAAP",
+   '<header class="oaap-header"' in pg and "/platform/theme.css" in pg and "/platform/app.js" in pg
+   and 'class="oaap-appname">Vorgänge<' in pg and "<b>OAAP</b>" not in pg and "/auth/logout" not in pg
+   and "X-OAAP" not in pg, None)
+ok("RFC-0118: Fußzeile mit Name und Version, die eigenen Rechte als Satz unter der Seite",
+   f'<footer class="oaap-footer"><span>Vorgänge {app.VERSION}' in pg and "Bearbeiten in keinem Bereich" in pg, None)
+ok("RFC-0118: die Reiter des Vorgangs sind die eine Leiste, darüber der Weg zurück",
+   pg.count("class=oaap-tabs") + pg.count('class="oaap-tabs"') == 1 and "Reiter des Vorgangs" in pg
+   and "oaap-back" in pg and 'data-oaap-object="Vorgang:' in pg, None)
 ok("0.7.0: Text als Markdown zum Formatieren (roh im Element, escaped) und der Umschalter",
    "data-md" in pg and "**fett**" in pg and "A--&gt;B" in pg and 'data-md-mode=raw' in pg
    and "/static/md/view.js" in pg and "<script>x" not in pg, None)
@@ -427,14 +431,17 @@ ok("0.8.0: Bearbeiter/in übergibt nicht, Clearing schon (nur im eigenen Bereich
    not hans.may("hand_over", "jira") and clr.may("hand_over", "jira") and not clr.may("hand_over", "partner"), None)
 st, b, _ = call("POST", "/bereiche/mitglied", {**HANS, **ORIGIN}, "op=set&queue=jira&uid=u-melder&kind=handler",
                 "application/x-www-form-urlencoded")
-ok("0.8.0: KÖDER: Zuständige tragen keine weiteren ein", st == 400 and "tenant_admin" in b, (st, b[-200:]))
+ok("0.8.0: KÖDER: Zuständige tragen keine weiteren ein", st == 400 and "Mandanten-Administrator" in b, (st, b[-200:]))
 st, pg, _ = call("GET", "/bereiche", TA)
-ok("0.8.0: Seite Bereiche: Zuständige je Bereich, pflegen, letzte Änderungen",
-   st == 200 and "Hans (Bearbeiter/in)" in pg and "Zuständige pflegen" in pg and "Zuletzt geändert" in pg,
-   pg[-1200:])
+st2, qp, _ = call("GET", "/bereich/jira", TA)
+ok("0.8.0: Seite Bereiche: Zuständige je Bereich, letzte Änderungen; gepflegt auf der Seite des Bereichs",
+   st == 200 and "Hans (Bearbeiter/in)" in pg and "href='/bereich/jira'" in pg and "Zuletzt geändert" in pg
+   and "<form" not in pg.split("<tbody>")[1].split("</tbody>")[0]
+   and st2 == 200 and "Zuständige pflegen" in qp and "oaap-back" in qp, pg[-1200:])
 st, pg, _ = call("GET", "/bereiche", HANS)
-ok("0.8.0: ... ohne Pflege-Formular für Hans, mit „bearbeiten“ bei jira",
-   st == 200 and "Zuständige pflegen" not in pg and "bearbeiten" in pg, None)
+st2, _, _ = call("GET", "/bereich/jira", HANS)
+ok("0.8.0: ... ohne Pflege-Link und -Seite für Hans, mit „bearbeiten“ bei jira",
+   st == 200 and "/bereich/jira" not in pg and st2 == 404 and "bearbeiten" in pg, None)
 st, b, _ = call("POST", "/bereiche/mitglied", {**TA, **ORIGIN}, "op=remove&queue=jira&uid=u-hans",
                 "application/x-www-form-urlencoded")
 ok("0.8.0: entfernen: danach darf Hans in jira nichts mehr",
@@ -657,9 +664,9 @@ st, pg, _ = call("GET", "/?queue=jira&status=open&sort=updated", TA)
 ok("0.11.0: sort=updated dreht die Reihenfolge um", numbers(pg) == list(reversed(want)), numbers(pg))
 st, pg, _ = call("GET", "/?queue=jira&status=open", TA)
 ok("0.11.0: der aktive Spaltenkopf trägt den Pfeil und den Link für die andere Richtung",
-   "Geändert ▼" in pg and "sort=updated" in pg and "aria-sort=descending" in pg, pg[:200])
+   ">Geändert</a>" in pg and "sort=updated" in pg and "aria-sort=descending" in pg, pg[:200])
 ok("0.11.0: die Filter stehen in einem GET-Formular (Adresse = Lesezeichen)",
-   "<form method=get action='/' class=filter>" in pg and "<option value='jira' selected>" in pg, None)
+   "<form method=get action='/' class=oaap-filter role=search>" in pg and "<option value='jira' selected>" in pg, None)
 st, pg, _ = call("GET", "/?status=rejected&sort=bogus&queue=nix", TA)
 ok("0.11.0: unbekannte Sortierung fällt auf „letzte Änderung“ zurück, ein fremder Bereich zeigt nichts",
    st == 200 and numbers(pg) == [], numbers(pg))
@@ -719,6 +726,26 @@ ok("0.11.0: ... aber keinen dieser Vorgänge (Mia hat keinen gemeldet)", d["case
 del os.environ["OAAP_INSTANCE_NAMES"]
 st, b, _ = call("GET", "/platform/feedback/mine", {**SOURCE, **MIA})
 ok("0.11.0: ohne öffentlichen Namen kein Link", json.loads(b)["assigned_url"] == "", b[:200])
+
+# --- RFC-0118 §7: Suche zuerst, Zählzeile, Blättern ab 50
+for i in range(55):
+    app.STORE.create(kind="internal", title=f"Massenvorgang {i:02d}", body="Seriennummer Q" + str(7000 + i),
+                     reporter="u-ta", reporter_name="Tenant Admin", queue="jira",
+                     attested={"app": "vorgaenge", "via": "app"})
+st, pg, _ = call("GET", "/?status=all", TA)
+ok("RFC-0118: Listenbericht blättert ab 50 -- 50 Zeilen, Zählzeile, „Weitere 50“",
+   st == 200 and len(numbers(pg)) == 50 and "Weitere 50" in pg and "offset=50" in pg and " von " in pg, pg[-700:])
+st, pg2, _ = call("GET", "/?status=all&offset=50", TA)
+ok("RFC-0118: die zweite Seite zeigt den Rest und „Vorige 50“", st == 200 and 0 < len(numbers(pg2)) <= 50
+   and "Vorige 50" in pg2 and not (set(numbers(pg)) & set(numbers(pg2))), numbers(pg2)[:5])
+st, pg, _ = call("GET", "/?q=Q7042", TA)
+ok("RFC-0118: die Suche findet über die Beschreibung genau einen Vorgang",
+   st == 200 and len(numbers(pg)) == 1 and "Massenvorgang 42" in pg and "Zurücksetzen" in pg, numbers(pg))
+st, pg, _ = call("GET", "/?q=Massenvorgang+4&sort=title", TA)
+got = [x for x in _re.findall(r"Massenvorgang (\d\d)", pg)]
+ok("RFC-0118: Suche plus Sortieren nach Betreff", got == sorted(got) and "40" in got and "05" not in got, got)
+st, pg, _ = call("GET", "/?q=Massenvorgang", user("u-bob"))
+ok("RFC-0118: KÖDER: Bob ohne Bereich findet keinen Massenvorgang", numbers(pg) == [] and "Massenvorgang 0" not in pg, None)
 
 srv.shutdown()
 print("")

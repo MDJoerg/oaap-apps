@@ -2225,7 +2225,7 @@ for tab, word in (("server", "+ Server anlegen"), ("sichten", "+ Sicht anlegen")
                   ("aufrufe", "Prüfspur")):
     st_t, pg_t = admin_get("/?tab=" + tab)
     check(f"0.9.0: Reiter {tab} zeigt „{word}“ und ist markiert",
-          st_t == 200 and word in pg_t and f'?tab={tab}" class=on' in pg_t, st_t)
+          st_t == 200 and word in pg_t and f'?tab={tab}" aria-current="page"' in pg_t, st_t)
 check("L3 (0.20.1): kein Reiter sagt „Menschen“ -- das Portal sagt „Personen“",
       all("Mensch" not in admin_get("/?tab=" + t)[1]
           for t in ("", "server", "sichten", "zugaenge", "anmeldung", "aufrufe")), None)
@@ -2234,7 +2234,52 @@ check("0.9.0: der Server papier steht im Reiter Server", "papier" in admin_get("
 st_x, px = admin_get("/?tab=gibtsnicht")
 check("0.9.0: unbekannter Reiter fällt auf die Übersicht zurück", st_x == 200 and "Zu tun" in px, st_x)
 _, detail = admin_get("/server?name=papier")
-check("0.9.0: Detailseite eines Servers markiert den Reiter Server", '?tab=server" class=on' in detail, None)
+check("0.9.0: Detailseite eines Servers markiert den Reiter Server", '?tab=server" aria-current="page"' in detail, None)
+
+# ---- 0.40.0: ein Gesicht für alle Apps (RFC-0118): Rahmen, Name, Listenberichte
+print("\n-- 0.40.0: Rahmen der Plattform, Name ohne OAAP, Listenberichte (RFC-0118)")
+check("Rahmen: Kit und Rahmenskript der Plattform",
+      '/platform/theme.css' in main_page and '/platform/app.js' in main_page, None)
+check("Rahmen: der Name ist „MCP-Gateway“, ohne OAAP; kein eigener Kopf, keine Rollen",
+      'class="oaap-appname">MCP-Gateway<' in main_page and "OAAP MCP" not in main_page
+      and "MCP-GATEWAY" not in main_page and "userbox" not in main_page
+      and "<title>Übersicht · MCP-Gateway</title>" in main_page, None)
+check("Rahmen: keine eingefügte Palette mehr", "#1e3a8a" not in main_page and "--oaap-blue-900:" not in main_page)
+check("Rahmen: Fußzeile mit Name und Version", f"MCP-Gateway {app.VERSION}" in main_page)
+check("Reiter: der erste liest (Übersicht), die Anmeldung steht zuletzt",
+      main_page.index(">Übersicht<") < main_page.index(">Server<") < main_page.index(">Anmeldung</a></nav>"))
+_, srv_lr = admin_get("/?tab=server&q=papier")
+check("Listenbericht Server: Suche, Zählzeile, sortierbare Spalten, Reiter im Formular",
+      'class="oaap-filter"' in srv_lr and 'name="tab" value="server"' in srv_lr
+      and 'class="oaap-countline"' in srv_lr and "papier" in srv_lr
+      and 'href="./?tab=server&amp;q=papier&amp;sort=-name"' in srv_lr, None)
+_, srv_none = admin_get("/?tab=server&q=gibtsganzbestimmtnicht")
+check("Listenbericht Server: kein Treffer sagt es", "Keine Treffer für diese Auswahl." in srv_none)
+_, spur = admin_get("/?tab=spur")
+n_audit = len(books.audit(app.DB, 1000))
+check("Prüfspur: eigener Listenbericht unter dem Reiter Aufrufe, ab 50 geblättert",
+      'aria-current="page">Aufrufe &amp; Prüfspur' in spur and "Prüfspur" in spur
+      and (n_audit <= 50 or ("Weitere 50" in spur and f"von {n_audit}" in spur)), n_audit)
+if n_audit > 50:
+    _, spur2 = admin_get("/?tab=spur&offset=50")
+    check("Prüfspur: zweite Seite mit „Vorige 50“", "Vorige 50" in spur2, None)
+_, spur_s = admin_get("/?tab=spur&sort=actor")
+check("Prüfspur: sortiert nach Wer, markiert", 'aria-sort="ascending"' in spur_s, None)
+_, keys_lr = admin_get("/?tab=zugaenge")
+check("Schlüssel: keine Formulare in Tabellenzeilen, das Etikett öffnet die Seite",
+      'action="revoke"' not in keys_lr and 'action="key-limits"' not in keys_lr
+      and 'href="key?label=' in keys_lr, None)
+_lbl = next(k["label"] for k in books.keys(app.DB) if not k["revoked"])
+st_k, kpage = admin_get("/key?label=" + urllib.parse.quote(_lbl))
+check("Seite eines Schlüssels: zurück zur Liste, Widerrufen und Ändern",
+      st_k == 200 and 'class="oaap-back"' in kpage and 'action="revoke"' in kpage
+      and 'action="key-limits"' in kpage, st_k)
+st_k, kpage = admin_get("/key?label=gibtsnicht")
+check("unbekannter Schlüssel: Satz statt Absturz", st_k == 200 and "gibt es nicht" in kpage, st_k)
+_, filt = admin_get("/?tab=zugaenge&zustand=widerrufen")
+check("Schlüssel: Auswahl Zustand filtert auf dem Server",
+      all(f'href="key?label={urllib.parse.quote(k["label"])}"' not in filt
+          for k in books.keys(app.DB) if not k["revoked"]), None)
 
 # ------------------------------------------------- 0.8.0: Ansichten (MCP Apps, RFC-0075)
 print("\n-- MCP Apps: ein Tool bringt seine Ansicht mit (0.8.0, RFC-0075)")
@@ -2494,7 +2539,7 @@ try:
     said = ""
 except app.NoPerson as exc:
     said = str(exc)
-check("P: eine Anmeldung beim Anmeldedienst (Form B) wird mit Satz abgewiesen", "Form B" in said, said)
+check("P: eine Anmeldung beim Anmeldedienst (Form B) wird mit Satz abgewiesen", "nimmt die Destination noch nicht an" in said, said)
 try:
     app.propagate_access(None)
     said = ""
@@ -2783,6 +2828,17 @@ st, html_ = me_get("/me", "u-ohne", roles="admin")
 check("… und /me als Admin führt zurück zur Verwaltung", st == 200 and "zur Verwaltung" in html_)
 st, html_ = me_get("/me", "u-ohne")
 check("… als Person ohne Admin-Rolle kein Link zur Verwaltung", st == 200 and "zur Verwaltung" not in html_)
+check("0.40.0: /me im Rahmen, ohne Reiter der Verwaltung, mit Filterleiste (Ausgang, Sicht, Tag)",
+      "/platform/app.js" in html_ and 'class="oaap-tabs"' not in html_ and 'class="oaap-filter"' in html_
+      and 'name="problems"' in html_ and 'name="view"' in html_ and 'name="day"' in html_
+      and "Meine Werkzeuge · MCP-Gateway" in html_, None)
+st, html_ = me_get("/me?problems=0&q=gibtsganzbestimmtnicht", "u-ohne")
+check("0.40.0: /me sucht auf dem Server", st == 200 and "Keine Treffer für diese Auswahl." in html_, None)
+st, html_ = me_get("/me?problems=0&sort=-ms", "u-ohne")
+check("0.40.0: /me sortiert nach Dauer", st == 200 and 'aria-sort="descending"' in html_, None)
+st, html_ = me_get("/me", "u-ohne", roles="admin")
+check("0.40.0: /me für die Verwaltung mit ihren Reitern, „Meine Aufrufe“ markiert",
+      'href="me" aria-current="page"' in html_, None)
 st, _ = me_get("/me")
 check("/me ohne Kennung der Person: 403", st == 403, st)
 st, _ = me_get("/me/v1/calls")
@@ -3259,8 +3315,8 @@ row = app.DB.execute("SELECT * FROM keys WHERE label='b-prof'").fetchone()
 check("L11: falsche Gruppen werden abgewiesen, und dann ändert sich gar nichts (auch nicht die Sichten)",
       books.profile_groups(row) == ["/neu-team", "@uchat"] and row["views"] == "b-sicht", dict(row))
 admin("/key-limits", label="b-prof", views="b-sicht", max_effect="read", ceiling="red", groups="@uchat")
-st, page = admin_get("/?tab=zugaenge")
-check("L11: das Formular „Ändern“ eines Profils hat das Feld Gruppen",
+st, page = admin_get("/key?label=b-prof")
+check("L11: das Formular „Ändern“ eines Profils (auf seiner Seite) hat das Feld Gruppen",
       'name="groups" value="@uchat"' in page, page[:0])
 old_portal, old_iss = app.PORTAL_URL, app.ISSUER
 app.PORTAL_URL = "https://bec.oaap.example/instances/bec-tools"

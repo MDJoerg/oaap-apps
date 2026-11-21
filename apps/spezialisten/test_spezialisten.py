@@ -592,7 +592,7 @@ try:
         except urllib.error.HTTPError as e:
             return e.code, e.read().decode()
     st, home = spage("GET", "/", "admin")
-    st2, edit = spage("GET", f"/s/{sid}", "admin")
+    st2, edit = spage("GET", f"/s/{sid}?tab=bearbeiten", "admin")
     ok("Seite und Formular zeigen keinen der drei Schlüssel",
        st == 200 and st2 == 200 and all(k not in home + edit for k in (AGENT_KEY, MCP_KEY, AI_KEY))
        and "Analyse (KI)" in home and "eingetragen" in edit, (st, st2))
@@ -603,6 +603,64 @@ try:
     st, res = spage("POST", f"/s/{sid}/pruefen", "tenant_admin", {})
     ok("Prüfen: Vorgänge (Agent spez), Sicht (2 Werkzeuge), KI-Gateway (Modell erreichbar)",
        st == 200 and res.count("✓") == 3 and "spez" in res and "find_dumps" in res, res[res.find("Prüfung"):][:600])
+
+    # ------------------------------------------------------------ 9. Rahmen, Listen, MCP (RFC-0118)
+    ok("Rahmen: Kit, Rahmenskript, Name ohne OAAP, keine Rohrollen",
+       "/platform/theme.css" in home and "/platform/app.js" in home
+       and 'class="oaap-appname">Spezialisten<' in home and "OAAP Spezialisten" not in home
+       and "RFC-" not in home + edit and "X-OAAP" not in home, home[:400])
+    ok("Reiter: Übersicht zuerst, Änderungen zuletzt; keine Formulare in Tabellenzeilen",
+       home.index(">Übersicht<") < home.index(">Läufe<") < home.index(">Änderungen<")
+       and "<form method=post" not in home, "")
+    st, obj = spage("GET", f"/s/{sid}", "admin")
+    ok("Objektseite: Zurück, Objektkopf, Prüfen/Ausschalten dort", st == 200 and "oaap-back" in obj
+       and "oaap-objhead" in obj and f"action='{sid}/pruefen'" in obj and "?tab=bearbeiten" in obj, obj[:300])
+    st, ku = spage("GET", "/", "keyuser")
+    ok("keyuser sieht die Liste ohne Link und ohne Pflege-Reiter", st == 200 and "Analyse (KI)" in ku
+       and f"href='s/{sid}'" not in ku and ">Änderungen<" not in ku, "")
+    st, _ = spage("GET", "/aenderungen", "keyuser")
+    ok("keyuser: Änderungen gibt es nicht", st == 404, st)
+    for i in range(55):
+        S.run_start(f"t{i}", sid, f"V-9{i:03d}")
+        S.run_end(f"t{i}", "done" if i % 2 else "error", i)
+    st, rp = spage("GET", "/laeufe", "keyuser")
+    ok("Läufe: Listenbericht blättert ab 50", st == 200 and "Weitere 50" in rp and "von " in rp, rp[-600:])
+    st, rf = spage("GET", "/laeufe?ende=" + urllib.parse.quote("Fehler, zurückgegeben") + "&sort=steps", "keyuser")
+    nums = [int(x) for x in __import__("re").findall(r"<td class=oaap-num>(\d+)</td>", rf)]
+    ok("Läufe: Filter Ende und Sortieren nach Schritten", st == 200 and nums and nums == sorted(nums)
+       and all(n % 2 == 0 for n in nums) and "aria-sort" in rf, nums[:10])
+    st, rq = spage("GET", "/laeufe?q=V-9054", "keyuser")
+    ok("Läufe: Suche findet einen Vorgang", "V-9054" in rq and "V-9053" not in rq, "")
+
+    def mcp(method, params=None, roles="keyuser", uid="chef"):
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+        h = {"Content-Type": "application/json", "X-OAAP-User-Id": uid, "X-OAAP-Roles": roles}
+        with urllib.request.urlopen(urllib.request.Request(SURL + "/mcp", data=body, headers=h, method="POST"),
+                                    timeout=10) as r:
+            return json.loads(r.read())
+
+    names = [t["name"] for t in mcp("tools/list")["result"]["tools"]]
+    ok("MCP: tools/list nennt die drei Lesewerkzeuge, alle readOnly",
+       names == ["spezialisten_list", "spezialisten_read", "spezialisten_runs"]
+       and all(t["annotations"]["readOnlyHint"] for t in mcp("tools/list")["result"]["tools"]), names)
+    r = mcp("tools/call", {"name": "spezialisten_list", "arguments": {}})["result"]
+    txt = r["content"][0]["text"]
+    ok("MCP: spezialisten_list ohne Schlüssel", not r["isError"] and "Analyse (KI)" in txt
+       and all(k not in txt for k in (AGENT_KEY, MCP_KEY, AI_KEY)), txt[:300])
+    r = mcp("tools/call", {"name": "spezialisten_read", "arguments": {"id": sid}}, roles="keyuser")["result"]
+    d = json.loads(r["content"][0]["text"])
+    ok("MCP: spezialisten_read für keyuser ohne Anweisung (wie die Seite)", "system" not in d and d["runs"], d)
+    r = mcp("tools/call", {"name": "spezialisten_read", "arguments": {"id": sid}}, roles="tenant_admin")["result"]
+    t2 = r["content"][0]["text"]
+    d = json.loads(t2)
+    ok("MCP: spezialisten_read für tenant_admin mit Anweisung, nie ein Schlüssel", "Ursache eines Abbruchs" in d.get("system", "")
+       and all(k not in t2 for k in (AGENT_KEY, MCP_KEY, AI_KEY)), d.keys())
+    r = mcp("tools/call", {"name": "spezialisten_runs", "arguments": {"limit": 5}})["result"]
+    d = json.loads(r["content"][0]["text"])
+    ok("MCP: spezialisten_runs liefert höchstens limit Läufe", len(d["runs"]) == 5 and d["count"] >= 55, d["count"])
+    r = mcp("tools/call", {"name": "spezialisten_list", "arguments": {}}, uid="")["result"]
+    ok("MCP: ohne Person lehnt die Tür ab", r["isError"] and "Nicht angemeldet" in r["content"][0]["text"], r)
+    ok("MCP: zwei Vorlagen", len(mcp("prompts/list")["result"]["prompts"]) == 2, "")
 finally:
     vg.terminate()
 

@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: projekt
-  name: OAAP Projekt-App
-  version: 0.1.2
+  name: Projekte
+  version: 0.2.0
   type: native
   class: frontend
-  description: "Referenz-App fuer den digitalen Zwilling (RFC-0031 Schritt 4, zweite Welle): definiert Projekt, konsumiert Firma als Referenz -- Partnerverwaltung legt auf demselben Typ eigene Instanzen an"
+  description: "Projekte mit Kunde, Status und Beginn pflegen -- alle Projekte des Mandanten im digitalen Zwilling, auch die aus der Partnerverwaltung"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -18,8 +18,13 @@ services:
     port: 8000
 
 routes:
+  # deckt auch /mcp ab: das MCP-Gateway reicht die Person durch, die Tür
+  # prüft wie die Seiten (RFC-0073, RFC-0118 §9)
   - path: /
     roles: [user]
+
+mcp:
+  path: /mcp
 
 storage:
   - name: data
@@ -67,7 +72,8 @@ data_model:
       activities: []
   relation_types:
     - key: forCustomer
-      title: "is project for"
+      # title ist reine Anzeige (additiv); title_inverse bleibt wie registriert
+      title: "ist Projekt für"
       title_inverse: "has project"
       from: Projekt
       to: Firma
@@ -80,6 +86,22 @@ consumes:
   - type: Firma
     as: Kunde
     fields: [reference]
+
+docs:
+  # RFC-0094 / RFC-0118 §9: die Anwenderhilfe geht an die Hilfe des Mandanten
+  # und damit auch an den Chat.
+  - product: projekt
+    title: "Projekte"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [user]
+    readers: [end-user]
+    kinds:
+      index.md: overview
+      projekt-anlegen.md: howto
+      projekte-finden.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

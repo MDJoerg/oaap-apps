@@ -171,5 +171,5 @@ exec /usr/bin/entrypoint.sh \
   --disable-telemetry \
   --disable-update-check \
   --disable-workspace-trust \
-  --app-name "OAAP IDE" \
+  --app-name "Entwicklungsumgebung" \
   "$PROJECTS"

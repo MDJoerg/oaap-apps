@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: fleetview
-  name: OAAP FleetView
-  version: 1.0.0
+  name: Flotte
+  version: 1.1.0
   type: native
   class: frontend
-  description: "Die OAAP-Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten, aus dem Zwilling der Zentrale (RFC-0021, RFC-0085 §10)"
+  description: "Die Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten, aus dem Zwilling der Zentrale"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Nur Standardbibliothek, beim Bau wird nichts nachgeladen — ein Neubau ändert nur die Basis.
@@ -38,6 +38,28 @@ routes:
   # Landschaft lesend betreuen, heißt seit RFC-0039 `support`.
   - path: /
     roles: [admin, support]
+
+# RFC-0118 §9: eine MCP-Tür mit Lesewerkzeugen (Knoten, ein Knoten,
+# Instanzen) unter der Route / -- also für dieselben Rollen wie die Seite.
+mcp:
+  path: /mcp
+
+# RFC-0118 §9 / RFC-0094: die Hilfe für Betreiber und Dienstleister.
+docs:
+  - product: fleetview
+    title: "Flotte"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin, support]
+    readers: [admin, operator]
+    kinds:
+      index.md: overview
+      flotte-pruefen.md: howto
+      knoten-ansehen.md: howto
+      instanz-finden.md: howto
+      einrichten.md: howto
+      faq.md: faq
 
 storage:
   # Nur der zuletzt gelesene Stand (fleet-state.json) — damit ein nicht

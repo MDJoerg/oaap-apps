@@ -52,13 +52,14 @@ import re
 import urllib.error
 import urllib.request
 
+import appframe as af
 import authz_client
 import mcp_door
 from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -331,101 +332,64 @@ def next_statuses(who, c):
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = {"/static/md/markdown.js": "markdown.js", "/static/md/view.js": "view.js",
           "/static/md/mermaid.min.js": "mermaid.min.js"}
-_REQ = threading.local()          # wer gerade fragt -- für Kopf- und Fußzeile
+_REQ = threading.local()          # wer gerade fragt -- für Reiter und Rechte-Hinweis
 
-LOGO = ('<svg viewBox="0 0 100 100" width="26" height="26" aria-hidden="true">'
-        '<polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="none" stroke="#fff" '
-        'stroke-width="7" stroke-linejoin="round"/><polygon points="50,28 69,39 69,61 50,72 31,61 31,39" '
-        'fill="#93c5fd"/></svg>')
+APP_NAME = "Vorgänge"
 
-STYLE = """<link rel="stylesheet" href="/platform/theme.css">
-<style>
-  *{box-sizing:border-box} [hidden]{display:none!important}
-  /* 0.7.0: OAAP-Design (oaap-design §5, §5.1): dunkelblaue Kopfzeile mit Marke und
-     Benutzermenü, Fußzeile mit Version und den eigenen Rechten */
-  body{display:flex;flex-direction:column;min-height:100vh;background:var(--oaap-bg, #f4f6fa)}
-  header.oaap{display:flex;align-items:center;gap:.8rem;padding:.55rem 1rem;color:#fff;
-       background:linear-gradient(90deg, var(--oaap-blue-950, #172554), var(--oaap-blue-900, #1e3a8a))}
-  header.oaap .brand{display:flex;align-items:center;gap:.55rem;color:#fff;text-decoration:none}
-  header.oaap .brand b{letter-spacing:.06em;font-size:.95rem} header.oaap .brand small{opacity:.8;font-size:.82rem}
-  header.oaap .sp{flex:1}
-  details.user{position:relative} details.user summary{list-style:none;cursor:pointer;padding:.35rem .7rem;
-       border-radius:6px;border:1px solid rgba(255,255,255,.3);font-size:.88rem}
-  details.user summary::-webkit-details-marker{display:none}
-  details.user[open] summary{background:rgba(255,255,255,.12)}
-  details.user .menu{position:absolute;right:0;top:calc(100% + .35rem);min-width:15rem;z-index:5;
-       background:var(--oaap-surface, #fff);color:var(--oaap-text, #1f2937);border:1px solid var(--oaap-border, #e5e7eb);
-       border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:.6rem .7rem}
-  details.user .menu a{display:block;padding:.35rem 0;color:var(--oaap-blue-600, #2563eb);text-decoration:none}
-  details.user .menu form{margin:.3rem 0 0} details.user .menu button{width:100%}
-  details.user .menu .hint{font-size:.78rem;color:var(--oaap-muted, #6b7280);margin:.35rem 0 0}
-  footer.oaap{margin-top:auto;padding:.6rem 1rem;font-size:.8rem;color:#cbd5e1;background:var(--oaap-blue-950, #172554)}
-  footer.oaap b{color:#fff;font-weight:600}
-  .seg{display:inline-flex;border:1px solid var(--oaap-color-border, #d8dbe0);border-radius:6px;overflow:hidden;vertical-align:middle}
-  .seg button{background:transparent;color:var(--oaap-color-text, #1a1d21);border:0;border-radius:0;padding:.25rem .65rem;font-size:.82rem}
-  .seg button[aria-pressed=true]{background:var(--oaap-color-primary, #2f6fed);color:#fff}
+# Nur, was dieser App eigen ist -- Kopfleiste, Reiter, Fußzeile, Tabellen, Knöpfe und
+# Dunkelmodus kommen aus dem Kit der Plattform (/platform/theme.css, RFC-0118).
+STYLE = """
+  [hidden]{display:none!important}
+  h1{font-size:1.3rem;margin:0 0 1rem} h2{font-size:1.02rem;margin:1.4rem 0 .6rem}
+  .seg{display:inline-flex;border:1px solid var(--oaap-color-border);border-radius:6px;overflow:hidden;vertical-align:middle}
+  .oaap-app .seg button{background:transparent;color:var(--oaap-color-text);border:0;border-radius:0;padding:.25rem .65rem;font-size:.82rem;min-height:0}
+  .oaap-app .seg button[aria-pressed=true]{background:var(--oaap-color-primary);color:var(--oaap-color-primary-text)}
   html[data-md-view=raw] .md-f{display:none} html:not([data-md-view=raw]) .md-raw[data-mounted]{display:none}
   .md-f > :first-child{margin-top:0} .md-f > :last-child{margin-bottom:0}
-  .md-f table{width:auto} .md-f pre{background:var(--oaap-color-bg, #fff);padding:.5rem;border-radius:4px;overflow:auto}
-  .md-f code{font-size:.88em} .md-f blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--oaap-color-border, #d8dbe0)}
-  .mermaid-src svg,.svg-src img{max-width:100%;height:auto;background:#fff;border-radius:4px}
-  .rights{border-left:3px solid var(--oaap-color-warning, #b45309);background:var(--oaap-color-bg, #fff);padding:.55rem .8rem;margin:.8rem 0;font-size:.9rem}
-  body{font-family:var(--oaap-font-family, system-ui, -apple-system, "Segoe UI", sans-serif);
-       font-size:var(--oaap-font-size-base, 15px);margin:0;
-       background:var(--oaap-color-bg, #fff);color:var(--oaap-color-text, #1a1d21)}
-  main{max-width:62rem;margin:1.6rem auto;padding:0 var(--oaap-space-3, 16px)}
-  h1{font-size:1.25rem;margin:0 0 1rem} h2{font-size:1.02rem;margin:1.4rem 0 .6rem}
-  nav.tabs{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1.2rem}
-  nav.tabs a{padding:.45rem .9rem;border-radius:6px;border:1px solid var(--oaap-color-border, #d8dbe0);
-       text-decoration:none;color:var(--oaap-color-text, #1a1d21);font-size:.9rem}
-  nav.tabs a.on{background:var(--oaap-color-primary, #2f6fed);color:var(--oaap-color-primary-text, #fff);border-color:transparent}
-  table{border-collapse:collapse;width:100%} td,th{text-align:left;padding:.4rem .5rem;
-       border-bottom:1px solid var(--oaap-color-border, #d8dbe0);vertical-align:top;font-size:.92rem}
-  th{color:var(--oaap-color-text-muted, #5b616b);font-weight:600}
-  .card{background:var(--oaap-color-surface, #f4f5f7);border:1px solid var(--oaap-color-border, #d8dbe0);
-       border-radius:6px;padding:.8rem 1rem;margin:.6rem 0}
-  .muted{color:var(--oaap-color-text-muted, #5b616b);font-size:.88rem}
-  .pill{display:inline-block;padding:.05rem .5rem;border-radius:9px;font-size:.8rem;
-       border:1px solid var(--oaap-color-border, #d8dbe0)}
-  .err{color:var(--oaap-color-danger, #c4342f)} .ok{color:var(--oaap-color-success, #1f8a4c)}
-  input,select,textarea{font:inherit;padding:.35rem .5rem;border:1px solid var(--oaap-color-border, #d8dbe0);border-radius:4px}
+  .md-f table{width:auto} .md-f pre{background:var(--oaap-color-bg);padding:.5rem;border-radius:4px;overflow:auto}
+  .md-f code{font-size:.88em} .md-f blockquote{margin:.4rem 0;padding-left:.7rem;border-left:3px solid var(--oaap-color-border)}
+  .mermaid-src svg,.svg-src img{max-width:100%;height:auto;background:var(--oaap-color-surface);border-radius:4px}
+  .rights{border-left:3px solid var(--oaap-color-warning);background:var(--oaap-color-surface);padding:.55rem .8rem;margin:.8rem 0;font-size:.9rem}
+  .card{background:var(--oaap-color-surface);border:1px solid var(--oaap-color-border);border-radius:var(--oaap-radius);padding:.8rem 1rem;margin:.6rem 0}
+  .card.c-ki{border-left:4px solid var(--oaap-badge-info)} .card.c-rat{border-left:4px solid var(--oaap-color-success)}
+  .card.c-int{border-left:4px solid var(--oaap-color-warning)}
+  .muted{color:var(--oaap-color-text-muted);font-size:.88rem}
+  .err{color:var(--oaap-color-danger)} .ok{color:var(--oaap-color-success)}
   textarea{width:100%;min-height:6rem} input[type=text]{width:100%}
-  button{font:inherit;padding:.4rem .9rem;border-radius:4px;border:1px solid transparent;cursor:pointer;
-       background:var(--oaap-color-primary, #2f6fed);color:var(--oaap-color-primary-text, #fff)}
   pre{white-space:pre-wrap;word-break:break-word;margin:.3rem 0;font-size:.85rem}
   .body{white-space:pre-wrap}
   form.inline{display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;margin:.5rem 0}
   form.inline > *{flex:0 0 auto}
-  label{display:block;font-size:.85rem;color:var(--oaap-color-text-muted, #5b616b);margin:.5rem 0 .2rem}
-  /* 0.11.0 (RFC-0103 D6): Statusfarben wie die Punkte im Chat */
-  .pill.s-red{border-color:#dc2626;color:#b91c1c;background:#fef2f2}
-  .pill.s-green{border-color:#16a34a;color:#15803d;background:#f0fdf4}
-  .pill.s-yellow{border-color:#ca8a04;color:#854d0e;background:#fefce8}
-  .pill.s-grey{border-color:#9ca3af;color:#4b5563;background:#f3f4f6}
-  /* Listenbericht: Filter in der Adresse, Sortieren über die Spaltenköpfe */
-  form.filter{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin:0 0 .8rem}
-  form.filter label{margin:0 0 .2rem}
-  th a{color:inherit;text-decoration:none} th a:hover{text-decoration:underline}
+  label{display:block;font-size:.85rem;color:var(--oaap-color-text-muted);margin:.5rem 0 .2rem}
+  .oaap-filter label{margin:0}
   .quick a{margin-right:.8rem}
+  .rights-line{margin-top:2rem}
   /* Reiter des Vorgangs: Anker und CSS, ohne Skript; die Adresse behält den Reiter.
      Der Überblick steht im Dokument zuletzt und wird mit `order` nach vorn gestellt,
      damit `:target ~ #ueberblick` ihn ausblenden kann. */
-  nav.ctabs{display:flex;flex-wrap:wrap;gap:.2rem;border-bottom:1px solid var(--oaap-color-border, #d8dbe0);margin:.8rem 0 0}
-  nav.ctabs a{padding:.45rem .9rem;text-decoration:none;color:var(--oaap-color-text, #1a1d21);font-size:.9rem;
-       border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;margin-bottom:-1px}
   .panels{display:flex;flex-direction:column}
   .tp{display:none;scroll-margin-top:5rem} .tp:target{display:block}
   #ueberblick{display:block;order:-1} .tp:target ~ #ueberblick{display:none}
-</style>"""
+"""
+HEAD = ('<script src="/static/md/markdown.js" defer></script>'
+        '<script src="/static/md/view.js" defer></script>')
+SCRIPTS = """<script>
+addEventListener("DOMContentLoaded", function () {
+  if (window.OAAPView) { OAAPView.mode(); OAAPView.mount(document); }
+  document.querySelectorAll("[data-md-mode]").forEach(function (b) {
+    b.onclick = function () { OAAPView.mode(b.getAttribute("data-md-mode")); };
+  });
+});
+</script>"""
 
 
 def rights_summary(who, store):
-    """Ein Satz für die Fußzeile: was diese Person hier darf."""
+    """Ein Satz unter jeder Seite: was diese Person hier darf."""
     if who is None:
         return ""
     try:
         queues = store.queues() if store else []
-    except Exception:  # noqa: BLE001 -- die Fußzeile darf keine Seite verhindern
+    except Exception:  # noqa: BLE001 -- der Hinweis darf keine Seite verhindern
         queues = []
     work = [q["title"] for q in queues if who.may("triage", q["id"])]
     read = [q["title"] for q in queues if who.may("read", q["id"]) and q["title"] not in work]
@@ -439,64 +403,50 @@ def rights_summary(who, store):
     return "Deine Bereiche — " + " · ".join(parts)
 
 
-def page(title, body, tab=""):
-    tabs = [("/", "Übersicht", "home"), ("/neu", "Neuer Vorgang", "new"),
-            ("/bereiche", "Bereiche", "queues"), ("/partner", "Partner", "partners")]
-    nav = "".join(f'<a href="{h}" class="{"on" if k == tab else ""}">{esc(t)}</a>'
-                  for h, t, k in tabs)
+TAB_KEYS = {"home": "/", "new": "/neu", "queues": "/bereiche", "partners": "/partner"}
+
+
+def page(title, body, tab="", *, h1=True, back="", tabs_html="", obj=None, obj_title=None):
+    """Eine Seite im Rahmen der Plattform (RFC-0118): Kopfleiste, eine Reiterleiste,
+    Fußzeile. Auf einer Vorgangsseite trägt die Leiste die Reiter des Vorgangs."""
     who = getattr(_REQ, "who", None)
-    user = ""
-    if who is not None:
-        # oaap-design §5.1: dasselbe Benutzermenü wie im Portal. Der Name kommt vom
-        # Gateway; /auth/whoami sagt, ob es ein Passwort gibt. Abmelden ist ein POST.
-        user = (f'<details class=user><summary id=uname>{esc(who.name)}</summary><div class=menu>'
-                f'<div class=muted id=ulogin></div>'
-                f'<a id=upw href="/auth/password" hidden>Passwort ändern</a>'
-                f'<form method=post action="/auth/logout"><button>Abmelden</button></form>'
-                f'<p class=hint>Als andere Person weiter: abmelden und neu anmelden.</p></div></details>')
+    tabs = [("/", "Übersicht"), ("/neu", "Neuer Vorgang"), ("/bereiche", "Bereiche")]
+    if who is not None and who.admin:
+        tabs.append(("/partner", "Partner"))
     foot = rights_summary(who, getattr(_REQ, "store", None))
-    return (f"<!doctype html><html lang=de><head><meta charset=utf-8>"
-            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
-            f"<title>{esc(title)} · Vorgänge</title>{STYLE}"
-            f'<script src="/platform/feedback.js" defer></script>'
-            f'<script src="/static/md/markdown.js" defer></script>'
-            f'<script src="/static/md/view.js" defer></script></head>'
-            f'<body><header class=oaap><a class=brand href="/">{LOGO}<span><b>OAAP</b> '
-            f'<small>Vorgänge</small></span></a><span class=sp></span>{user}</header>'
-            f"<main><h1>{esc(title)}</h1><nav class=tabs>{nav}</nav>{body}</main>"
-            f"<footer class=oaap><b>Vorgänge {esc(VERSION)}</b>"
-            + (f" · {esc(foot)}" if foot else "") + "</footer>"
-            + """<script>
-addEventListener("DOMContentLoaded", function () {
-  if (window.OAAPView) { OAAPView.mode(); OAAPView.mount(document); }
-  document.querySelectorAll("[data-md-mode]").forEach(function (b) {
-    b.onclick = function () { OAAPView.mode(b.getAttribute("data-md-mode")); };
-  });
-  fetch("/auth/whoami", {headers: {"Accept": "application/json"}})
-    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-    .then(function (me) {
-      var n = document.getElementById("uname"); if (!n) return;
-      if (me.display_name || me.username) n.textContent = me.display_name || me.username;
-      document.getElementById("ulogin").textContent = me.username ? "angemeldet als " + me.username : "";
-      if (me.links && me.links.password) document.getElementById("upw").hidden = false;
-    }).catch(function () {});
-});
-</script></body></html>""")
+    main = (back + (f"<h1>{esc(title)}</h1>" if h1 else "") + body
+            + (f"<p class='muted rights-line'>{esc(foot)}</p>" if foot else ""))
+    return af.page(title, main, app=APP_NAME, version=VERSION, product=APP_ID,
+                   tabs=None if tabs_html else tabs, active=TAB_KEYS.get(tab, ""), tabs_html=tabs_html,
+                   obj=obj, obj_title=obj_title, style=STYLE, head=HEAD, scripts=SCRIPTS)
 
 
 def status_color(status):
-    """0.11.0 (RFC-0103 D6): dieselben Farben wie die Punkte im Chat (§6.2) -- rot: die
-    Meldende ist dran, grün: beantwortet, grau: erledigt, gelb: offen."""
+    """0.11.0: dieselben Farben wie die Punkte im Chat -- rot: die Meldende ist dran,
+    grün: beantwortet, grau: erledigt, gelb: offen."""
     if status in ("waiting_reporter", "rejected"):
         return "red"
     return {"answered": "green", "closed": "grey"}.get(status, "yellow")
+
+
+BADGE_OF = {"red": "err", "green": "ok", "yellow": "warn", "grey": ""}
 
 
 def pill(status, mark="", reporter=False):
     word = "Rückfrage an dich" if reporter and status == "waiting_reporter" else STATUS_LABEL.get(status, status)
     if status == "closed" and mark in MARK_LABEL:
         word += f" ({MARK_LABEL[mark]})"
-    return f'<span class="pill s-{status_color(status)}">{esc(word)}</span>'
+    return af.badge(word, BADGE_OF[status_color(status)])
+
+
+KI = af.badge("KI", "info")
+
+
+def queue_href(queue):
+    """Die Seite eines Bereichs (/bereich/<kennung>) -- dort pflegt der Mandanten-
+    Administrator Zuständige, Erstbearbeitung und Ampel (RFC-0118 §7: keine Formulare
+    in Tabellenzeilen)."""
+    return "/bereich/" + quote(queue) if queue else "/bereiche"
 
 
 # 0.16.0 (RFC-0105 §7.1): der Freigabeschlüssel dieser Instanz. Mit ihm unterschreibt sie jede
@@ -579,7 +529,7 @@ def mine_row(r):
 
 def case_table(rows, queues):
     if not rows:
-        return "<p class=muted>Keine Vorgänge.</p>"
+        return af.empty("Keine Vorgänge.")
     qt = {q["id"]: q["title"] for q in queues}
     tr = "".join(
         f"<tr><td><a href='/v/{quote(r['number'])}'>{esc(r['number'])}</a></td>"
@@ -588,8 +538,8 @@ def case_table(rows, queues):
         f"<td>{esc(qt.get(r['queue'], r['queue']))}</td>"
         f"<td class=muted>{esc(r['updated'][:16].replace('T', ' '))}</td></tr>"
         for r in rows)
-    return ("<table><tr><th>Nr.</th><th>Art</th><th>Betreff</th><th>Status</th>"
-            f"<th>Bereich</th><th>Geändert</th></tr>{tr}</table>")
+    return ("<div class=oaap-tablewrap><table class=oaap-table><thead><tr><th>Nr.</th><th>Art</th>"
+            f"<th>Betreff</th><th>Status</th><th>Bereich</th><th>Geändert</th></tr></thead><tbody>{tr}</tbody></table></div>")
 
 
 # ------------------------------------------------------------------ HTTP
@@ -730,6 +680,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.queues_page(who)
         if p == "/bereiche/freigabeschluessel":
             return self.approval_key_page(who)
+        if p.startswith("/bereich/"):
+            return self.queue_page(who, unquote(p[len("/bereich/"):]).strip("/"))
         if p == "/partner":
             return self.partners_page(who)
         if p.startswith("/v/") and p.endswith("/uebergabe"):
@@ -737,7 +689,7 @@ class Handler(BaseHTTPRequestHandler):
                                       (q.get("partner") or [""])[0])
         if p.startswith("/v/"):
             return self.case_page(who, p[3:], (q.get("m") or [""])[0])
-        return self.send(404, page("Nicht gefunden", ""))
+        return self.send(404, page("Nicht gefunden", af.empty("Diese Seite gibt es nicht. <a href='/'>Zur Übersicht</a>")))
 
     def do_POST(self):
         _REQ.who = _REQ.store = None
@@ -786,8 +738,8 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/v/"):
                 return self.case_post(who, p[3:].split("/")[0], p.rsplit("/", 1)[-1], f)
         except Refused as e:
-            return self.send(400, page("Nicht möglich", f"<p class=err>{esc(str(e))}</p>"
-                                       "<p><a href='javascript:history.back()'>Zurück</a></p>"))
+            return self.send(400, page("Nicht möglich", af.msg(str(e), error=True)
+                                       + "<p><a href='javascript:history.back()'>Zurück</a></p>"))
         return self.send(404, "")
 
     # --- 0.13.0 (RFC-0105 Stufe 1): die Tür für den Lauf eines Spezialisten. Der Spezialist
@@ -887,14 +839,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def queue_light_post(self, who, f):
         if not who.manager:
-            raise Refused("Die Ampel eines Bereichs stellt der tenant_admin ein.")
+            raise Refused("Die Ampel eines Bereichs stellt der Mandanten-Administrator ein.")
         self.store.set_queue_light(f.get("queue", ""), f.get("light", ""), who.id)
-        return self.redirect("/bereiche")
+        return self.redirect(queue_href(f.get("queue", "")))
 
     def approval_key_page(self, who, msg=""):
         """0.16.0 (RFC-0105 §7.1): der Freigabeschlüssel, nur für den tenant_admin."""
         if not who.manager:
-            return self.send(403, page("Abgelehnt", "<p>Den Freigabeschlüssel sieht der tenant_admin.</p>"))
+            return self.send(403, page("Abgelehnt", "<p>Den Freigabeschlüssel sieht der Mandanten-Administrator.</p>"))
         k = approval_key()
         body = (f"{msg}<p>Mit diesem Schlüssel unterschreibt diese App jede Freigabe eines geplanten "
                 f"Aufrufs eines Spezialisten. Hinterlegt bei seiner Sicht im <b>MCP-Gateway</b> (Seite der "
@@ -905,22 +857,21 @@ class Handler(BaseHTTPRequestHandler):
                 f"<p><code style='user-select:all'>{esc(k)}</code></p>"
                 f"<p class=muted>Behandle ihn wie ein Passwort. Neu erzeugen macht alle noch nicht "
                 f"ausgeführten Freigaben ungültig; danach im MCP-Gateway den neuen eintragen.</p>"
-                f"<form method=post action=/bereiche/freigabeschluessel><button>Neu erzeugen</button></form>"
-                f"<p><a href=/bereiche>← Bereiche</a></p>")
-        return self.send(200, page("Freigabeschlüssel", body, "queues"))
+                f"<form method=post action=/bereiche/freigabeschluessel><button class=danger>Neu erzeugen</button></form>")
+        return self.send(200, page("Freigabeschlüssel", body, "queues", back=af.back("/bereiche", "Zu den Bereichen")))
 
     def approval_key_post(self, who, f):
         if not who.manager:
-            raise Refused("Den Freigabeschlüssel erzeugt der tenant_admin.")
+            raise Refused("Den Freigabeschlüssel erzeugt der Mandanten-Administrator.")
         approval_key(rotate=True)
         self.store.log_queue_action("", who.id, "approval_key")
-        return self.approval_key_page(who, "<p class=ok>Neu erzeugt. Jetzt im MCP-Gateway eintragen.</p>")
+        return self.approval_key_page(who, af.msg("Neu erzeugt. Jetzt im MCP-Gateway eintragen."))
 
     def first_responder_post(self, who, f):
         if not who.manager:
-            raise Refused("Die Erstbearbeitung eines Bereichs stellt der tenant_admin ein.")
+            raise Refused("Die Erstbearbeitung eines Bereichs stellt der Mandanten-Administrator ein.")
         self.store.set_first_responder(f.get("queue", ""), f.get("uid", ""))
-        return self.redirect("/bereiche")
+        return self.redirect(queue_href(f.get("queue", "")))
 
     # --- die MCP-Tür (0.4.0, RFC-0073): dieselbe Person, dieselben Regeln wie die Seite
     def mcp_post(self, who):
@@ -1182,18 +1133,18 @@ class Handler(BaseHTTPRequestHandler):
     # --- Partner (nur Admins des Mandanten)
     def partners_page(self, who):
         if not who.admin:
-            return self.send(403, page("Partner", "<p>Partner tragen die Admins des Mandanten ein.</p>",
+            return self.send(403, page("Partner", "<p>Partner tragen die Administratoren des Mandanten ein.</p>",
                                        "partners"))
         queues = self.store.queues()
         rows = "".join(
             f"<tr><td><code>{esc(x['id'])}</code></td><td>{esc(x['name'])}</td>"
             f"<td>{esc(x['url']) or '–'}</td><td>{'ja' if x['out_key'] else 'nein'}</td>"
             f"<td><code>{esc(x['in_principal']) or '–'}</code></td><td>{esc(x['in_queue'])}</td>"
-            f"<td>{'aktiv' if x['active'] else 'aus'}</td></tr>"
+            f"<td>{af.badge('aktiv', 'ok') if x['active'] else af.badge('aus')}</td></tr>"
             for x in self.store.partners())
         qs = "".join(f"<option value='{esc(q['id'])}'>{esc(q['title'])}</option>" for q in queues)
         body = f"""<p>Ein Partner ist ein anderer Mandant, mit dem Vorgänge ausgetauscht werden,
-auf diesem oder einem anderen Knoten (RFC-0061 §5). Was übergeben wird, ist eine freigegebene
+auf diesem oder einem anderen Server. Was übergeben wird, ist eine freigegebene
 Kopie ohne Personendaten; der Vorgang selbst bleibt hier.</p>
 <ul class=muted>
 <li><b>Damit Sie an ihn übergeben können:</b> Adresse seiner Vorgänge-App und der Schlüssel, den
@@ -1202,10 +1153,12 @@ Kopie ohne Personendaten; der Vorgang selbst bleibt hier.</p>
 einen Maschinenzugang mit Rolle <code>user</code> an, beschränkt auf diese Instanz, geben Sie ihm
 den Schlüssel, und tragen Sie den Namen des Zugangs hier als <i>eingehenden Zugang</i> ein.</li>
 </ul>
-<table><tr><th>Kennung</th><th>Name</th><th>Adresse</th><th>Schlüssel</th><th>Eingehender Zugang</th>
-<th>landet in</th><th></th></tr>{rows}</table>
+{('<div class=oaap-tablewrap><table class=oaap-table><thead><tr><th>Kennung</th><th>Name</th><th>Adresse</th>'
+  '<th>Schlüssel</th><th>Eingehender Zugang</th><th>landet in</th><th>Zustand</th></tr></thead><tbody>' + rows
+  + '</tbody></table></div>') if rows else af.empty('Noch kein Partner. Unten den ersten eintragen.')}
 <h2>Partner eintragen oder ändern</h2>
-<form method=post action=/partner class=card>
+<p class=muted>Zum Ändern dieselbe Kennung eintragen.</p>
+<form method=post action=/partner class=oaap-card>
  <label for=i>Kennung</label><input id=i name=id pattern='[a-z0-9][a-z0-9-]{{0,39}}' required>
  <label for=n>Name</label><input type=text id=n name=name maxlength=80>
  <label for=u>Adresse seiner Vorgänge-App (leer: er übergibt nur an uns)</label>
@@ -1215,13 +1168,13 @@ den Schlüssel, und tragen Sie den Namen des Zugangs hier als <i>eingehenden Zug
  <label for=p>Eingehender Zugang (Name des Maschinenzugangs)</label>
  <input type=text id=p name=in_principal>
  <label for=q>Übergaben von ihm landen in</label><select id=q name=in_queue>{qs}</select>
- <p><button name=action value=save>Speichern</button>
-    <button name=action value=off>Abschalten</button></p></form>"""
+ <p><button name=action value=save class=primary>Speichern</button>
+    <button name=action value=off class=danger>Abschalten</button></p></form>"""
         return self.send(200, page("Partner", body, "partners"))
 
     def partners_post(self, who, f):
         if not who.admin:
-            raise Refused("Partner tragen die Admins des Mandanten ein.")
+            raise Refused("Partner tragen die Administratoren des Mandanten ein.")
         if f.get("action") == "off":
             self.store.deactivate_partner((f.get("id") or "").strip().lower())
         else:
@@ -1259,14 +1212,14 @@ den Schlüssel, und tragen Sie den Namen des Zugangs hier als <i>eingehenden Zug
 <p>Was hier steht, verlässt den Mandanten. Die meldende Person, Benutzer-IDs und alle Einträge,
 die Sie nicht auswählen, gehen <b>nicht</b> mit. Namen im Text findet kein Filter — prüfen Sie
 Betreff und Text.</p>
-<form method=post action='/v/{quote(c['number'])}/uebergabe' class=card>
+<form method=post action='/v/{quote(c['number'])}/uebergabe' class=oaap-card>
  <input type=hidden name=partner value='{esc(partner['id'])}'>
  <label for=t>Betreff</label><input type=text id=t name=title maxlength=200 value='{esc(title)}' required>
  <label for=b>Text</label><textarea id=b name=body maxlength=10000>{esc(body)}</textarea>
  <label><input type=checkbox name=with_tech value=1{' checked' if with_tech else ''}>
   technische Angaben mitgeben (App, Version, Seite, Browser, letzter Fehler)</label>
  <h2>Kommentare, die mitgehen</h2>{boxes}
- <p><button name=step value=preview>Vorschau</button></p></form>"""
+ <p><button name=step value=preview class=primary>Vorschau</button></p></form>"""
 
     def handover_post(self, who, number, f):
         c, partner, err = self._handover_case(who, number, f.get("partner", ""))
@@ -1297,7 +1250,7 @@ Betreff und Text.</p>
                 f"(<code>{esc(partner['url'])}</code>):</p>"
                 f"<pre class=card>{esc(raw)}</pre>"
                 f"<form method=post action='/v/{quote(c['number'])}/uebergabe'>{hidden}"
-                f"<button name=step value=release>Freigeben und senden</button></form>"
+                f"<button name=step value=release class=primary>Freigeben und senden</button></form>"
                 f"<p><a href='/v/{quote(c['number'])}/uebergabe?partner={quote(partner['id'])}'>"
                 f"Zurück zum Entwurf</a></p>")
         return self.send(200, page(f"Vorschau der Übergabe {c['number']}", body))
@@ -1321,6 +1274,11 @@ Betreff und Text.</p>
         status = arg("status", "all" if arg("alle") == "1" else "open")
         status = status if status in ("open", "all") or status in STATUS_LABEL else "open"
         queue = arg("queue")
+        text = arg("q")[:200]
+        try:
+            offset = max(0, int(arg("offset") or 0))
+        except ValueError:
+            offset = 0
         sort = arg("sort", "-updated")
         key = sort.lstrip("-")
         if key not in self.LIST_SORT:
@@ -1359,6 +1317,11 @@ Betreff und Text.</p>
             out = [r for r in out if who.id in (r["responsible"], r["assignee"]) or r["id"] in asked]
         if queue:
             out = [r for r in out if r["queue"] == queue]
+        if text:
+            # RFC-0118 §7: die Suche zuerst -- Nummer, Betreff, Beschreibung, Meldende
+            words = text.lower().split()
+            out = [r for r in out if all(w in " ".join(str(r.get(k) or "") for k in (
+                "number", "title", "body", "reporter_name")).lower() for w in words)]
         if status == "open":
             out = [r for r in out if r["status"] in OPEN]
         elif status != "all":
@@ -1368,25 +1331,29 @@ Betreff und Text.</p>
         out.sort(key=lambda r: (str(cell(r, key)).lower(), r["number"]), reverse=sort.startswith("-"))
 
         def link(**kw):
-            p = {"view": view, "queue": queue, "status": status, "sort": sort}
+            p = {"q": text, "view": view, "queue": queue, "status": status, "sort": sort, "offset": 0}
             p.update(kw)
             return "/?" + urlencode({k: v for k, v in p.items() if v and not (k == "status" and v == "open")
                                      and not (k == "sort" and v == "-updated")})
 
         def sel(name, cur, opts):
-            return (f"<select name={name}>" + "".join(
+            return (f"<select name={name} onchange='this.form.submit()'>" + "".join(
                 f"<option value='{esc(v)}'{' selected' if v == cur else ''}>{esc(t)}</option>"
                 for v, t in opts) + "</select>")
-        form = ("<form method=get action='/' class=filter>"
-                "<div><label>Ansicht</label>" + sel("view", view, (
+        # RFC-0118 §7: die Filterleiste des Kits -- Suche zuerst, dann drei Auswahlen
+        form = ("<form method=get action='/' class=oaap-filter role=search>"
+                f"<label>Suchen<input type=search name=q value='{esc(text)}' placeholder='Nummer, Betreff, Text'></label>"
+                "<label>Ansicht" + sel("view", view, (
                     ("", "alles, was ich sehe"), ("mine", "meine (gemeldet, verantwortlich, zugewiesen)"),
-                    ("assigned", "mir zugewiesen oder von mir verantwortet"))) + "</div>"
-                "<div><label>Bereich</label>" + sel("queue", queue, [("", "alle Bereiche")] + [
-                    (x, qt.get(x, x)) for x in seen_queues]) + "</div>"
-                "<div><label>Status</label>" + sel("status", status, [("open", "offen"), ("all", "alle")] + [
-                    (k, w) for k, w in STATUS_LABEL.items()]) + "</div>"
+                    ("assigned", "mir zugewiesen oder von mir verantwortet"))) + "</label>"
+                "<label>Bereich" + sel("queue", queue, [("", "alle Bereiche")] + [
+                    (x, qt.get(x, x)) for x in seen_queues]) + "</label>"
+                "<label>Status" + sel("status", status, [("open", "offen"), ("all", "alle")] + [
+                    (k, w) for k, w in STATUS_LABEL.items()]) + "</label>"
                 + (f"<input type=hidden name=sort value='{esc(sort)}'>" if sort != "-updated" else "")
-                + "<button>Anzeigen</button></form>")
+                + "<button>Anzeigen</button>"
+                + ("<a class=oaap-btn href='/'>Zurücksetzen</a>" if (text or view or queue or status != "open") else "")
+                + "</form>")
         mine_now = sum(1 for r in rows.values() if r["status"] in OPEN
                        and who.id in (r["responsible"], r["assignee"]))
         quick = ("<p class='muted quick'>"
@@ -1400,10 +1367,15 @@ Betreff und Text.</p>
         for k, t in self.LIST_HEAD:
             on = key == k
             nxt = ("-" + k if not sort.startswith("-") else k) if on else ("-" + k if k == "updated" else k)
-            arrow = (" ▼" if sort.startswith("-") else " ▲") if on else ""
+            # der Pfeil ▲/▼ kommt aus dem Kit (aria-sort)
             head += (f"<th{' aria-sort=' + ('descending' if sort.startswith('-') else 'ascending') if on else ''}>"
-                     f"<a href='{esc(link(sort=nxt))}'>{esc(t)}{arrow}</a></th>")
-        if out:
+                     f"<a href='{esc(link(sort=nxt))}'>{esc(t)}</a></th>")
+        total = len(out)
+        if offset >= total:
+            offset = 0
+        size = af.PAGE_SIZE
+        shown = out[offset:offset + size]
+        if shown:
             tr = "".join(
                 f"<tr><td><a href='/v/{quote(r['number'])}'>{esc(r['number'])}</a></td>"
                 f"<td>{esc(r['title'])} <span class=muted>{esc(KIND_LABEL.get(r['kind'], r['kind']))}</span></td>"
@@ -1411,24 +1383,37 @@ Betreff und Text.</p>
                 f"<td>{esc(cell(r, 'queue'))}</td><td>{esc(cell(r, 'responsible'))}</td>"
                 f"<td>{esc(cell(r, 'assignee'))}</td>"
                 f"<td class=muted>{esc(r['updated'][:16].replace('T', ' '))}</td></tr>"
-                for r in out)
-            table = f"<table class=list><tr>{head}</tr>{tr}</table>"
+                for r in shown)
+            table = (f"<div class=oaap-tablewrap><table class='oaap-table list'><thead><tr>{head}</tr></thead>"
+                     f"<tbody>{tr}</tbody></table></div>")
+        elif rows:
+            table = af.empty("Keine Vorgänge für diese Auswahl. <a href='/?status=all'>Auch erledigte zeigen</a>")
         else:
-            table = "<p class=muted>Keine Vorgänge für diese Auswahl.</p>"
-        body = (quick + form + f"<p class=muted>{len(out)} Vorgang{'' if len(out) == 1 else 'e'}</p>" + table)
+            table = af.empty("Noch keine Vorgänge. <a href='/neu'>Neuer Vorgang</a> legt den ersten an; "
+                             "Meldungen kommen auch über den Knopf „Feedback“ in jeder App.")
+        paging = ""
+        if total > size:
+            paging = ("<nav class=oaap-paging aria-label=Seiten>"
+                      + (f"<a href='{esc(link(offset=max(0, offset - size)))}'>← Vorige {size}</a>" if offset else "")
+                      + f"<span>{offset + 1}–{min(total, offset + size)} von {total}</span>"
+                      + (f"<a href='{esc(link(offset=offset + size))}'>Weitere {size} →</a>"
+                         if offset + size < total else "") + "</nav>")
+        count = (f"<p class=oaap-countline>{total} Vorgang{'' if total == 1 else 'e'}</p>" if total <= size
+                 else af.countline(offset + 1, offset + len(shown), total, "Vorgängen"))
+        body = quick + form + count + table + paging
         return self.send(200, page("Vorgänge", body, "home"))
 
     def new_form(self, who, err=""):
         queues = self.store.queues()
         kinds = "".join(f"<option value={k}>{esc(KIND_LABEL[k])}</option>" for k in KINDS)
         qs = "".join(f"<option value='{esc(q['id'])}'>{esc(q['title'])}</option>" for q in queues)
-        body = (f"<p class=err>{esc(err)}</p>" if err else "") + f"""
-<form method=post action=/neu class=card>
+        body = af.msg(err, error=True) + f"""
+<form method=post action=/neu class=oaap-card>
  <label for=k>Art</label><select id=k name=kind>{kinds}</select>
  <label for=q>Bereich</label><select id=q name=queue>{qs}</select>
  <label for=t>Betreff</label><input type=text id=t name=title maxlength=200 required>
  <label for=b>Beschreibung</label><textarea id=b name=body maxlength=10000></textarea>
- <p><button>Anlegen</button></p></form>"""
+ <p><button class=primary>Anlegen</button></p></form>"""
         return self.send(200, page("Neuer Vorgang", body, "new"))
 
     def new_post(self, who, f):
@@ -1439,10 +1424,13 @@ Betreff und Text.</p>
                                       "user_id": who.id, "via": "app"})
         return self.redirect(f"/v/{quote(made['number'])}")
 
+    KIND_WORD = {"handler": "Bearbeiter/in", "clearing": "Clearing"}
+
     def queues_page(self, who, msg=""):
+        """Die Bereiche als Liste; gepflegt wird auf der Seite eines Bereichs (RFC-0118 §7:
+        eine Zeilenaktion, keine Formulare in Tabellenzeilen)."""
         queues = self.store.queues()
-        kind_word = {"handler": "Bearbeiter/in", "clearing": "Clearing"}
-        people = self.store.people() if who.manager else []
+        kind_word = self.KIND_WORD
         rows = []
         for q in queues:
             mem = self.store.members(q["id"])
@@ -1451,87 +1439,105 @@ Betreff und Text.</p>
             mine = ("bearbeiten" if who.may("triage", q["id"]) else "lesen" if who.may("read", q["id"]) else "")
             fr_name = self.store.person_name(q["first_responder"]) if q.get("first_responder") else ""
             if fr_name:
-                names += f" · <span class=pill>KI</span> {esc(fr_name)} (Erstbearbeitung)"
+                names += f" · {KI} {esc(fr_name)} (Erstbearbeitung)"
             if q.get("light"):
                 names += f" · Ampel {LIGHT_WORD.get(q['light'], q['light'])}"
-            row = (f"<tr><td><code>{esc(q['id'])}</code></td><td>{esc(q['title'])}</td>"
-                   f"<td>{names}</td><td>{mine}</td></tr>")
-            if who.manager:
-                opts = "".join(f"<option value='{esc(p['uid'])}'>{esc(p['name'])}"
-                               f"{' (' + esc(p['username']) + ')' if p['username'] and p['username'] != p['name'] else ''}"
-                               f"</option>" for p in people)
-                rm = "".join(
-                    f"<form method=post action=/bereiche/mitglied class=inline style='margin:.2rem 0'>"
-                    f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=uid value='{esc(m['uid'])}'>"
-                    f"<input type=hidden name=op value=remove><span>{esc(m['name'])}</span>"
-                    f"<button style='background:transparent;color:var(--oaap-color-danger,#c4342f);"
-                    f"border:1px solid currentColor;padding:.1rem .5rem'>entfernen</button></form>" for m in mem)
-                row += (f"<tr><td></td><td colspan=3><details><summary class=muted>Zuständige pflegen</summary>{rm}"
-                        f"<form method=post action=/bereiche/mitglied class=inline>"
-                        f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=op value=set>"
-                        f"<div><label>Person</label><select name=uid required>{opts}</select></div>"
-                        f"<div><label>als</label><select name=kind><option value=handler>Bearbeiter/in</option>"
-                        f"<option value=clearing>Clearing (darf auch übergeben)</option></select></div>"
-                        f"<button>Eintragen</button></form>"
-                        f"<p class=muted>Fehlt jemand? Die Person öffnet die App Vorgänge einmal, danach steht "
-                        f"sie hier. Ein Verzeichnis aller Benutzer bekommt diese App nicht.</p></details>"
-                        # 0.13.0 (RFC-0105 §3.1): ein Spezialist bekommt neue Vorgänge zuerst
-                        f"<details><summary class=muted>Erstbearbeitung durch einen Spezialisten"
-                        f"{': ' + esc(fr_name) if fr_name else ''}</summary>"
-                        f"<form method=post action=/bereiche/spezialist class=inline>"
-                        f"<input type=hidden name=queue value='{esc(q['id'])}'>"
-                        f"<div><label>Spezialist (KI)</label><select name=uid><option value=''>keiner</option>"
-                        + "".join(f"<option value='{esc(p['uid'])}'{' selected' if p['uid'] == q.get('first_responder') else ''}>"
-                                  f"{esc(p['name'])}</option>" for p in people)
-                        + f"</select></div><button>Speichern</button></form>"
-                        f"<p class=muted>Neue und hierher verschobene Vorgänge bekommt zuerst dieser Spezialist "
-                        f"als Verantwortlichen (RFC-0105). Er arbeitet im Hintergrund, schreibt nur intern und gibt "
-                        f"an die Zuständigen zurück. Zur Auswahl steht er, sobald die App Spezialisten einmal für "
-                        f"ihn gelaufen ist.</p></details>"
-                        # 0.16.0 (RFC-0105 D9): die Ampel, mit der ein Spezialist hier arbeitet
-                        f"<details><summary class=muted>Ampel für Spezialisten: "
-                        f"{esc(LIGHT_WORD.get(q.get('light') or '', 'keine eigene'))}</summary>"
-                        f"<form method=post action=/bereiche/ampel class=inline>"
-                        f"<input type=hidden name=queue value='{esc(q['id'])}'>"
-                        f"<div><label>Ampel</label><select name=light>"
-                        + "".join(f"<option value='{v}'{' selected' if v == (q.get('light') or '') else ''}>"
-                                  f"{LIGHT_WORD.get(v, 'keine eigene')}</option>" for v in ("", "green", "yellow", "red"))
-                        + f"</select></div><button>Speichern</button></form>"
-                        f"<p class=muted>Ein Spezialist schickt diese Ampel an das KI- und das MCP-Gateway. Sie "
-                        f"nehmen dann nur Modelle und Sichten bis zu dieser Farbe -- grün ist am strengsten. "
-                        f"Ohne eigene gelten die Decken seiner Schlüssel. Unterschriebene Freigaben: "
-                        f"<a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p></details></td></tr>")
-            rows.append(row)
-        rows = "".join(rows)
-        body = (f"<p>Ein Bereich ist eine Zuständigkeit: ein Thema oder ein Team. Vorgänge kommen im "
+            title = (f"<a href='{esc(queue_href(q['id']))}'>{esc(q['title'])}</a>" if who.manager
+                     else esc(q["title"]))
+            rows.append(f"<tr><td>{title}</td><td class=oaap-minor><code>{esc(q['id'])}</code></td>"
+                        f"<td>{names}</td><td>{mine}</td></tr>")
+        body = (msg + f"<p>Ein Bereich ist eine Zuständigkeit: ein Thema oder ein Team. Vorgänge kommen im "
                 f"<b>Eingang</b> an und werden von dort in den passenden Bereich verschoben.</p>"
-                f"<p>Wer einen Bereich bearbeitet, trägt der <code>tenant_admin</code> hier ein. "
-                f"<b>Bearbeiter/innen</b> lesen, kommentieren, ändern den Status, verschieben und "
+                f"<p>Wer einen Bereich bearbeitet, trägt der Mandanten-Administrator auf der Seite des "
+                f"Bereichs ein. <b>Bearbeiter/innen</b> lesen, kommentieren, ändern den Status, verschieben und "
                 f"schließen; das <b>Clearing</b> darf zusätzlich an einen Partner-Mandanten übergeben. "
-                f"Der <code>tenant_admin</code> bearbeitet jeden Bereich (übergeben nur als Clearing). "
+                f"Der Mandanten-Administrator bearbeitet jeden Bereich (übergeben nur als Clearing). "
                 f"In großen Mandanten geht dasselbe über <b>Rollen &amp; Rechte</b> (Vorlagen "
                 f"<i>Bearbeiter/in</i>, <i>Clearing</i>, Kontext = Kennung des Bereichs); beides zählt.</p>"
                 f"<p class=muted>Löschfrist: {RETENTION} Monate nach dem Schließen oder Ablehnen "
                 f"wird die meldende Person aus einem Vorgang entfernt "
                 f"(Einstellung <code>VORGAENGE_RETENTION_MONTHS</code> dieser Instanz).</p>"
-                f"<table><tr><th>Kennung</th><th>Titel</th><th>Zuständige</th><th>Ich darf</th></tr>{rows}</table>")
+                + ("<div class=oaap-tablewrap><table class=oaap-table><thead><tr><th>Bereich</th>"
+                   "<th class=oaap-minor>Kennung</th><th>Zuständige</th><th>Ich darf</th></tr></thead><tbody>"
+                   + "".join(rows) + "</tbody></table></div>" if rows else af.empty("Noch kein Bereich.")))
         if who.manager:
             log = self.store.queue_log(15)
             if log:
-                body += ("<h2>Zuletzt geändert</h2><table>" + "".join(
+                body += ("<h2>Zuletzt geändert</h2><div class=oaap-tablewrap><table class=oaap-table><tbody>" + "".join(
                     f"<tr><td class=muted>{esc(x['at'][:16].replace('T', ' '))}</td><td>{esc(x['queue'])}</td>"
                     f"<td>{esc(x['name']) if x['action'] in ('set', 'remove') else ''} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt' if x['action'] == 'remove' else 'Ampel ' + LIGHT_WORD.get(x['kind'] if x['kind'] != '-' else '', x['kind']) if x['action'] == 'light' else 'Freigabeschlüssel neu erzeugt' if x['action'] == 'approval_key' else esc(x['action'])}</td>"
-                    f"<td class=muted>von {esc(x['actor_name'])}</td></tr>" for x in log) + "</table>")
+                    f"<td class=muted>von {esc(x['actor_name'])}</td></tr>" for x in log) + "</tbody></table></div>")
             body += """<h2>Bereich anlegen</h2>
 <form method=post action=/bereiche class=inline>
  <div><label for=i>Kennung</label><input id=i name=id pattern='[a-z0-9][a-z0-9-]{0,39}' required></div>
  <div><label for=t>Titel</label><input id=t name=title maxlength=80 required></div>
- <button>Anlegen</button></form>"""
+ <button class=primary>Anlegen</button></form>
+<p class=muted>Unterschriebene Freigaben für Spezialisten: <a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p>"""
         return self.send(200, page("Bereiche", body, "queues"))
+
+    def queue_page(self, who, qid):
+        """Die Seite eines Bereichs: Zuständige, Erstbearbeitung durch einen Spezialisten
+        und die Ampel -- nur für den Mandanten-Administrator, wie die Formulare selbst."""
+        q = self.store.queue(qid)
+        if not q or not who.manager:
+            return self.send(404, page("Nicht gefunden", af.empty("Diesen Bereich gibt es nicht. "
+                                                                "<a href='/bereiche'>Zu den Bereichen</a>"), "queues"))
+        kind_word = self.KIND_WORD
+        people = self.store.people()
+        mem = self.store.members(q["id"])
+        fr_name = self.store.person_name(q["first_responder"]) if q.get("first_responder") else ""
+        opts = "".join(f"<option value='{esc(p['uid'])}'>{esc(p['name'])}"
+                       f"{' (' + esc(p['username']) + ')' if p['username'] and p['username'] != p['name'] else ''}"
+                       f"</option>" for p in people)
+        members = "".join(
+            f"<li><form method=post action=/bereiche/mitglied class=inline style='margin:.2rem 0'>"
+            f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=uid value='{esc(m['uid'])}'>"
+            f"<input type=hidden name=op value=remove><span>{esc(m['name'])} ({kind_word.get(m['kind'], m['kind'])})</span>"
+            f"<button class=danger>entfernen</button></form></li>" for m in mem) or "<li class=muted>noch niemand</li>"
+        body = (af.card("Zuständige pflegen",
+                        f"<ul style='list-style:none;padding:0;margin:0'>{members}</ul>"
+                        f"<form method=post action=/bereiche/mitglied class=inline>"
+                        f"<input type=hidden name=queue value='{esc(q['id'])}'><input type=hidden name=op value=set>"
+                        f"<div><label>Person</label><select name=uid required>{opts}</select></div>"
+                        f"<div><label>als</label><select name=kind><option value=handler>Bearbeiter/in</option>"
+                        f"<option value=clearing>Clearing (darf auch übergeben)</option></select></div>"
+                        f"<button class=primary>Eintragen</button></form>"
+                        f"<p class=muted>Fehlt jemand? Die Person öffnet die App Vorgänge einmal, danach steht "
+                        f"sie hier. Ein Verzeichnis aller Benutzer bekommt diese App nicht.</p>")
+                + af.card("Erstbearbeitung durch einen Spezialisten",
+                          f"<form method=post action=/bereiche/spezialist class=inline>"
+                          f"<input type=hidden name=queue value='{esc(q['id'])}'>"
+                          f"<div><label>Spezialist (KI)</label><select name=uid><option value=''>keiner</option>"
+                          + "".join(f"<option value='{esc(p['uid'])}'{' selected' if p['uid'] == q.get('first_responder') else ''}>"
+                                    f"{esc(p['name'])}</option>" for p in people)
+                          + f"</select></div><button>Speichern</button></form>"
+                          f"<p class=muted>Neue und hierher verschobene Vorgänge bekommt zuerst dieser Spezialist "
+                          f"als Verantwortlichen. Er arbeitet im Hintergrund, schreibt nur intern und gibt "
+                          f"an die Zuständigen zurück. Zur Auswahl steht er, sobald die App Spezialisten einmal für "
+                          f"ihn gelaufen ist.</p>")
+                + af.card("Ampel für Spezialisten",
+                          f"<form method=post action=/bereiche/ampel class=inline>"
+                          f"<input type=hidden name=queue value='{esc(q['id'])}'>"
+                          f"<div><label>Ampel</label><select name=light>"
+                          + "".join(f"<option value='{v}'{' selected' if v == (q.get('light') or '') else ''}>"
+                                    f"{LIGHT_WORD.get(v, 'keine eigene')}</option>" for v in ("", "green", "yellow", "red"))
+                          + f"</select></div><button>Speichern</button></form>"
+                          f"<p class=muted>Ein Spezialist schickt diese Ampel an das KI- und das MCP-Gateway. Sie "
+                          f"nehmen dann nur Modelle und Sichten bis zu dieser Farbe – grün ist am strengsten. "
+                          f"Ohne eigene gelten die Decken seiner Schlüssel. Unterschriebene Freigaben: "
+                          f"<a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p>"))
+        head = (f"<div class=oaap-objhead><h1>{esc(q['title'])}</h1>"
+                + af.facts([("Kennung", f"<code>{esc(q['id'])}</code>"),
+                            ("Zuständige", str(len(mem))),
+                            ("Erstbearbeitung", f"{KI} {esc(fr_name)}" if fr_name else "keine"),
+                            ("Ampel", esc(LIGHT_WORD.get(q.get("light") or "", "keine eigene")))]) + "</div>")
+        return self.send(200, page(q["title"], head + body, "queues", h1=False,
+                                   back=af.back("/bereiche", "Zu den Bereichen"),
+                                   obj=f"Bereich:{q['id']}", obj_title=q["title"]))
 
     def queues_post(self, who, f):
         if not who.manager:
-            raise Refused("Bereiche legt der tenant_admin an.")
+            raise Refused("Bereiche legt der Mandanten-Administrator an.")
         self.store.add_queue(f.get("id"), f.get("title"))
         return self.redirect("/bereiche")
 
@@ -1539,13 +1545,13 @@ Betreff und Text.</p>
         """0.8.0 (RFC-0103 D2): Zuständige pflegt nur der tenant_admin (oder admin) --
         Zuständige tragen keine weiteren ein."""
         if not who.manager:
-            raise Refused("Zuständige eines Bereichs trägt der tenant_admin ein.")
+            raise Refused("Zuständige eines Bereichs trägt der Mandanten-Administrator ein.")
         queue, uid = f.get("queue", ""), f.get("uid", "")
         if f.get("op") == "remove":
             self.store.remove_member(queue, uid, who.id)
         else:
             self.store.set_member(queue, uid, f.get("kind", ""), who.id)
-        return self.redirect("/bereiche")
+        return self.redirect(queue_href(queue))
 
     def case_page(self, who, number, msg=""):
         c = self.store.get(number)
@@ -1562,7 +1568,7 @@ Betreff und Text.</p>
         if att.get("node") and c["object_kind"] == "request":
             src = (f"<div class=muted>Anfrage an den Betreiber, geschrieben vom Knoten "
                    f"<b>{esc(att['node'])}</b> für <b>{esc(att.get('on_behalf', ''))}</b> "
-                   "(RFC-0109; beglaubigt ist der Knoten, nicht die Person)</div>")
+                   "(beglaubigt ist der Knoten, nicht die Person)</div>")
         elif att.get("node"):
             src = (f"<div class=muted>Gemeldet vom Knoten <b>{esc(att['node'])}</b> "
                    "(Neustart-Plan der Plattform, vom Gateway beglaubigt)</div>")
@@ -1584,7 +1590,7 @@ Betreff und Text.</p>
                 for k, v in (tech.get("fields") or {}).items())
             techbox += (f"<details open><summary class=muted>Angaben der App "
                         f"(Unterart <code>{esc(tech['subkind'])}</code>, von der Seite mitgegeben, "
-                        f"nicht beglaubigt)</summary><table>{rows}</table></details>")
+                        f"nicht beglaubigt)</summary><table class=oaap-table>{rows}</table></details>")
         ent, ent_int = [], []
         names = {p["uid"]: p["name"] for p in self.store.people()}
         decided = {e["data"].get("plan"): e for e in c["entries"] if e["type"] == "approval"}
@@ -1639,11 +1645,11 @@ Betreff und Text.</p>
                         body += (f"<form method=post action='/v/{quote(c['number'])}/freigabe' class=inline>"
                                  f"<input type=hidden name=seq value='{e['seq']}'>"
                                  f"<input name=text placeholder='Bemerkung (optional)' maxlength=2000>"
-                                 f"<button name=ok value=1>{yes}</button> "
-                                 f"<button name=ok value=0 style='background:transparent;color:inherit;border:1px solid currentColor'>"
+                                 f"<button name=ok value=1 class=primary>{yes}</button> "
+                                 f"<button name=ok value=0>"
                                  f"{'Verwerfen' if k == 'draft' else 'Ablehnen'}</button></form>")
-                box.append(f"<div class=card style='background:#eef2ff'><div class=muted>{when} · {who_} "
-                           f"<span class=pill>KI</span> · {label}{(' · ' + meta) if meta else ''}</div>{body}</div>")
+                box.append(f"<div class='card c-ki'><div class=muted>{when} · {who_} "
+                           f"{KI} · {label}{(' · ' + meta) if meta else ''}</div>{body}</div>")
                 continue
             elif e["type"] == "approval":
                 box.append(f"<div class=card><div class=muted>{when} · {who_} · "
@@ -1653,11 +1659,11 @@ Betreff und Text.</p>
                 continue
             elif e["type"] in ("consult", "consult_answer"):
                 # 0.15.0 (§6): Rückfrage und Antwort -- intern
-                ai = " <span class=pill>KI</span>" if e["actor"] in specs else ""
+                ai = " " + KI if e["actor"] in specs else ""
                 if e["type"] == "consult":
                     k = consults.get(e["seq"]) or {}
                     head = (f"fragt {esc(d.get('to_name') or '')}"
-                            + (" <span class=pill>KI</span>" if d.get("specialist") else "")
+                            + (" " + KI if d.get("specialist") else "")
                             + (" · beantwortet" if k.get("answered") else " · <b>offen</b>"))
                     form_ = ""
                     if k and not k["answered"] and k["target"] == who.id and c["status"] not in ("closed", "rejected"):
@@ -1667,7 +1673,7 @@ Betreff und Text.</p>
                                  f"<p><button>Antworten</button></p></form>")
                 else:
                     head = "antwortet auf die Rückfrage"
-                box.append(f"<div class=card style='background:#f0fdf4'><div class=muted>{when} · {who_}{ai} · {head}</div>"
+                box.append(f"<div class='card c-rat'><div class=muted>{when} · {who_}{ai} · {head}</div>"
                            f"<div class=body data-md>{esc(e['text'])}</div>{form_ if e['type'] == 'consult' else ''}</div>")
                 continue
             elif e["type"] == "spec_stop":
@@ -1683,9 +1689,9 @@ Betreff und Text.</p>
             else:
                 head = "Kommentar"
             if e.get("internal"):
-                head += " <span class=pill style='border-color:#b45309;color:#b45309'>intern</span>"
+                head += " " + af.badge("intern", "warn")
             text = f"<div class=body data-md>{esc(e['text'])}</div>" if e["text"] else ""
-            box.append(f"<div class=card{' style=background:#fff7ed' if e.get('internal') else ''}>"
+            box.append(f"<div class='card{' c-int' if e.get('internal') else ''}'>"
                        f"<div class=muted>{when} · {who_} · {head}</div>{text}</div>")
         forms = comment_form = intern_form = hand = ""
         base = f"/v/{quote(c['number'])}"
@@ -1787,8 +1793,8 @@ Betreff und Text.</p>
                 c["reporter"] == who.id and c["status"] == "answered"):
             how = (f"Im Bereich <b>{esc(qt.get(c['queue'], c['queue']))}</b> stellen ihn die "
                    "Zuständigen dieses Bereichs um (Seite „Bereiche“) und der "
-                   "<code>tenant_admin</code>"
-                   + (", im Eingang auch die App-Rolle <code>admin</code>" if c["queue"] == DEFAULT_QUEUE else "")
+                   "Mandanten-Administrator"
+                   + (", im Eingang auch die Administratoren der App" if c["queue"] == DEFAULT_QUEUE else "")
                    + ". In großen Mandanten vergibt „Rollen &amp; Rechte“ dasselbe mit den Vorlagen "
                    "<i>Bearbeiter/in</i> und <i>Clearing</i>.")
             mine = (" Als Meldende kannst du im Reiter <a href='#verlauf'>Verlauf</a> kommentieren und, "
@@ -1822,15 +1828,18 @@ Betreff und Text.</p>
         if hand:
             panels.append(("uebergabe", "Übergabe", hand))
         tabs = "".join(f"<a href='#{k}'>{esc(t)}</a>" for k, t, _ in [("ueberblick", "Überblick", "")] + panels)
-        # den aktiven Reiter hervorheben (wo der Browser :has kann; sonst ohne Hervorhebung)
-        on = "background:var(--oaap-color-surface, #f4f5f7);border-color:var(--oaap-color-border, #d8dbe0)"
-        hl = ("<style>" + "".join(f"body:has(#{k}:target) nav.ctabs a[href='#{k}']{{{on}}}" for k, _, _ in panels)
-              + f"body:not(:has(.tp:target)) nav.ctabs a[href='#ueberblick'],"
-              f"body:has(#ueberblick:target) nav.ctabs a[href='#ueberblick']{{{on}}}</style>")
-        body = (hl + f"<nav class=ctabs aria-label='Reiter des Vorgangs'>{tabs}</nav><div class=panels>"
+        # RFC-0118 §6: die Reiter des Vorgangs SIND die eine Leiste unter der Kopfleiste.
+        # Den aktiven hebt CSS hervor (wo der Browser :has kann; sonst ohne Hervorhebung).
+        on = ("color:var(--oaap-color-primary);border-bottom-color:var(--oaap-color-primary);font-weight:600")
+        hl = ("<style>" + "".join(f"body:has(#{k}:target) nav.oaap-tabs a[href='#{k}']{{{on}}}" for k, _, _ in panels)
+              + f"body:not(:has(.tp:target)) nav.oaap-tabs a[href='#ueberblick'],"
+              f"body:has(#ueberblick:target) nav.oaap-tabs a[href='#ueberblick']{{{on}}}</style>")
+        bar = f"<nav class=oaap-tabs aria-label='Reiter des Vorgangs'>{tabs}</nav>"
+        body = (hl + "<div class=panels>"
                 + "".join(f"<section class=tp id={k} aria-label='{esc(t)}'>{h}</section>" for k, t, h in panels)
                 + f"<section class=tp id=ueberblick aria-label='Überblick'>{overview}</section></div>")
-        return self.send(200, page(f"{c['number']}: {c['title']}", body))
+        return self.send(200, page(f"{c['number']}: {c['title']}", body, back=af.back("/", "Zurück zur Übersicht"),
+                                   tabs_html=bar, obj=f"Vorgang:{c['number']}", obj_title=c["title"]))
 
     def _roles_form(self, c, base):
         """0.10.0 (D3): verantwortlich = ein Zuständiger des Bereichs (aus der Liste auf
@@ -1873,7 +1882,7 @@ Betreff und Text.</p>
         elif action == "rolle":
             if not can_set_roles(who, c):
                 raise Refused("Verantwortlich und zugewiesen setzen die Zuständigen des Bereichs "
-                              "und der tenant_admin.")
+                              "und der Mandanten-Administrator.")
             role, uid = f.get("role", ""), (f.get("uid") or "").strip()
             if role == "responsible" and uid and not self.target_who(uid).may("triage", c["queue"]):
                 raise Refused("Verantwortlich ist ein Zuständiger dieses Bereichs (Seite „Bereiche“). "

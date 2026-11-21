@@ -249,11 +249,100 @@ check("mit Urheber", all(r.get("actor") for r in log), log[:2])
 check("die Datei liegt unter dem deklarierten Mount",
       os.path.exists(os.path.join(TMP, "actions.jsonl")))
 
-print("\n-- Die Zeilen für das Gateway stehen auf der Seite")
-status, seite = call("/")
+print("\n-- Die Zeilen für das Gateway stehen auf ihrem Reiter")
+status, seite = call("/anschluss")
 check("die Verbindung wird genannt", "oaap app link add" in seite)
 check("die Bezugsquelle mit grüner Ampel", "light=green" in seite, "")
 check("und ein Alias-Vorschlag", "chat-default = ollama:" in seite)
+
+print("\n-- Der Rahmen der Plattform (RFC-0118)")
+status, seite = call("/", roles="keyuser,user")
+check("Kit der Plattform geladen", "/platform/theme.css" in seite)
+check("Rahmenskript der Plattform geladen", "/platform/app.js" in seite)
+check("App-Name ohne OAAP", "Ollama-Modelle" in seite and "OAAP Ollama" not in seite)
+check("keine Rollen auf der Seite", "keyuser,user" not in seite)
+check("keine eigene Palette", "#1e3a8a" not in seite and "--oaap-blue-900:" not in seite)
+check("Reiter: Übersicht zuerst", seite.find(">Übersicht<") < seite.find(">Protokoll<")
+      and 'aria-current="page">Übersicht' in seite)
+check("Fußzeile mit Name und Version", f"Ollama-Modelle {app.VERSION}" in seite)
+check("kein Löschknopf in einer Tabellenzeile", 'action="delete"' not in seite)
+
+print("\n-- Listenbericht der installierten Modelle")
+
+
+def installed_part(seite):
+    return seite.split("Installierte Modelle")[1].split("Modell holen")[0]
+
+
+status, seite = call("/?q=nomic")
+part = installed_part(seite)
+check("Suche filtert", "nomic-embed-text" in part and "qwen2.5:3b" not in part, part[-600:])
+status, seite = call("/?sort=name")
+part = installed_part(seite)
+check("Sortieren nach Name", part.find("nomic-embed-text") < part.find("qwen2.5:3b"))
+check("Spaltenkopf markiert", 'aria-sort="ascending"' in seite)
+status, seite = call("/?geladen=ja")
+check("Filter: nur geladene", "nomic-embed-text" not in installed_part(seite))
+check("Zählzeile", "Modelle</p>" in seite)
+alt = Fake.models
+Fake.models = [{"name": f"m{i:03d}:1b", "size": 1000 + i, "modified_at": "2026-08-20T10:00:00Z",
+                "details": {}} for i in range(60)]
+status, seite = call("/")
+check("ab 50 Zeilen wird geblättert", "Weitere 50" in seite and "1–50 von 60" in seite)
+status, seite = call("/?offset=50")
+check("zweite Seite", "51–60 von 60" in seite)
+Fake.models = alt
+
+print("\n-- Objektseite eines Modells")
+status, seite = call("/modell?name=qwen2.5%3A3b")
+check("Objektseite kommt", status == 200 and "Zurück zur Übersicht" in seite and "Q4_K_M" in seite)
+check("Verwaltung sieht Löschen", 'action="delete"' in seite)
+status, seite = call("/modell?name=qwen2.5%3A3b", roles="keyuser")
+check("Schlüsselanwender sieht kein Löschen", status == 200 and 'action="delete"' not in seite)
+status, seite = call("/modell?name=gibtsnicht")
+check("unbekanntes Modell: Hinweis statt Absturz", status == 200 and "nicht (mehr) installiert" in seite)
+status, seite = call("/protokoll")
+check("Protokoll als Liste", status == 200 and "oaap-table" in seite and "joerg" in seite)
+
+
+def mcp(method, params=None, roles="keyuser", user="anna"):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+    headers = {"Content-Type": "application/json"}
+    if roles is not None:
+        headers.update({"X-OAAP-User": user, "X-OAAP-Roles": roles})
+    req = urllib.request.Request(BASE + "/mcp", data=body, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read())
+
+
+def text(r):
+    return r["result"]["content"][0]["text"]
+
+
+print("\n-- MCP-Tür (nur lesen)")
+r = mcp("initialize", {"protocolVersion": "2025-06-18"})
+check("initialize", r["result"]["serverInfo"]["name"] == "oaap-ollama-models")
+tools = mcp("tools/list")["result"]["tools"]
+names = {t["name"] for t in tools}
+check("drei Lesewerkzeuge", names == {"ollama_models_list", "ollama_models_loaded", "ollama_models_read"}, names)
+check("alle nur lesend", all(t["annotations"]["readOnlyHint"] for t in tools))
+r = mcp("tools/call", {"name": "ollama_models_list", "arguments": {}})
+doc = json.loads(text(r))
+check("list: Modelle mit Größe", not r["result"]["isError"] and doc["count"] == 2 and doc["models"][0]["size"], doc)
+r = mcp("tools/call", {"name": "ollama_models_list", "arguments": {"q": "nomic"}})
+check("list: Suchwort filtert", json.loads(text(r))["count"] == 1)
+r = mcp("tools/call", {"name": "ollama_models_loaded", "arguments": {}})
+doc = json.loads(text(r))
+check("loaded: das geladene Modell", doc["loaded"][0]["name"] == "qwen2.5:3b"
+      and doc["loaded"][0]["where"] == "Arbeitsspeicher", doc)
+r = mcp("tools/call", {"name": "ollama_models_read", "arguments": {"name": "qwen2.5:3b"}})
+check("read: ein Modell", json.loads(text(r))["loaded"] is True)
+r = mcp("tools/call", {"name": "ollama_models_read", "arguments": {"name": "nix"}})
+check("read: unbekannt als Ablehnung", r["result"]["isError"] and "nicht installiert" in text(r))
+r = mcp("tools/call", {"name": "ollama_models_list", "arguments": {}}, roles=None)
+check("ohne Rolle: abgelehnt wie die Seite", r["result"]["isError"] and "angemeldete" in text(r))
+check("Vorlagen für die Hauptaufgaben", len(mcp("prompts/list")["result"]["prompts"]) == 2)
+check("GET /mcp: 405", call("/mcp", roles=None)[0] == 405)
 
 print("\n-- Gesundheit")
 status, body = call("/healthz", roles=None)

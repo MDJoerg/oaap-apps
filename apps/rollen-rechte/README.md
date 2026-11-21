@@ -74,5 +74,12 @@ python3 oaap-reference/test/test_rollen_rechte_app.py
 python3 oaap-reference/test/test_authorization_admin_door.py
 ```
 
+Rahmen, Listen, Objektseiten und die MCP-Tür prüft ein Test ohne
+Identity-Dienst (ein Schein-Dienst an der Stelle von `door.call`):
+
+```bash
+python3 oaap-apps/apps/rollen-rechte/test_rollen_rechte.py
+```
+
 Nicht gemessen: ob Vereinsadmins die Begriffe (Rolle, Berechtigungspaket, Gilt für)
 verstehen — das braucht einen echten Menschen.

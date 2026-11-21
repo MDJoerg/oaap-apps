@@ -115,7 +115,7 @@ shutil.rmtree(bad_dir, ignore_errors=True)
 
 print("\n-- Reiter Vorlagen, aus einem Schlüssel")
 st, _h, html = admin_get(f"/vorlagen?target=claude-code&key={KID}")
-check("Seite 200, Reiter aktiv", st == 200 and 'href="vorlagen" class=on' in html, st)
+check("Seite 200, Reiter aktiv", st == 200 and 'href="vorlagen" aria-current="page"' in html, st)
 check("Datei mit beiden Sichten des Schlüssels", "https://gw.example/mcp/lesen" in html
       and "https://gw.example/mcp/beides" in html)
 check("Platzhalter statt Wert", "${OAAP_MCP_KEY}" in html and KEY not in html)

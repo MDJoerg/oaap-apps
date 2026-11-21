@@ -31,6 +31,8 @@ COPY gwcore/ /srv/gwcore/
 # 0.22.0 (RFC-0097 Stufe 1): Assistenten liegen im Gateway -- Prüfung und Sichtbarkeit
 # aus lib/assistants, fachliche Berechtigungen über den Referenz-Client der Plattform.
 COPY assistants/ /srv/assistants/
+# 0.40.0 (RFC-0118): der Rahmen der Seiten -- eine Kopie von oaap-apps/lib/appframe.
+COPY appframe/ /srv/appframe/
 
 USER 10001
 EXPOSE 8000

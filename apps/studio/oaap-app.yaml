@@ -1,9 +1,9 @@
-oaap_manifest: "0.17"
+oaap_manifest: "0.18"
 
 app:
   id: studio
-  name: OAAP Studio
-  version: 0.6.0
+  name: Studio
+  version: 0.7.0
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
@@ -31,6 +31,12 @@ routes:
   # aufheben, um die es dort geht.
   - path: /
     roles: [keyuser, admin]
+
+# Die MCP-Tür (RFC-0118 §9): Assistenten des Mandanten lesen Vorhaben und
+# Briefings -- mit denselben Rollen wie die Seite (Route / oben: keyuser,
+# admin). Nur lesend; der Deploy-Token bleibt beim Menschen.
+mcp:
+  path: /mcp
 
 storage:
   - name: data
@@ -88,7 +94,7 @@ docs:
   # Hilfe des Mandanten und damit auch an den Chat (help_search). Sichtbar
   # für dieselben Rollen, die das Studio betreten dürfen.
   - product: studio
-    title: "OAAP Studio"
+    title: "Studio"
     path: docs/
     entry: index.md
     color: "#2563eb"

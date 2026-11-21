@@ -271,7 +271,7 @@ class Fetcher:
             raise Refused("Dieser Rechnername ist kein gültiger Domainname.", "url") from None
         port = port or PORTS[scheme]
         if port not in (80, 443):
-            raise Refused(f"Nur die Ports 80 und 443 werden gelesen, nicht {port} (RFC-0116 D6).",
+            raise Refused(f"Nur die Ports 80 und 443 werden gelesen, nicht {port}.",
                           "port")
         if any(under(host, d) for d in self.deny):
             raise Refused(f"{host} steht auf der Sperrliste dieser Instanz (RECHERCHE_DENY).", "deny")
@@ -361,7 +361,7 @@ class Fetcher:
                 base = ctype.split(";")[0].strip()
                 if base and base not in TYPES:
                     raise Refused(f"Die Seite ist {base}; gelesen werden nur Text, HTML und JSON "
-                                  "(PDF kommt später, RFC-0116 D7).", "type")
+                                  "(PDF kommt später).", "type")
                 n = r.getheader("Content-Length")
                 if n and n.isdigit() and int(n) > MAX_BYTES:
                     raise Refused(f"Die Seite ist größer als 2 MB ({int(n) // 1024} KB); sie wird "

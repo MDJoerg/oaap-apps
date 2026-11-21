@@ -1,12 +1,12 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: package-catalog
   name: Paketkatalog
-  version: 0.4.1
+  version: 0.5.0
   type: native
   class: frontend
-  description: "Freigegebene ZIP-Pakete mit Versionsverlauf: hochladen, freigeben, laden. Wird zur Store-Quelle des Knotens (RFC-0050). Seit 0.2 auch Spiegel eines Marketplace-Feeds (RFC-0077). Seit 0.4 Eingang fuer das getestete Paket einer Instanz und Sichtbarkeit je Mandant (RFC-0050 §9)."
+  description: "Freigegebene App-Pakete (ZIP) mit Versionsverlauf: hochladen, freigeben, laden, Sichtbarkeit je Mandant. Wird zur Store-Quelle des Knotens; übernimmt getestete Pakete einer Instanz und spiegelt auf Wunsch einen Marktplatz."
 
 care:
   # RFC-0071 §15 (Manifest 0.10): PyYAML fest auf 6.0.3, Debians Korrekturen per
@@ -25,6 +25,30 @@ routes:
   # App prüft sie noch einmal.
   - path: /
     roles: [admin]
+
+# RFC-0118 §9 / RFC-0073: die lesende MCP-Tür unter derselben Route (/ deckt
+# /mcp ab, also nur admin). Die Werkzeuge prüfen die Rolle wie die Seite.
+mcp:
+  path: /mcp
+
+# RFC-0094 (Manifest 0.17): die Hilfe des Paketkatalogs für die Hilfe des
+# Mandanten und den Chat -- für dieselbe Rolle, die den Katalog betritt.
+docs:
+  - product: package-catalog
+    title: "Paketkatalog"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin]
+    readers: [admin]
+    kinds:
+      index.md: overview
+      paket-hochladen.md: howto
+      freigeben.md: howto
+      sichtbarkeit.md: howto
+      store-quelle.md: howto
+      spiegel.md: howto
+      faq.md: faq
 
 storage:
   # Pakete (packages/), Zustand (state.json) und die Liste (store.json).

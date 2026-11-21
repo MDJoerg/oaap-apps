@@ -1,4 +1,4 @@
-"""Wegweiser 0.1 — Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain.
+"""Wegweiser — Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain.
 
 Eine Adresse der Form  https://go.example.org/<area>/<key>  wird öffentlich
 aufgelöst. Die **Area** sagt, was passiert, und trägt Voreinstellungen
@@ -20,6 +20,12 @@ Drei Wege in dieselbe App, im Manifest mit verschiedenen Rollen:
 Einmal-Links entwertet nie der erste GET: Mailprogramme und Messenger
 rufen Links beim Empfang für Vorschauen auf. Erst der POST von der
 Zwischenseite lädt herunter, erst der PUT lädt hoch.
+
+Seit 0.5.0 (RFC-0118) stehen die angemeldeten Seiten im Rahmen der
+Plattform: eine Reiterleiste je nach Rolle (Meine Links, Areas,
+Verwaltung), Listen als Listenbericht, „Neuer Link“ und „Neue Area“ auf
+eigenen Seiten. Die öffentlichen Seiten bleiben, wie sie sind. Dazu eine
+MCP-Tür (/mcp) mit Lesewerkzeugen nach denselben Regeln wie /manage.
 """
 import csv
 import io
@@ -32,11 +38,12 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import mcpdoor
 import qr
 import store
 import ui
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -419,6 +426,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/healthz":
                 self.send_json(200, {"status": "ok", "version": VERSION})
+            elif path == "/mcp":
+                # Eigene Route im Manifest (user): das Gateway hat die Person
+                # angemeldet und reicht sie in den X-OAAP-Kopfzeilen durch.
+                DOOR.serve(self)
             elif parts and parts[0] == "api":
                 self.api(method, parts[1:])
             elif parts and parts[0] == "manage":
@@ -891,12 +902,16 @@ class Handler(BaseHTTPRequestHandler):
         return who
 
     def nav(self, who, on):
+        """Die eine Reiterleiste: was die Rolle nutzen kann, Verwaltung zuletzt."""
         items = [("/manage", "Meine Links", on == "manage")]
         if who.is_keyuser:
             items.append(("/manage/areas", "Areas", on == "areas"))
         if who.is_admin:
             items.append(("/admin", "Verwaltung", on == "admin"))
         return items
+
+    def params(self):
+        return {k: [v] for k, v in self.query.items()}
 
     def manage(self, method, parts):
         who = self.page_who()
@@ -905,10 +920,13 @@ class Handler(BaseHTTPRequestHandler):
         base = self.base_url()
         if not parts:
             if method == "GET":
-                self.send_html(200, self.manage_page(who, base))
+                self.send_html(200, self.manage_page(who, base, notice=self.query.get("ok", "")))
                 return
             self.drain()
-            self.send_html(405, ui.page("Nicht erlaubt", "<p>Methode nicht erlaubt.</p>", who, VERSION))
+            self.send_html(405, ui.page("Nicht erlaubt", "<p>Methode nicht erlaubt.</p>", who, VERSION, self.nav(who, "manage")))
+            return
+        if parts == ["new"] and method == "GET":
+            self.send_html(200, self.new_link_page(who))
             return
         if parts[0] == "links":
             if len(parts) == 1 and method == "POST":
@@ -919,7 +937,9 @@ class Handler(BaseHTTPRequestHandler):
                 area = store.get_area(DB, link["area"]) if link and not link["deleted_at"] else None
                 if link is None or area is None or not who.may_see(link, area):
                     self.drain()
-                    self.send_html(404, ui.page("Nicht gefunden", '<div class="card"><h1>Diesen Link gibt es nicht</h1></div>', who, VERSION, self.nav(who, "manage")))
+                    self.send_html(404, ui.page("Nicht gefunden", ui.af.back("/manage", "Zu meinen Links")
+                                                + ui.af.card("", "<h1>Diesen Link gibt es nicht</h1>"),
+                                                who, VERSION, self.nav(who, "manage")))
                     return
                 if method == "GET":
                     self.send_html(200, self.link_page(who, link, area, base, notice=self.query.get("ok", "")))
@@ -931,24 +951,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(200, self.areas_page(who, base, parts[1] if len(parts) > 1 else ""))
             return
         self.drain()
-        self.send_html(404, ui.page("Nicht gefunden", '<div class="card"><h1>Hier ist nichts</h1></div>', who, VERSION, self.nav(who, "manage")))
+        self.send_html(404, ui.page("Nicht gefunden", ui.af.card("", "<h1>Hier ist nichts</h1>"), who, VERSION, self.nav(who, "manage")))
 
     def usable_areas(self, who):
         return [a for a in store.list_areas(DB) if who.may_use(a)]
 
+    def no_area_card(self):
+        return ui.af.card("Noch keine Area, in der Sie Links anlegen dürfen",
+                          '<p class="oaap-muted">Areas legt die Verwaltung an. Fragen Sie dort nach.</p>',
+                          "oaap-warn")
+
     def new_link_form(self, who, areas, data=None):
         data = data or {}
         if not areas:
-            return ('<div class="card attention"><h2>Noch keine Area, in der Sie Links anlegen dürfen</h2>'
-                    '<p class="hint">Areas legt die Verwaltung an. Fragen Sie dort nach.</p></div>')
+            return self.no_area_card()
         opts = "".join(
             f'<option value="{esc(a["slug"])}" data-type="{esc(a["type"])}" data-custom="{1 if a["custom_keys"] and who.manages(a) else 0}" '
             f'data-pin="{1 if a["pin_required"] else 0}" {"selected" if data.get("area") == a["slug"] else ""}>'
             f'{esc(a["slug"])} — {esc(a["title"] or a["type_label"])} ({esc(a["type_label"])})</option>'
             for a in areas)
-        return f"""<div class="card">
-  <h2>Neuer Link</h2>
-  <form class="grid" method="post" action="/manage/links" id="newlink">
+        return f"""<div class="oaap-card">
+  <form class="ww-grid" method="post" action="/manage/links" id="newlink">
     <div><label>Area</label><select name="area" id="area">{opts}</select></div>
     <div data-for="custom"><label>Wunsch-Key (leer = erzeugen)</label><input type="text" name="key" maxlength="8" value="{esc(data.get("key", ""))}"></div>
     <div class="wide"><label>Titel (nur für Sie sichtbar)</label><input type="text" name="title" maxlength="200" value="{esc(data.get("title", ""))}"></div>
@@ -959,9 +982,9 @@ class Handler(BaseHTTPRequestHandler):
     <div data-for="download"><label>Download bis</label><input type="datetime-local" name="valid_until" value="{esc(data.get("valid_until", ""))}"></div>
     <div data-for="download_window"><label>Höchstzahl Downloads (leer = unbegrenzt)</label><input type="number" name="max_downloads" min="1" value="{esc(data.get("max_downloads", ""))}"></div>
     <div class="wide"><label>Notiz</label><input type="text" name="note" maxlength="2000" value="{esc(data.get("note", ""))}"></div>
-    <div><button type="submit">Anlegen</button></div>
+    <div><button type="submit" class="primary">Anlegen</button></div>
   </form>
-  <p class="hint" style="margin-top:.8rem">Die Datei für einen Download-Link hängen Sie nach dem Anlegen an.</p>
+  <p class="oaap-muted" style="margin-top:.8rem">Die Datei für einen Download-Link hängen Sie nach dem Anlegen an.</p>
 </div>
 <script>
 (function(){{
@@ -982,48 +1005,66 @@ class Handler(BaseHTTPRequestHandler):
 }})();
 </script>"""
 
-    def links_table(self, who, links, areas, base, show_owner=False):
-        if not links:
-            return '<p class="muted">Noch keine Links.</p>'
+    def new_link_page(self, who, errors=(), data=None):
+        """Die Dialogseite „Neuer Link“."""
+        body = (ui.af.back("/manage", "Zu meinen Links") + ui.af.pagehead("Neuer Link")
+                + ui.errors_card(errors) + self.new_link_form(who, self.usable_areas(who), data))
+        return ui.page("Neuer Link", body, who, VERSION, self.nav(who, "manage"))
+
+    def links_report(self, links, areas, base_path, show_owner=False, empty_text="Noch keine Links."):
+        """Der Listenbericht der Links: Suche, Area, Status, Sortierung, Blättern."""
         ts = store.now_iso()
-        rows = []
-        for l in links:
+        q = ui.af.Query(self.params(), filters=("area", "status"), default_sort="-angelegt")
+        rows = [l for l in links
+                if (not q.filters["area"] or l["area"] == q.filters["area"])
+                and (not q.filters["status"] or ui.link_status(l, ts)[0] == q.filters["status"])]
+
+        def row(l):
             a = areas.get(l["area"])
-            rows.append(
-                f'<tr><td><a href="/manage/links/{esc(l["id"])}"><code>{esc(l["area"])}/{esc(l["key"])}</code></a></td>'
-                f'<td>{esc(a["type_label"] if a else l["area"])}</td>'
-                f'<td>{esc(l["title"] or "")}</td>'
-                f'<td>{ui.status_badge(l, ts)}</td>'
-                f'<td class="num">{l["hit_count"]}</td>'
-                + (f'<td>{esc(l["created_by_name"])}</td>' if show_owner else "")
-                + f'<td class="muted">{ui.fmt_dt(l["created_at"], TZ)}</td></tr>')
-        owner = "<th>Von</th>" if show_owner else ""
-        return (f'<table><tr><th>Link</th><th>Typ</th><th>Titel</th><th>Status</th><th class="num">Zugriffe</th>{owner}<th>Angelegt</th></tr>'
-                f'{"".join(rows)}</table>')
+            return (f'<tr><td><a href="/manage/links/{esc(l["id"])}"><code>{esc(l["area"])}/{esc(l["key"])}</code></a></td>'
+                    f'<td class="oaap-minor">{esc(a["type_label"] if a else l["area"])}</td>'
+                    f'<td>{esc(l["title"] or "")}</td>'
+                    f'<td>{ui.status_badge(l, ts)}</td>'
+                    f'<td class="oaap-num">{l["hit_count"]}</td>'
+                    + (f'<td>{esc(l["created_by_name"])}</td>' if show_owner else "")
+                    + f'<td class="oaap-muted oaap-minor">{ui.fmt_dt(l["created_at"], TZ)}</td></tr>')
+        cols = [("Link", "link", lambda l: f'{l["area"]}/{l["key"]} {l.get("target_url") or ""}', ""),
+                ("Typ", "typ", lambda l: (areas.get(l["area"]) or {}).get("type_label", ""), "oaap-minor"),
+                ("Titel", "titel", lambda l: l["title"] or "", ""),
+                ("Status", "status", lambda l: ui.link_status(l, ts)[1], ""),
+                ("Zugriffe", "zugriffe", lambda l: l["hit_count"], "oaap-num")]
+        if show_owner:
+            cols.append(("Von", "von", lambda l: l["created_by_name"] or "", ""))
+        cols.append(("Angelegt", "angelegt", lambda l: l["created_at"] or "", "oaap-minor"))
+        slugs = sorted({l["area"] for l in links})
+        choices = ([("area", "Area", [(s, s) for s in slugs])] if len(slugs) > 1 and not show_owner else [])
+        choices.append(("status", "Status", ui.STATUS_CHOICES))
+        return ui.af.list_report(q, rows, cols, row, base=base_path + "?", noun="Links",
+                                 empty_text=empty_text, choices=choices,
+                                 placeholder="Key, Titel, Ziel …")
 
     def manage_page(self, who, base, errors=(), data=None, notice=""):
         areas = {a["slug"]: a for a in store.list_areas(DB)}
         usable = self.usable_areas(who)
-        filt = self.query.get("area", "")
-        links = store.list_links(DB, who.id, filt or None)
-        chips = "".join(f'<a class="btn quiet" href="/manage?area={esc(s)}">{esc(s)}</a>' for s in sorted({l["area"] for l in store.list_links(DB, who.id)}))
-        body = ui.notice_card(notice) + ui.errors_card(errors) + self.new_link_form(who, usable, data)
-        body += f"""<div class="card">
-  <h2>Meine Links{f" in {esc(filt)}" if filt else ""}</h2>
-  <div class="row" style="margin-bottom:.8rem"><a class="btn quiet" href="/manage">alle</a>{chips}</div>
-  {self.links_table(who, links, areas, base)}
-</div>"""
+        links = store.list_links(DB, who.id)
+        action = '<a class="oaap-btn primary" href="/manage/new">Neuer Link</a>' if usable else ""
+        body = ui.af.pagehead("Meine Links", action) + ui.notice_card(notice) + ui.errors_card(errors)
+        if not usable and not links:
+            body += self.no_area_card()
+        body += self.links_report(links, areas, "/manage",
+                                  empty_text="Noch keine Links. <a href=\"/manage/new\">Neuer Link</a> "
+                                             "legt den ersten an." if usable else "Noch keine Links.")
         return ui.page("Meine Links", body, who, VERSION, self.nav(who, "manage"))
 
     def manage_create(self, who, base):
         form = self.read_form()
         area = store.get_area(DB, form.get("area", ""))
         if area is None or not who.may_use(area):
-            self.send_html(403, self.manage_page(who, base, ["In dieser Area dürfen Sie keine Links anlegen."], form))
+            self.send_html(403, self.new_link_page(who, ["In dieser Area dürfen Sie keine Links anlegen."], form))
             return
         fields, key, pin, errors = prepare_link(who, area, form)
         if errors:
-            self.send_html(422, self.manage_page(who, base, errors, form))
+            self.send_html(422, self.new_link_page(who, errors, form))
             return
         link = store.create_link(DB, APP_SECRET, area, who.id, who.display or who.name, fields, key, pin)
         self.redirect(f"/manage/links/{link['id']}?ok=" + urllib.parse.quote("Link angelegt."))
@@ -1038,7 +1079,7 @@ class Handler(BaseHTTPRequestHandler):
         present = bool(path and os.path.exists(path))
         rows = [("Typ", esc(area["type_label"])), ("Status", ui.status_badge(link, ts)),
                 ("Angelegt", f'{ui.fmt_dt(link["created_at"], TZ)} von {esc(link["created_by_name"])}'),
-                ("Gültig bis", ui.fmt_dt(link["expires_at"], TZ) or '<span class="muted">unbegrenzt</span>'),
+                ("Gültig bis", ui.fmt_dt(link["expires_at"], TZ) or '<span class="oaap-muted">unbegrenzt</span>'),
                 ("PIN", "ja" if link["has_pin"] else "nein"),
                 ("Zugriffe", f'{link["hit_count"]}' + (f', zuletzt {ui.fmt_dt(link["last_hit_at"], TZ)}' if link["last_hit_at"] else ""))]
         if t == "redirect":
@@ -1046,46 +1087,49 @@ class Handler(BaseHTTPRequestHandler):
         if t in ("download_once", "download_window", "upload_once"):
             if link["file_name"]:
                 rows.append(("Datei", f'{esc(link["file_name"])} · {ui.fmt_size(link["file_size"])} · <code>{esc(link["file_sha256"] or "")}</code>'
-                             + ("" if present else ' <span class="badge off">Bytes entfernt</span>')))
+                             + ("" if present else " " + ui.af.badge("Bytes entfernt"))))
             else:
-                rows.append(("Datei", '<span class="muted">noch keine</span>'))
+                rows.append(("Datei", '<span class="oaap-muted">noch keine</span>'))
         if t in ("download_once", "download_window"):
             rows.append(("Downloads", f'{link["download_count"]} / {link["max_downloads"] if link["max_downloads"] is not None else "unbegrenzt"}'))
             rows.append(("Zeitraum", f'{ui.fmt_dt(link["valid_from"], TZ) or "sofort"} bis {ui.fmt_dt(link["valid_until"], TZ) or "offen"}'))
         if t == "upload_once":
-            rows.append(("Eingang", ui.fmt_dt(link["received_at"], TZ) or '<span class="muted">wartet</span>'))
+            rows.append(("Eingang", ui.fmt_dt(link["received_at"], TZ) or '<span class="oaap-muted">wartet</span>'))
         if link["note"]:
             rows.append(("Notiz", esc(link["note"])))
-        details = "".join(f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in rows)
+        details = '<dl class="oaap-kv">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows) + "</dl>"
 
         qr_api = f"/api/v1/links/{esc(link['id'])}/qr"
         hq = "&amp;host=" + esc(urllib.parse.quote(chosen.split("://", 1)[1])) if len(bases) > 1 else ""
-        qrbox = "" if t == "pixel" else f"""<div class="qrbox">
+        qrbox = "" if t == "pixel" else f"""<div class="ww-qrbox">
     <img src="{qr_api}?format=svg&amp;scale=4{hq}" alt="QR-Code zu {esc(url)}" width="132" height="132">
     QR-Code: <a href="{qr_api}?format=png&amp;scale=10&amp;download=1{hq}">PNG</a> · <a href="{qr_api}?format=svg&amp;download=1{hq}">SVG</a></div>"""
         chips = ""
+        cur = ' aria-current="true"'
         if len(bases) > 1:
-            chips = '<p class="row hosts"><span class="muted">Adresse:</span>' + "".join(
-                f'<a class="btn quiet{" on" if b == chosen else ""}" href="/manage/links/{esc(link["id"])}?host={esc(urllib.parse.quote(b.split("://", 1)[1]))}">{esc(b.split("://", 1)[1])}</a>'
+            chips = '<p class="ww-row"><span class="oaap-muted">Adresse:</span>' + "".join(
+                f'<a class="oaap-btn{" primary" if b == chosen else ""}"{cur if b == chosen else ""} '
+                f'href="/manage/links/{esc(link["id"])}?host={esc(urllib.parse.quote(b.split("://", 1)[1]))}">{esc(b.split("://", 1)[1])}</a>'
                 for b in bases) + "</p>"
-        body = ui.notice_card(notice) + ui.errors_card(errors)
-        body += f"""<div class="card">{qrbox}
-  <h1>{esc(link["title"] or (link["area"] + "/" + link["key"]))}</h1>
-  {chips}<p class="linkurl"><a href="{esc(url)}" target="_blank" rel="noopener" id="theurl">{esc(url)}</a>
-    <button type="button" class="quiet" onclick="navigator.clipboard.writeText(document.getElementById('theurl').textContent).then(function(){{document.getElementById('copied').textContent='kopiert';}})">Kopieren</button>
-    <span id="copied" class="muted"></span></p>
-  {"<p class='hint'>Als Bild einbetten: <code>&lt;img src=&quot;" + esc(url) + ".gif&quot; width=&quot;1&quot; height=&quot;1&quot; alt=&quot;&quot;&gt;</code></p>" if t == "pixel" else ""}
-  <table>{details}</table>
+        title = link["title"] or (link["area"] + "/" + link["key"])
+        body = ui.af.back("/manage", "Zu meinen Links") + ui.notice_card(notice) + ui.errors_card(errors)
+        body += f"""<div class="oaap-card">{qrbox}
+  <div class="oaap-objhead"><h1>{esc(title)}</h1></div>
+  {chips}<p class="ww-linkurl"><a href="{esc(url)}" target="_blank" rel="noopener" id="theurl">{esc(url)}</a>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('theurl').textContent).then(function(){{document.getElementById('copied').textContent='kopiert';}})">Kopieren</button>
+    <span id="copied" class="oaap-muted"></span></p>
+  {"<p class='oaap-muted'>Als Bild einbetten: <code>&lt;img src=&quot;" + esc(url) + ".gif&quot; width=&quot;1&quot; height=&quot;1&quot; alt=&quot;&quot;&gt;</code></p>" if t == "pixel" else ""}
+  {details}
 </div>"""
 
         # Datei anhängen / holen
         if t in ("download_once", "download_window"):
-            body += f"""<div class="card">
+            body += f"""<div class="oaap-card">
   <h2>Datei</h2>
-  <p class="hint">Höchstens {min(area["max_file_mb"], MAX_UPLOAD_MB)} MB{(" · erlaubt: " + esc(area["allowed_extensions"].replace(",", ", "))) if area["allowed_extensions"] else ""}. Eine neue Datei ersetzt die alte.</p>
-  <div class="row"><input type="file" id="file"><button type="button" id="go" class="quiet">Anhängen</button></div>
-  <progress id="prog" value="0" max="100" hidden></progress><p id="msg" class="muted"></p>
-  {("<p><a class='btn quiet' href='/api/v1/links/" + esc(link["id"]) + "/file'>Datei herunterladen</a></p>") if present else ""}
+  <p class="oaap-muted">Höchstens {min(area["max_file_mb"], MAX_UPLOAD_MB)} MB{(" · erlaubt: " + esc(area["allowed_extensions"].replace(",", ", "))) if area["allowed_extensions"] else ""}. Eine neue Datei ersetzt die alte.</p>
+  <div class="ww-row"><input type="file" id="file"><button type="button" id="go">Anhängen</button></div>
+  <progress id="prog" value="0" max="100" hidden></progress><p id="msg" class="oaap-muted"></p>
+  {("<p><a class='oaap-btn' href='/api/v1/links/" + esc(link["id"]) + "/file'>Datei herunterladen</a></p>") if present else ""}
 </div>
 <script>
 (function(){{
@@ -1101,8 +1145,8 @@ class Handler(BaseHTTPRequestHandler):
 }})();
 </script>"""
         if t == "upload_once" and present:
-            body += f"""<div class="card okbox"><h2>Eingegangene Datei</h2>
-  <p><a class="btn" href="/api/v1/links/{esc(link["id"])}/file">{esc(link["file_name"])} herunterladen</a></p></div>"""
+            body += ui.af.card("Eingegangene Datei",
+                               f'<p><a class="oaap-btn primary" href="/api/v1/links/{esc(link["id"])}/file">{esc(link["file_name"])} herunterladen</a></p>')
 
         # Aktionen
         toggle = ("enable", "Wieder aktivieren") if link["disabled"] else ("disable", "Deaktivieren")
@@ -1116,22 +1160,23 @@ class Handler(BaseHTTPRequestHandler):
                             f'<div><label>Download bis</label><input type="datetime-local" name="valid_until" value="{ui.dt_input(link["valid_until"], TZ)}"></div>')
         if t == "download_window":
             edit_fields += f'<div><label>Höchstzahl Downloads</label><input type="number" name="max_downloads" min="1" value="{esc(str(link["max_downloads"] or ""))}"></div>'
-        pin_form = "" if t == "pixel" else f"""<form method="post" class="row" style="margin-top:1rem">
+        pin_form = "" if t == "pixel" else f"""<form method="post" class="ww-grid" style="margin-top:1rem">
     <input type="hidden" name="_action" value="pin">
     <div><label>PIN setzen (leer = PIN entfernen)</label><input type="password" name="pin" autocomplete="new-password"></div>
-    <button type="submit" class="quiet">PIN speichern</button></form>"""
-        body += f"""<div class="card">
+    <div><button type="submit">PIN speichern</button></div></form>"""
+        body += f"""<div class="oaap-card">
   <h2>Bearbeiten</h2>
-  <form method="post" class="grid"><input type="hidden" name="_action" value="edit">{edit_fields}<div><button type="submit">Speichern</button></div></form>
+  <form method="post" class="ww-grid"><input type="hidden" name="_action" value="edit">{edit_fields}<div><button type="submit" class="primary">Speichern</button></div></form>
   {pin_form}
-  <div class="row" style="margin-top:1rem">
-    <form method="post"><input type="hidden" name="_action" value="{toggle[0]}"><button type="submit" class="quiet">{toggle[1]}</button></form>
+  <div class="ww-row" style="margin-top:1rem">
+    <form method="post"><input type="hidden" name="_action" value="{toggle[0]}"><button type="submit">{toggle[1]}</button></form>
     <form method="post" onsubmit="return confirm('Diesen Link endgültig löschen? Die Datei geht mit.')"><input type="hidden" name="_action" value="delete"><button type="submit" class="danger">Löschen</button></form>
   </div>
 </div>"""
         body += self.stats_cards(store.stats(DB, link_id=link["id"], days=30), f"/api/v1/links/{link['id']}/accesses?format=csv&limit=5000",
                                  store.accesses(DB, link_id=link["id"], limit=50), area)
-        return ui.page(link["title"] or f"{link['area']}/{link['key']}", body, who, VERSION, self.nav(who, "manage"))
+        return ui.page(title, body, who, VERSION, self.nav(who, "manage"),
+                       obj=f"Link:{link['area']}/{link['key']}", obj_title=title)
 
     def stats_cards(self, st, csv_url, recent, area):
         level = area["log_level"]
@@ -1140,26 +1185,27 @@ class Handler(BaseHTTPRequestHandler):
                 "standard": "Diese Area speichert gekürzte Adressen und Geräteklassen.",
                 "full": "Diese Area speichert alles, was der Client mitschickt."}[level]
         if level == "count":
-            return f'<div class="card"><h2>Statistik</h2><p class="hint">{esc(hint)}</p></div>'
-        body = f"""<div class="card">
-  <h2>Statistik</h2>
-  <p class="hint">{esc(hint)} Aufbewahrung {area["log_retention_days"]} Tage. <a href="{esc(csv_url)}">Als CSV</a></p>
-  <div class="grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:1rem">
-    <div><h2>Ergebnisse</h2>{ui.bars(st["by_result"], label_map=ui.RESULT_LABELS)}</div>
-    <div><h2>Letzte 30 Tage</h2>{ui.day_table(st["by_day"])}</div>"""
+            return ui.af.card("Statistik", f'<p class="oaap-muted">{esc(hint)}</p>')
+        inner = f"""<p class="oaap-muted">{esc(hint)} Aufbewahrung {area["log_retention_days"]} Tage. <a href="{esc(csv_url)}">Als CSV</a></p>
+  <div class="ww-stats">
+    <div><h3>Ergebnisse</h3>{ui.bars(st["by_result"], label_map=ui.RESULT_LABELS)}</div>
+    <div><h3>Letzte 30 Tage</h3>{ui.day_table(st["by_day"])}</div>"""
         if level in ("standard", "full"):
-            body += f"""<div><h2>Geräte</h2>{ui.bars(st["by_class"], label_map={"desktop": "Desktop", "mobile": "Mobil", "bot": "Automat/Vorschau", "unknown": "unbekannt"})}</div>
-    <div><h2>Browser</h2>{ui.bars(st["by_browser"])}</div>
-    <div><h2>Betriebssystem</h2>{ui.bars(st["by_os"])}</div>
-    <div><h2>Sprache</h2>{ui.bars(st["by_lang"])}</div>
-    <div><h2>Herkunft (Referer)</h2>{ui.bars({r["referer"]: r["n"] for r in st["top_referers"]})}</div>"""
-        body += "</div></div>"
+            inner += f"""<div><h3>Geräte</h3>{ui.bars(st["by_class"], label_map={"desktop": "Desktop", "mobile": "Mobil", "bot": "Automat/Vorschau", "unknown": "unbekannt"})}</div>
+    <div><h3>Browser</h3>{ui.bars(st["by_browser"])}</div>
+    <div><h3>Betriebssystem</h3>{ui.bars(st["by_os"])}</div>
+    <div><h3>Sprache</h3>{ui.bars(st["by_lang"])}</div>
+    <div><h3>Herkunft (Referer)</h3>{ui.bars({r["referer"]: r["n"] for r in st["top_referers"]})}</div>"""
+        inner += "</div>"
+        body = ui.af.card("Statistik", inner)
         if recent:
-            rows = "".join(
-                f'<tr><td>{ui.fmt_dt(r["ts"], TZ)}</td><td>{esc(ui.RESULT_LABELS.get(r["result"], r["result"]))}</td>'
-                f'<td>{esc(r["ip"] or "")}</td><td>{esc(r["ua_class"] or "")} {esc(r["browser"] or "")} {esc(r["os"] or "")}</td>'
-                f'<td>{esc(r["lang"] or "")}</td><td>{esc(r["referer"] or "")}</td></tr>' for r in recent)
-            body += f'<div class="card"><h2>Letzte Zugriffe</h2><table><tr><th>Zeit</th><th>Ergebnis</th><th>Adresse</th><th>Gerät</th><th>Sprache</th><th>Herkunft</th></tr>{rows}</table></div>'
+            rows = [f'<tr><td>{ui.fmt_dt(r["ts"], TZ)}</td><td>{esc(ui.RESULT_LABELS.get(r["result"], r["result"]))}</td>'
+                    f'<td class="oaap-minor">{esc(r["ip"] or "")}</td><td>{esc(r["ua_class"] or "")} {esc(r["browser"] or "")} {esc(r["os"] or "")}</td>'
+                    f'<td class="oaap-minor">{esc(r["lang"] or "")}</td><td class="oaap-minor">{esc(r["referer"] or "")}</td></tr>' for r in recent]
+            body += ui.af.card(f"Letzte Zugriffe ({len(recent)})", ui.af.table(
+                '<th>Zeit</th><th>Ergebnis</th><th class="oaap-minor">Adresse</th><th>Gerät</th>'
+                '<th class="oaap-minor">Sprache</th><th class="oaap-minor">Herkunft</th>', rows)
+                + f'<p class="oaap-muted">Alle Zugriffe: <a href="{esc(csv_url)}">als CSV</a>.</p>')
         return body
 
     def manage_link_action(self, who, link, area, base):
@@ -1191,32 +1237,76 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_html(400, self.link_page(who, link, area, base, errors=["Unbekannte Aktion."]))
 
+    def area_report(self, areas, base_path, admin):
+        counts = store.area_counts(DB)
+        q = ui.af.Query(self.params(), filters=("typ", "aktiv"), default_sort="area")
+        rows = [a for a in areas
+                if (not q.filters["typ"] or a["type"] == q.filters["typ"])
+                and (not q.filters["aktiv"] or bool(a["active"]) == (q.filters["aktiv"] == "ja"))]
+        href = "/admin/areas/" if admin else "/manage/areas/"
+
+        def row(a):
+            c = counts.get(a["slug"], {})
+            state = ui.af.badge("aktiv", "ok") if a["active"] else ui.af.badge("inaktiv")
+            if not a["open_for_users"]:
+                state += ' <span class="oaap-muted">nur Verantwortliche</span>'
+            return (f'<tr><td><a href="{href}{esc(a["slug"])}"><code>{esc(a["slug"])}</code></a></td>'
+                    f'<td>{esc(a["type_label"])}</td><td>{esc(a["title"])}</td>'
+                    + (f'<td class="oaap-minor">{esc(", ".join(a["responsible"]))}</td>' if admin else "")
+                    + f'<td>{state}</td>'
+                    + (f'<td class="oaap-minor">{esc(store.LOG_LABELS[a["log_level"]])}, {a["log_retention_days"]} T</td>' if admin else "")
+                    + f'<td class="oaap-num">{c.get("links", 0)}</td><td class="oaap-num">{c.get("hits", 0)}</td></tr>')
+        cols = [("Area", "area", lambda a: a["slug"], ""),
+                ("Typ", "typ", lambda a: a["type_label"], ""),
+                ("Titel", "titel", lambda a: a["title"] or "", "")]
+        if admin:
+            cols.append(("Verantwortliche", "resp", lambda a: ", ".join(a["responsible"]), "oaap-minor"))
+        cols.append(("Status", "status", lambda a: "0" if a["active"] else "1", ""))
+        if admin:
+            cols.append(("Speichern", "", None, "oaap-minor"))
+        cols += [("Links", "links", lambda a: counts.get(a["slug"], {}).get("links", 0), "oaap-num"),
+                 ("Zugriffe", "hits", lambda a: counts.get(a["slug"], {}).get("hits", 0), "oaap-num")]
+        return ui.af.list_report(
+            q, rows, cols, row, base=base_path + "?", noun="Areas",
+            empty_text=("Noch keine Area. Ohne Area kann niemand einen Link anlegen. "
+                        "<a href=\"/admin/new\">Neue Area</a> legt die erste an.") if admin else "Keine Area.",
+            choices=[("typ", "Typ", [(t, store.TYPE_LABELS[t]) for t in store.TYPES]),
+                     ("aktiv", "Aktiv", [("ja", "ja"), ("nein", "nein")])],
+            placeholder="Slug, Titel …")
+
     def areas_page(self, who, base, slug):
         """Keyuser-Sicht: die verantworteten Areas, alle Links darin, Zahlen."""
         mine = [a for a in store.list_areas(DB) if who.manages(a)]
         if not mine:
-            body = '<div class="card"><h2>Sie verantworten keine Area</h2><p class="hint">Die Verwaltung trägt Verantwortliche je Area ein.</p></div>'
+            body = ui.af.pagehead("Areas") + ui.af.card(
+                "Sie verantworten keine Area",
+                '<p class="oaap-muted">Die Verwaltung trägt Verantwortliche je Area ein.</p>')
             return ui.page("Areas", body, who, VERSION, self.nav(who, "areas"))
         areas = {a["slug"]: a for a in store.list_areas(DB)}
         if slug and slug in areas and who.manages(areas[slug]):
             a = areas[slug]
             links = store.list_links(DB, area=slug)
-            body = f"""<div class="card"><h1>{esc(a["slug"])} — {esc(a["title"] or a["type_label"])}</h1>
-  <p class="hint">{esc(a["type_label"])} · {esc(a["description"])}</p>
-  <p class="muted">Erzeugte Keys {a["key_length"]} Zeichen · Wunsch-Keys {"ja" if a["custom_keys"] else "nein"} · PIN {"Pflicht" if a["pin_required"] else "optional"} ·
-     Vorgabe {a["default_ttl_days"] or "unbegrenzt"} Tage · Höchstens {a["max_ttl_days"] or "unbegrenzt"} Tage für Benutzer ·
-     Speichertiefe {esc(ui.esc(store.LOG_LABELS[a["log_level"]]))}, {a["log_retention_days"]} Tage</p></div>
-<div class="card"><h2>Alle Links dieser Area</h2>{self.links_table(who, links, areas, base, show_owner=True)}</div>"""
+            facts = ui.af.facts([
+                ("Typ", esc(a["type_label"])),
+                ("Erzeugte Keys", f'{a["key_length"]} Zeichen'),
+                ("Wunsch-Keys", "ja" if a["custom_keys"] else "nein"),
+                ("PIN", "Pflicht" if a["pin_required"] else "optional"),
+                ("Vorgabe Lebensdauer", f'{a["default_ttl_days"] or "unbegrenzt"} Tage'),
+                ("Höchstens für Benutzer", f'{a["max_ttl_days"] or "unbegrenzt"} Tage'),
+                ("Speichertiefe", f'{esc(store.LOG_LABELS[a["log_level"]])}, {a["log_retention_days"]} Tage')])
+            body = (ui.af.back("/manage/areas", "Zu den Areas")
+                    + f'<div class="oaap-objhead"><h1>{esc(a["slug"])} — {esc(a["title"] or a["type_label"])}</h1>'
+                    + (f'<p class="oaap-muted">{esc(a["description"])}</p>' if a["description"] else "")
+                    + facts + "</div>"
+                    + ui.af.card("Alle Links dieser Area",
+                                 self.links_report(links, areas, f"/manage/areas/{slug}", show_owner=True,
+                                                   empty_text="In dieser Area gibt es noch keine Links.")))
             body += self.stats_cards(store.stats(DB, area=slug), f"/api/v1/areas/{slug}/accesses?format=csv&limit=5000",
                                      store.accesses(DB, area=slug, limit=50), a)
-            return ui.page(f"Area {slug}", body, who, VERSION, self.nav(who, "areas"))
-        counts = store.area_counts(DB)
-        rows = "".join(
-            f'<tr><td><a href="/manage/areas/{esc(a["slug"])}"><code>{esc(a["slug"])}</code></a></td><td>{esc(a["type_label"])}</td>'
-            f'<td>{esc(a["title"])}</td><td>{"aktiv" if a["active"] else "inaktiv"}</td>'
-            f'<td class="num">{counts.get(a["slug"], {}).get("links", 0)}</td><td class="num">{counts.get(a["slug"], {}).get("hits", 0)}</td></tr>'
-            for a in mine)
-        body = f'<div class="card"><h2>Areas, die Sie verantworten</h2><table><tr><th>Area</th><th>Typ</th><th>Titel</th><th>Status</th><th class="num">Links</th><th class="num">Zugriffe</th></tr>{rows}</table></div>'
+            return ui.page(f"Area {slug}", body, who, VERSION, self.nav(who, "areas"),
+                           obj=f"Area:{slug}", obj_title=a["title"] or slug)
+        body = (ui.af.pagehead("Areas, die Sie verantworten")
+                + self.area_report(mine, "/manage/areas", admin=False))
         return ui.page("Areas", body, who, VERSION, self.nav(who, "areas"))
 
     # =============================================================== admin
@@ -1227,11 +1317,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not who.is_admin:
             self.drain()
-            self.send_html(403, ui.page("Nur Verwaltung", '<div class="card"><h1>Nur für die Rolle admin</h1></div>', who, VERSION, self.nav(who, "admin")))
+            self.send_html(403, ui.page("Nur Verwaltung", '<div class="oaap-card"><h1>Nur für die Rolle admin</h1></div>', who, VERSION, self.nav(who, "admin")))
             return
         base = self.base_url()
         if not parts and method == "GET":
             self.send_html(200, self.admin_page(who, notice=self.query.get("ok", "")))
+            return
+        if parts == ["new"] and method == "GET":
+            self.send_html(200, self.admin_new_page(who))
             return
         if parts == ["hosts"] and method == "POST":
             form = self.read_form()
@@ -1257,7 +1350,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not errors and store.get_area(DB, fields["slug"]):
                     errors.append("slug: gibt es schon")
                 if errors:
-                    self.send_html(422, self.admin_page(who, errors=errors, data=form))
+                    self.send_html(422, self.admin_new_page(who, errors=errors, data=form))
                     return
                 area = store.create_area(DB, fields)
                 self.redirect(f"/admin/areas/{area['slug']}?ok=" + urllib.parse.quote("Area angelegt."))
@@ -1266,7 +1359,7 @@ class Handler(BaseHTTPRequestHandler):
                 area = store.get_area(DB, parts[1])
                 if area is None:
                     self.drain()
-                    self.send_html(404, ui.page("Nicht gefunden", '<div class="card"><h1>Diese Area gibt es nicht</h1></div>', who, VERSION, self.nav(who, "admin")))
+                    self.send_html(404, ui.page("Nicht gefunden", '<div class="oaap-card"><h1>Diese Area gibt es nicht</h1></div>', who, VERSION, self.nav(who, "admin")))
                     return
                 if method == "GET":
                     self.send_html(200, self.admin_area_page(who, area, base, notice=self.query.get("ok", "")))
@@ -1290,7 +1383,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.redirect(f"/admin/areas/{area['slug']}?ok=" + urllib.parse.quote("Gespeichert."))
                     return
         self.drain()
-        self.send_html(404, ui.page("Nicht gefunden", '<div class="card"><h1>Hier ist nichts</h1></div>', who, VERSION, self.nav(who, "admin")))
+        self.send_html(404, ui.page("Nicht gefunden", '<div class="oaap-card"><h1>Hier ist nichts</h1></div>', who, VERSION, self.nav(who, "admin")))
 
     def area_form(self, a, creating):
         """Ein Formular für beide Fälle. `a` ist die Area oder ein dict mit Eingaben."""
@@ -1320,58 +1413,181 @@ class Handler(BaseHTTPRequestHandler):
     <div class="wide"><label>Speichertiefe der Zugriffe</label><select name="log_level">{levels}</select></div>
     <div><label>Aufbewahrung der Zugriffe in Tagen</label><input type="number" name="log_retention_days" min="1" value="{g("log_retention_days", 90)}"></div>"""
 
+    def admin_new_page(self, who, errors=(), data=None):
+        """Die Dialogseite „Neue Area“."""
+        body = (ui.af.back("/admin", "Zur Verwaltung") + ui.af.pagehead("Neue Area")
+                + ui.errors_card(errors)
+                + ui.af.card("", f"""<p class="oaap-muted">Der Typ steht danach fest. Der Slug ist das erste Pfadsegment der öffentlichen Adresse; reserviert sind {esc(", ".join(sorted(store.RESERVED_SLUGS)))}.</p>
+  <form class="ww-grid" method="post" action="/admin/areas">{self.area_form(data or {}, creating=True)}<div><button type="submit" class="primary">Anlegen</button></div></form>"""))
+        return ui.page("Neue Area", body, who, VERSION, self.nav(who, "admin"))
+
     def admin_page(self, who, errors=(), data=None, notice="", hosts_text=None):
-        counts = store.area_counts(DB)
-        rows = "".join(
-            f'<tr><td><a href="/admin/areas/{esc(a["slug"])}"><code>{esc(a["slug"])}</code></a></td><td>{esc(a["type_label"])}</td>'
-            f'<td>{esc(a["title"])}</td><td>{esc(", ".join(a["responsible"]))}</td>'
-            f'<td>{"aktiv" if a["active"] else "<span class=muted>inaktiv</span>"}{"" if a["open_for_users"] else " · nur Verantwortliche"}</td>'
-            f'<td>{esc(a["log_level"])}/{a["log_retention_days"]} T</td>'
-            f'<td class="num">{counts.get(a["slug"], {}).get("links", 0)}</td><td class="num">{counts.get(a["slug"], {}).get("hits", 0)}</td></tr>'
-            for a in store.list_areas(DB))
-        table = (f'<table><tr><th>Area</th><th>Typ</th><th>Titel</th><th>Verantwortliche</th><th>Status</th><th>Speichern</th><th class="num">Links</th><th class="num">Zugriffe</th></tr>{rows}</table>'
-                 if rows else '<p class="muted">Noch keine Area. Ohne Area kann niemand einen Link anlegen.</p>')
-        body = ui.notice_card(notice) + ui.errors_card(errors)
-        body += f'<div class="card"><h2>Areas</h2>{table}</div>'
-        body += f"""<div class="card"><h2>Neue Area</h2>
-  <p class="hint">Der Typ steht danach fest. Der Slug ist das erste Pfadsegment der öffentlichen Adresse; reserviert sind {esc(", ".join(sorted(store.RESERVED_SLUGS)))}.</p>
-  <form class="grid" method="post" action="/admin/areas">{self.area_form(data or {}, creating=True)}<div><button type="submit">Anlegen</button></div></form></div>"""
+        body = (ui.af.pagehead("Verwaltung", '<a class="oaap-btn primary" href="/admin/new">Neue Area</a>')
+                + ui.notice_card(notice) + ui.errors_card(errors))
+        body += ui.af.card("Areas", self.area_report(store.list_areas(DB), "/admin", admin=True))
         if hosts_text is None:
             hosts_text = chr(10).join(store.get_hosts(DB))
         current = store.get_setting(DB, "default_host", "")
-        platform_list = ("<ul class=\"hostlist\">" + "".join(f"<li><code>{esc(h)}</code></li>" for h in PLATFORM_HOSTS) + "</ul>"
+        platform_list = ("<ul class=\"ww-hostlist\">" + "".join(f"<li><code>{esc(h)}</code></li>" for h in PLATFORM_HOSTS) + "</ul>"
                          if PLATFORM_HOSTS else
-                         "<p class=\"muted\">Die Plattform hat dieser Instanz keine Namen mitgegeben (kein <code>OAAP_INSTANCE_NAMES</code>).</p>")
+                         "<p class=\"oaap-muted\">Die Plattform hat dieser Instanz keine Namen mitgegeben.</p>")
         choices = all_hosts()
         options = '<option value="">erste der Liste</option>' + "".join(
             f'<option value="{esc(h)}"{" selected" if h == current else ""}>{esc(h)}</option>' for h in choices)
-        body += f"""<div class="card"><h2>Öffentliche Adressen</h2>
-  <p class="hint">Die Namen, unter denen diese Instanz erreichbar ist. Die Plattform gibt sie der App mit (RFC-0043: Hauptname, Aliasse, Knoten-Adresse); sie stehen hier zum Lesen.
+        body += ui.af.card("Öffentliche Adressen", f"""<p class="oaap-muted">Die Namen, unter denen diese Instanz erreichbar ist. Die Plattform gibt sie der App mit (Hauptname, weitere Namen, Adresse des Servers); sie stehen hier zum Lesen.
   Darunter kann die Verwaltung Adressen ergänzen, eine je Zeile, ohne Schema gilt https. Die Vorgabe steht in Link-Adressen und QR-Codes, jede andere ist auf der Link-Seite wählbar.
   Gibt es gar keine Adresse, gilt die der Anfrage (<code>{esc(self.base_url())}</code>).</p>
   <h3>Von der Plattform</h3>{platform_list}
-  <form method="post" action="/admin/hosts">
+  <form method="post" action="/admin/hosts" class="oaap-form">
   <label>Ergänzte Adressen<textarea name="hosts" rows="3" placeholder="go.example.org">{esc(hosts_text)}</textarea></label>
   <label>Vorgabe<select name="default">{options}</select></label>
-  <div style="margin-top:.6rem"><button type="submit">Speichern</button></div></form></div>"""
-        body += f"""<div class="card"><h2>REST-API</h2>
-  <p class="hint">Basis <code>{esc(self.base_url())}/api/v1</code>, Anmeldung über die Sitzung oder einen API-Schlüssel der Plattform (<code>Authorization: Bearer oaapk_…</code>, RFC-0027).
+  <div><button type="submit" class="primary">Speichern</button></div></form>""")
+        body += ui.af.card("REST-API", f"""<p class="oaap-muted">Basis <code>{esc(self.base_url())}/api/v1</code>, Anmeldung über die Sitzung oder einen API-Schlüssel der Plattform (<code>Authorization: Bearer oaapk_…</code>).
   Endpunkte: <code>me</code>, <code>hosts</code>, <code>areas</code>, <code>areas/&lt;slug&gt;/stats|accesses</code>, <code>links?area=</code>, <code>links/&lt;id&gt;</code>, <code>links/&lt;id&gt;/file|qr|stats|accesses</code>.
-  Rollen wie in der Oberfläche. Details in der README der App.</p></div>"""
+  Rollen wie in der Oberfläche. Einzelheiten in der Hilfe.</p>""")
         return ui.page("Verwaltung", body, who, VERSION, self.nav(who, "admin"))
 
     def admin_area_page(self, who, area, base, errors=(), notice=""):
         counts = store.area_counts(DB).get(area["slug"], {})
-        body = ui.notice_card(notice) + ui.errors_card(errors)
-        body += f"""<div class="card"><h1>Area {esc(area["slug"])}</h1>
-  <p class="muted">{esc(area["type_label"])} · {counts.get("links", 0)} Links · {counts.get("hits", 0)} Zugriffe · öffentlich unter <code>{esc(base)}/{esc(area["slug"])}/&lt;key&gt;</code></p>
-  <form class="grid" method="post">{self.area_form(area, creating=False)}<div><button type="submit">Speichern</button></div></form>
-</div>
-<div class="card"><h2>Löschen</h2><p class="hint">Nimmt alle Links, Dateien und Zugriffszeilen dieser Area mit. Das ist endgültig.</p>
-  <form method="post" onsubmit="return confirm('Area {esc(area["slug"])} mit allen Links löschen?')"><input type="hidden" name="_action" value="delete"><button type="submit" class="danger">Area löschen</button></form></div>"""
+        body = (ui.af.back("/admin", "Zur Verwaltung") + ui.notice_card(notice) + ui.errors_card(errors)
+                + f'<div class="oaap-objhead"><h1>Area {esc(area["slug"])}</h1>'
+                + ui.af.facts([("Typ", esc(area["type_label"])), ("Links", str(counts.get("links", 0))),
+                               ("Zugriffe", str(counts.get("hits", 0))),
+                               ("Öffentlich unter", f'<code>{esc(base)}/{esc(area["slug"])}/&lt;key&gt;</code>')])
+                + "</div>")
+        body += ui.af.card("Eigenschaften", f"""<form class="ww-grid" method="post">{self.area_form(area, creating=False)}<div><button type="submit" class="primary">Speichern</button></div></form>""")
+        body += ui.af.card("Löschen", f"""<p class="oaap-muted">Nimmt alle Links, Dateien und Zugriffszeilen dieser Area mit. Das ist endgültig.</p>
+  <form method="post" onsubmit="return confirm('Area {esc(area["slug"])} mit allen Links löschen?')"><input type="hidden" name="_action" value="delete"><button type="submit" class="danger">Area löschen</button></form>""", "oaap-danger")
         body += self.stats_cards(store.stats(DB, area=area["slug"]), f"/api/v1/areas/{area['slug']}/accesses?format=csv&limit=5000",
                                  store.accesses(DB, area=area["slug"], limit=30), area)
-        return ui.page(f"Area {area['slug']}", body, who, VERSION, self.nav(who, "admin"))
+        return ui.page(f"Area {area['slug']}", body, who, VERSION, self.nav(who, "admin"),
+                       obj=f"Area:{area['slug']}", obj_title=area["title"] or area["slug"])
+
+
+# ---------------------------------------------------------------- MCP
+# Nur lesen, mit denselben Regeln wie /manage und die API: eigene Links
+# sieht jede Person, alle Links einer Area nur, wer sie verantwortet (oder
+# admin). Nie eine PIN, nie der Hash, nie eine Datei.
+
+DOOR = mcpdoor.Door(
+    "oaap-wegweiser", VERSION,
+    "Kurzlinks, Zählpixel und Übergaben des Wegweisers suchen und lesen -- mit den Rechten "
+    "der fragenden Person: eigene Links, und alle Links der Areas, die sie verantwortet.")
+
+
+def mcp_who(who):
+    return Who({"X-OAAP-User": who.get("user") or "", "X-OAAP-User-Id": who.get("user_id") or "",
+                "X-OAAP-Display-Name": who.get("display_name") or "",
+                "X-OAAP-Roles": ",".join(who.get("roles") or [])})
+
+
+def _mcp_person(who):
+    w = mcp_who(who)
+    if not w.known:
+        raise mcpdoor.Refused("Ohne angemeldete Person gibt es hier nichts.")
+    return w
+
+
+def _mcp_link(link, area, base):
+    ts = store.now_iso()
+    key, word, _kind = ui.link_status(link, ts)
+    out = {"id": link["id"], "area": link["area"], "key": link["key"],
+           "url": f"{base}/{link['area']}/{link['key']}" if base else f"/{link['area']}/{link['key']}",
+           "type": area["type"] if area else "", "title": link["title"] or "",
+           "status": key, "status_text": word, "hits": link["hit_count"],
+           "last_hit_at": link["last_hit_at"], "created_at": link["created_at"],
+           "created_by": link["created_by_name"], "expires_at": link["expires_at"],
+           "pin": bool(link["has_pin"])}
+    if area and area["type"] == "redirect":
+        out["target_url"] = link["target_url"] or ""
+    if area and area["type"] in ("download_once", "download_window", "upload_once"):
+        out["file_name"] = link["file_name"] or ""
+        out["downloads"] = link["download_count"]
+    return out
+
+
+def _mcp_base():
+    hosts = all_hosts(store.get_setting(DB, "default_host", ""))
+    return hosts[0] if hosts else ""
+
+
+def _visible_links(w, area_slug=""):
+    areas = {a["slug"]: a for a in store.list_areas(DB)}
+    if area_slug:
+        a = areas.get(area_slug)
+        if a is None:
+            raise mcpdoor.Refused("Diese Area gibt es nicht.")
+        links = store.list_links(DB, area=area_slug) if w.manages(a) else store.list_links(DB, w.id, area_slug)
+    else:
+        own = store.list_links(DB, w.id)
+        managed = [l for s, a in areas.items() if w.manages(a) for l in store.list_links(DB, area=s)]
+        seen, links = set(), []
+        for l in own + managed:
+            if l["id"] not in seen:
+                seen.add(l["id"])
+                links.append(l)
+    return links, areas
+
+
+@DOOR.tool("wegweiser_search", "Links suchen",
+           "Sucht Kurzlinks, Zählpixel und Übergaben nach Wort (Key, Titel, Ziel), Area und Status. "
+           "Liefert eigene Links und die der Areas, die die Person verantwortet.",
+           {"q": {"type": "string", "description": "Suchwort"},
+            "area": {"type": "string", "description": "Slug der Area"},
+            "status": {"type": "string", "description": "active, expired, disabled, used, waiting oder received"}})
+def _mcp_search(args, who):
+    w = _mcp_person(who)
+    links, areas = _visible_links(w, str(args.get("area") or "").strip())
+    q = ui.af.Query({"q": str(args.get("q") or "")})
+    want = str(args.get("status") or "").strip()
+    ts = store.now_iso()
+    hits = [l for l in links if q.matches(l["area"], l["key"], l["title"], l.get("target_url"), l["note"])
+            and (not want or ui.link_status(l, ts)[0] == want)]
+    base = _mcp_base()
+    return {"links": [_mcp_link(l, areas.get(l["area"]), base) for l in hits[:100]], "total": len(hits)}
+
+
+@DOOR.tool("wegweiser_link_read", "Einen Link lesen",
+           "Liest einen Link (Kennung oder area/key) mit Status, Ziel, Datei, Zugriffen und der "
+           "Verteilung der Ergebnisse der letzten 30 Tage.",
+           {"link": {"type": "string", "description": "Kennung des Links oder area/key"}},
+           required=("link",))
+def _mcp_read(args, who):
+    w = _mcp_person(who)
+    ref = str(args.get("link") or "").strip().strip("/")
+    link = store.get_link(DB, ref)
+    if link is None and "/" in ref:
+        slug, key = ref.split("/", 1)
+        link = store.find_link(DB, slug, key) if store.valid_key(key) else None
+    area = store.get_area(DB, link["area"]) if link and not link["deleted_at"] else None
+    if link is None or area is None or not w.may_see(link, area):
+        raise mcpdoor.Refused("Diesen Link gibt es nicht oder Sie sehen ihn nicht.")
+    st = store.stats(DB, link_id=link["id"], days=30)
+    return {**_mcp_link(link, area, _mcp_base()), "note": link["note"] or "",
+            "results_30d": st.get("by_result") or {}}
+
+
+@DOOR.tool("wegweiser_areas", "Areas",
+           "Listet die Areas, in denen die Person Links anlegen darf oder die sie verantwortet, mit "
+           "Typ, Titel und Regeln (PIN, Lebensdauer).")
+def _mcp_areas(args, who):
+    w = _mcp_person(who)
+    counts = store.area_counts(DB)
+    return {"areas": [{"slug": a["slug"], "type": a["type"], "type_text": a["type_label"],
+                       "title": a["title"], "manager": w.manages(a), "may_create": w.may_use(a),
+                       "pin_required": bool(a["pin_required"]), "max_ttl_days": a["max_ttl_days"],
+                       **({"links": counts.get(a["slug"], {}).get("links", 0)} if w.manages(a) else {})}
+                      for a in store.list_areas(DB) if w.may_use(a) or w.manages(a)]}
+
+
+DOOR.prompt("wegweiser_find", "Link finden",
+            "Findet einen Kurzlink und nennt Adresse und Status.",
+            "Suche mit wegweiser_search nach „{was}“ und nenne für jeden Treffer die Adresse, "
+            "den Titel und ob er noch gilt.", arguments=("was",))
+DOOR.prompt("wegweiser_report", "Wie läuft ein Link?",
+            "Fasst die Zugriffe auf einen Link zusammen.",
+            "Lies mit wegweiser_link_read den Link „{link}“ und fasse in wenigen Sätzen zusammen: "
+            "Status, Zugriffe insgesamt und die Ergebnisse der letzten 30 Tage.", arguments=("link",))
 
 
 # ---------------------------------------------------------------- Aufräumen

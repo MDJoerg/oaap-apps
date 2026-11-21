@@ -1,8 +1,8 @@
-"""OAAP Starter — die kleinste App, die alle Plattformregeln einhält.
+"""Starter — die kleinste App, die alle Plattformregeln einhält.
 
 Sie ist als Vorlage gedacht, nicht als Produkt: Wer eine eigene App
 baut, ersetzt den Inhalt und behält den Rahmen. Der Rahmen zeigt genau
-die sechs Dinge, an denen fremde Apps sonst scheitern:
+die sieben Dinge, an denen fremde Apps sonst scheitern:
 
 1. **Kein eigener Login.** Die geprüfte Identität kommt vom Gateway in
    den Kopfzeilen `X-OAAP-User-Id` (die Person: eine UUID, die sich nie
@@ -16,6 +16,14 @@ die sechs Dinge, an denen fremde Apps sonst scheitern:
 5. **Logs nach stdout**, dazu ein Gesundheitspfad ohne Anmeldung.
 6. **Keine externen Ressourcen** — keine Webfonts, keine CDNs; die App
    muss in einem Netz ohne Internet vollständig funktionieren.
+7. **Der Rahmen der Plattform** (RFC-0118): Die Seite lädt
+   `/platform/theme.css` (Farben, Karten, Tabellen, Dunkelmodus) und
+   `/platform/app.js` (Mandant, Hilfe, Fragen, Benutzermenü, Feedback)
+   — beide liefert das Gateway unter dem EIGENEN Namen der Instanz aus,
+   es sind also keine fremden Ressourcen. Die App schreibt Kopfleiste
+   und Fußzeile selbst (Name, Weg zurück), das Skript füllt den Rest.
+   Ohne das Skript bleibt die Seite ganz. Keine eigene Farbpalette,
+   keine Rollen auf der Seite, App-Name ohne „OAAP“.
 
 Dazu zeigt die Startseite, welche **Plattformtüren** diese Instanz
 bekommen hat (Zwilling, Berechtigungen, Destinationen, Vorgänge …) —
@@ -32,7 +40,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
+APP_NAME = "Starter"   # derselbe Name wie app.name im Manifest
 PORT = 8000
 
 # Regel 3: nur dieser Pfad überlebt ein Deployment und wird gesichert.
@@ -42,24 +51,33 @@ VISITS = os.path.join(DATA_DIR, "besuche.json")
 # Regel 4: Konfiguration kommt aus deklarierten Variablen, mit Vorgabe.
 GREETING = os.environ.get("STARTER_GREETING", "Willkommen")
 
-STYLE = """<style>
-  :root{color-scheme:light}
-  body{margin:0;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
-       background:#f8fafc;color:#0f172a}
-  header{background:#1e3a8a;color:#fff;padding:1rem 1.4rem}
-  header b{font-size:1.1rem;letter-spacing:.04em}
-  main{max-width:46rem;margin:0 auto;padding:1.4rem}
-  .card{background:#fff;border:1px solid #e2e8f0;border-radius:.6rem;
-        padding:1.1rem 1.4rem;margin-bottom:1rem}
-  h1{font-size:1.4rem;margin:.2rem 0 1rem}
-  h2{font-size:1.05rem;margin:0 0 .6rem}
-  table{border-collapse:collapse;width:100%}
-  td,th{text-align:left;padding:.45rem .3rem;border-bottom:1px solid #e2e8f0}
-  code{background:#f1f5f9;padding:.1rem .3rem;border-radius:.25rem}
-  .muted{color:#64748b}
-  a.btn{display:inline-block;min-height:44px;line-height:44px;padding:0 1.1rem;
-        background:#2563eb;color:#fff;border-radius:.4rem;text-decoration:none}
-</style>"""
+# Regel 7: Farben, Karten, Tabellen und Dunkelmodus kommen aus dem Kit der
+# Plattform. Eine App setzt keine eigenen Farben -- höchstens Abstände.
+HEX_SVG = ('<svg viewBox="0 0 100 100" width="26" height="26" aria-hidden="true">'
+           '<polygon points="50,4 90,27 90,73 50,96 10,73 10,27" fill="none" '
+           'stroke="currentColor" stroke-width="8" stroke-linejoin="round"/>'
+           '<polygon points="50,30 72,42 72,62 50,74 28,62 28,42" fill="currentColor" '
+           'opacity=".85"/></svg>')
+
+
+def page(title, body):
+    """Der Rahmen (RFC-0118 §4): Kopfleiste mit Name und Weg zurück, Inhalt,
+    Fußzeile mit Version. `/platform/app.js` ergänzt Mandant, Hilfe (aus
+    `docs:` im Manifest), Fragen, Benutzermenü und Feedback."""
+    return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(title)} · {APP_NAME}</title>
+<link rel="stylesheet" href="/platform/theme.css">
+<script src="/platform/app.js" defer></script></head>
+<body class="oaap-app">
+<header class="oaap-header" data-oaap-product="starter">
+  <a class="oaap-brand" href="./" data-oaap-portal><span class="oaap-logo">{HEX_SVG}</span>
+    <span class="oaap-tenant"></span><span class="oaap-appname">{APP_NAME}</span></a>
+  <span class="oaap-actions"></span>
+</header>
+<main class="oaap-main">{body}</main>
+<footer class="oaap-footer"><span>{APP_NAME} {VERSION}</span><span class="oaap-platform"></span></footer>
+</body></html>"""
 
 
 def read_visits():
@@ -161,12 +179,14 @@ class Handler(BaseHTTPRequestHandler):
         roles = [r.strip() for r in
                  self.headers.get("X-OAAP-Roles", "").split(",") if r.strip()]
         if not user:
-            return self.send(
-                "<p>Diese App wird über das OAAP-Gateway aufgerufen. "
-                "Direkt erreicht sie niemand.</p>", status=403)
+            return self.send(page("Kein Zugang", '<div class="oaap-msg err">Diese App '
+                             "wird über das OAAP-Gateway aufgerufen. Direkt erreicht sie "
+                             "niemand.</div>"), status=403)
 
         if path != "/":
-            return self.send("<p>Seite nicht gefunden.</p>", status=404)
+            return self.send(page("Nicht gefunden", '<a class="oaap-back" href="./">← Zur '
+                             'Startseite</a><div class="oaap-msg err">Diese Seite gibt es '
+                             "nicht.</div>"), status=404)
 
         # Ein API-Schlüssel (Maschine) trägt einen Namen, aber keine UUID
         # einer Person — dann zählt der Name. Für Personen immer die UUID.
@@ -177,49 +197,51 @@ class Handler(BaseHTTPRequestHandler):
                             key=lambda v: str(v.get("name", ""))))
         door_rows = "".join(
             f"<tr><td>{esc(t)}</td><td><code>{esc(sec)}</code></td><td>"
-            + (esc(ok) if isinstance(ok, str) else ("ja" if ok else '<span class="muted">nein</span>'))
+            + (esc(ok) if isinstance(ok, str) else ("ja" if ok else '<span class="oaap-muted">nein</span>'))
             + "</td></tr>" for t, sec, ok in doors())
-        self.send(f"""<!doctype html><html lang="de"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OAAP Starter</title>{STYLE}
-<header><b>OAAP STARTER</b></header>
-<main>
-  <h1>{esc(GREETING)}, {esc(shown)}!</h1>
-  <div class="card">
+        # Rollen werden GEPRÜFT, nicht angezeigt (Design-Guidelines §5.1).
+        may_manage = bool({"keyuser", "admin"} & set(roles))
+        self.send(page("Übersicht", f"""
+  <div class="oaap-pagehead"><h1>{esc(GREETING)}, {esc(shown)}!</h1></div>
+  <section class="oaap-card">
     <h2>Was die Plattform über Dich sagt</h2>
-    <table>
-      <tr><th>Person (<code>X-OAAP-User-Id</code>)</th>
-          <td>{esc(user_id) or '<span class="muted">keine — Maschine</span>'}</td></tr>
-      <tr><th>Anmeldename (<code>X-OAAP-User</code>)</th><td>{esc(user)}</td></tr>
-      <tr><th>Rollen (<code>X-OAAP-Roles</code>)</th>
-          <td>{esc(", ".join(roles)) or '<span class="muted">keine</span>'}</td></tr>
-    </table>
-    <p class="muted">Diese Kopfzeilen setzt das Gateway. Die App hat kein
+    <dl class="oaap-kv">
+      <dt>Person (<code>X-OAAP-User-Id</code>)</dt>
+      <dd>{esc(user_id) or '<span class="oaap-muted">keine — Maschine</span>'}</dd>
+      <dt>Anmeldename (<code>X-OAAP-User</code>)</dt><dd>{esc(user)}</dd>
+      <dt>Darf verwalten (aus <code>X-OAAP-Roles</code>)</dt><dd>{"ja" if may_manage else "nein"}</dd>
+    </dl>
+    <p class="oaap-muted">Diese Kopfzeilen setzt das Gateway. Die App hat kein
     Anmeldeformular und wird auch keines bekommen. Eigene Daten hängen an
-    der <code>X-OAAP-User-Id</code>; der Anmeldename ist änderbar.</p>
-  </div>
-  <div class="card">
+    der <code>X-OAAP-User-Id</code>; der Anmeldename ist änderbar. Die Rollen
+    prüft die App — anzeigen tut sie sie nicht; wer angemeldet ist, zeigt
+    das Benutzermenü oben rechts.</p>
+  </section>
+  <section class="oaap-card">
     <h2>Welche Plattformtüren diese Instanz hat</h2>
-    <table><tr><th>Fähigkeit</th><th>Manifest</th><th>Da?</th></tr>{door_rows}</table>
-    <p class="muted">Gezeigt wird nur, ob die Variable gesetzt ist — nie ihr
+    <div class="oaap-tablewrap"><table class="oaap-table">
+      <thead><tr><th>Fähigkeit</th><th>Manifest</th><th>Da?</th></tr></thead>
+      <tbody>{door_rows}</tbody></table></div>
+    <p class="oaap-muted">Gezeigt wird nur, ob die Variable gesetzt ist — nie ihr
     Wert. „nein“ heißt: Abschnitt nicht im Manifest, oder der Knoten kann
     ihn nicht (der Zwilling braucht das Knotenprofil <code>store</code>).</p>
-  </div>
-  <div class="card">
+  </section>
+  <section class="oaap-card">
     <h2>Was den Neustart überlebt</h2>
     <p>Dein {count}. Besuch. Gezählt wird in <code>/data</code> — dem
     einzigen Pfad, den das Manifest als Speicher deklariert und den die
     Plattform sichert.</p>
-    <table><tr><th>Benutzer</th><th>Besuche</th></tr>{rows}</table>
-  </div>
-  <div class="card">
+    <div class="oaap-tablewrap"><table class="oaap-table">
+      <thead><tr><th>Benutzer</th><th>Besuche</th></tr></thead><tbody>{rows}</tbody></table></div>
+  </section>
+  <section class="oaap-card">
     <h2>Und jetzt?</h2>
     <p>Ersetze den Inhalt dieser App durch Deinen — behalte den Rahmen:
     Manifest, ein Port, <code>/data</code>, <code>/healthz</code>,
-    Identität aus den Kopfzeilen. Was das Paket erfüllen muss, steht im
+    Identität aus den Kopfzeilen, Kit und Rahmenskript der Plattform, die
+    Hilfe in <code>docs/</code>. Was das Paket erfüllen muss, steht im
     Plattform-Briefing, das Du zusammen mit diesem Paket bekommen hast.</p>
-  </div>
-</main></html>""")
+  </section>"""))
 
 
 def main():

@@ -346,6 +346,13 @@ ok("Kommandozeile: view systems zeigt den Abgleich",
 tab = admin_get("/?tab=systeme")
 ok("Betreiberseite: Reiter Systemlandschaft mit den Systemen",
    "Systemlandschaft" in tab and "A4H Entwicklung" in tab and "Produktion" in tab)
+ok("Listenbericht: keine Formulare in Zeilen, die Kennung öffnet die Seite des Systems (RFC-0118)",
+   'action="system-delete"' not in tab and 'href="system?id=' in tab and 'class="oaap-filter"' in tab)
+_sid = landscape.systems(app.DB)[0]["id"]
+spage = admin_get("/system?id=" + _sid)
+ok("Seite eines Zielsystems: zurück, Ändern und Löschen",
+   'class="oaap-back"' in spage and 'action="system-save"' in spage and 'action="system-delete"' in spage)
+ok("Auswahl Rolle filtert", "A4H Entwicklung" not in admin_get("/?tab=systeme&role=sandbox"))
 admin("/view-save", name="einfach", max_effect="read")
 admin("/item-add", view="einfach", server="sys-b", kind="tool", source="find_users", effect="read")
 EINFACH = secret_from(admin("/issue", label="einfach", views="einfach", max_effect="read",

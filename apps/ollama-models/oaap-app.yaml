@@ -1,9 +1,9 @@
-oaap_manifest: "0.10"
+oaap_manifest: "0.18"
 
 app:
   id: ollama-models
-  name: OAAP Ollama-Modelle
-  version: 0.1.2
+  name: Ollama-Modelle
+  version: 0.2.0
   type: native
   class: frontend
   description: "Die Betriebsoberfläche zu Ollama: welche Modelle liegen da, was ist gerade geladen, Modelle holen und löschen — und die Zeilen für den Anschluss ans KI-Gateway"
@@ -25,6 +25,12 @@ routes:
   - path: /
     roles: [keyuser, admin]
 
+# Die MCP-Tür unter der eigenen Route: Assistenten des Mandanten lesen,
+# welche Modelle installiert und geladen sind -- als die Person, die mit
+# ihnen spricht, mit denselben Rechten wie die Seite. Nur lesen.
+mcp:
+  path: /mcp
+
 storage:
   # Nur das Protokoll: wer wann welches Modell geholt oder gelöscht hat.
   # Die Modelle selbst liegen im Mount der Ollama-Instanz, nicht hier.
@@ -45,6 +51,23 @@ config:
   - key: OLLAMA_URL
     label: "Adresse der Ollama-Instanz (z. B. http://oaap-app-ollama:11434)"
     default: "http://oaap-app-ollama:11434"
+
+docs:
+  # Die Anwenderhilfe geht an die Hilfe des Mandanten und damit auch an den
+  # Chat. Sichtbar für dieselben Rollen, die die App betreten dürfen.
+  - product: ollama-models
+    title: "Ollama-Modelle"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [keyuser, admin]
+    readers: [power-user, admin]
+    kinds:
+      index.md: overview
+      modell-holen.md: howto
+      modell-loeschen.md: howto
+      gateway-anschliessen.md: howto
+      faq.md: faq
 
 health:
   path: /healthz

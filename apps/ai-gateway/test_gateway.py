@@ -214,7 +214,10 @@ check("kein Quellenname", "eusrc" not in body.decode() and "fern" not in body.de
 
 print("\n-- 0.8.0 (L26): Modellnamen eines Schlüssels ändern, das Geheimnis bleibt")
 status, body, _ = call("/schluessel", admin=True)
-check("die Schlüsselzeile bietet „Modellnamen ändern“ an",
+check("die Schlüsselliste öffnet den Schlüssel auf seiner Seite",
+      'href="schluessel?etikett=laptop"' in body.decode("utf-8") and 'action="key-aliases"' not in body.decode("utf-8"))
+status, body, _ = call("/schluessel?etikett=laptop", admin=True)
+check("die Schlüsselseite bietet „Modellnamen ändern“ an",
       "Modellnamen ändern" in body.decode("utf-8") and 'action="key-aliases"' in body.decode("utf-8"))
 status, body, _ = call("/key-aliases", "POST", admin=True, form="label=laptop&alias=nur-lokal")
 check("die Seite bestätigt die Änderung", "geändert" in body.decode("utf-8"), body[-300:])
@@ -505,11 +508,12 @@ store.issue(app.DB, "laptop@jana", "test", aliases=["chat-default"], ceiling="gr
 app.DB.execute("UPDATE keys SET created='2026-01-01T00:00:00Z', expires='2026-01-31T00:00:00Z' "
                "WHERE label='laptop@jana'")
 app.DB.commit()
-status, body, _ = call("/schluessel", admin=True)
+status, body, _ = call("/schluessel?etikett=laptop%40jana", admin=True)
 text = body.decode("utf-8")
 check("abgelaufener Schlüssel bietet „neu ausstellen“ an",
       "schluessel?neu_wie=laptop%40jana#ausstellen" in text)
-check("auch der widerrufene", "neu_wie=gleich-weg" in text)
+status, body, _ = call("/schluessel?etikett=gleich-weg", admin=True)
+check("auch der widerrufene", "neu_wie=gleich-weg" in body.decode("utf-8"))
 status, body, _ = call("/schluessel?neu_wie=laptop%40jana", admin=True)
 text = body.decode("utf-8")
 check("Etikett: das nächste freie", 'value="laptop@jana-2"' in text)
@@ -801,16 +805,16 @@ check("die Karte Bezugsquellen zeigt den Abschnitt, wenn die App bearbeitbar ist
       ("Aus Destinationen der Plattform" in card) == (app.MODE == "app"), app.MODE)
 
 print("\n-- 0.6 Reiter: Dashboard, Letzte Anfragen, Auswertung, Schlüssel, Modelle, Bezugsquellen")
-REITER = ["Dashboard", "Letzte Anfragen", "Auswertung", "Schlüssel", "Kohorten", "Modelle",
-          "Bezugsquellen"]
+REITER = ["Übersicht", "Letzte Anfragen", "Auswertung", "Schlüssel", "Kohorten", "Vorlagen",
+          "Modelle", "Bezugsquellen"]
 for pfad in ("/", "/anfragen", "/auswertung", "/schluessel", "/kohorten", "/modelle", "/quellen"):
     status, body, _ = call(pfad, admin=True)
     seite = body.decode("utf-8")
-    nav = seite.split('<nav class="tabs"')[1].split("</nav>")[0] if '<nav class="tabs"' in seite else ""
+    nav = seite.split('<nav class="oaap-tabs"')[1].split("</nav>")[0] if '<nav class="oaap-tabs"' in seite else ""
     check(f"{pfad} antwortet mit allen Reitern in der Reihenfolge",
           status == 200 and [seite_ for seite_ in REITER if seite_ in nav] == REITER
-          and all(nav.index(REITER[i]) < nav.index(REITER[i + 1]) for i in range(6)), status)
-    check(f"{pfad}: genau ein Reiter ist markiert", nav.count('class="on"') == 1)
+          and all(nav.index(REITER[i]) < nav.index(REITER[i + 1]) for i in range(len(REITER) - 1)), status)
+    check(f"{pfad}: genau ein Reiter ist markiert", nav.count('aria-current="page"') == 1)
     status, _, _ = call(pfad)
     check(f"{pfad} bleibt der Serververwaltung vorbehalten", status == 403, status)
 status, _, _ = call("/gibtsnicht", admin=True)
@@ -859,11 +863,11 @@ status, body, _ = call("/anfragen?ausgang=fehler&anzahl=200", admin=True)
 seite = body.decode("utf-8")
 fehler = app.DB.execute("SELECT COUNT(*) AS n FROM usage WHERE outcome NOT LIKE 'ok%'").fetchone()["n"]
 check("nur nicht beantwortete Zeilen", status == 200
-      and seite.count("<tr><td class=\"muted nowrap\"") == min(fehler, 200)
+      and seite.count("<tr><td class=\"muted nowrap\"") == min(fehler, 50)
       and "beantwortet, mit Token-Zahlen</span>" not in seite, (fehler,))
 status, body, _ = call("/anfragen?model=nur-lokal", admin=True)
 seite = body.decode("utf-8")
-check("Filter nach Modellname", "<code>chat-default</code>" not in seite.split("<table>")[1])
+check("Filter nach Modellname", "<code>chat-default</code>" not in seite.split("Zeiten in")[1])
 check("kein Prompt auf der Seite", PROMPT not in seite)
 
 print("\n-- 0.6 Verbindungstest einer Bezugsquelle")
@@ -871,7 +875,7 @@ Fake.calls.clear()
 status, body, _ = call("/supplier-test", "POST", admin=True, form="name=fern")
 seite = body.decode("utf-8")
 check("Test antwortet auf dem Reiter Bezugsquellen", status == 200
-      and 'class="on" aria-current="page">Bezugsquellen' in seite, status)
+      and 'aria-current="page">Bezugsquellen' in seite, status)
 check("erreichbar, mit Modellliste", "erreichbar — HTTP 200" in seite and "fern-modell" in seite,
       seite[seite.find("Verbindungstest"):][:300])
 check("die Quelle wurde mit GET /v1/models und ihren Zugangsdaten gefragt",
@@ -911,8 +915,10 @@ check("502 der Plattform „not connected“: Tunnel nicht verbunden",
       cls == "critical" and "Tunnel ist nicht verbunden" in text)
 status, body, _ = call("/supplier-test", "POST", admin=False, form="name=fern")
 check("der Test bleibt der Serververwaltung vorbehalten", status == 403, status)
-check("im Reiter steht je Quelle ein Testknopf und „Alle testen“",
-      app.suppliers_card().count('action="supplier-test"') == len(app.SUPPLIERS) + 1)
+check("im Reiter steht „Alle testen“, keine Knöpfe in den Zeilen",
+      app.suppliers_card().count('action="supplier-test"') == 1)
+check("je Quelle ein Testknopf auf ihrer Seite",
+      all(app.supplier_page("t", "admin", n).count('action="supplier-test"') == 1 for n in app.SUPPLIERS))
 
 print("\n-- 0.6 Test eines Modellnamens: eine Mini-Anfrage je Ziel")
 Fake.calls.clear()
@@ -1201,6 +1207,126 @@ check("/v1/models mit rot: wie ohne Kopfzeile (Decke des Schlüssels)",
 status, _, _ = call("/v1/chat/completions", "POST", key=key_licht,
                     body={"model": "nur-lokal", "messages": []})
 check("ohne Kopfzeile bleibt die Messzeile leer", store.recent(app.DB, limit=1)[0]["light"] == "")
+
+print("\n-- RFC-0118: der Rahmen der Plattform")
+status, body, _ = call("/", admin=True)
+seite = body.decode("utf-8")
+check("Kit der Plattform geladen", "/platform/theme.css" in seite)
+check("Rahmenskript der Plattform geladen", "/platform/app.js" in seite)
+check("App-Name ohne OAAP", '<span class="oaap-appname">KI-Gateway</span>' in seite and "OAAP KI-Gateway" not in seite)
+check("keine Rollen und kein Benutzer roh auf der Seite", "admin,user" not in seite)
+check("keine eigene Palette", "#1e3a8a" not in seite and "--oaap-blue-900:" not in seite and "#172554" not in seite)
+check("Fußzeile mit Name und Version", f"KI-Gateway {app.VERSION}" in seite)
+check("erster Reiter heißt Übersicht", 'aria-current="page">Übersicht' in seite)
+
+print("\n-- RFC-0118 §7: Listenbericht der Schlüssel")
+for i in range(55):
+    store.issue(app.DB, f"liste-{i:02d}", "test", project="Liste")
+status, body, _ = call("/schluessel", admin=True)
+seite = body.decode("utf-8")
+check("Suche, Zählzeile, Blättern ab 50", 'name="q"' in seite and "oaap-countline" in seite
+      and "Weitere 50" in seite, seite[:0])
+check("keine Formulare in den Zeilen", 'action="revoke"' not in seite and 'action="context"' not in seite)
+status, body, _ = call("/schluessel?q=liste-0", admin=True)
+seite = body.decode("utf-8")
+check("Suche filtert", "10 Schlüssel" in seite and "liste-10" not in seite, seite[seite.find("oaap-countline"):][:120])
+status, body, _ = call("/schluessel?q=liste&sort=-label", admin=True)
+seite = body.decode("utf-8")
+check("Sortieren absteigend", seite.find("liste-54") < seite.find("liste-53") and 'aria-sort="descending"' in seite)
+status, body, _ = call("/schluessel?q=liste&offset=50", admin=True)
+check("zweite Seite", "51–55 von 55" in body.decode("utf-8"))
+status, body, _ = call("/schluessel?zustand=widerrufen", admin=True)
+seite = body.decode("utf-8")
+check("Filter Zustand: nur widerrufene", "gleich-weg" in seite and "liste-01" not in seite)
+status, body, _ = call("/schluessel?etikett=liste-01", admin=True)
+seite = body.decode("utf-8")
+check("Objektseite: zurück, Kontext, Widerrufen", status == 200 and "Zurück zu den Schlüsseln" in seite
+      and 'action="context"' in seite and 'action="revoke"' in seite)
+status, body, _ = call("/schluessel?etikett=gibtsnicht", admin=True)
+check("unbekannter Schlüssel: Hinweis", status == 200 and "gibt es nicht" in body.decode("utf-8"))
+status, body, _ = call("/context", "POST", admin=True, form="label=liste-01&project=Neu")
+check("Kontext ändern führt zurück auf die Seite des Schlüssels",
+      "geändert" in body.decode("utf-8") and "<h1>liste-01</h1>" in body.decode("utf-8"))
+for i in range(55):
+    store.revoke(app.DB, f"liste-{i:02d}", "test")
+
+print("\n-- RFC-0118 §7: Letzte Anfragen blättern und sortieren")
+n = app.DB.execute("SELECT COUNT(*) AS n FROM usage").fetchone()["n"]
+status, body, _ = call("/anfragen", admin=True)
+seite = body.decode("utf-8")
+check("Zählzeile nennt alle Anfragen", (f"von {n} Anfragen" in seite) if n > 50 else (f"{n} Anfragen" in seite), n)
+status, body, _ = call("/anfragen?sort=ms", admin=True)
+check("sortierbar nach Dauer", status == 200 and 'aria-sort="ascending"' in body.decode("utf-8"))
+status, body, _ = call("/anfragen?q=nur-lokal", admin=True)
+seite = body.decode("utf-8").split("Zeiten in")[1]
+check("Suche filtert in der Datenbank", "<code>chat-default</code>" not in seite)
+
+print("\n-- RFC-0118 §7.5: Objektseiten für Modellname, Bezugsquelle, Kohorte")
+status, body, _ = call("/modelle", admin=True)
+seite = body.decode("utf-8")
+check("Modellnamen: keine Knöpfe in den Zeilen", 'action="alias-test"' not in seite
+      and 'href="modelle?name=chat-default"' in seite)
+status, body, _ = call("/modelle?name=chat-default", admin=True)
+seite = body.decode("utf-8")
+check("Seite des Modellnamens: testen und zurück", 'action="alias-test"' in seite
+      and "Zurück zu den Modellnamen" in seite)
+status, body, _ = call("/quellen", admin=True)
+check("Bezugsquellen: Zeile öffnet die Quelle", 'href="quellen?name=' in body.decode("utf-8"))
+status, body, _ = call("/kohorten", admin=True)
+seite = body.decode("utf-8")
+check("Kohorten als Liste ohne Formulare in Zeilen", 'action="cohort-extend"' not in seite)
+kohorten = store.cohorts(app.DB)
+if kohorten:
+    status, body, _ = call("/kohorten?kohorte=" + kohorten[0]["cohort"], admin=True)
+    check("Seite der Kohorte: verlängern", 'action="cohort-extend"' in body.decode("utf-8"))
+
+
+def mcp(method, params=None, admin=True):
+    data = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
+    headers = {"Content-Type": "application/json"}
+    if admin:
+        headers.update({"X-OAAP-User": "joerg", "X-OAAP-Roles": "admin,user"})
+    else:
+        headers.update({"X-OAAP-User": "anna", "X-OAAP-Roles": "user"})
+    req = urllib.request.Request(BASE + "/mcp", data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read())
+
+
+def mtext(r):
+    return r["result"]["content"][0]["text"]
+
+
+print("\n-- RFC-0118 §9: MCP-Tür, nur lesen")
+r = mcp("initialize", {"protocolVersion": "2025-06-18"})
+check("initialize", r["result"]["serverInfo"]["name"] == "oaap-ai-gateway")
+tools = mcp("tools/list")["result"]["tools"]
+check("drei Lesewerkzeuge", {t["name"] for t in tools} == {"ai_gateway_usage", "ai_gateway_models",
+                                                            "ai_gateway_suppliers"}, [t["name"] for t in tools])
+check("alle nur lesend", all(t["annotations"]["readOnlyHint"] for t in tools))
+r = mcp("tools/call", {"name": "ai_gateway_usage", "arguments": {"window": "30d"}})
+doc = json.loads(mtext(r))
+check("usage: Summen und Ranglisten", not r["result"]["isError"] and doc["calls"] > 0
+      and doc["by_model"]["top"], doc)
+r = mcp("tools/call", {"name": "ai_gateway_usage", "arguments": {"window": "1y"}})
+check("usage: unbekanntes Fenster als Ablehnung", r["result"]["isError"])
+r = mcp("tools/call", {"name": "ai_gateway_models", "arguments": {}})
+doc = json.loads(mtext(r))
+check("models: die Modellnamen mit Ampel", doc["count"] == len(app.ALIASES)
+      and all(m["light"] for m in doc["models"]), doc)
+r = mcp("tools/call", {"name": "ai_gateway_suppliers", "arguments": {}})
+raw = mtext(r)
+check("suppliers: ohne Adressen und Zugangsdaten", "http" not in raw and GEHEIM not in raw
+      and json.loads(raw)["count"] == len(app.SUPPLIERS), raw[:200])
+alles = "".join(mtext(mcp("tools/call", {"name": n, "arguments": {}})) for n in
+                ("ai_gateway_usage", "ai_gateway_models", "ai_gateway_suppliers"))
+check("nie ein Schlüsselwert", store.KEY_PREFIX not in alles and GEHEIM not in alles)
+for n in ("ai_gateway_usage", "ai_gateway_models", "ai_gateway_suppliers"):
+    r = mcp("tools/call", {"name": n, "arguments": {}}, admin=False)
+    check(f"{n}: ohne admin abgelehnt wie die Seite", r["result"]["isError"]
+          and "Serververwaltung" in mtext(r))
+check("Vorlagen für die Hauptaufgaben", len(mcp("prompts/list")["result"]["prompts"]) == 2)
+check("GET /mcp: 405", call("/mcp", admin=True)[0] == 405)
 
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} passed, {fail} failed")

@@ -1,6 +1,7 @@
 """help -- die Dokumentation eines Mandanten für Menschen und jede KI
 (RFC-0078 Stufen 1 und 2, RFC-0094 Stufe 1: die Doku der installierten Apps
-als Hilfsprodukte, mit Kacheln und Filtern).
+als Hilfsprodukte, mit Kacheln und Filtern; RFC-0118: angemeldet im Rahmen
+der Plattform, öffentlich mit eigenem Aussehen).
 
 Drei Türen auf denselben Kern (library.py):
   /mcp              MCP (Streamable HTTP, JSON): help_search, help_read,
@@ -28,6 +29,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+import appframe as af
 import guide_requests
 import maint_door
 import mcp_door
@@ -39,14 +41,17 @@ import apps_source
 from library import APPS_SOURCE, ARCHIVE_SOURCE, LOCAL_SOURCE, Library
 
 APP_ID = "help"
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA_DIR = os.environ.get("HELP_DATA_DIR", "/data")
 LIB = None
 
-CSP = ("default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; "
-       "form-action 'self'; base-uri 'none'; frame-ancestors 'self'")
+# Kit und Rahmen der Plattform (RFC-0118) kommen vom eigenen Ursprung.
+CSP = ("default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; "
+       "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'")
 
+# Der öffentliche Pfad (/public/, zentrale Instanz) behält sein eigenes Aussehen
+# (RFC-0118: öffentliche Seiten ohne Rahmen); angemeldet trägt die Hilfe den Rahmen.
 STYLE = """
 :root{--bg:#fbfbfa;--fg:#1d1d1b;--mute:#6b6b66;--line:#e2e1dc;--card:#fff;--acc:#2b5f8a;--code:#f2f1ec;--warn:#8a5a00}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#e8e7e2;--mute:#9a9992;--line:#33322f;--card:#1f1f1d;--acc:#7fb0dc;--code:#262624;--warn:#e0b050}}
@@ -78,6 +83,30 @@ ul.plain{list-style:none;padding:0}ul.plain li{padding:3px 0}
 .chip{display:inline-block;padding:2px 10px;border:1px solid var(--line);border-radius:14px;font-size:.86em;color:var(--fg);text-decoration:none}
 .chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
 """
+# Was der Hilfe im Rahmen eigen ist -- Farben nur aus dem Kit (var(--oaap-…)).
+FRAME_STYLE = """
+.hsearch{display:flex;gap:8px;margin:0 0 18px}.hsearch input{flex:1;min-width:0}
+.hit{padding:14px 0;border-bottom:1px solid var(--oaap-color-border)}.hit h3{margin:0 0 4px;font-size:1.05em}
+.meta{color:var(--oaap-color-text-muted);font-size:.86em}.snip{margin:6px 0 0}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.78em;font-weight:600;background:var(--oaap-badge-neutral-bg);color:var(--oaap-badge-neutral);text-decoration:none}
+.badge.warn{background:var(--oaap-badge-test-bg);color:var(--oaap-badge-test)}
+.warn{color:var(--oaap-color-warning)}.err{color:var(--oaap-color-danger)}
+.doc{max-width:52rem;line-height:1.6}
+.doc pre{background:var(--oaap-color-bg);border:1px solid var(--oaap-color-border);padding:12px;border-radius:var(--oaap-radius);overflow-x:auto;font-size:.9em}
+.doc code{background:var(--oaap-color-bg);padding:1px 4px;border-radius:4px;font-size:.92em}.doc pre code{padding:0;background:none}
+.doc table{border-collapse:collapse;display:block;overflow-x:auto;font-size:.92em}
+.doc td,.doc th{border:1px solid var(--oaap-color-border);padding:4px 8px;text-align:left;vertical-align:top}
+.doc blockquote{margin:0;padding:4px 14px;border-left:3px solid var(--oaap-color-border);color:var(--oaap-color-text-muted)}
+.toc{columns:2;font-size:.9em}@media(max-width:640px){.toc{columns:1}}
+ul.plain{list-style:none;padding:0}ul.plain li{padding:3px 0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;margin:16px 0 24px}
+.tile{display:block;border:1px solid var(--oaap-color-border);border-radius:var(--oaap-radius);background:var(--oaap-color-surface);padding:14px 16px;color:var(--oaap-color-text);text-decoration:none;border-top:4px solid var(--tc,var(--oaap-color-primary))}
+.tile:hover{border-color:var(--tc,var(--oaap-color-primary));text-decoration:none}.tile b{display:block;font-size:1.05em;margin-bottom:4px}
+.tile .meta{display:block}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 14px;align-items:center}
+.chip{display:inline-block;padding:2px 10px;border:1px solid var(--oaap-color-border);border-radius:14px;font-size:.86em;color:var(--oaap-color-text);text-decoration:none}
+.chip.on{background:var(--oaap-color-primary);border-color:var(--oaap-color-primary);color:var(--oaap-color-primary-text)}
+.box{border:1px solid var(--oaap-color-border);background:var(--oaap-color-surface);border-radius:var(--oaap-radius);padding:12px 16px;margin:0 0 20px}
+"""
 LAYOUTS = ("kacheln", "nüchtern")
 
 
@@ -85,8 +114,11 @@ def esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
+APP_NAME = "Hilfe"       # app.name im Manifest; HELP_TITLE ändert ihn je Mandant (RFC-0118 §3.4)
+
+
 def site_title():
-    return (os.environ.get("HELP_TITLE") or "Hilfe").strip()[:60] or "Hilfe"
+    return (os.environ.get("HELP_TITLE") or APP_NAME).strip()[:60] or APP_NAME
 
 
 def page(title, body, q="", base=""):
@@ -176,8 +208,17 @@ class Handler(BaseHTTPRequestHandler):
     def href(self, source, doc_id, anchor=""):
         return doc_href(source, doc_id, anchor, self.base)
 
-    def page(self, title, body, q=""):
-        return page(title, body, q, self.base)
+    def page(self, title, body, q="", active="/", back=""):
+        """Öffentlich das eigene Aussehen; angemeldet der Rahmen der Plattform
+        mit der Suche oben und den Reitern Übersicht · Verwaltung (nur admin)."""
+        if self.public:
+            return page(title, body, q, self.base)
+        search = (f'<form class="hsearch" action="/" method="get" role="search">'
+                  f'<input type="search" name="q" value="{esc(q)}" placeholder="Wie richte ich …?" '
+                  f'aria-label="In der Hilfe suchen"><button class="primary">Suchen</button></form>')
+        tabs = [("/", "Übersicht")] + ([("/admin", "Verwaltung")] if "admin" in self.roles() else [])
+        return af.page(title, back + search + body, app=site_title(), version=VERSION, product=APP_ID,
+                       tabs=tabs, active=active, style=FRAME_STYLE)
 
     def same_origin(self):
         origin = self.headers.get("Origin", "")
@@ -238,7 +279,17 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith("/p/"):
             # relativer Link zwischen Dokumenten: Pfad → id → Leseseite
             source, _, path = unquote(p[3:]).partition("/")
-            doc_id = self.lib.index.id_by_path(source, path)
+            doc_id = self.lib.index.id_by_path(source, path) if path else None
+            if not doc_id and source:
+                # RFC-0118 P4 / RFC-0094 §9: /p/<product> is where an app's
+                # "Hilfe" lands -- the product's page, also for a document
+                # this help does not have (any more)
+                prods = {x.get("product") for x in self.lib.products(roles=self.view_roles())}
+                if source in prods:
+                    return self.send(303, "", headers={"Location": self.base + "/produkt/" + quote(source)})
+                if not path:
+                    # no product of that name (yet): search for it instead of a dead end
+                    return self.send(303, "", headers={"Location": self.base + "/?q=" + quote(source)})
             if not doc_id:
                 return self.send(404, self.page("Nicht gefunden", "<p>Dieses Dokument gibt es hier nicht.</p>"))
             return self.send(303, "", headers={"Location": self.href(source, doc_id)})
@@ -276,7 +327,8 @@ class Handler(BaseHTTPRequestHandler):
             # Die Route /admin verlangt `admin` am Gateway; hier dieselbe Prüfung
             # noch einmal, und ein Formular nur von dieser Seite.
             if "admin" not in self.roles():
-                return self.send(403, self.page("Nur für admin", "<p>Diese Verwaltung ist nur für admin.</p>"))
+                return self.send(403, self.page("Nur für Administratoren",
+                                                "<p>Diese Verwaltung ist nur für Administratoren.</p>", active="/admin"))
             if not self.same_origin():
                 return self.send(403, self.page("Abgelehnt", "<p>Dieses Formular kam nicht von dieser Seite.</p>"))
             f = {k: v[0] for k, v in parse_qs(body.decode("utf-8", "replace"), keep_blank_values=True).items()}
@@ -444,7 +496,9 @@ class Handler(BaseHTTPRequestHandler):
                 body += (f"<h1>Keine Treffer</h1><p>Für „{esc(q)}“ gibt es nichts. Andere oder weniger Wörter versuchen.</p>"
                          + (f"<div class=box><p class=warn>{esc(note)}</p></div>" if note else ""))
             else:
-                body += (f"<p class=meta>{len(hits)} Treffer für „{esc(q)}“</p>"
+                more = (" – die besten; mit Produkt, Typ oder mehr Wörtern eingrenzen"
+                        if len(hits) >= ix.MAX_LIMIT else "")
+                body += (f"<p class=meta>{len(hits)} Treffer für „{esc(q)}“{more}</p>"
                          + "".join(self.hit_row(h, titles) for h in hits))
             return self.send(200, self.page(q, body, q))
         st = self.status()
@@ -452,7 +506,7 @@ class Handler(BaseHTTPRequestHandler):
         products = list(titles.values())
         parts = [f"<h1>{esc(site_title())}</h1><p>Anleitungen, Funktionsbeschreibungen und FAQ "
                  "zu den Apps dieses Mandanten. Oben suchen oder ein Thema wählen. "
-                 "Eine KI erreicht dasselbe über MCP unter <code>/mcp</code>.</p>"]
+                 "Im Chat beantwortet ein Assistent Fragen aus derselben Hilfe.</p>"]
         note = self.lib.platform_notice(admin=self.is_admin())
         if note:
             parts.append(f"<div class=box><p class=warn>{esc(note)}</p></div>")
@@ -482,14 +536,15 @@ class Handler(BaseHTTPRequestHandler):
         good = st.get("last_good") or {}
         parts.append(f"<p class=meta>{st['documents']} Dokumente"
                      + (f" · Plattform-Doku vom {esc(good.get('at'))}" if good.get("at") and st.get("oaap_docs") else "")
-                     + ("" if self.public else " · <a href=\"/admin\">Verwaltung</a>") + "</p>")
+                     + "</p>")
         return self.send(200, self.page("Übersicht", "".join(parts)))
 
     def product_page(self, pid):
         titles = self.product_titles()
         pr = titles.get(pid)
         if not pr:
-            return self.send(404, self.page("Nicht gefunden", "<p>Dieses Thema gibt es hier nicht.</p>"))
+            return self.send(404, self.page("Nicht gefunden", "<p>Dieses Thema gibt es hier nicht. "
+                                            f"<a href=\"{self.base}/\">Zur Übersicht</a></p>"))
         tree = self.lib.topics(roles=self.view_roles(), product=pid)
         docs = [d for items in tree.values() for d in items]
         by_kind = {}
@@ -514,7 +569,8 @@ class Handler(BaseHTTPRequestHandler):
             li = "".join(f"<li><a href=\"{esc(self.href(src_of.get(d['id'], ARCHIVE_SOURCE), d['id']))}\">{esc(d['title'])}</a></li>"
                          for d in items)
             parts.append(f"<h2>{esc(ix.KIND_WORDS.get(kind, kind))}</h2><ul class=plain>{li}</ul>")
-        return self.send(200, self.page(pr["title"], "".join(parts)))
+        back = "" if self.public else af.back("/", "Zur Übersicht")
+        return self.send(200, self.page(pr["title"], "".join(parts), back=back))
 
     def doc_page(self, ref):
         source, _, doc_id = ref.partition("/")
@@ -546,16 +602,19 @@ class Handler(BaseHTTPRequestHandler):
             toc = "<div class=box><div class=toc>" + "".join(
                 f"<div><a href=\"#{esc(s['anchor'])}\">{esc(s['heading'])}</a></div>" for s in doc["sections"]) + "</div></div>"
         body = (f"<div class=meta>{' · '.join(info)}</div>" + toc
-                + render.to_html(doc["markdown"], doc["path"], link_for))
-        return self.send(200, self.page(doc["title"], body))
+                + "<div class=doc>" + render.to_html(doc["markdown"], doc["path"], link_for) + "</div>")
+        back = "" if self.public or not doc.get("product") else af.back(
+            "/produkt/" + quote(doc["product"]), f"Zu {pt}")
+        return self.send(200, self.page(doc["title"], body, back=back))
 
     def admin_page(self, msg):
         if "admin" not in self.roles():
-            return self.send(403, self.page("Nur für admin", "<p>Diese Verwaltung ist nur für admin.</p>"))
+            return self.send(403, self.page("Nur für Administratoren",
+                                            "<p>Diese Verwaltung ist nur für Administratoren.</p>"))
         st = self.status()
         a = st["sources"].get(ARCHIVE_SOURCE) or {}
         good = st.get("last_good") or {}
-        note = f"<p class=meta>Erledigt: {esc(msg)}</p>" if msg else ""
+        note = af.msg(f"Erledigt: {msg}") if msg else ""
         rows = [
             f"<tr><td>{ARCHIVE_SOURCE}</td><td>archive über Destination <code>docs-origin</code> "
             f"({'zugeordnet' if st['destination'] else '<span class=err>nicht zugeordnet</span>'}), Pfad <code>{esc(self.lib.archive_path)}</code></td>"
@@ -575,20 +634,28 @@ class Handler(BaseHTTPRequestHandler):
         rows.append(f"<tr><td>{LOCAL_SOURCE}</td><td>eigene Notizen, Priorität über der Plattform-Doku</td><td>{len(local)} Dateien</td></tr>")
         files = "".join(
             f"<li><code>{esc(n)}</code> <form method=post action=\"/admin/local/delete\" style=\"display:inline\">"
-            f"<input type=hidden name=name value=\"{esc(n)}\"><button class=ghost>entfernen</button></form></li>"
+            f"<input type=hidden name=name value=\"{esc(n)}\"><button class=danger>entfernen</button></form></li>"
             for n, _t in local) or "<li class=meta>keine</li>"
-        body = f"""<h1>Verwaltung</h1>{note}
-<table><tr><th>Quelle</th><th>Art</th><th>Letzter Abruf</th></tr>{''.join(rows)}</table>
-<form method=post action="/admin/fetch" style="margin:12px 0"><button>Jetzt holen</button></form>
-<p class=meta>{st['documents']} Dokumente · Suche: {'FTS5' if st['fts5'] else 'einfach (ohne FTS5)'} · Öffentlicher Pfad <code>/public/</code>: {'an' if st['public_path'] else 'aus'} · angemeldet gilt der Zielgruppenfilter</p>
-<h2>Anfragen nach Anleitungen</h2>
-<p>{'An' if self.lib.requests.enabled else 'Aus'} (<code>HELP_REQUESTS</code>) · offen: {self.lib.requests.counts()['open']} · Bearbeitungstür <code>/maint/mcp</code>: {'Schlüssel gesetzt' if st['requests']['maintainer_key'] else 'kein Schlüssel (HELP_MAINT_KEY_SHA256)'}</p>
-<h2>Eigene Notizen (local)</h2>
-<p>Eine Notiz mit derselben <code>id</code> wie ein Plattformtext überdeckt ihn auf diesem Knoten; das Original bleibt lesbar.</p>
-<ul class=plain>{files}</ul>
-<form method=post action="/admin/local"><p><input type=text name=name placeholder="dateiname.md (a-z, 0-9, / _ . -)" required></p>
-<p><textarea name=text rows=12 placeholder="---&#10;id: szenarien/server-aufsetzen&#10;---&#10;# …"></textarea></p><button>Speichern</button></form>"""
-        return self.send(200, self.page("Verwaltung", body))
+        rq = self.lib.requests
+        body = (af.pagehead("Verwaltung", '<form method=post action="/admin/fetch"><button class="primary">Jetzt holen</button></form>')
+                + note
+                + af.card("Quellen", '<div class="oaap-tablewrap"><table class="oaap-table"><thead><tr><th>Quelle</th>'
+                          '<th>Art</th><th>Letzter Abruf</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></div>"
+                          f"<p class=meta>{st['documents']} Dokumente · Suche: {'Volltext (FTS5)' if st['fts5'] else 'einfach (ohne FTS5)'}"
+                          f" · Öffentlicher Pfad <code>/public/</code>: {'an' if st['public_path'] else 'aus'}"
+                          " · angemeldet sieht jede Person die Dokumente für ihre Rollen</p>")
+                + af.card("Anfragen nach Anleitungen",
+                          f"<p>{'An' if rq.enabled else 'Aus'} (<code>HELP_REQUESTS</code>) · offen: {rq.counts()['open']}"
+                          f" · Bearbeitungstür <code>/maint/mcp</code>: "
+                          f"{'Schlüssel gesetzt' if st['requests']['maintainer_key'] else 'kein Schlüssel (HELP_MAINT_KEY_SHA256)'}</p>")
+                + af.card("Eigene Notizen", "<p>Eine Notiz mit derselben <code>id</code> wie ein Plattformtext überdeckt "
+                          "ihn auf diesem Server; das Original bleibt lesbar.</p>"
+                          f"<ul class=plain>{files}</ul>"
+                          '<form method=post action="/admin/local" class="oaap-form" style="max-width:none">'
+                          '<label>Dateiname<input type=text name=name placeholder="dateiname.md (a-z, 0-9, / _ . -)" required></label>'
+                          '<label>Text (Markdown)<textarea name=text rows=12 placeholder="---&#10;id: szenarien/server-aufsetzen&#10;---&#10;# …"></textarea></label>'
+                          '<p><button class="primary">Speichern</button></p></form>'))
+        return self.send(200, self.page("Verwaltung", body, active="/admin"))
 
 
 def setup_door_path():
