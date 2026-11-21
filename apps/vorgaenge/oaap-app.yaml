@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: vorgaenge
   name: Vorgänge
-  version: 0.17.0
+  version: 0.18.0
   type: native
   class: frontend
   description: "Melden und Klären im Mandanten: nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant hier oder in „Rollen & Rechte“ vergibt. Eine Instanz je Mandant. Der Knoten kündigt seinen Neustart hier als Vorgang an und schreibt die Anfragen der Mandanten an den Betreiber hierher. KI-Spezialisten (App Spezialisten) bearbeiten Vorgänge im Hintergrund: je Bereich eine Erstbearbeitung, interne Schritte, Stopp-Knopf; schreibende Aufrufe und Antworten an die Meldende nur nach Freigabe eines Menschen. Übersicht als Listenbericht mit Suche, Filtern, Sortieren und Blättern; MCP-Tür mit Suchen, Lesen, Melden und Kommentieren. Plattform ab 0.1.199"
@@ -33,6 +33,10 @@ routes:
 # Person, die die Plattform durchreicht -- mit den Rechten der Seite.
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 storage:
   - name: data
