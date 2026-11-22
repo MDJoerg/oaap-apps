@@ -1670,6 +1670,8 @@ function renderAssistants(){
     const tags = el("div");
     for (const t of [scopeWord(a), a.origin === "config" ? "verwaltet über die Konfiguration" : "",
                      a.rev ? "Fassung " + a.rev : "", a.state === "inactive" ? "deaktiviert" : "",
+                     a.tools_gone === "all" ? "Werkzeuge gibt es nicht mehr" :
+                       a.tools_gone === "some" ? "ein Teil der Werkzeuge fehlt" : "",
                      a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
       if (t) tags.appendChild(el("span", "badge", t));
     card.appendChild(tags);
@@ -1678,7 +1680,10 @@ function renderAssistants(){
     card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · " + (a.view ? "Sicht " + a.view : "ohne Werkzeuge")));
     const acts = el("div", "acts");
     const go = el("button", "primary", "Neues Gespräch"); go.type = "button";
-    go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive"; acts.appendChild(go);
+    go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive" || a.tools_gone === "all"; acts.appendChild(go);
+    // 0.21.0 (RFC-0119 §6): die App hinter den Werkzeugen wurde entfernt
+    if (a.tools_gone === "all")
+      card.appendChild(el("p", "err", "Die Werkzeuge dieses Assistenten gibt es nicht mehr – die App dahinter wurde entfernt."));
     // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
     const r = READY[a.id];
     if (r && r.missing_tools) {

@@ -674,7 +674,11 @@ def sync_sources(db, sources, limits):
         if row["source"] not in seen:
             db.execute("UPDATE servers SET gone=?, updated=? WHERE name=?", (stamp, stamp, row["name"]))
             log(db, "plattform", "server.source", row["name"],
-                "nicht mehr in der Quellenliste; Einträge in den Sichten bleiben stehen")
+                "nicht mehr in der Quellenliste; Einträge in den Sichten bleiben stehen, "
+                "werden aber nicht mehr angeboten (RFC-0119 §6)")
+            for item in approved_items(db, row["name"]):
+                log(db, "plattform", "item.gone", f"{item['view']}/{item['name']}",
+                    "Die Quelle steht nicht mehr in der Quellenliste")
             report["gone"].append(row["name"])
     db.commit()
     return report
@@ -1327,10 +1331,19 @@ def approved_items(db, server):
 
 
 def item_state(db, item):
-    """`active`, `suspended` oder `missing` (Spec §4.2).
+    """`active`, `suspended`, `missing` oder `gone` (Spec §4.2).
 
     0.8.0 (RFC-0075 D3): ein Tool mit Ansicht ist nur aktiv, wenn auch seine
-    Ansicht in derselben Sicht aktiv ist -- eine geänderte Ansicht sperrt das Tool."""
+    Ansicht in derselben Sicht aktiv ist -- eine geänderte Ansicht sperrt das Tool.
+
+    0.41.0 (RFC-0119 §6): `gone`, wenn der Server einer Quelle der Plattform nicht
+    mehr in der Quellenliste steht (die App wurde entfernt). Der Katalog sagt dann
+    noch „vorhanden“ -- gelesen wurde er, als es die App gab --, aber hinter dem
+    Eintrag ist nichts mehr. Kommt die Quelle wieder, ist der Eintrag wieder aktiv,
+    wenn der Text gleich blieb."""
+    srv = db.execute("SELECT gone FROM servers WHERE name=?", (item["server"],)).fetchone()
+    if srv and srv["gone"]:
+        return "gone"
     cat = catalog_row(db, item["server"], item["kind"], item["source"])
     if not cat or not cat["present"]:
         return "missing"
@@ -1659,6 +1672,20 @@ def _assistant(r):
 
 def assistant_rows(db):
     return [_assistant(r) for r in db.execute("SELECT * FROM assistants ORDER BY id")]
+
+
+def tools_gone(db, view):
+    """0.41.0 (RFC-0119 §6): `all`, wenn jedes Werkzeug der Sicht von einer entfernten
+    Quelle kam (Zustand `gone`), `some`, wenn ein Teil, sonst ''. Für den Chat: Er sagt
+    dann „Die Werkzeuge dieses Assistenten gibt es nicht mehr“, statt das Modell ohne
+    Werkzeuge raten zu lassen. Nennt keinen Server."""
+    if not view:
+        return ""
+    states = [item_state(db, i) for i in items(db, view, "tool")]
+    n = states.count("gone")
+    if not n:
+        return ""
+    return "all" if n == len(states) else "some"
 
 
 def assistant_row(db, aid):

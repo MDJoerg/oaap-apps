@@ -47,7 +47,7 @@ import authz_client
 import loop
 import store
 
-VERSION = "0.20.0"
+VERSION = "0.21.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -950,7 +950,11 @@ CONFIRM_SAYS = {"yellow": "Ich gebe in diesem Gespräch nichts Sensibles ein.",
                 "red": "Ich gebe in diesem Gespräch nur Öffentliches ein.", "green": ""}
 
 
-PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands")
+PUBLIC = ("id", "title", "greeting", "model", "view", "gateway", "visibility", "commands",
+          # 0.21.0 (RFC-0119 §6): das Gateway sagt, ob die Werkzeuge von einer entfernten App kamen
+          "tools_gone")
+TOOLS_GONE_TEXT = ("Die Werkzeuge dieses Assistenten gibt es nicht mehr – die App dahinter wurde "
+                   "entfernt. Wer ihn pflegt, kann ihn löschen oder ihm eine andere Sicht geben.")
 
 
 def public(a, origin, who):
@@ -1567,6 +1571,8 @@ class Handler(BaseHTTPRequestHandler):
             return "Den Assistenten dieses Gesprächs gibt es für dich nicht (mehr)."
         if a.get("state") == "inactive":
             return "Dieser Assistent ist gerade deaktiviert."
+        if a.get("tools_gone") == "all":
+            return TOOLS_GONE_TEXT
         errs = store.problems(clean(a))
         return ("Der Assistent ist ungültig: " + " ".join(errs)) if errs else a
 
@@ -1638,6 +1644,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(404, {"error": "Diesen Assistenten gibt es für dich nicht."})
             if a.get("state") == "inactive":
                 return self.json(409, {"error": "Dieser Assistent ist gerade deaktiviert."})
+            if a.get("tools_gone") == "all":
+                return self.json(409, {"error": TOOLS_GONE_TEXT})
             light = body.get("light") or DEFAULT_LIGHT
             refused = light_change_refused(DEFAULT_LIGHT, light, body.get("sure"))
             if refused:

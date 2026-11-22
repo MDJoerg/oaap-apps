@@ -2079,7 +2079,7 @@ st, sid = session_a("a-sicht")
 check("... danach öffnet das Profil a-sicht wieder", st == 200 and bool(sid), st)
 _saved = (app.SOURCES_URL, app.fetch_sources)
 app.SOURCES_URL = "http://quellen.invalid/list"
-app.fetch_sources = lambda: list(books.servers(app.DB)) and [{"name": "kp", "app": "kontext-probe", "version": "0.1.4", "door": TUER, "instance": "kp"}]
+app.fetch_sources = lambda: list(books.servers(app.DB)) and [{"name": "kp", "app": "kontext-probe", "version": "0.1.4", "address": DREI, "door": TUER, "instance": "kp"}]
 st_p, page = admin_get("/")
 check("0.7.3: Betreiberseite zeigt den Knopf „Quellen jetzt einlesen“ und wann zuletzt", "Quellen jetzt" in page and "zuletzt" in page, None)
 page = admin("/source-sync")

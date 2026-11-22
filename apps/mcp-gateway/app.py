@@ -66,7 +66,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.40.0"
+VERSION = "0.41.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -965,6 +965,10 @@ def refusal(vrow, kind, name):
     if state == "suspended":
         return "suspended", -32002, (f"{word} {name} ist gesperrt, bis der Betreiber einen "
                                      "geänderten Text bestätigt.")
+    if state == "gone":
+        # 0.41.0 (RFC-0119 §6): die App dahinter wurde entfernt -- ohne den Server zu nennen
+        return "gone", -32002, (f"{word} {name} gibt es nicht mehr: die App dahinter wurde "
+                                "entfernt.")
     if state == "active" and item["effect"] != "read" and books.untrusted_in_view(DB, vrow["name"]):
         return "untrusted", -32002, (f"{word} {name} schreibt; diese Sicht enthält fremden Inhalt "
                                      "(Webseiten) und liefert deshalb nur Lesendes aus.")
@@ -1139,7 +1143,11 @@ STYLE = """
 """
 
 STATE_WORDS = {"active": ("green", "freigegeben"), "suspended": ("yellow", "gesperrt: Text geändert"),
-               "missing": ("red", "fehlt beim Server")}
+               "missing": ("red", "fehlt beim Server"),
+               "gone": ("red", "Quelle entfernt")}
+# 0.41.0 (RFC-0119 §6): Seite Assistenten des Betreibers
+TOOLS_GONE_MARK = {"all": " · die Werkzeuge gibt es nicht mehr (App entfernt)",
+                   "some": " · ein Teil der Werkzeuge gibt es nicht mehr (App entfernt)"}
 LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
                "yellow": "gelb — unter verbindlicher Zusage",
                "red": "rot — Daten können abfließen"}
@@ -1286,8 +1294,9 @@ def start_tab(host):
                          f'server?name={quote(x["name"])}'))
     for v in views:
         st = view_states(v["name"])
-        if st.get("suspended") or st.get("missing"):
-            bits = ", ".join(f"{st[k]} {STATE_WORDS[k][1]}" for k in ("suspended", "missing") if st.get(k))
+        if st.get("suspended") or st.get("missing") or st.get("gone"):
+            bits = ", ".join(f"{st[k]} {STATE_WORDS[k][1]}" for k in ("suspended", "missing", "gone")
+                             if st.get(k))
             todo.append(("Sicht", f'<b>{esc(v["name"])}</b>: {esc(bits)}', f'view?name={quote(v["name"])}'))
         elif not st:
             todo.append(("Sicht", f'<b>{esc(v["name"])}</b> ist leer — noch nichts freigegeben', f'view?name={quote(v["name"])}'))
@@ -1532,6 +1541,8 @@ HINT_LATER = "Versuch es später noch einmal; hält es an, sag der Verwaltung Ze
 REASON_SENTENCES = {
     ("refused", "suspended"): ("Der Eintrag ist gesperrt, bis die Verwaltung einen geänderten "
                                "Text bestätigt.", HINT_GATEWAY),
+    ("refused", "gone"): ("Die App hinter diesem Eintrag wurde entfernt; den Eintrag gibt es "
+                          "nicht mehr.", HINT_TENANT),
     ("refused", "effect"): ("Der Eintrag liegt über der Wirkungsklasse, die dein Zugang oder die "
                             "Sicht erlaubt.", HINT_GATEWAY),
     ("refused", "untrusted"): ("Der Eintrag schreibt; die Sicht enthält Webinhalt und liefert "
@@ -2950,7 +2961,7 @@ def assistants_page(user, roles, who, params):
                     "tenant": "ganzer Mandant"}.get(vis, vis)
         cards.append(
             f'<div class="card" id="a-{esc(aid)}"><h2>{esc(d.get("title") or aid)} <small class="muted">'
-            f'{esc(aid)} · Revision {r["rev"]} · {esc(vis_word)}{" · deaktiviert" if r["state"] == "inactive" else ""}</small></h2>'
+            f'{esc(aid)} · Revision {r["rev"]} · {esc(vis_word)}{" · deaktiviert" if r["state"] == "inactive" else ""}{TOOLS_GONE_MARK.get(books.tools_gone(DB, d.get("view") or ""), "")}</small></h2>'
             f'<p class="hint">Modell <code>{esc(d.get("model", ""))}</code> · Sicht <code>{esc(d.get("view", ""))}</code>'
             + (f' · Bereich für „Nicht zufrieden“ <code>{esc(d["support_queue"])}</code>' if d.get("support_queue") else "")
             + '</p>'
@@ -3266,8 +3277,11 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 if r["state"] == "inactive" and not manage:
                     continue
+                gone = books.tools_gone(DB, d.get("view") or "")
                 out.append(dict(d, rev=r["rev"], state=r["state"], changed_at=r["changed_at"],
                                 manage=manage,
+                                # 0.41.0 (RFC-0119 §6): die Werkzeuge kamen von einer entfernten App
+                                **({"tools_gone": gone} if gone else {}),
                                 # 0.37 (RFC-0117 Stufe 2): die Vorlage, damit der Export des
                                 # Chats sie nennt -- nur wenn die Einrichtung sie kennt
                                 **({"from": "recipe:" + r["origin"]}
@@ -3328,8 +3342,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": "rev ist eine Zahl."})
             return
         if not want or int(want) == row["rev"]:
+            gone = books.tools_gone(DB, row["doc"].get("view") or "")
             self.send_json(200, dict(row["doc"], rev=row["rev"], state=row["state"],
-                                     changed_at=row["changed_at"], manage=manage))
+                                     changed_at=row["changed_at"], manage=manage,
+                                     **({"tools_gone": gone} if gone else {})))
             return
         old = books.assistant_revision(DB, aid, int(want))
         if old is None:

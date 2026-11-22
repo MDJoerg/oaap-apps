@@ -1076,6 +1076,25 @@ check("0.15.0 (RFC-0103 D9): die Ansicht „Vorgänge“: Knopf mit Zahl, Tabell
 check("0.15.0: gezählt werden die offenen eigenen (nicht geschlossen, nicht abgelehnt)",
       'const CASE_ENDED = ["closed", "rejected"];' in html
       and "filter(st => !CASE_ENDED.includes(st.status)).length" in html)
+# ---- 0.21.0 (RFC-0119 §6): die App hinter den Werkzeugen wurde entfernt
+_d, _r, _st = GWA["items"]["alt-privat"]
+GWA["items"]["alt-privat"] = (dict(_d, tools_gone="all"), _r, "active")
+st, s21 = req("GET", "/api/state")
+_a = next((a for a in s21["assistants"] if a["id"] == "alt-privat"), {})
+check("0.21.0: das Gateway sagt tools_gone=all, der Chat reicht es an die Seite weiter",
+      _a.get("tools_gone") == "all", _a)
+st2, r2 = req("POST", "/api/conv", {"assistant": "alt-privat"})
+check("0.21.0: kein neues Gespräch (409) mit „gibt es nicht mehr“",
+      st2 == 409 and "gibt es nicht mehr" in r2.get("error", ""), (st2, r2))
+st, r = req("POST", f"/api/conv/{c9['id']}/send", {"text": "Noch da?"})
+check("0.21.0: ... und ein laufendes Gespräch sagt es, statt das Modell ohne Werkzeuge raten zu lassen",
+      st == 403 and "die App dahinter wurde entfernt" in r.get("error", ""), (st, r))
+GWA["items"]["alt-privat"] = (dict(_d, tools_gone="some"), _r, "active")
+st2, r2 = req("POST", "/api/conv", {"assistant": "alt-privat"})
+check("0.21.0: KÖDER: nur ein Teil der Werkzeuge weg -- das Gespräch geht", st2 == 200, (st2, r2))
+GWA["items"]["alt-privat"] = (_d, _r, _st)
+check("0.21.0: die Karte zeigt es und sperrt „Neues Gespräch“",
+      '"Werkzeuge gibt es nicht mehr"' in _pg and 'a.tools_gone === "all"; acts.appendChild(go)' in _pg, None)
 GWA["on"] = False
 
 # ------------------------------------------------ 0.16.0 (RFC-0104 §4): das KI-Gateway ohne Schlüssel

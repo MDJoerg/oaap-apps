@@ -209,6 +209,43 @@ app.sync_sources()
 ok("einmal: was der Betreiber entfernt, bleibt beim naechsten Abgleich entfernt",
    READS == ["bdt-help"] and not any(i["source"] == "help_search"
                                      for i in books.items(app.DB, "chat", "tool")))
+
+# ---- 0.41.0 (RFC-0119 §6): die App einer Quelle wird entfernt
+print("\n-- 0.41.0: Werkzeuge einer entfernten Quelle (RFC-0119 §6)")
+chat_tools = books.items(app.DB, "chat", "tool")
+n_chat = len(books.items(app.DB, "chat"))
+ok("vorher: die Werkzeuge der Hilfe sind aktiv, die Sicht hat keine entfernten",
+   chat_tools and all(books.item_state(app.DB, i) == "active" for i in chat_tools)
+   and books.tools_gone(app.DB, "chat") == "", [dict(i) for i in chat_tools])
+ANSWER.update(body=json.dumps({"v": 1, "sources": [KP]}).encode(), code=200)
+okk, text = app.sync_sources()
+states = {books.item_state(app.DB, i) for i in books.items(app.DB, "chat")}
+ok("die Hilfe verschwindet aus der Liste: jeder Eintrag der Sicht ist „gone“, keiner gelöscht",
+   okk and states == {"gone"} and len(books.items(app.DB, "chat")) == n_chat, (text, states))
+ok("… und wird nicht mehr angeboten (visible_items leer)",
+   not app.visible_items(books.view_row(app.DB, "chat"), {"max_effect": "admin"}, "tool"))
+ok("… alle Werkzeuge der Sicht entfernt: tools_gone = all", books.tools_gone(app.DB, "chat") == "all")
+t_name = books.items(app.DB, "chat", "tool")[0]["name"]
+why = app.refusal(books.view_row(app.DB, "chat"), "tool", t_name)
+ok("… ein Aufruf: abgelehnt mit „gibt es nicht mehr“, ohne den Server zu nennen",
+   why[0] == "gone" and "gibt es nicht mehr" in why[2] and "bdt-help" not in why[2], why)
+ok("… das Protokoll nennt jeden Eintrag (item.gone)",
+   app.DB.execute("SELECT COUNT(*) FROM audit WHERE action='item.gone'").fetchone()[0] == n_chat)
+ok("… die Startseite des Betreibers nennt die Sicht mit „Quelle entfernt“",
+   "Quelle entfernt" in app.start_tab("x"))
+# ein Teil: ein Werkzeug von kp in dieselbe Sicht
+books.store_catalog(app.DB, "kp", {"tool": [{"name": "kp_lesen", "description": "lesen",
+                                              "inputSchema": {"type": "object"}}]})
+books.approve(app.DB, "betreiber", "chat", "tool", "kp", "kp_lesen", effect="read")
+ok("ein Werkzeug einer noch installierten App daneben: tools_gone = some",
+   books.tools_gone(app.DB, "chat") == "some")
+ok("KÖDER: eine Sicht ohne entfernte Quelle und ein Assistent ohne Sicht: ''",
+   books.tools_gone(app.DB, "werkzeuge") == "" and books.tools_gone(app.DB, "") == "")
+ANSWER.update(body=json.dumps({"v": 1, "sources": [KP, HELP]}).encode(), code=200)
+app.sync_sources()
+ok("kommt die App wieder (Text gleich): die Einträge sind wieder aktiv",
+   {books.item_state(app.DB, i) for i in books.items(app.DB, "chat")} == {"active"}
+   and books.tools_gone(app.DB, "chat") == "")
 srv.shutdown()
 
 print("")
