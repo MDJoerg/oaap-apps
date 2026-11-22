@@ -1,7 +1,7 @@
 {
   "recipe": "oaap.tenant-recipe/1",
   "id": "studio-vorhaben",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "offers": "assistant",
   "card": {
     "title": "Stand der App-Vorhaben",
@@ -10,7 +10,7 @@
     "icon": "code"
   },
   "title": "Studio im Chat",
-  "description": "RFC-0119, Vorlage der App Studio. Der Chat bekommt einen Assistenten, der die App Studio liest. Er sieht nur, was die fragende Person in der App sehen darf, und schreibt nichts. Legt im MCP-Gateway die Sicht 'studio' mit den lesenden Werkzeugen der App, ein eigenes Zugangsprofil des Chats für diese Sicht und den Assistenten an. Steht die Quelle Studio im MCP-Gateway noch auf Rot, entscheidest du hier ihre Ampel. Überschreibt nichts, was ein Mensch angelegt hat. Voraussetzung: mcp-gateway ab 0.27.0, ein Modellname im KI-Gateway, der für den Chat freigegeben ist.",
+  "description": "RFC-0119, Vorlage der App Studio. Der Chat bekommt einen Assistenten, der die App Studio liest. Er sieht nur, was die fragende Person in der App sehen darf, und schreibt nichts. Legt im MCP-Gateway die Sicht 'studio' mit den lesenden Werkzeugen und den fertigen Fragen (Prompts, im Chat mit /name) der App, ein eigenes Zugangsprofil des Chats für diese Sicht und den Assistenten an. Steht die Quelle Studio im MCP-Gateway noch auf Rot, entscheidest du hier ihre Ampel. Überschreibt nichts, was ein Mensch angelegt hat. Voraussetzung: mcp-gateway ab 0.42.0, ein Modellname im KI-Gateway, der für den Chat freigegeben ist.",
   "needs": {
     "source": {
       "app": "studio",
@@ -18,7 +18,8 @@
     },
     "tools": {
       "app": "mcp-gateway",
-      "label": "Werkzeuge (MCP-Gateway)"
+      "label": "Werkzeuge (MCP-Gateway)",
+      "min_version": "0.42.0"
     },
     "models": {
       "app": "ai-gateway",
@@ -100,6 +101,9 @@
           "tools": {
             "server": "{source_key}",
             "effect": "read"
+          },
+          "prompts": {
+            "server": "{source_key}"
           }
         },
         {

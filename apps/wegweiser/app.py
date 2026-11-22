@@ -43,7 +43,7 @@ import qr
 import store
 import ui
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")

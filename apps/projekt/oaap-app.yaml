@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: projekt
   name: Projekte
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "Projekte mit Kunde, Status und Beginn pflegen -- alle Projekte des Mandanten im digitalen Zwilling, auch die aus der Partnerverwaltung"

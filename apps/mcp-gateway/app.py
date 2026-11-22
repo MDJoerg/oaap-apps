@@ -66,7 +66,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.41.0"
+VERSION = "0.42.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4774,7 +4774,7 @@ SETUP_SECRET_FIELDS = {"key", "token", "secret", "password", "credentials"}
 SETUP_FIELDS = {
     "refresh": set(),
     "server_light": {"light"},
-    "view": {"accesses", "tools", "max_effect"},
+    "view": {"accesses", "tools", "max_effect", "prompts"},   # prompts: 0.42.0 (RFC-0119 3a)
     "profile": {"group", "views", "ceiling", "max_effect"},
     "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
                   "commands", "views", "support_queue"},
@@ -5016,6 +5016,22 @@ def setup_wish(kind, sid, item, planned, actor):
         if max_effect not in books.EFFECTS:
             raise SetupRefused("max_effect ist read, write oder execute.")
         wish = {"ways": ways, "max_effect": max_effect, "tools": sorted(list(w) for w in wanted)}
+        # 0.42.0 (RFC-0119 3a, D11): die Prompts eines Servers kommen dazu -- alle, die er
+        # anbietet, lesend; nie statt der Tools, nur zusätzlich
+        if "prompts" in item:
+            pr = item["prompts"]
+            if not (isinstance(pr, dict) and set(pr) == {"server"} and isinstance(pr["server"], str)):
+                raise SetupRefused('prompts: {"server": <s>} -- alle Prompts dieses Servers.')
+            srow = setup_server(pr["server"])
+            rows = [r for r in books.catalog(DB, srow["name"], "prompt") if r["present"]] if srow else []
+            if rows:
+                wish["prompts"] = sorted([srow["name"], r["name"]] for r in rows)
+            elif ("refresh", pr["server"]) in planned:
+                pending = True
+            elif not srow:
+                raise SetupRefused(f"Einen Server „{pr['server']}“ gibt es nicht (erst refresh).")
+            else:
+                raise SetupRefused(f"Der Katalog von „{srow['name']}“ hat keine Prompts (erst refresh).")
         if pending:
             wish["pending"] = True
         return wish
@@ -5078,10 +5094,11 @@ def setup_matches(kind, sid, wish, obs):
             return False
         rows = books.items(DB, sid)
         tools = sorted([i["server"], i["source"], i["effect"]] for i in rows if i["kind"] == "tool")
+        prompts = sorted([i["server"], i["source"]] for i in rows if i["kind"] == "prompt")
         uis = {books.ui_uri(i) for i in rows if i["kind"] == "tool"} - {None}
-        extra = [i for i in rows if i["kind"] != "tool"
+        extra = [i for i in rows if i["kind"] not in ("tool", "prompt")
                  and not (i["kind"] == "resource" and i["name"] in uis)]
-        return tools == wish["tools"] and not extra
+        return tools == wish["tools"] and prompts == wish.get("prompts", []) and not extra
     if kind == "profile":
         return (obs["kind"] == "profile" and obs["groups"] == wish["groups"]
                 and sorted(obs["views"]) == sorted(wish["views"])
@@ -5138,8 +5155,9 @@ def setup_difference(kind, wish, obs):
             bits.append(f"Zugänge {obs['ways']} statt {wish['ways']}")
         if obs["max_effect"] != wish["max_effect"]:
             bits.append(f"bis {obs['max_effect']} statt {wish['max_effect']}")
-        have = sorted({f"{i[2]}:{i[3]}" for i in obs["items"] if i[0] == "tool"})
-        want = sorted({f"{s}:{t}" for s, t, _e in wish["tools"]})
+        have = sorted({f"{i[2]}:{i[3]}" for i in obs["items"] if i[0] in ("tool", "prompt")})
+        want = sorted({f"{s}:{t}" for s, t, _e in wish["tools"]}
+                      | {f"{s}:{p}" for s, p in wish.get("prompts", [])})
         if have != want or not bits:
             bits.append(f"Einträge {', '.join(have) or 'keine'} statt {', '.join(want)}"
                         if have != want else "Einträge oder Wirkungsklassen geändert")
@@ -5175,10 +5193,14 @@ def setup_make(kind, sid, wish, by):
         try:
             for server, source, eff in wish["tools"]:
                 books.approve(DB, by, sid, "tool", server, source, None, eff)
+            for server, source in wish.get("prompts", []):     # 0.42.0 (RFC-0119 3a)
+                books.approve(DB, by, sid, "prompt", server, source)
         except ValueError:
             books.delete_view(DB, by, sid)            # nichts halb stehen lassen
             raise
-        return f"Sicht „{sid}“ angelegt, {len(wish['tools'])} Tool(s) freigegeben."
+        n_pr = len(wish.get("prompts", []))
+        return (f"Sicht „{sid}“ angelegt, {len(wish['tools'])} Tool(s)"
+                + (f" und {n_pr} Prompt(s)" if n_pr else "") + " freigegeben.")
     if kind == "profile":
         books.issue(DB, sid, by, views=wish["views"], max_effect=wish["max_effect"],
                     ceiling=wish["ceiling"], kind="profile", groups=wish["groups"])

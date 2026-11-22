@@ -237,7 +237,7 @@ check("keine Knotenliste, keine Schlüssel mehr",
       "FLEETVIEW_NODES" not in man and "FLEETVIEW_KEYS" not in man)
 appsrc = open(os.path.join(here, "app.py"), encoding="utf-8").read()
 check("Version in app.py und Manifest gleich",
-      'VERSION = "1.2.0"' in appsrc and "version: 1.2.0" in man)
+      'VERSION = "1.2.1"' in appsrc and "version: 1.2.1" in man)
 check("Name im Manifest ohne OAAP: Flotte", "name: Flotte" in man and "OAAP FleetView" not in man)
 
 print("\n-- Seiten im Rahmen, Listen, MCP-Tür (1.1.0)")

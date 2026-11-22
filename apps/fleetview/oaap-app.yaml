@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: fleetview
   name: Flotte
-  version: 1.2.0
+  version: 1.2.1
   type: native
   class: frontend
   description: "Die Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten, aus dem Zwilling der Zentrale"

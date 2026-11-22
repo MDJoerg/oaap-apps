@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: marketplace
   name: Marktplatz
-  version: 0.5.0
+  version: 0.5.1
   type: native
   class: frontend
   description: "Digitale Assets anbieten und beziehen: OAAP-Apps, Aufbau-Vorlagen und Dateien mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen. Ein Katalog mit Landschaften, Kategorien, Suche und Detailseite (Teilen mit QR-Code), Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Prüfung zählt ein Release erst nach der Freigabe durch eine zweite Person oder eine Prüf-KI. Paketkataloge der Knoten beziehen OAAP-Apps über einen Feed."

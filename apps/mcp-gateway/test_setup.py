@@ -484,6 +484,43 @@ st, doc = call("POST", body={"v": 1, "items": [{"kind": "assistant", "id": "feld
 ok("from als Feld eines Eintrags bleibt unbekannt (die Kopfzeile ist der Weg)",
    results(doc) == ["refused"] and "from" in json.dumps(doc, ensure_ascii=False), doc)
 
+# 0.42.0 (RFC-0119 3a, D11): die Prompts des Servers in der Sicht, zusätzlich zu den Tools
+PV = {"kind": "view", "id": "mit-prompts", "accesses": ["platform"],
+      "tools": {"server": "ws-hilfe", "effect": "read"}, "prompts": {"server": "ws-hilfe"}}
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [PV]})
+ok("Sicht mit Prompts, dry: would_make, nichts angelegt",
+   results(doc) == ["would_make"] and books.view_row(app.DB, "mit-prompts") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [PV]})
+its = books.items(app.DB, "mit-prompts")
+kinds = sorted((i["kind"], i["source"], i["effect"]) for i in its)
+ok("Sicht mit Prompts: angelegt, lesende Tools und der Prompt (lesend), das schreibende Tool nicht",
+   results(doc) == ["made"] and kinds == [("prompt", "guide", "read"), ("tool", "help_products", "read"),
+                                          ("tool", "help_search", "read")]
+   and "1 Prompt(s)" in doc["results"][0]["note"], (doc, kinds))
+st, doc = call("POST", body={"v": 1, "items": [PV]})
+ok("… derselbe Lauf noch einmal: present", results(doc) == ["present"], doc)
+st, doc = call("POST", body={"v": 1, "items": [dict(PV, id="hilfe")]})
+ok("eine vorhandene Sicht ohne Prompts ist nicht „wie gewünscht“: conflict mit Satz",
+   results(doc) == ["conflict"] and "guide" in doc["results"][0]["note"], doc)
+for bad in ({"server": "ws-hilfe", "name": "guide"}, ["guide"], {"server": 3}):
+    st, doc = call("POST", body={"v": 1, "items": [dict(PV, id="p-bad", prompts=bad)]})
+    ok(f"KÖDER: prompts in anderer Form ({json.dumps(bad)}): refused, nichts angelegt",
+       results(doc) == ["refused"] and books.view_row(app.DB, "p-bad") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [dict(PV, id="p-none", prompts={"server": "gibtsnicht"})]})
+ok("KÖDER: Prompts eines unbekannten Servers: refused", results(doc) == ["refused"]
+   and books.view_row(app.DB, "p-none") is None, doc)
+CAT_SAVED, CAT["prompt"] = CAT["prompt"], []
+books.store_catalog(app.DB, "ws-hilfe", json.loads(json.dumps(CAT)))
+st, doc = call("POST", body={"v": 1, "items": [dict(PV, id="p-leer")]})
+ok("KÖDER: ein Server ohne Prompts: refused mit Satz, die Sicht nicht halb angelegt",
+   results(doc) == ["refused"] and "keine Prompts" in json.dumps(doc, ensure_ascii=False)
+   and books.view_row(app.DB, "p-leer") is None, doc)
+CAT["prompt"] = CAT_SAVED
+books.store_catalog(app.DB, "ws-hilfe", json.loads(json.dumps(CAT)))
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "mit-prompts"}]})
+ok("remove der unveränderten Sicht mit Prompts: removed", results(doc) == ["removed"]
+   and books.view_row(app.DB, "mit-prompts") is None, doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")

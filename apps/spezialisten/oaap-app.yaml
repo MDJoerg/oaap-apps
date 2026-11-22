@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: spezialisten
   name: Spezialisten
-  version: 0.6.0
+  version: 0.6.1
   type: native
   class: frontend
   description: "KI-Spezialisten, die Vorgänge im Hintergrund bearbeiten. Ein Spezialist ist eine festgehaltene Assistenten-Revision (Kennung@Revision) mit eigenem Agenten und engen Rechten nur in seinen Bereichen. Die App fragt alle 30 s die App Vorgänge (ab 0.13.0), welche Vorgänge an ihm dran sind, liest den Vorgang als zitierte Daten, ruft nur Werkzeuge seiner eigenen Sicht im MCP-Gateway und das Modell über das KI-Gateway, schreibt jeden Schritt intern in den Vorgang und gibt am Ende an die Zuständigen zurück. Ändernde Werkzeuge nur nach Freigabe eines Menschen (unterschrieben, Vorgänge ab 0.16.0); Antworten an die Meldende nur als Entwurf; Rückfragen an andere Spezialisten oder Menschen des Bereichs. Grenzen je Lauf und je Vorgang, Stopp-Knopf am Vorgang. Gepflegt vom Mandanten-Administrator; die drei Schlüssel werden nie zurückgezeigt. Lesende MCP-Tür: Spezialisten und ihre Läufe."

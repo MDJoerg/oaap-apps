@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: raci
   name: Zuständigkeiten (RACI)
-  version: 0.3.0
+  version: 0.3.1
   type: native
   class: frontend
   description: "Festhalten, welche Kontaktperson für welche Firma verantwortlich ist -- im digitalen Zwilling, auf den Firmen der Partnerverwaltung"

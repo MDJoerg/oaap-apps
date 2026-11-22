@@ -442,7 +442,7 @@ def project_tabs(p, active):
                    base + active)
 
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
