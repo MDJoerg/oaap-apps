@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: projekt
   name: Projekte
-  version: 0.2.0
+  version: 0.3.0
   type: native
   class: frontend
   description: "Projekte mit Kunde, Status und Beginn pflegen -- alle Projekte des Mandanten im digitalen Zwilling, auch die aus der Partnerverwaltung"
@@ -25,6 +25,10 @@ routes:
 
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 storage:
   - name: data

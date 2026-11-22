@@ -46,7 +46,7 @@ import appframe as af
 import door
 import mcpdoor
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PORT = 8000
 
 esc = html.escape

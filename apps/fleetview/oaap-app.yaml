@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: fleetview
   name: Flotte
-  version: 1.1.0
+  version: 1.2.0
   type: native
   class: frontend
   description: "Die Flotte auf einen Blick — lesende Übersicht über Knoten, Versionen, Instanzen und Auffälligkeiten, aus dem Zwilling der Zentrale"
@@ -43,6 +43,10 @@ routes:
 # Instanzen) unter der Route / -- also für dieselben Rollen wie die Seite.
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 # RFC-0118 §9 / RFC-0094: die Hilfe für Betreiber und Dienstleister.
 docs:

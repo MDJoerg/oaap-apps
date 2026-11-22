@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: studio
   name: Studio
-  version: 0.7.0
+  version: 0.8.0
   type: native
   # Das Studio hat eine Oberfläche — das ist der Normalfall und stünde
   # auch ohne diese Zeile so da (Runtime-Spec 2.10, RFC-0012 §1.2).
@@ -37,6 +37,10 @@ routes:
 # admin). Nur lesend; der Deploy-Token bleibt beim Menschen.
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 storage:
   - name: data

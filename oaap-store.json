@@ -9,8 +9,8 @@
       "id": "fleetview",
       "name": "Flotte",
       "type": "native",
-      "version": "1.1.0",
-      "released": "2026-11-15",
+      "version": "1.2.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/fleetview"
@@ -58,8 +58,8 @@
       "id": "studio",
       "name": "Studio",
       "type": "native",
-      "version": "0.7.0",
-      "released": "2026-11-18",
+      "version": "0.8.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/studio"
@@ -608,8 +608,8 @@
       "id": "wegweiser",
       "name": "Wegweiser",
       "type": "native",
-      "version": "0.5.0",
-      "released": "2026-11-11",
+      "version": "0.6.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/wegweiser"
@@ -700,8 +700,8 @@
       "id": "marketplace",
       "name": "Marktplatz",
       "type": "native",
-      "version": "0.4.0",
-      "released": "2026-11-18",
+      "version": "0.5.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/marketplace"
@@ -784,8 +784,8 @@
       "id": "rollen-rechte",
       "name": "Rollen & Rechte",
       "type": "native",
-      "version": "0.3.0",
-      "released": "2026-11-11",
+      "version": "0.4.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/rollen-rechte"
@@ -827,8 +827,8 @@
       "id": "partnerverwaltung",
       "name": "Partnerverwaltung",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-11-11",
+      "version": "0.3.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/partnerverwaltung"
@@ -870,8 +870,8 @@
       "id": "mitarbeiterverwaltung",
       "name": "Mitarbeiterverwaltung",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-11-11",
+      "version": "0.3.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/mitarbeiterverwaltung"
@@ -912,8 +912,8 @@
       "id": "projekt",
       "name": "Projekte",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-11-11",
+      "version": "0.3.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/projekt"
@@ -953,8 +953,8 @@
       "id": "raci",
       "name": "Zuständigkeiten (RACI)",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-11-11",
+      "version": "0.3.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/raci"
@@ -1042,8 +1042,8 @@
       "id": "spezialisten",
       "name": "Spezialisten",
       "type": "native",
-      "version": "0.5.0",
-      "released": "2026-11-20",
+      "version": "0.6.0",
+      "released": "2026-11-22",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/spezialisten"

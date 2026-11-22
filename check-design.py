@@ -10,6 +10,8 @@ Fehler (Ausgang 1):
   name      „OAAP“ im App-Namen (RFC-0118 §3)
   docs      keine Hilfe (docs:) -- Pflicht für jede App (§9, D5)
   mcp       keine MCP-Tür bei einer Fach- oder Betriebs-App mit Daten (§9, D6)
+  template  eine App mit MCP-Tür bringt keine Vorlage für einen Assistenten mit
+            (RFC-0119 D10, §7) und steht nicht unter den Ausnahmen
   frame     eine App mit Oberfläche lädt Kit und Rahmen nicht (§4, D3)
   palette   eine App setzt die Markenfarben selbst statt über das Kit
 Hinweise (kein Fehler):
@@ -43,6 +45,19 @@ TYPES = {
 # Ausnahmen von der MCP-Pflicht (§9): der Chat ist Client, das MCP-Gateway
 # ist die Tür selbst.
 NO_MCP = {"chat", "mcp-gateway"}
+# RFC-0119 D10: eine App mit MCP-Tür bringt mindestens eine Vorlage für einen
+# Assistenten mit (`assistant_templates:`), außer hier -- je mit Grund. Die
+# Ausnahmen stehen hier und nicht als Kommentar im Manifest: so ändert eine
+# Ausnahme kein Paket.
+NO_TEMPLATE = {
+    "ai-gateway": "Betriebs-App des Modellzugangs; keine Frage, die eine Person des Mandanten stellt",
+    "ollama-models": "Betriebswerkzeug für lokale Modelle",
+    "package-catalog": "Betriebswerkzeug für Pakete",
+    "vpn-client": "Betriebswerkzeug für den Tunnel",
+    "store-editor": "Werkzeug des Katalogpflegers, nicht des Mandanten",
+    "help": "die Plattform bringt die Vorlage „hilfe-assistent“ für dieselbe Quelle mit",
+    "recherche": "die Plattform bringt die Vorlage „recherche“ mit (RFC-0116); der Betreiber gibt sie frei",
+}
 # Eigene Oberfläche, aber kein Rahmen: der Chat ordnet selbst an (Typ A).
 NO_FRAME = {"chat"}
 
@@ -87,6 +102,12 @@ def check(app):
         errs.append("docs: keine Hilfe deklariert (§9)")
     if kind in ("B", "C") and app not in NO_MCP and not m.get("mcp"):
         errs.append("mcp: keine MCP-Tür (§9)")
+    if m.get("mcp") and app not in NO_TEMPLATE and app not in NO_MCP:
+        folder = str((m.get("assistant_templates") or {}).get("path") or "").strip().rstrip("/")
+        d = os.path.join(ROOT, "apps", app, folder) if folder else ""
+        if not d or not os.path.isdir(d) or not any(n.endswith(".json") for n in os.listdir(d)):
+            errs.append("template: keine Vorlage für einen Assistenten (assistant_templates:, "
+                        "RFC-0119 D10) -- oder als Ausnahme in NO_TEMPLATE mit Grund")
     src = list(sources(app))
     if kind in ("B", "C") and app not in NO_FRAME:
         has_kit = any("/platform/theme.css" in s for _p, s in src) or os.path.isdir(
@@ -124,7 +145,7 @@ def main(argv):
         if "-v" in argv:
             for h in hints:
                 print(f"          (Hinweis) {h}")
-    print(f"{len(apps) - bad} von {len(apps)} Apps halten RFC-0118 ein")
+    print(f"{len(apps) - bad} von {len(apps)} Apps halten RFC-0118 und RFC-0119 D10 ein")
     return 1 if bad else 0
 
 

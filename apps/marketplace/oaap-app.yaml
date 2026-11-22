@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: marketplace
   name: Marktplatz
-  version: 0.4.0
+  version: 0.5.0
   type: native
   class: frontend
   description: "Digitale Assets anbieten und beziehen: OAAP-Apps, Aufbau-Vorlagen und Dateien mit Kanälen (stable, beta), Sichtbarkeit und Berechtigungen. Ein Katalog mit Landschaften, Kategorien, Suche und Detailseite (Teilen mit QR-Code), Texte je Sprache. Eine Sperre prüft vor jedem Speichern auf Geheimnisse; mit Prüfung zählt ein Release erst nach der Freigabe durch eine zweite Person oder eine Prüf-KI. Paketkataloge der Knoten beziehen OAAP-Apps über einen Feed."
@@ -44,6 +44,10 @@ routes:
 # marketplace_requests -- nur, was die Person auch im Katalog sieht.
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 storage:
   # market.db (SQLite, WAL) und blobs/ -- im Backup des Knotens (D9).

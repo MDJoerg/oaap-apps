@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: wegweiser
   name: Wegweiser
-  version: 0.5.0
+  version: 0.6.0
   type: native
   class: frontend
   description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, REST-API"
@@ -42,6 +42,10 @@ routes:
 
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 # RFC-0118 §9 / RFC-0094: die Hilfe für Benutzer, Verantwortliche und Verwaltung.
 docs:

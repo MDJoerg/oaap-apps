@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.20"
 
 app:
   id: rollen-rechte
   name: Rollen & Rechte
-  version: 0.3.0
+  version: 0.4.0
   type: native
   class: frontend
   description: "Werkzeug des Mandanten-Admins für fachliche Berechtigungen: wer darf was in welcher App – Personen, Rollen, Berechtigungspakete, Zuordnungen, Gruppen des Anmeldedienstes, Protokoll. Privilegiert: verwaltet die Rechte eines Mandanten, nie Plattformrollen"
@@ -33,6 +33,10 @@ routes:
 # ist, bekommt dieselbe Ablehnung wie auf der Seite.
 mcp:
   path: /mcp
+# RFC-0119 (Manifest 0.20): Vorlagen für Assistenten, die die App mitbringt. Der Knoten
+# kopiert sie je Mandant wie die Doku; im Portal unter „Assistenten“ als Karte „von der App“.
+assistant_templates:
+  path: assistants/
 
 # RFC-0118 §9 / RFC-0094: die Hilfe für Mandanten-Admins.
 docs:
