@@ -29,7 +29,7 @@ import twin
 
 APP_NAME = "Mitarbeiterverwaltung"
 APP_ID = "mitarbeiterverwaltung"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MITARBEITERVERWALTUNG_DATA_DIR", "/data")

@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: rollen-rechte
   name: Rollen & Rechte
-  version: 0.4.1
+  version: 0.4.2
   type: native
   class: frontend
   description: "Werkzeug des Mandanten-Admins für fachliche Berechtigungen: wer darf was in welcher App – Personen, Rollen, Berechtigungspakete, Zuordnungen, Gruppen des Anmeldedienstes, Protokoll. Privilegiert: verwaltet die Rechte eines Mandanten, nie Plattformrollen"

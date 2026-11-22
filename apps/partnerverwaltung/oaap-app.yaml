@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: partnerverwaltung
   name: Partnerverwaltung
-  version: 0.3.1
+  version: 0.3.2
   type: native
   class: frontend
   description: "Firmen und Kontaktpersonen pflegen, Ansprechpartner verknüpfen, Aktivitäten und Projekte zu einer Firma erfassen -- alles im digitalen Zwilling des Mandanten"

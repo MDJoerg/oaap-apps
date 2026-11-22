@@ -33,7 +33,7 @@ import twin
 
 APP_NAME = "Projekte"
 APP_ID = "projekt"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 PORT = 8000
 
 DATA_DIR = os.environ.get("PROJEKT_DATA_DIR", "/data")

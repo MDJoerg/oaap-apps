@@ -43,7 +43,7 @@ import secretguard
 import views
 import zipinfo
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 PORT = 8000
 DATA_DIR = os.environ.get("MARKET_DATA_DIR", "/data")
 APP_NAME = "Marktplatz"          # RFC-0118 §3: derselbe Name wie im Manifest

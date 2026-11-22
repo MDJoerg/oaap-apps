@@ -35,7 +35,7 @@ import appframe as af
 import fleet
 import mcpdoor
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 APP_NAME = "Flotte"
 PORT = 8000
 

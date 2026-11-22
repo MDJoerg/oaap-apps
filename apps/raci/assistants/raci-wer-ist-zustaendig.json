@@ -1,7 +1,7 @@
 {
   "recipe": "oaap.tenant-recipe/1",
   "id": "raci-wer-ist-zustaendig",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "offers": "assistant",
   "card": {
     "title": "Wer ist zuständig?",
@@ -10,7 +10,7 @@
     "icon": "user-check"
   },
   "title": "Zuständigkeiten (RACI) im Chat",
-  "description": "RFC-0119, Vorlage der App Zuständigkeiten (RACI). Der Chat bekommt einen Assistenten, der die App Zuständigkeiten (RACI) liest. Er sieht nur, was die fragende Person in der App sehen darf, und schreibt nichts. Legt im MCP-Gateway die Sicht 'zustaendigkeiten' mit den lesenden Werkzeugen und den fertigen Fragen (Prompts, im Chat mit /name) der App, ein eigenes Zugangsprofil des Chats für diese Sicht und den Assistenten an. Steht die Quelle Zuständigkeiten (RACI) im MCP-Gateway noch auf Rot, entscheidest du hier ihre Ampel. Überschreibt nichts, was ein Mensch angelegt hat. Voraussetzung: mcp-gateway ab 0.42.0, ein Modellname im KI-Gateway, der für den Chat freigegeben ist.",
+  "description": "RFC-0119, Vorlage der App Zuständigkeiten (RACI). Der Chat bekommt einen Assistenten, der die App Zuständigkeiten (RACI) liest. Er sieht nur, was die fragende Person in der App sehen darf, und schreibt nichts. Legt im MCP-Gateway die Sicht 'zustaendigkeiten' mit den lesenden Werkzeugen und den fertigen Fragen (Prompts; im Chat bietet der Assistent sie mit /name an) der App, ein eigenes Zugangsprofil des Chats für diese Sicht und den Assistenten an. Steht die Quelle Zuständigkeiten (RACI) im MCP-Gateway noch auf Rot, entscheidest du hier ihre Ampel. Überschreibt nichts, was ein Mensch angelegt hat. Voraussetzung: mcp-gateway ab 0.42.0, ein Modellname im KI-Gateway, der für den Chat freigegeben ist.",
   "needs": {
     "source": {
       "app": "raci",
@@ -125,7 +125,8 @@
           "model": "{model}",
           "greeting": "{greeting}",
           "system": "{system}",
-          "visibility": "tenant"
+          "visibility": "tenant",
+          "commands": true
         }
       ]
     }

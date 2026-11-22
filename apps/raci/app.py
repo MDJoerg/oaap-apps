@@ -30,7 +30,7 @@ import twin
 
 APP_NAME = "Zuständigkeiten (RACI)"
 APP_ID = "raci"
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 PORT = 8000
 
 ASSIGNMENT_GROUP = "raci.assignments"

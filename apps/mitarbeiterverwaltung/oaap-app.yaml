@@ -3,7 +3,7 @@ oaap_manifest: "0.20"
 app:
   id: mitarbeiterverwaltung
   name: Mitarbeiterverwaltung
-  version: 0.3.1
+  version: 0.3.2
   type: native
   class: frontend
   description: "Mitarbeiter mit E-Mail, Telefon und Abteilung im digitalen Zwilling des Mandanten pflegen"

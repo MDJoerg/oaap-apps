@@ -66,7 +66,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.42.0"
+VERSION = "0.43.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4771,10 +4771,11 @@ SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "serve
 # Destination, die der Betreiber oder ein freigegebenes Rezept angelegt hat.
 SETUP_SERVER_AUTH = ("propagate", "none")
 SETUP_SECRET_FIELDS = {"key", "token", "secret", "password", "credentials"}
+SETUP_TOOL_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")   # 0.43.0: Tools in writes
 SETUP_FIELDS = {
     "refresh": set(),
     "server_light": {"light"},
-    "view": {"accesses", "tools", "max_effect", "prompts"},   # prompts: 0.42.0 (RFC-0119 3a)
+    "view": {"accesses", "tools", "max_effect", "prompts", "writes"},   # prompts 0.42.0, writes 0.43.0 (RFC-0119 3a/3b)
     "profile": {"group", "views", "ceiling", "max_effect"},
     "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
                   "commands", "views", "support_queue"},
@@ -5011,6 +5012,34 @@ def setup_wish(kind, sid, item, planned, actor):
                                        "nicht an (erst refresh).")
         else:
             raise SetupRefused(shape)
+        # 0.43.0 (RFC-0119 3b, D13): einzelne schreibende Tools DESSELBEN Servers, jedes mit
+        # eigenem Ja/Nein -- was ein Mensch im Assistenten angehakt hat; im Chat bestätigt die
+        # Person dann jeden Aufruf (X-OAAP-Confirmed)
+        if "writes" in item:
+            wr = item["writes"]
+            if not isinstance(tools, dict) or not isinstance(wr, dict) or not all(
+                    isinstance(k, str) and SETUP_TOOL_NAME.match(k) for k in wr):
+                raise SetupRefused('writes: {"<tool>": true|false, ...} -- nur neben '
+                                   'tools: {"server", "effect": "read"}, Tools desselben Servers.')
+            srow = setup_server(tools["server"])
+            for tname, yes in sorted(wr.items()):
+                if yes in (True, "true"):
+                    pass
+                elif yes in (False, "false"):
+                    continue
+                else:
+                    raise SetupRefused(f"writes: „{tname}“ ist true oder false.")
+                cat = books.catalog_row(DB, srow["name"], "tool", tname) if srow else None
+                if not (cat and cat["present"]):
+                    if ("refresh", tools["server"]) in planned:
+                        pending = True
+                        continue
+                    raise SetupRefused(f"Der Server „{tools['server']}“ bietet das Tool „{tname}“ "
+                                       "nicht an (erst refresh).")
+                if tname in {r["name"] for r in reading_tools(srow["name"])}:
+                    raise SetupRefused(f"„{tname}“ ist lesend (readOnlyHint) -- es kommt schon "
+                                       "über tools; writes nennt nur schreibende Tools.")
+                wanted.add((srow["name"], tname, "write"))
         effects = [e for _s, _t, e in wanted] or ["read"]
         max_effect = item.get("max_effect") or max(effects, key=lambda e: books.EFFECT_RANK[e])
         if max_effect not in books.EFFECTS:

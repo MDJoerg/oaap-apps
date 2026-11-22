@@ -521,6 +521,39 @@ st, doc = call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "mit-prom
 ok("remove der unveränderten Sicht mit Prompts: removed", results(doc) == ["removed"]
    and books.view_row(app.DB, "mit-prompts") is None, doc)
 
+# 0.43.0 (RFC-0119 3b, D13): einzelne schreibende Tools desselben Servers
+WV = {"kind": "view", "id": "mit-schreiben", "accesses": ["platform"],
+      "tools": {"server": "ws-hilfe", "effect": "read"}, "writes": {"help_request_guide": "false"}}
+st, doc = call("POST", body={"v": 1, "items": [WV]})
+its = sorted((i["source"], i["effect"]) for i in books.items(app.DB, "mit-schreiben"))
+ok("writes mit false: nur die lesenden Tools, Sicht liest",
+   results(doc) == ["made"] and its == [("help_products", "read"), ("help_search", "read")]
+   and books.view_row(app.DB, "mit-schreiben")["max_effect"] == "read", (doc, its))
+st, doc = call("POST", body={"v": 1, "items": [dict(WV, writes={"help_request_guide": "true"})]})
+ok("… dieselbe Sicht, jetzt angehakt: conflict (nichts ändert sich von selbst)",
+   results(doc) == ["conflict"], doc)
+WV2 = dict(WV, id="schreibt", writes={"help_request_guide": True})
+st, doc = call("POST", body={"v": 1, "items": [WV2]})
+its = sorted((i["source"], i["effect"]) for i in books.items(app.DB, "schreibt"))
+ok("writes mit true: das schreibende Tool als write dazu, Sicht bis write",
+   results(doc) == ["made"] and ("help_request_guide", "write") in its and len(its) == 3
+   and books.view_row(app.DB, "schreibt")["max_effect"] == "write", (doc, its))
+st, doc = call("POST", body={"v": 1, "items": [WV2]})
+ok("… noch einmal: present", results(doc) == ["present"], doc)
+for bad, word in (({"help_search": True}, "lesend"), ({"gibtsnicht": True}, "nicht an"),
+                  ({"help_request_guide": "ja"}, "true oder false"), (["help_request_guide"], "writes:")):
+    st, doc = call("POST", body={"v": 1, "items": [dict(WV, id="w-bad", writes=bad)]})
+    ok(f"KÖDER writes {json.dumps(bad)}: refused ({word}), nichts angelegt",
+       results(doc) == ["refused"] and word in json.dumps(doc, ensure_ascii=False)
+       and books.view_row(app.DB, "w-bad") is None, doc)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "view", "id": "w-liste", "accesses": ["platform"],
+                                                "tools": [{"server": "ws-hilfe", "tool": "help_search"}],
+                                                "writes": {"help_request_guide": True}}]})
+ok("KÖDER writes neben einer Tool-Liste: refused", results(doc) == ["refused"]
+   and books.view_row(app.DB, "w-liste") is None, doc)
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "schreibt"}]})
+ok("remove der unveränderten schreibenden Sicht: removed", results(doc) == ["removed"], doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")
