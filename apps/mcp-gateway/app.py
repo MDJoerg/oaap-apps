@@ -66,7 +66,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.43.0"
+VERSION = "0.44.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -5247,9 +5247,14 @@ def setup_refresh(sid, dry, planned):
     srow = setup_server(sid)
     had = bool(srow) and bool(catalog_tools(srow["name"]))
     if dry:
-        if had:
-            return "present", f"{len(catalog_tools(srow['name']))} Tool(s) im Katalog."
+        # 0.44.0 (RFC-0120 Stufe 5): auch ein vorhandener Katalog wird im Lauf neu
+        # eingelesen -- ein Tool, das der Server seitdem dazubekommen hat (der Zwilling
+        # 0.16 mit seinen schreibenden Tools), darf eine spätere Sicht derselben
+        # Einrichtung daher schon nennen
         planned.add(("refresh", sid))
+        if had:
+            return "present", (f"{len(catalog_tools(srow['name']))} Tool(s) im Katalog; "
+                               "wird neu eingelesen.")
         return "would_make", "Liest die Quellen der Plattform und den Katalog ein."
     ok, text = sync_sources()
     srow = setup_server(sid)

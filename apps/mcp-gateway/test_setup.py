@@ -554,6 +554,27 @@ ok("KÖDER writes neben einer Tool-Liste: refused", results(doc) == ["refused"]
 st, doc = call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "schreibt"}]})
 ok("remove der unveränderten schreibenden Sicht: removed", results(doc) == ["removed"], doc)
 
+# 0.44.0 (RFC-0120 Stufe 5): ein Katalog, dem ein Tool fehlt, das der Server inzwischen hat
+# (der Zwilling 0.16): refresh in derselben Einrichtung liest ihn neu ein, die Sicht darf es nennen
+app.DB.execute("UPDATE catalog SET present = 0 WHERE server = 'ws-hilfe' AND name = "
+               "'help_request_guide'")
+app.DB.commit()
+WG = {"kind": "view", "id": "gewachsen", "accesses": ["platform"],
+      "tools": {"server": "ws-hilfe", "effect": "read"}, "writes": {"help_request_guide": True}}
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [WG]})
+ok("KÖDER ohne refresh: das fehlende Tool -> refused (erst refresh)",
+   results(doc) == ["refused"] and "erst refresh" in json.dumps(doc, ensure_ascii=False), doc)
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [
+    {"kind": "refresh", "id": "ws-hilfe"}, WG]})
+ok("mit refresh davor: die Prüfung plant das Neueinlesen, die Sicht wäre anzulegen",
+   results(doc) == ["present", "would_make"] and "neu eingelesen" in json.dumps(
+       doc, ensure_ascii=False), doc)
+st, doc = call("POST", body={"v": 1, "items": [{"kind": "refresh", "id": "ws-hilfe"}, WG]})
+its = sorted((i["source"], i["effect"]) for i in books.items(app.DB, "gewachsen"))
+ok("… der Lauf: Katalog neu eingelesen, das Tool als write in der Sicht",
+   results(doc) == ["present", "made"] and ("help_request_guide", "write") in its, (doc, its))
+call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "gewachsen"}]})
+
 gw.shutdown()
 plat.shutdown()
 print("")
