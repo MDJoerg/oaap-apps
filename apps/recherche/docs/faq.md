@@ -20,6 +20,11 @@ Noch nicht.
 Entweder hat Ihr Administrator `web_fetch` ausgeschaltet, oder Ihr Mandant ist geschlossen
 und erreicht das Internet nur über freigegebene Ziele.
 
-**„Suchdienst nicht zugeordnet“ – was tun?**
-Der Administrator ordnet der App eine Destination `search` zu, siehe
+**„Kein Suchdienst zugeordnet“ – was tun?**
+Das kommt nur in einem geschlossenen Mandanten vor oder wenn der eigene Suchdienst
+abgeschaltet ist. Der Administrator ordnet der App dann eine Destination `search` zu, siehe
 [Recherche einrichten](einrichten.md).
+
+**„Der Suchdienst ist nicht erreichbar“ – was tun?**
+Der eigene Suchdienst der Instanz startet gerade oder läuft nicht. Kurz warten; bleibt es so,
+sieht der Administrator auf der Gesundheitsseite nach der Instanz.

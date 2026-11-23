@@ -1,8 +1,13 @@
 """web_search über SearXNG hinter der Destination `search` (RFC-0116 §2.2, D3, §8).
 
-Die App kennt keine Adresse eines Suchdienstes: wohin die Suche geht, sagt die
-Destination, die der Betreiber gebunden hat (OAAP_DESTINATION_SEARCH_URL). In einem
-geschlossenen Mandanten ist das der einzige Weg hinaus (RFC-0068).
+Wohin die Suche geht (RFC-0116 §2.2a, recherche 0.3.0):
+  1. die Destination `search`, wenn der Betreiber eine gebunden hat
+     (OAAP_DESTINATION_SEARCH_URL) -- eine gemietete oder eigene Suche; in einem
+     geschlossenen Mandanten der einzige Weg hinaus (RFC-0068);
+  2. sonst der eigene SearXNG-Dienst `search` im Netz der Instanz
+     (RECHERCHE_SEARCH_URL, Vorgabe http://search:8080) -- aber nie in einem
+     geschlossenen Mandanten: dort käme er nicht hinaus, und eine Suche, die
+     still nichts findet, ist die schlechtere Antwort als ein Satz.
 
 Aus der Messung von Stufe 0 (§8.3): Fallen Suchmaschinen aus (CAPTCHA, Zeitüberschreitung),
 sagt das Ergebnis es in einem Satz; sind dabei keine Treffer übrig, ist das eine
@@ -26,14 +31,36 @@ class Refused(Exception):
         self.text, self.reason = text, reason
 
 
+OWN_DEFAULT = "http://search:8080"
+
+
 def destination(env):
     return (env.get("OAAP_DESTINATION_SEARCH_URL") or "").strip()
 
 
+def own_service(env):
+    """Adresse des eigenen SearXNG-Dienstes, oder "" (abgeschaltet, geschlossener Mandant)."""
+    if (env.get("OAAP_EGRESS") or "").strip() == "closed":
+        return ""
+    v = env.get("RECHERCHE_SEARCH_URL")
+    v = OWN_DEFAULT if v is None else v.strip()
+    return "" if v.lower() in ("", "off", "aus") else v
+
+
+def backend(env):
+    """(Adresse, Art): Art ist "destination", "eigen" oder "" (keiner)."""
+    d = destination(env)
+    if d:
+        return d, "destination"
+    o = own_service(env)
+    return (o, "eigen") if o else ("", "")
+
+
 def search(env, query, count=5, language="", site="", opener=urllib.request.urlopen):
-    base = destination(env)
+    base, _kind = backend(env)
     if not base:
-        raise Refused("Dieser Instanz ist kein Suchdienst zugeordnet (Destination search). Der "
+        raise Refused("Dieser Instanz ist kein Suchdienst zugeordnet: keine Destination search und "
+                      "kein eigener Suchdienst (im geschlossenen Mandanten gibt es ihn nicht). Der "
                       "Betreiber bindet einen: oaap destination bind <instanz> <destination> "
                       "--as search.", "no-destination")
     q = str(query or "").strip()
@@ -60,7 +87,7 @@ def search(env, query, count=5, language="", site="", opener=urllib.request.urlo
     # §8.4: SearXNG schreibt sonst für jede Anfrage eine Warnung ins eigene Protokoll.
     req = urllib.request.Request(url, headers={"Accept": "application/json",
                                                "X-Real-IP": "127.0.0.1",
-                                               "User-Agent": "oaap-recherche/0.1"})
+                                               "User-Agent": "oaap-recherche/0.3"})
     try:
         with opener(req, timeout=TIMEOUT) as r:
             raw = r.read(4_000_000)

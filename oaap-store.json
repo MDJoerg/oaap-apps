@@ -372,8 +372,8 @@
       "id": "recherche",
       "name": "Recherche",
       "type": "native",
-      "version": "0.2.0",
-      "released": "2026-11-21",
+      "version": "0.3.0",
+      "released": "2026-11-23",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/recherche"
@@ -400,8 +400,8 @@
         "ki",
         "searxng"
       ],
-      "summary": "Websuche und Webseiten als lesende MCP-Quelle für Assistenten — Suchdienst hinter einer Destination, startet rot.",
-      "description": "Recherche (RFC-0116): web_search fragt einen Suchdienst hinter der Destination search (zuerst SearXNG mit format json), web_fetch liest eine öffentliche Seite als Text (höchstens 12.000 Zeichen). Beide Werkzeuge lesen nur. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht; nur Ports 80/443, höchstens 2 MB, Text/HTML/JSON. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün; in einem geschlossenen Mandanten gibt es nur die Suche. Mit dem Rezept 'recherche' bekommt der Chat den Assistenten in einem Lauf.",
+      "summary": "Websuche und Webseiten als lesende MCP-Quelle für Assistenten — mit eigenem Suchdienst (SearXNG), startet rot.",
+      "description": "Recherche (RFC-0116): web_search fragt den eigenen Suchdienst der Instanz (SearXNG, ohne Route und ohne offenen Port) oder einen anderen hinter der Destination search, web_fetch liest eine öffentliche Seite als Text (höchstens 12.000 Zeichen). Beide Werkzeuge lesen nur. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht; nur Ports 80/443, höchstens 2 MB, Text/HTML/JSON. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün; in einem geschlossenen Mandanten gibt es nur die Suche. Mit dem Rezept 'recherche' bekommt der Chat den Assistenten in einem Lauf.",
       "links": [
         {
           "rel": "source",

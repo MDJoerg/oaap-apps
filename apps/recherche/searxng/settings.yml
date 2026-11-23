@@ -1,0 +1,23 @@
+# SearXNG als Dienst `search` der App recherche. Nur Abweichungen vom Standard.
+use_default_settings: true
+
+general:
+  instance_name: "OAAP Recherche"
+
+server:
+  # Platzhalter: der echte Schlüssel kommt aus SEARXNG_SECRET, das der
+  # Einstiegsschritt (oaap-entrypoint.sh) beim ersten Start erzeugt.
+  secret_key: "ultrasecretkey"
+  # Nur der Dienst web derselben Instanz fragt: keine Bremse.
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+search:
+  # JSON ist das, was recherche liest.
+  formats:
+    - html
+    - json
+
+ui:
+  default_locale: "de"

@@ -24,7 +24,7 @@ import fetch as fx
 import mcp_door
 import search as sx
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 APP_NAME = "Recherche"
 PORT = int(os.environ.get("PORT", "8000"))
 BODY_LIMIT = 256 * 1024
@@ -79,6 +79,7 @@ class State:
                     for (d, t), v in sorted(self.counts.items(), reverse=True)]
         return {"version": VERSION, "backend": (self.env.get("RECHERCHE_BACKEND") or "searxng"),
                 "search_destination": bool(sx.destination(self.env)),
+                "search_backend": sx.backend(self.env)[1],
                 "fetch": self.fetch_on(), "egress": "closed" if self.closed() else "open",
                 "allow": fx.domains(self.env.get("RECHERCHE_ALLOW", "")),
                 "deny": fx.domains(self.env.get("RECHERCHE_DENY", "")),
@@ -158,8 +159,10 @@ class Handler(BaseHTTPRequestHandler):
     def home(self):
         s = self.state.status()
         e = html.escape
-        dest = ("zugeordnet" if s["search_destination"] else
-                "<b>nicht zugeordnet</b> – <code>oaap destination bind &lt;instanz&gt; &lt;destination&gt; --as search</code>")
+        dest = {"destination": "Destination <code>search</code> (vom Betreiber zugeordnet)",
+                "eigen": "eigener Suchdienst der Instanz (SearXNG)"}.get(
+            s["search_backend"],
+            "<b>keiner</b> – <code>oaap destination bind &lt;instanz&gt; &lt;destination&gt; --as search</code>")
         fetch = ("an" if s["fetch"] else "aus") + (" (geschlossener Mandant)" if s["egress"] == "closed" else "")
         settings = af.card("Einstellungen", (
             '<dl class="oaap-kv">'
@@ -197,7 +200,7 @@ def main():
     global STATE
     STATE = State()
     print(f"recherche {VERSION} auf :{PORT} -- Suchdienst "
-          f"{'zugeordnet' if sx.destination(os.environ) else 'NICHT zugeordnet'}, "
+          f"{ {'destination': 'Destination search', 'eigen': 'eigener Dienst'}.get(sx.backend(os.environ)[1], 'KEINER')}, "
           f"web_fetch {'an' if STATE.fetch_on() else 'aus'}", flush=True)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()
 

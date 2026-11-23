@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""recherche 0.1.0 (RFC-0116 Stufe 1) ohne Knoten.
+"""recherche 0.3.0 (RFC-0116 Stufe 1, 2 und §2.2a) ohne Knoten.
 
 Ein nachgebautes SearXNG hinter einer nachgebauten Destination, eine nachgebaute
 Webseite; die App läuft echt (HTTP). Jede Sperre hat einen Köder: ein Zuhörer, der
@@ -127,10 +127,15 @@ for bad, word in ((dict(query=""), "query fehlt"), (dict(query="x" * 301), "300"
     except sx.Refused as e:
         ok(f"KÖDER abgelehnt mit Satz: {list(bad)}", word in e.text, e.text)
 try:
-    sx.search({}, "foo")
-    ok("ohne Destination", False)
+    sx.search({"RECHERCHE_SEARCH_URL": "off"}, "foo")
+    ok("ohne Destination und ohne eigenen Dienst", False)
 except sx.Refused as e:
-    ok("ohne Destination: der Satz sagt, wie man bindet", "--as search" in e.text, e.text)
+    ok("ohne Destination und ohne eigenen Dienst: der Satz sagt, wie man bindet", "--as search" in e.text, e.text)
+try:
+    sx.search({}, "foo")
+    ok("eigener Dienst nicht da", False)
+except sx.Refused as e:
+    ok("eigener Dienst nicht erreichbar: ein Satz, Grund connect", e.reason == "connect" and "nicht erreichbar" in e.text, e.text)
 
 # ------------------------------------------------------------ eine Webseite
 class Site(BaseHTTPRequestHandler):
@@ -392,9 +397,23 @@ tools = rpc(s3, "tools/list")["result"]["tools"]
 res, text = call(s3, "web_fetch", {"url": "http://pub.example/seite"})
 ok("RECHERCHE_FETCH=off: nur die Suche, ein Aufruf sagt warum", [t["name"] for t in tools] == ["web_search"]
    and res["isError"] and "RECHERCHE_FETCH=off" in text, text)
-s4 = door({})
+s4 = door({"RECHERCHE_SEARCH_URL": "off"})
 res, text = call(s4, "web_search", {"query": "x"})
-ok("Konformität 6: ohne Destination nichts hinaus, ein Satz", res["isError"] and "Destination search" in text, text)
+ok("Konformität 6: ohne Destination und ohne eigenen Dienst nichts hinaus, ein Satz",
+   res["isError"] and "Destination search" in text, text)
+
+print("eigener Suchdienst (0.3.0, RFC-0116 §2.2a)")
+ok("ohne Destination: der eigene Dienst http://search:8080", sx.backend({}) == ("http://search:8080", "eigen"))
+ok("Destination gebunden: sie gilt vor dem eigenen", sx.backend(ENV) == (DEST, "destination"))
+ok("geschlossener Mandant: nie der eigene Dienst", sx.backend({"OAAP_EGRESS": "closed"}) == ("", ""))
+ok("geschlossener Mandant mit Destination: die Destination",
+   sx.backend(dict(ENV, OAAP_EGRESS="closed")) == (DEST, "destination"))
+ok("RECHERCHE_SEARCH_URL=off schaltet den eigenen ab", sx.backend({"RECHERCHE_SEARCH_URL": "off"}) == ("", ""))
+own = {"RECHERCHE_SEARCH_URL": f"http://127.0.0.1:{searx.server_port}/eigen"}
+Searx.mode = "ok"
+r = sx.search(own, "Wärmepumpe", count=2)
+ok("die Suche geht an den eigenen Dienst, gleiche Form", Searx.seen[-1][0] == "/eigen/search"
+   and Searx.seen[-1][1]["format"] == "json" and r["count"] >= 1, (Searx.seen[-1], r))
 ok("unbekanntes Werkzeug → JSON-RPC-Fehler", "error" in rpc(s, "tools/call", {"name": "shell", "arguments": {}}))
 
 print(f"\n{'ALLES GRÜN' if not fails else f'{fails} FEHLER'}")

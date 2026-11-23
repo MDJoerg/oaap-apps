@@ -3,25 +3,43 @@ oaap_manifest: "0.19"
 app:
   id: recherche
   name: Recherche
-  version: 0.2.0
+  version: 0.3.0
   type: native
   class: service
-  description: "Websuche und Webseiten als MCP-Quelle für die Assistenten des Mandanten: web_search fragt einen Suchdienst hinter der Destination search (zuerst SearXNG), web_fetch liest eine öffentliche Seite als Text. Beides lesend. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün: Suchwörter verlassen den Mandanten. In einem geschlossenen Mandanten gibt es nur die Suche."
+  description: "Websuche und Webseiten als MCP-Quelle für die Assistenten des Mandanten: web_search fragt den eigenen Suchdienst der Instanz (SearXNG, Dienst search) oder, wenn der Betreiber eine bindet, einen Suchdienst hinter der Destination search, web_fetch liest eine öffentliche Seite als Text. Beides lesend. Adressen im eigenen Netz und des eigenen Knotens werden nie gelesen, auch nach Umleitungen nicht. Kein Suchbegriff, keine Adresse, kein Inhalt im Protokoll. Die Quelle startet im MCP-Gateway rot und wird nie grün: Suchwörter verlassen den Mandanten. In einem geschlossenen Mandanten gibt es nur die Suche."
 
 care:
-  # RFC-0071 §15: nur Standardbibliothek, beim Bau wird nichts nachgeladen.
+  # RFC-0071 §15: web nur Standardbibliothek, search auf Tag und Digest
+  # festgenagelt -- beim Bau wird nichts nachgeladen.
   rebuild: self
 
+# Mehr-Container (RFC-0016), seit 0.3.0 (RFC-0116 §2.2a):
+#   web     die App selbst: Seite, Status, MCP-Tür
+#   search  der eigene Suchdienst, SearXNG (searxng/). Keine Route, kein Port
+#           nach außen: nur web fragt ihn im Netz der Instanz (http://search:8080).
+#           Bindet der Betreiber eine Destination search, gilt die, und search
+#           läuft unbenutzt mit. Im geschlossenen Mandanten fragt web ihn nie.
 services:
   web:
     build: .
     port: 8000
+  search:
+    build: searxng
+    port: 8080
+
+storage:
+  # Zwischenspeicher von SearXNG und sein Schlüssel (beim ersten Start erzeugt);
+  # ohne Erklärung legte Docker ein namenloses Volume an.
+  - name: cache
+    mount: /var/cache/searxng
+    service: search
 
 routes:
   # Seite, Status und MCP-Tür für angemeldete Personen. Über das MCP-Gateway des
   # Mandanten erreicht ein Assistent die Tür als die Person, die mit ihm spricht.
   - path: /
     roles: [admin, keyuser, user, support]
+    service: web
 
 # RFC-0073 (Manifest 0.11): die MCP-Tür unter der eigenen Route.
 mcp:
@@ -36,9 +54,12 @@ mcp_content:
 destinations:
   - name: search
     kind: http
-    purpose: "Suchdienst: eine SearXNG-Instanz mit format json (eigene oder gemietete), z. B. http://<host>:8080"
+    purpose: "Freiwillig: ein anderer Suchdienst statt des eigenen, eine SearXNG-Instanz mit format json (gemietete oder eigene), z. B. http://<host>:8080. Im geschlossenen Mandanten der einzige Weg zur Suche."
 
 config:
+  - key: RECHERCHE_SEARCH_URL
+    label: "Adresse des eigenen Suchdienstes im Netz der Instanz (Vorgabe http://search:8080; off = nur über die Destination search)"
+    default: "http://search:8080"
   - key: RECHERCHE_BACKEND
     label: "Art des Suchdienstes hinter der Destination search (zurzeit: searxng)"
     default: "searxng"
