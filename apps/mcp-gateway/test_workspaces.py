@@ -81,6 +81,9 @@ check("schreibende Werkzeuge mit Arbeitsablage", "store_write" in names and "sto
 ro = W.save_ws(db, "u1", {"id": "nur-lesen", "title": "x", "mounts": [
     dict(GOOD["mounts"][0])]})
 check("Werkzeugliste fest benannt", set(names) == set(W.TOOLS))
+eff = {t["name"]: t["_meta"]["oaap/effect"] for t in W.tool_list(ws)}
+check("Wirkungsklasse für den Chat: lesen ohne, schreiben mit Zustimmung",
+      eff["store_read"] == "read" and eff["workspace_info"] == "read" and eff["store_edit"] == "write")
 
 
 # --- der nachgebaute Konnektor
@@ -175,6 +178,8 @@ check("Arbeitsraum zeigt jetzt gelb", W.ws_light(db, ws) == "yellow")
 t = "# A\n## X\n1\n# B\n## X\n2\n"
 check("mehrdeutiger Abschnitt verlangt Oben > Unten", raises(W.find_section, t, "X") is not None)
 check("Oben > Unten eindeutig", W.read_part(t, "B > X")["text"] == "## X\n2")
+check("Abschnitt auch samt Rauten („# B > ## X“, gemessen am Modell)",
+      W.read_part(t, "# B > ## X")["text"] == "## X\n2")
 check("section_delete", W.edit(t, "section_delete", "A > X") == "# A\n# B\n## X\n2\n")
 check("Überschrift im Codeblock zählt nicht", [x[1] for x in W.outline("```\n# nein\n```\n# ja")] == ["ja"])
 rp = W.read_part("\n".join(str(i) for i in range(1000)), from_line=1)

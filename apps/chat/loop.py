@@ -148,10 +148,17 @@ def result_text(msgs):
 
 
 def for_model(msgs):
-    """Nur die Felder, die das Modell kennt -- eigene Vermerke bleiben in der Datei."""
+    """Nur die Felder, die das Modell kennt -- eigene Vermerke bleiben in der Datei.
+
+    0.22.0 (RFC-0121 §5.3): was der CHAT selbst aufrief (`by: chat`, das Ablegen des
+    Gesprächs), geht nicht ans Modell -- weder der Aufruf noch sein Ergebnis."""
     out = []
+    own = {c.get("id") for m in msgs if m.get("role") == "assistant"
+           for c in m.get("tool_calls") or [] if c.get("by") == "chat"}
     for m in msgs:
         role = m.get("role")
+        if m.get("by") == "chat" or (role == "tool" and m.get("tool_call_id") in own):
+            continue
         if role == "user":
             out.append({"role": "user", "content": m.get("content", "")})
         elif role == "assistant":

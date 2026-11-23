@@ -447,3 +447,15 @@ nennt, glaubt an Werkzeuge dort), ebenso `views: true` ohne `view`.
 
 Streaming der Antwort, Anhänge, Formulare, Sprache, mobile Ansicht als
 eigene Oberfläche; Kontexte außer `team`.
+
+## Arbeitsräume (0.22.0, RFC-0121 §5)
+
+Ein Gespräch kann in einem Arbeitsraum des MCP-Gateways beginnen (`oaap.work.workspaces` 0.2).
+Der Chat schickt dann `X-OAAP-Workspace` mit, das Gateway fügt die Ablagetür (`store_*`) zur
+Sicht des Assistenten hinzu. Vor dem ersten Modellzug liest der Chat `workspace_info`, Stand
+und Protokoll und gibt sie dem Modell als fremden Inhalt mit (`workspace.py`, gespeichert als
+`ws_context`). `/stand` und `/abschluss` sind Bitten an den Assistenten; `/ablegen` schreibt der
+Chat selbst (ein Aufruf mit `by: chat`, durch dieselbe Zustimmung, nie ans Modell). Ein
+Gespräch, dessen Ampel lockerer ist als die des Arbeitsraums, beginnt nicht (409 mit
+`needs_light`). Arbeitsräume anlegen und löschen: `/api/workspaces` (durchgereicht an
+`/mcp/_workspaces` des Gateways, als die Person). Tests: `test_workspace.py`.

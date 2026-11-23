@@ -45,4 +45,5 @@ Auf dem Telefon ist die Leiste eine Schublade (☰).
 - [Assistenten wählen und pflegen](assistenten.md)
 - [Ampel, Sterne und „Nicht zufrieden“](ampel-und-rueckmeldung.md)
 - [Deine Vorgänge im Chat](vorgaenge.md)
+- [Im Arbeitsraum arbeiten](arbeitsraeume.md)
 - [Häufige Fragen](faq.md)

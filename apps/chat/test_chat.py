@@ -434,11 +434,11 @@ st, r = req("POST", f"/api/conv/{c2['id']}/step", {})
 check("... erneut versucht mit frischer Zusicherung: läuft", r["state"] == "done" and len(DOOR) == calls + 1, r)
 
 # Sitzung einer anderen Person wird nicht übernommen
-app._MCP[("id-anna", "gw1", "kp-i", False)] = "S-bert"
+app._MCP[("id-anna", "gw1", "kp-i", False, "")] = "S-bert"
 req("POST", f"/api/conv/{c2['id']}/send", {"text": "Projekte?"})
 _, r = req("POST", f"/api/conv/{c2['id']}/step", {})
 check("fremde MCP-Sitzung: die Tür kennt sie nicht, der Chat eröffnet eine eigene",
-      r["state"] == "done" and app._MCP[("id-anna", "gw1", "kp-i", False)] == "S-anna", r)
+      r["state"] == "done" and app._MCP[("id-anna", "gw1", "kp-i", False, "")] == "S-anna", r)
 
 # Schleife begrenzt
 _, c3 = req("POST", "/api/conv", {"assistant": "projekte"})

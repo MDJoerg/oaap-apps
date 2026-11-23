@@ -46,8 +46,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import authz_client
 import loop
 import store
+import workspace
 
-VERSION = "0.21.0"
+VERSION = "0.22.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -120,6 +121,7 @@ except (ValueError, AssertionError):
 # Decke des Schlüssels, lockert sie nie -- ein Schutz vor Versehen, keine Kontrolle.
 LIGHTS = ("green", "yellow", "red")
 LIGHT_RANK = {x: i for i, x in enumerate(LIGHTS)}
+LIGHT_WORDS = {"green": "grün", "yellow": "gelb", "red": "rot"}
 LIGHT_HEADER = "X-OAAP-Light"
 _DL = (os.environ.get("CHAT_DEFAULT_LIGHT") or "").strip().lower()
 # D5: grün ist die Vorgabe; der Mandant darf gelb vorgeben (Demo, Schulung), rot nie.
@@ -195,7 +197,8 @@ def list_convs(person):
             if c:
                 out.append({"id": c["id"], "title": c.get("title") or "Neues Gespräch",
                             "assistant": c.get("assistant"), "updated": c.get("updated", ""),
-                            "created": c.get("created", "")})
+                            "created": c.get("created", ""), "workspace": c.get("workspace"),
+                            "private": bool(c.get("private"))})
     return sorted(out, key=lambda c: c["updated"], reverse=True)
 
 
@@ -230,13 +233,15 @@ def gateway_for(name):
     return hit[0]
 
 
-def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False, light=""):
+def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False, light="", ws=""):
     headers = {"Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
                "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion,
                "X-OAAP-Assistant": assistant_id}
     if light:
         headers[LIGHT_HEADER] = light
+    if ws:
+        headers[workspace.WS_HEADER] = ws      # 0.22.0 (RFC-0121): die Ablagetür des Gateways
     if confirmed:
         headers["X-OAAP-Confirmed"] = "yes"
     if session:
@@ -271,18 +276,19 @@ def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False, light=
 class McpWay:
     """Die Sicht eines Assistenten, als die Person dieser Anfrage."""
 
-    def __init__(self, person, assertion, assistant, light=""):
+    def __init__(self, person, assertion, assistant, light="", ws=""):
         if not assistant.get("view"):
             # 0.18.0 (RFC-0116 D9): ein Satz statt eines KeyError, an jeder Tür
             raise Stop("Dieser Assistent hat keine Sicht und darum keine Werkzeuge, "
                        "Befehle oder Ansichten.", 400)
         self.light = light if light in LIGHT_RANK else ""
+        self.ws = ws if workspace.WS_ID.match(ws or "") else ""
         self.views = bool(assistant.get("views"))
         gw = gateway_for(assistant.get("gateway") or "")
         self.url = f'{gw["via"]}/{assistant["view"]}'
         # 0.7.0: ob die Sitzung Ansichten (MCP Apps) angesagt hat, gehört zum Schlüssel --
         # sonst erbte ein Assistent mit Ansichten die Sitzung eines ohne auf derselben Sicht.
-        self.key = (person, gw["name"], assistant["view"], self.views)
+        self.key = (person, gw["name"], assistant["view"], self.views, self.ws)
         self.assertion = assertion
         # 0.9.0 (RFC-0097): die Revision, die spricht, steht in der Messzeile des Gateways.
         self.aid = assistant["id"] + (f'@{assistant["rev"]}' if assistant.get("rev") else "")
@@ -294,7 +300,7 @@ class McpWay:
                        "capabilities": ({"extensions": {UI_EXTENSION: {"mimeTypes": [UI_MIME]}}}
                                         if self.views else {}),
                        "clientInfo": {"name": "oaap-chat", "version": VERSION}}},
-            "", self.assertion, self.aid, light=self.light)
+            "", self.assertion, self.aid, light=self.light, ws=self.ws)
         if status == 401:
             raise Stop("Die Plattform hat dich am MCP-Gateway nicht erkannt (401). Lade die "
                        "Seite neu und versuche es noch einmal.", 401)
@@ -305,7 +311,7 @@ class McpWay:
             raise Stop(f"Das MCP-Gateway hat keine Sitzung eröffnet ({status})"
                        + (f": {said}" if said else "."))
         mcp_post(self.url, {"jsonrpc": "2.0", "method": "notifications/initialized"}, sess,
-                 self.assertion, self.aid, light=self.light)
+                 self.assertion, self.aid, light=self.light, ws=self.ws)
         with _MCP_GUARD:
             _MCP[self.key] = sess
         return sess
@@ -317,7 +323,7 @@ class McpWay:
             sess = sess or self._open()
             status, _, msgs = mcp_post(self.url, {"jsonrpc": "2.0", "id": 2, "method": method,
                                                   "params": params}, sess, self.assertion,
-                                       self.aid, confirmed, light=self.light)
+                                       self.aid, confirmed, light=self.light, ws=self.ws)
             if status in (400, 404) and attempt == 0:     # Sitzung unbekannt oder abgelaufen
                 sess = None
                 continue
@@ -464,12 +470,14 @@ def model_ready():
     return bool(KI_URL or (AI_CLIENT_KEY and AI_CLIENT_URL))
 
 
-def ask_model(assistant, person_name, msgs, tools, light="", assertion=""):
+def ask_model(assistant, person_name, msgs, tools, light="", assertion="", context=""):
     way = model_way(assertion)
     d = datetime.now()
     today = WEEKDAYS[d.weekday()] + d.strftime(", %d.%m.%Y")
     system = (assistant["system"] + f"\n\nHeute ist {today}. Du sprichst mit {person_name}. "
               "Werkzeuge, die etwas ändern, laufen erst, wenn die Person zustimmt.")
+    if context:
+        system += "\n\n" + context          # 0.22.0 (RFC-0121 §5.2): der Arbeitsraum
     body = dict(MODEL_EXTRA, model=assistant["model"], stream=False,
                 messages=[{"role": "system", "content": system}] + loop.for_model(msgs))
     body.setdefault("temperature", 0.2)
@@ -549,6 +557,77 @@ def run_command(way, assistant, msgs, text):
         raise Stop(f"/{p['name']} lieferte keinen Text.")
 
 
+def ws_of(conv):
+    return (conv.get("workspace") or {}).get("id", "")
+
+
+def filed_path(call):
+    try:
+        return json.loads(call["function"]["arguments"]).get("path", "")
+    except (ValueError, KeyError, TypeError):
+        return ""
+
+
+def ws_call(way, name, args):
+    """Ein lesendes Werkzeug der Ablagetür, als die Person -> dict oder None."""
+    msgs = way.rpc("tools/call", {"name": name, "arguments": args})
+    for m in msgs:
+        res = m.get("result") if isinstance(m, dict) else None
+        if isinstance(res, dict):
+            if res.get("isError"):
+                return None
+            if isinstance(res.get("structuredContent"), dict):
+                return res["structuredContent"]
+            try:
+                return json.loads(loop.result_text([m]))
+            except ValueError:
+                return None
+    return None
+
+
+def workspace_context(way):
+    """§5.2: Arbeitsraum, Ablagen, Stand und die letzten Protokolleinträge -- einmal am Anfang."""
+    info = ws_call(way, "workspace_info", {})
+    if not info:
+        return ("Dieses Gespräch läuft in einem Arbeitsraum, den das MCP-Gateway gerade nicht "
+                "nennt; die Werkzeuge store_* sagen, was geht.")
+    state = ws_call(way, "store_read", {"path": info.get("state")}) if info.get("state") else None
+    log = ws_call(way, "store_read", {"path": info.get("log"), "lines": workspace.MAX_LOG_LINES}) \
+        if info.get("log") else None
+    return workspace.context_text(info, state, log)
+
+
+def workspace_command(person, person_name, assertion, assistant, conv, text):
+    """/stand, /abschluss, /ablegen im Arbeitsraum (RFC-0121 §5.2, §5.3). True = erledigt."""
+    m = COMMAND.match(text)
+    if not m or m.group(1) not in workspace.OWN or not ws_of(conv):
+        return False
+    way = McpWay(person, assertion, assistant, conv_light(conv), ws_of(conv))
+    info = ws_call(way, "workspace_info", {})
+    if not info:
+        raise Stop("Das MCP-Gateway nennt diesen Arbeitsraum gerade nicht.", 400)
+    msgs = conv["messages"]
+    if m.group(1) == "stand":
+        msgs.append({"role": "user", "content": workspace.stand_prompt(info), "command": "stand",
+                     "at": now()})
+    elif m.group(1) == "abschluss":
+        msgs.append({"role": "user", "command": "abschluss", "at": now(), "content":
+                     workspace.abschluss_prompt(info, conv.get("title") or "Gespräch", person_name,
+                                                bool(conv.get("private")))})
+    else:
+        home = f"{info.get('home')}:{info.get('state', '').split(':', 1)[-1].rsplit('/', 1)[0]}"
+        try:
+            call, note = workspace.filing(conv, m.group(2), home, assistant.get("title") or "Assistent",
+                                          person_name, (conv.get("workspace") or {}).get("title", ""),
+                                          sum(1 for x in msgs if x.get("by") == "chat"))
+        except workspace.Refused as exc:
+            raise Stop(str(exc), 400) from None
+        call["note"] = note
+        msgs.append({"role": "assistant", "by": "chat", "content": "", "tool_calls": [call],
+                     "command": "ablegen", "at": now()})
+    return True
+
+
 def step(person, person_name, assertion, assistant, conv, decision):
     """Eine Runde: erst offene Werkzeugaufrufe (frische Zusicherung), dann ein Modellzug.
 
@@ -561,18 +640,21 @@ def step(person, person_name, assertion, assistant, conv, decision):
     for c in loop.pending_calls(msgs):
         name = c["function"]["name"]
         args, bad = loop.call_args(c)
-        eff = effects.get(name)
+        eff = "write" if c.get("by") == "chat" else effects.get(name)
         if eff is None:
             result, note = f"Fehler: Ein Werkzeug {name} gibt es in dieser Sicht nicht.", {}
         elif bad:
             result, note = "Fehler: " + bad, {}
         elif eff != "read" and not (decision and decision.get("call") == c["id"]):
             conv["confirm"] = {"call": c["id"], "name": name, "effect": eff, "arguments": args}
+            if c.get("by") == "chat":
+                shown, note = workspace.confirm_view(c, c.get("note", ""))
+                conv["confirm"].update(arguments=shown, note=note, by="chat")
             return "confirm"
         elif eff != "read" and not decision.get("ok"):
             result, note = loop.REFUSED, {"confirmed": False}
         else:
-            way = way or McpWay(person, assertion, assistant, conv_light(conv))
+            way = way or McpWay(person, assertion, assistant, conv_light(conv), ws_of(conv))
             if assistant.get("views") and name in conv.get("ui", {}):
                 result, raw = way.call_raw(name, args, confirmed=eff != "read")
                 note = {"view": conv["ui"][name]["resourceUri"], "raw": raw, "arguments": args}
@@ -583,21 +665,32 @@ def step(person, person_name, assertion, assistant, conv, decision):
         msgs.append(dict({"role": "tool", "tool_call_id": c["id"], "name": name,
                           "content": result, "at": now()}, **note))
         conv.pop("confirm", None)
+        if c.get("by") == "chat":
+            # 0.22.0 (RFC-0121 §5.3): das Ablegen macht der Chat -- kein Modellzug danach
+            ok_ = note.get("confirmed") and not str(result).startswith("Fehler")
+            msgs.append({"role": "assistant", "by": "chat", "at": now(), "content":
+                         ("Abgelegt: " + filed_path(c) + "." if ok_ else
+                          "Nicht abgelegt." if note.get("confirmed") is False else
+                          "Nicht abgelegt: " + str(result)[:400])})
+            return "done"
     if loop.model_turns_since_user(msgs) >= loop.MAX_MODEL_TURNS:
         msgs.append({"role": "assistant", "at": now(), "content":
                      f"Ich habe nach {loop.MAX_MODEL_TURNS} Runden aufgehört, ohne fertig zu "
                      "werden. Formuliere die Frage bitte enger."})
         return "done"
     if assistant.get("view"):
-        way = way or McpWay(person, assertion, assistant, conv_light(conv))
+        way = way or McpWay(person, assertion, assistant, conv_light(conv), ws_of(conv))
         listed = way.tools()
+        if ws_of(conv) and "ws_context" not in conv:
+            conv["ws_context"] = workspace_context(way)
     else:
         listed = []          # 0.18.0 (RFC-0116 D9): ohne Sicht keine Werkzeuge, kein Gateway
     tools, effects_now = loop.tools_for_model(listed)
     effects.clear()
     effects.update(effects_now)
     conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
-    reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv), assertion)
+    reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv), assertion,
+                      conv.get("ws_context", ""))
     reply["at"] = now()
     if assistant.get("rev"):
         reply["rev"] = assistant["rev"]       # für Bewertungen (RFC-0101 Stufe 2)
@@ -1009,6 +1102,31 @@ def gw_assist(method, path, assertion, body=None):
         return 0, {}
 
 
+def gw_ws(method, path, assertion, body=None):
+    """(Status, Dokument) von …/_workspaces<path> des Standard-Gateways, als die Person
+    (RFC-0121, oaap.work.workspaces §3.1). Status 0: kein Gateway oder nicht erreichbar."""
+    try:
+        gw = gateway_for("")
+    except Stop:
+        return 0, {}
+    if not assertion:
+        return 0, {}
+    req = urllib.request.Request(gw["via"] + "/_workspaces" + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Accept": "application/json", "Content-Type": "application/json",
+                                          "Authorization": "Bearer " + CLIENT_KEY, ACT_ASSERTION: assertion})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, json.loads(r.read(4_000_000) or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, json.loads(exc.read(200_000) or b"{}")
+        except ValueError:
+            return exc.code, {}
+    except (OSError, ValueError):
+        return 0, {}
+
+
 def gw_errors(st, doc):
     if st == 200:
         return []
@@ -1149,7 +1267,8 @@ NO_CALL_IDS = ("Aufruf-Kennungen gehen nicht mit: dieser Mandant führt sie noch
 
 
 def final_answer(m):
-    return m.get("role") == "assistant" and bool(m.get("content")) and not m.get("tool_calls")
+    return (m.get("role") == "assistant" and bool(m.get("content")) and not m.get("tool_calls")
+            and m.get("by") != "chat")
 
 
 def unhappy_round(conv, index):
@@ -1285,13 +1404,18 @@ def view_of(conv):
             x["view"] = m["view"]
         if m.get("tool_calls"):
             x["calls"] = [{"name": c["function"]["name"],
-                           "arguments": loop.call_args(c)[0]} for c in m["tool_calls"]]
+                           # das Ablegen trägt das ganze Gespräch -- gezeigt wird Ziel und Umfang
+                           "arguments": workspace.confirm_view(c, "")[0] if c.get("by") == "chat"
+                           else loop.call_args(c)[0]} for c in m["tool_calls"]]
+        if m.get("by") == "chat":
+            x["by"] = "chat"
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
             "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),
             "light": conv_light(conv), "stars": conv.get("stars"),
             "rateable": any(rateable(m) for m in conv["messages"]),
             "cases": conv.get("cases") or [],
+            "workspace": conv.get("workspace"), "private": bool(conv.get("private")),
             "answered": any(final_answer(m) for m in conv["messages"])}
 
 
@@ -1459,6 +1583,14 @@ class Handler(BaseHTTPRequestHandler):
             if a is None:
                 return self.json(404, {"error": "Kein solcher Assistent."})
             return self.json(200, dict(a, origin=origin, manage=public(a, origin, who)["manage"]))
+        if path in ("/api/workspaces", "/api/workspaces/pick"):
+            # 0.22.0 (RFC-0121): Arbeitsräume und die Auswahl der Ablagen, als die Person
+            q = self.path.partition("?")[2] if path.endswith("/pick") else ""
+            st, doc = gw_ws("GET", "/_pick?" + q if q or path.endswith("/pick") else "", home.assertion)
+            if st == 200:
+                return self.json(200, doc)
+            return self.json(st if st in (400, 403, 404) else 502,
+                             {"error": (doc or {}).get("error") or " ".join(gw_errors(st, doc))})
         m = re.match(r"^/api/conv/([a-z0-9]{12})(/commands|/view|/unhappy)?$", path)
         if m:
             conv = load_conv(person, m.group(1))
@@ -1638,6 +1770,14 @@ class Handler(BaseHTTPRequestHandler):
         assertion = self.headers.get(ASSERTION, "").strip()
         if path.startswith("/api/assistants"):
             return self.assistants_post(path, body, who, Home(assertion))
+        mw = re.match(r"^/api/workspaces(?:/([a-z0-9][a-z0-9-]{1,47})/delete)?$", path)
+        if mw:
+            st, doc = gw_ws("POST", f"/{mw.group(1)}/delete" if mw.group(1) else "", assertion,
+                            None if mw.group(1) else body)
+            if st == 200:
+                return self.json(200, doc)
+            return self.json(st if st in (400, 403, 404) else 502,
+                             {"error": (doc or {}).get("error") or " ".join(gw_errors(st, doc))})
         if path == "/api/conv":
             a, _ = Home(assertion).find(str(body.get("assistant") or ""), who)
             if a is None:
@@ -1652,6 +1792,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(*refused)
             conv = {"id": secrets.token_hex(6), "assistant": a["id"], "created": now(),
                     "messages": [], "light": light, "lights": [{"at": now(), "light": light}]}
+            wid = str(body.get("workspace") or "")
+            if wid:
+                # 0.22.0 (RFC-0121 §5.1): im Arbeitsraum -- er muss der Person gehören, und der
+                # Assistent braucht eine Sicht (die Ablagetür kommt zu ihr dazu)
+                if not a.get("view"):
+                    return self.json(400, {"error": "Ein Gespräch im Arbeitsraum braucht einen "
+                                                    "Assistenten mit Sicht."})
+                st, doc = gw_ws("GET", "", assertion)
+                hit = [w for w in (doc.get("workspaces") or []) if w.get("id") == wid] if st == 200 else []
+                if not hit:
+                    return self.json(404, {"error": "Diesen Arbeitsraum gibt es für dich nicht."
+                                           if st == 200 else " ".join(gw_errors(st, doc))})
+                wl = hit[0].get("light") or "red"
+                if LIGHT_RANK.get(wl, 2) > LIGHT_RANK.get(light, 0):
+                    # gemessen 23.11.: sonst lehnt die Ablagetür jeden Zugriff ab, und die
+                    # Person erfährt es erst aus einer Antwort des Modells
+                    return self.json(409, {"error": f"Der Arbeitsraum ist {LIGHT_WORDS.get(wl, wl)} "
+                                           f"eingestuft, das Gespräch {LIGHT_WORDS.get(light, light)}: "
+                                           "stell die Ampel des Gesprächs mindestens auf "
+                                           f"{LIGHT_WORDS.get(wl, wl)}.", "needs_light": wl})
+                conv["workspace"] = {"id": wid, "title": hit[0].get("title") or wid}
+                conv["private"] = bool(body.get("private"))
             save_conv(person, conv)
             return self.json(200, view_of(conv))
         m = re.match(r"^/api/conv/([a-z0-9]{12})/view-call$", path)
@@ -1814,8 +1976,11 @@ class Handler(BaseHTTPRequestHandler):
                 if loop.pending_calls(conv["messages"]):
                     return self.json(409, {"error": "Erst den offenen Werkzeugaufruf bestätigen "
                                                     "oder ablehnen."})
-                if COMMAND.match(text):
-                    run_command(McpWay(person, assertion, a, conv_light(conv)), a, conv["messages"], text)
+                if workspace_command(person, self.person_name(), assertion, a, conv, text):
+                    pass
+                elif COMMAND.match(text):
+                    run_command(McpWay(person, assertion, a, conv_light(conv), ws_of(conv)), a,
+                                conv["messages"], text)
                 else:
                     conv["messages"].append({"role": "user", "content": text, "at": now()})
                 conv.setdefault("title", text[:60])

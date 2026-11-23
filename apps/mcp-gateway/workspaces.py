@@ -295,7 +295,8 @@ def find_section(text, name):
 
     `name` ist ein Titel oder 'Oben > Unten', wenn er mehrdeutig ist."""
     heads = outline(text)
-    want = [x.strip() for x in str(name or "").split(">") if x.strip()]
+    # gemessen 23.11.: ein Modell nennt den Abschnitt gern samt Rauten („## Offen“)
+    want = [x.strip().lstrip("#").strip() for x in str(name or "").split(">") if x.strip().lstrip("#").strip()]
     if not want:
         raise Invalid("Welcher Abschnitt? section fehlt.")
     lines = text.split("\n")
@@ -388,7 +389,10 @@ def _tool(name, title, desc, props, required=(), read_only=True):
             "inputSchema": {"type": "object", "properties": props,
                             **({"required": list(required)} if required else {})},
             "annotations": {"title": title, "readOnlyHint": read_only,
-                            "destructiveHint": False, "openWorldHint": False}}
+                            "destructiveHint": False, "openWorldHint": False},
+            # wie compose.shaped für die Einträge einer Sicht: die Wirkungsklasse, die ein
+            # Chat für die Zustimmung liest (ohne sie gälte jedes Lesen als Schreiben)
+            "_meta": {"oaap/effect": "read" if read_only else "write"}}
 
 
 ADDR = {"type": "string", "description": "alias:/pfad, z. B. notizen:/stand"}
