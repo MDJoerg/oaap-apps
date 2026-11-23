@@ -34,7 +34,24 @@ Nach dem Update prüft der Dienst `oaap` von selbst, ob BookStacks Tabellen
 noch so sind, wie er sie kennt. Weicht etwas ab, legt er nichts an und
 sagt es unter `/oaap/status`.
 
-## Gemessen am 23.11.2026
+## Sicherung und Rücksicherung
+
+Die Sicherung der Plattform stoppt die Container der Instanz für die Kopie.
+Deshalb ist die Kopie der Datenbank in sich stimmig, und es braucht keinen
+eigenen Datenbank-Export. `db`, `files` und `oaap` reisen immer zusammen.
+
+Gemessen am 23.11.2026: Seite und Bild gesetzt, gesichert, danach die Seite
+geändert und ein Buch angelegt, dann die Ablagen der Instanz aus dem Archiv
+zurückgespielt. Die Datenbank startete ohne Reparaturlauf. Seite, Bild und
+Rechte waren wie zum Zeitpunkt der Sicherung, das spätere Buch war weg. Die
+Anmeldung über den Anmeldedienst ging unverändert.
+
+Die Plattform spielt bisher nur einen ganzen Knoten zurück oder zieht einen
+ganzen Mandanten auf einen leeren Knoten um. Eine **einzelne** Wiki-Instanz
+zurückzuspielen geht nur von Hand durch den Betreiber: Instanz stoppen, ihre
+Ablagen aus dem Archiv auspacken, Instanz starten.
+
+## Update gemessen am 23.11.2026
 
 Paket 0.0.9 (BookStack 25.02.5) auf 0.1.0 (BookStack 26.09.3), mit Inhalten:
 13 Umbauten der Datenbank. Bücher, Seiten, Berechtigungen, Rollen samt
