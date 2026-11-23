@@ -40,7 +40,7 @@ TYPES = {
     "store-editor": "C", "package-catalog": "C", "marketplace": "C",
     "ollama-models": "C", "rollen-rechte": "C", "vpn-client": "C", "recherche": "C",
     "keycloak": "D", "livekit": "D",
-    "code-server": "W", "webtop": "W",
+    "code-server": "W", "webtop": "W", "bookstack": "W",
 }
 # Ausnahmen von der MCP-Pflicht (§9): der Chat ist Client, das MCP-Gateway
 # ist die Tür selbst.

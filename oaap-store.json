@@ -1131,6 +1131,51 @@
           "label": "RFC-0078 — Hilfe"
         }
       ]
+    },
+    {
+      "id": "bookstack",
+      "name": "Wiki (BookStack)",
+      "type": "wrapped",
+      "version": "0.1.0",
+      "released": "2026-11-23",
+      "package": {
+        "git": "https://github.com/MDJoerg/oaap-apps",
+        "path": "apps/bookstack"
+      },
+      "roles": [
+        "admin",
+        "keyuser",
+        "user"
+      ],
+      "categories": [
+        "productivity"
+      ],
+      "audience": [
+        "user"
+      ],
+      "maturity": "alpha",
+      "status": "active",
+      "tags": [
+        "wiki",
+        "bookstack",
+        "wissen",
+        "dokumentation",
+        "oidc",
+        "sso"
+      ],
+      "summary": "Ein Wiki für den Mandanten — Regale, Bücher, Seiten; Anmeldung über den Realm, Gruppen werden Rollen, Bilder geschützt wie ihre Seite.",
+      "description": "BookStack 26.09.3 als OAAP-App (RFC-0110 Stufe 1): drei Container — BookStack auf dem Abbild von linuxserver.io mit exaktem Tag, MariaDB 11.4.13 und ein kleiner Dienst oaap, der Keim des späteren Adapters. Hinter dem Gateway nur für user, keyuser und admin; danach meldet BookStack selbst über den Realm des Mandanten an (identity.oidc_client, oaap idp app), ohne zweite Passwortabfrage. Die Gruppen des Realms sind die Rollen im Wiki (Externe Authentifizierungs-ID = Gruppenpfad), abgeglichen bei jeder Anmeldung; Rollen je Gruppe legt die Einrichtungstür an (RFC-0104), die Admin-Gruppe setzt OAAP_WIKI_ADMIN_GROUP. Bilder und Anhänge sind vom ersten Start an geschützt wie ihre Seite (local_secure_restricted, nicht abschaltbar). Ein Update geht nur vorwärts: zurück nur mit Sicherung von Datenbank und Dateien als Paar. Gemessen am 23.11.2026 auf oaap-test inklusive Update 25.02.5 → 26.09.3 mit Daten.",
+      "links": [
+        {
+          "rel": "source",
+          "url": "https://github.com/MDJoerg/oaap-apps/tree/main/apps/bookstack"
+        },
+        {
+          "rel": "docs",
+          "url": "https://github.com/MDJoerg/oaap-spec/blob/main/rfcs/RFC-0110-a-wiki-in-the-tenant.md",
+          "label": "RFC-0110 — Ein Wiki im Mandanten"
+        }
+      ]
     }
   ]
 }

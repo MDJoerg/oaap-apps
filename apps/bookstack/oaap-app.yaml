@@ -1,0 +1,148 @@
+oaap_manifest: "0.18"
+
+app:
+  id: bookstack
+  name: Wiki (BookStack)
+  version: 0.1.0
+  type: wrapped
+  description: "Ein Wiki für den Mandanten: Regale, Bücher, Kapitel, Seiten (BookStack 26.09.3). Menschen melden sich über den Anmeldedienst des Mandanten an, die Gruppen des Realms sind die Rollen im Wiki (RFC-0110 Stufe 1). Bilder und Anhänge sieht nur, wer die Seite sehen darf."
+
+care:
+  # RFC-0071 §15: BookStack auf einen exakten Tag festgenagelt, der Dienst
+  # oaap mit exakt festgelegten Abhängigkeiten -- ein Neubau holt nur
+  # dieselben Stände neu.
+  rebuild: self
+
+# Mehr-Container (RFC-0016), drei Dienste auf dem privaten Netz der Instanz:
+#   wiki  BookStack selbst (linuxserver-Abbild + Einstiegsschritt, wiki/)
+#   db    MariaDB -- BookStack kann nur MySQL/MariaDB, deshalb NICHT das
+#         Plattform-Postgres (oaap.data.store). Keine Route, nie erreichbar
+#         von außen oder für andere Apps.
+#   oaap  der Keim des Adapters (RFC-0110 §3, oaap/): Einrichtungstür, eigenes
+#         Konto, Standardkennwort ersetzen, Admin-Gruppe. Er ist der einzige,
+#         der BookStacks Datenbank anfasst (nur api_tokens, D3).
+services:
+  wiki:
+    build: wiki
+    port: 80
+  db:
+    # mariadb:11.4.13 mit einem Einstiegsschritt davor (db/): ohne
+    # Datenbank-Geheimnis startet es nicht, statt sich ohne Kennwort
+    # einzurichten (gemessen am 2026-11-23).
+    build: db
+    port: 3306
+  oaap:
+    build: oaap
+    port: 8000
+
+storage:
+  # Seiten, Rollen, Benutzer -- alles, was im Wiki steht.
+  - name: db
+    mount: /var/lib/mysql
+    service: db
+  # BookStacks /config: hochgeladene Bilder und Anhänge (geschützt abgelegt),
+  # Protokolle. Sicherung und Rücksicherung nur ZUSAMMEN mit db (Befund F6).
+  - name: files
+    mount: /config
+    service: wiki
+  # Was die Einrichtungstür angelegt hat (wer, wann, Prüfsumme) -- damit
+  # „entfernen“ nur nimmt, was noch so ist, wie die Einrichtung es machte.
+  - name: oaap
+    mount: /data
+    service: oaap
+
+# Nur Menschen des Mandanten (Jörg, 23.11.: user, keyuser, admin; Partner und
+# Gäste nicht). Hinter dem Gateway meldet BookStack selbst über denselben Realm
+# an -- wer schon im Realm angemeldet ist, sieht keine zweite Anmeldeseite.
+# Die Rücksprungadresse /oidc/callback liegt hinter derselben Route: wer dort
+# ankommt, kam schon durch das Gateway.
+routes:
+  - path: /
+    roles: [admin, keyuser, user]
+    service: wiki
+  # Der Zustand des Dienstes oaap -- nur für die Verwaltung des Mandanten.
+  # Die Einrichtungstür /oaap/setup liegt darunter; die Plattform ruft sie über
+  # den internen Zuhörer des Gateways, nie über diese Route.
+  - path: /oaap
+    roles: [admin]
+    service: oaap
+
+# RFC-0091 Stufe 3: BookStack meldet selbst über den Realm des Mandanten an,
+# sobald der Betreiber einen Client gibt (`oaap idp app <connector> --instance
+# <name>`). Ohne Client meldet sich nur der lokale Administrator an.
+identity:
+  oidc_client:
+    redirect_paths: [/oidc/callback]
+    groups_claim: true
+
+# RFC-0104: Rollen für Gruppen des Realms, aus einem Aufbau des Mandanten.
+setup:
+  path: /oaap/setup
+
+config:
+  # Werden erzeugt; der Betreiber muss nie ein Format kennen.
+  - key: OAAP_WIKI_APP_SECRET
+    label: "Anwendungsschlüssel (wird erzeugt; daraus leitet BookStack seinen APP_KEY ab -- nie ändern, sonst sind Sitzungen und gespeicherte zweite Faktoren ungültig)"
+    secret: true
+    generate: token
+  # Von BEIDEN gelesen: MariaDB richtet damit seinen Benutzer ein, wiki und
+  # oaap melden sich damit an. Eine Angabe statt zweier.
+  - key: MARIADB_PASSWORD
+    label: "Datenbank-Geheimnis (wird erzeugt; MariaDB, BookStack und der Dienst oaap benutzen dasselbe)"
+    secret: true
+    generate: token
+  - key: MARIADB_USER
+    label: "Datenbank-Benutzer"
+    default: "bookstack"
+  - key: MARIADB_DATABASE
+    label: "Datenbank-Name"
+    default: "bookstack"
+  - key: MARIADB_RANDOM_ROOT_PASSWORD
+    label: "Zufälliges Root-Kennwort für MariaDB (niemand braucht es)"
+    default: "1"
+  # BookStack legt beim ersten Start admin@admin.com / password an. Der Dienst
+  # oaap ersetzt dieses bekannte Kennwort durch diesen Wert, solange es noch das
+  # bekannte ist. Danach wird es in BookStack geändert, nicht hier.
+  - key: OAAP_WIKI_ADMIN_PASSWORD
+    label: "Kennwort des lokalen Administrators admin@admin.com (wird erzeugt; gilt nur ohne Anmeldedienst und nur beim ersten Start)"
+    secret: true
+    generate: token
+  # Die Gruppe des Realms, die im Wiki Administrator ist, als voller Pfad wie
+  # im Claim (z. B. /wiki-admins). Leer = die Rolle Admin bleibt, wie sie ist.
+  - key: OAAP_WIKI_ADMIN_GROUP
+    label: "Realm-Gruppe der Wiki-Administratoren, voller Pfad (z. B. /wiki-admins; leer = keine)"
+    default: ""
+  - key: OAAP_WIKI_LOGIN_LABEL
+    label: "Name des Anmeldeknopfs in BookStack"
+    default: "Anmeldedienst"
+  - key: OAAP_WIKI_AUTO_LOGIN
+    label: "Direkt zum Anmeldedienst, ohne BookStacks Anmeldeseite (true/false)"
+    default: "true"
+  - key: APP_LANG
+    label: "Sprache der Oberfläche (Vorgabe für neue Benutzer)"
+    default: "de"
+  - key: APP_TIMEZONE
+    label: "Zeitzone"
+    default: "Europe/Berlin"
+
+health:
+  # BookStacks eigene Antwort auf „Datenbank, Zwischenspeicher, Sitzung gut?“
+  # -- ohne Anmeldung, am primären Dienst wiki.
+  path: /status
+  startup_grace_seconds: 180
+
+# RFC-0118 §9: Hilfe für die Menschen im Wiki und für die Verwaltung.
+docs:
+  - product: bookstack
+    title: "Wiki (BookStack)"
+    path: docs/
+    entry: index.md
+    lang: de
+    audience: [admin, keyuser, user]
+    readers: [end-user, admin, operator]
+    kinds:
+      index.md: overview
+      anmelden-und-rollen.md: concept
+      einrichten.md: admin-guide
+      sicherung-und-update.md: admin-guide
+      faq.md: faq

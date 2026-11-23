@@ -104,6 +104,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [Mitarbeiterverwaltung](apps/mitarbeiterverwaltung/) | Referenz-App digitaler Zwilling: unabhängiger Owner von Mitarbeiter -- erzeugt die erste echte Dublette (RFC-0031) | 0.3.2   |
 | [Projekt-App](apps/projekt/)       | Referenz-App digitaler Zwilling: definiert Projekt, Partnerverwaltung legt eigene Instanzen an -- ein Typ, zwei Owner (RFC-0031) | 0.3.2   |
 | [OAAP-Hilfe](apps/help/)           | Die Doku für jede KI (RFC-0078): Suche über MCP, API und Seite, nach Rolle gefiltert; holt über die Destination `docs-origin`, Kopie im Paket; zentral zusätzlich öffentlich (`HELP_PUBLIC`); fehlende Anleitungen anfordern (`HELP_REQUESTS`) | 0.9.0   |
+| [Wiki (BookStack)](apps/bookstack/) | Wiki für den Mandanten (wrapped, drei Container): Anmeldung über den Realm, Gruppen werden Rollen, Bilder geschützt wie ihre Seite — RFC-0110 Stufe 1 | 0.1.0   |
 | [Kundenzufriedenheit](data_models/kundenzufriedenheit/) | `data_models`-Artefakt (kein App-Dienst): dritte Herkunftsgruppe auf Firma, gepflegt im Zwillings-Browser (RFC-0031) | 0.1.0   |
 
 ## Installation
