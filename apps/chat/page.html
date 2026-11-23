@@ -260,6 +260,8 @@ dialog label.inl input{width:auto;margin:0}
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
 dialog::backdrop{background:rgba(0,0,0,.35)}
 dialog label{display:block;font-size:.85rem;margin:.6rem 0 .2rem;color:var(--muted)}
+/* 0.22.1: sonst gewinnt display:block über hidden -- der Haken stand ohne Satz da */
+dialog label[hidden],dialog [hidden]{display:none}
 dialog input,dialog textarea,dialog select{width:100%}
 .dhead{display:flex;justify-content:space-between;align-items:center;gap:.5rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
@@ -372,6 +374,7 @@ dialog input,dialog textarea,dialog select{width:100%}
   <div class="dhead"><b>Ampel dieses Gesprächs</b><button type="button" class="hbtn" id="lightclose">Schließen</button></div>
   <p class="muted" style="font-size:.88rem">Sag, was du eingeben wirst. Der Chat nimmt dann nur Modelle und Werkzeuge,
   die solche Daten bekommen dürfen &mdash; und beide Gateways lehnen ebenfalls ab. Das schützt dich vor einem Versehen.</p>
+  <p id="lightwhy" hidden style="font-size:.88rem"></p>
   <div id="lightopts"></div>
   <label id="lightsurel" hidden><input type="checkbox" id="lightsure" style="width:auto"> <span id="lightsuret"></span></label>
   <p class="err" id="lighterr"></p>
@@ -704,13 +707,17 @@ function lightWarn(){
   box.appendChild(row);
   return box;
 }
-let LPICK = null;
-function openLight(preset){
+// 0.22.1: LMIN = was der Arbeitsraum mindestens verlangt (darunter nicht wählbar), LRETRY = nach
+// „Übernehmen“ die zurückgewiesene erste Nachricht gleich noch einmal senden.
+let LPICK = null, LMIN = null, LRETRY = false;
+function openLight(preset, min, why){
   const l = convLight(), ceiling = (LIGHT && LIGHT.ceiling) || "red";
+  LMIN = min || null;
   LPICK = preset || l;
   const box = $("lightopts"); box.textContent = "";
   for (const x of ["green", "yellow", "red"]) {
-    const off = LRANK[x] > LRANK[ceiling];
+    const low = !!LMIN && LRANK[x] < LRANK[LMIN];
+    const off = LRANK[x] > LRANK[ceiling] || low;
     const lab = el("label", "lopt l-" + x + (off ? " off" : ""));
     const r = el("input"); r.type = "radio"; r.name = "lpick"; r.value = x; r.checked = x === LPICK; r.disabled = off;
     r.onchange = () => { LPICK = x; sureRow(); };
@@ -718,11 +725,13 @@ function openLight(preset){
     let note = x === "green" ? "Nur Wege, auf denen die Daten das Unternehmen nicht verlassen." :
                x === "yellow" ? "Auch Wege zu Anbietern unter Zusage (Vertrag, EU, kein Training)." :
                "Auch externe Anbieter, bei denen Daten abfließen können.";
-    if (off) note = "Der Schlüssel dieses Chats reicht nur bis " + LWORD[ceiling] + ".";
+    if (low) note = "Der gewählte Arbeitsraum ist " + LWORD[LMIN] + " eingestuft.";
+    else if (off) note = "Der Schlüssel dieses Chats reicht nur bis " + LWORD[ceiling] + ".";
     else if (LIGHT && LIGHT.needs && LRANK[LIGHT.needs] > LRANK[x]) note += " Mit diesem Assistenten nicht möglich: " + tooRed(x) + ".";
     t.append(el("small", "", note));
     lab.append(r, el("i"), t); box.appendChild(lab);
   }
+  $("lightwhy").textContent = why || ""; $("lightwhy").hidden = !why;
   $("lighterr").textContent = ""; sureRow(); $("lightdlg").showModal();
 }
 function sureRow(){
@@ -730,9 +739,10 @@ function sureRow(){
   $("lightsurel").hidden = !worse; $("lightsure").checked = false;
   $("lightsuret").textContent = LSURE[LPICK] || "";
 }
-$("lightbtn").onclick = () => openLight();
-$("lightclose").onclick = () => $("lightdlg").close();
+$("lightbtn").onclick = () => { LRETRY = false; openLight(); };
+$("lightclose").onclick = () => { LRETRY = false; $("lightdlg").close(); };
 $("lightok").onclick = async () => {
+  if (LMIN && LRANK[LPICK] < LRANK[LMIN]) { $("lighterr").textContent = "Der Arbeitsraum verlangt mindestens " + LWORD[LMIN] + "."; return; }
   const worse = LRANK[LPICK] > LRANK[convLight()];
   if (worse && !$("lightsure").checked) { $("lighterr").textContent = "Bitte bestätige den Satz oben."; return; }
   if (C) {
@@ -741,6 +751,8 @@ $("lightok").onclick = async () => {
     C = r;
   } else DRAFT_LIGHT = LPICK;
   $("lightdlg").close(); renderLight(); render();
+  if (LRETRY && !C && $("t").value.trim()) { LRETRY = false; $("f").requestSubmit(); }
+  LRETRY = false;
 };
 // Die beiden Anfragen an die Verwaltung werden Vorgänge (RFC-0061) über die bezeugte Route
 // /platform/feedback dieser Seite -- die Plattform bezeugt dich, der Chat hat keinen Schlüssel dafür.
@@ -1608,7 +1620,7 @@ $("f").onsubmit = async ev => {
                                              sure: LRANK[dl] > LRANK[(S && S.default_light) || "green"] || undefined});
     if (r.error) { PENDING = null; busy = false; $("go").disabled = false; $("t").disabled = false;
       $("t").value = text; grow(); render(el("div", "err", r.error));
-      if (r.needs_light) openLight(r.needs_light);     // 0.22.0: der Arbeitsraum ist strenger eingestuft
+      if (r.needs_light) { LRETRY = true; openLight(r.needs_light, r.needs_light, r.error); }  // der Arbeitsraum ist strenger
       return; }
     C = r; loadCommands();
   }
@@ -1881,7 +1893,16 @@ function renderWsPick(){
   $("wsprivl").hidden = !(C ? C.workspace : sel.value);
   sel.title = WS.error || (C ? "Der Arbeitsraum eines Gesprächs bleibt." : "Optional: das Gespräch beginnt mit dem Stand dieses Arbeitsraums.");
 }
-$("wspick").onchange = () => renderWsPick();
+// 0.22.1: ein strenger eingestufter Arbeitsraum fragt gleich nach der Ampel, nicht erst beim Senden
+$("wspick").onchange = () => {
+  renderWsPick();
+  const w = WS.workspaces.find(x => x.id === $("wspick").value);
+  if (!C && w && LRANK[w.light] > LRANK[convLight()]) {
+    LRETRY = false;
+    openLight(w.light, w.light, "Der Arbeitsraum „" + w.title + "“ ist " + LWORD[w.light] + " eingestuft. "
+              + "Ein Gespräch darin braucht mindestens diese Ampel.");
+  }
+};
 const ROLEWORD = {source: "Quelle", work: "Arbeitsablage"};
 function renderWsList(){
   const box = $("wslist"); box.textContent = "";

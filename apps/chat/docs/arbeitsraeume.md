@@ -27,8 +27,9 @@ Wähl vor der ersten Nachricht unten einen **Assistenten** und einen
 Werkzeuge geht hier nicht.
 
 - **Ampel**: Ein Arbeitsraum hat die Ampel seiner strengsten Ablage. Ist er
-  gelb und dein Gespräch grün, fragt der Chat nach der Ampel, bevor das
-  Gespräch beginnt.
+  gelb und dein Gespräch grün, fragt der Chat nach der Ampel, sobald du den
+  Arbeitsraum wählst. Grün ist dann nicht wählbar; du bestätigst mit dem
+  Haken, dass du nichts Sensibles eingibst.
 - **privat**: Ein privates Gespräch bekommt am Ende keinen Protokolleintrag,
   und sein Titel erscheint für niemanden sonst. Was du in eine Ablage
   schreibst, steht dort trotzdem unter deinem Namen.
