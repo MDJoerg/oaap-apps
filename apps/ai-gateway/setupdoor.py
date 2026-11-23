@@ -10,8 +10,9 @@ nicht hinein. Fehlt der Schlüssel in der Umgebung, ist die Tür zu.
 Drei Arten:
 
 - `supplier` — eine Bezugsquelle **ohne** Zugangsdaten; die trägt ein
-  Mensch auf der Seite ein. `ready` heißt: Zugangsdaten gespeichert und
-  der Verbindungstest der Seite antwortet jetzt.
+  Mensch auf der Seite ein. `ready` heißt: der Verbindungstest der Seite
+  antwortet jetzt -- mit den gespeicherten Zugangsdaten, oder ohne, wenn
+  die Quelle keine verlangt (ein lokales Ollama; seit 0.14.0, I-68).
 - `alias` — ein Modellname auf genau ein Ziel (Quelle + Modell der Quelle);
   seit 0.11.0 (RFC-0106 §2.6) optional mit den Eigenschaften `tools`,
   `vision`, `context`, `output` dieses Ziels. Sie gelten als Angabe des
@@ -295,10 +296,13 @@ class Door:
             return doc
         suppliers, aliases = self.loaded()
         if kind == "supplier":
-            if not row["credential"]:
-                doc["note"] = ("Zugangsdaten fehlen — ein Mensch trägt sie unter Bezugsquellen "
-                               "ein.")
-            elif ident not in suppliers:
+            # Auch ohne Zugangsdaten wird gefragt (I-68 (6), 2026-11-23): Eine
+            # Quelle, die keine braucht -- ein Ollama auf dem Rechner --, war
+            # sonst nie `ready`, und der Aufbau eines Profils hing am
+            # Haltepunkt. Ob eine Quelle Zugangsdaten braucht, sagt nur sie
+            # selbst: Ein Anbieter, der welche will, antwortet 401 und bleibt
+            # nicht bereit, mit dem Hinweis, wer sie einträgt.
+            if row["credential"] and ident not in suppliers:
                 doc["note"] = "Zugangsdaten nicht lesbar (AIGW_MASTER_KEY geändert?)."
             else:
                 r = self.probe(ident)
@@ -306,6 +310,9 @@ class Door:
                 doc["ready"] = bool(status) and 200 <= status < 300
                 doc["note"] = (f"Verbindungstest: HTTP {status} in {r.get('ms', 0)} ms"
                                if status else f"Verbindungstest: {r.get('error') or 'keine Antwort'}")
+                if not row["credential"] and not doc["ready"]:
+                    doc["note"] = ("Zugangsdaten fehlen — ein Mensch trägt sie unter Bezugsquellen "
+                                   "ein. " + doc["note"])
         elif kind == "alias":
             doc["ready"] = ident in aliases
             doc["note"] = "" if doc["ready"] else "Ziel nicht nutzbar (Bezugsquelle fehlt oder fehlerhaft)."

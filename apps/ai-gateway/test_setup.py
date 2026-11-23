@@ -277,6 +277,32 @@ status, doc = door(query="?kind=supplier&id=gibtsnicht")
 check("GET eines fehlenden Eintrags: absent, nicht ready",
       doc["state"] == "absent" and doc["ready"] is False, doc)
 
+print("\n-- Art supplier ohne Zugangsdaten, die keine braucht (lokales Ollama, I-68)")
+
+
+class KeylessHandler(FakeHandler):
+    def do_GET(self):
+        self.answer(200, {"object": "list", "data": [{"id": "qwen2.5:3b"}]})
+
+
+keyless = start(KeylessHandler)
+KEYLESS_URL = f"http://127.0.0.1:{keyless.server_address[1]}/v1"
+status, doc = door({"v": 1, "items": [{"kind": "supplier", "id": "ollama", "url": KEYLESS_URL,
+                                       "light": "green"}]})
+check("angelegt: made", results(doc) == ["made"], doc)
+status, doc = door(query="?kind=supplier&id=ollama")
+check("ohne Zugangsdaten, Quelle antwortet 200: ready (der Aufbau hängt nicht mehr)",
+      doc["ready"] is True and "200" in doc["note"] and "Zugangsdaten fehlen" not in doc["note"],
+      doc)
+keyless.shutdown()
+keyless.server_close()
+status, doc = door(query="?kind=supplier&id=ollama")
+check("Quelle weg: nicht ready, der Hinweis nennt die fehlenden Zugangsdaten und den Test",
+      doc["ready"] is False and "Zugangsdaten fehlen" in doc["note"]
+      and "Verbindungstest" in doc["note"], doc)
+status, doc = door({"v": 1, "remove": [{"kind": "supplier", "id": "ollama"}]})
+check("die Einrichtung baut sie wieder zurück: removed", results(doc) == ["removed"], doc)
+
 print("\n-- Arten alias und client in einem Schritt (wie im Profil, §6 Schritt 7)")
 status, doc = door({"v": 1, "dry": True, "items": [ALIAS, CLIENT]})
 check("dry: would_make für beide (die Freigabe sieht den geplanten Modellnamen)",

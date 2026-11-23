@@ -3,7 +3,7 @@ oaap_manifest: "0.18"
 app:
   id: ai-gateway
   name: KI-Gateway
-  version: 0.13.0
+  version: 0.14.0
   type: native
   class: frontend
   description: "Eine Bezugsquelle für alle KI-Verbräuche: OpenAI-kompatibel, mit API-Schlüsseln, Modellnamen nach Zweck, Ampel je Bezugsquelle und Verbrauchsmessung ohne Inhalte. Freigaben für den Chat des Mandanten ohne Schlüssel, Kohorten für Schulungen, Eigenschaften je Modellname und Vorlagen für VS Code und opencode. Assistenten lesen Verbrauch und Modellnamen über die MCP-Tür."

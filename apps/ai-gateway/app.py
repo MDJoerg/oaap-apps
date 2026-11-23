@@ -64,7 +64,7 @@ import vault
 import appframe as af
 import mcpdoor
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("AIGW_DATA_DIR", "/data")

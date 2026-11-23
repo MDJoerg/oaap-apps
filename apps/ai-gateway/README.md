@@ -524,7 +524,7 @@ Umgebung, ist jeder Aufruf `403`.
 
 | Art | Eintrag | `ready` |
 | --- | --- | --- |
-| `supplier` | `{"id": <name>, "url": "https://…/v1", "light"}` — **ohne** Zugangsdaten | Zugangsdaten gespeichert **und** der Verbindungstest der Seite antwortet jetzt mit 2xx |
+| `supplier` | `{"id": <name>, "url": "https://…/v1", "light"}` — **ohne** Zugangsdaten | der Verbindungstest der Seite antwortet jetzt mit 2xx -- mit den gespeicherten Zugangsdaten oder, seit 0.14.0, ohne, wenn die Quelle keine verlangt (lokales Ollama); antwortet sie ohne Zugangsdaten nicht, nennt `note` sie als fehlend |
 | `alias` | `{"id": <modellname>, "supplier", "model"}` — genau ein Ziel | der Modellname ist routbar |
 | `client` | `{"id": <chat-instanz>, "aliases": [...], "ceiling", "personal_data", "tenant"}` — die Freigabe; `tenant` (seit 0.10.1, optional) ist ihr Kontext „Mandant“ und steht damit in jeder Messzeile des Chats, ohne ihn `default` | nicht widerrufen, nicht abgelaufen |
 
