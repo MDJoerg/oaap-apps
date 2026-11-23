@@ -260,7 +260,30 @@ CREATE TABLE IF NOT EXISTS system_items (
   PRIMARY KEY (view, system, kind, name)
 );
 """
-SCHEMA = SCHEMA + LANDSCAPE_SCHEMA
+# 0.45 (RFC-0121 Stufe 1): Ablagesysteme und Arbeitsräume. Die Regeln stehen in
+# workspaces.py; ein Arbeitsraum hält keine Adresse, keinen Zugang, keinen Inhalt.
+STORES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS store_systems (
+  name     TEXT PRIMARY KEY,
+  title    TEXT NOT NULL,
+  kind     TEXT NOT NULL,
+  server   TEXT NOT NULL,
+  light    TEXT NOT NULL DEFAULT 'yellow',
+  active   INTEGER NOT NULL DEFAULT 1,
+  created  TEXT NOT NULL,
+  updated  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workspaces (
+  id       TEXT PRIMARY KEY,
+  owner    TEXT NOT NULL,
+  scope    TEXT NOT NULL DEFAULT 'private',
+  rev      INTEGER NOT NULL DEFAULT 1,
+  doc      TEXT NOT NULL,
+  created  TEXT NOT NULL,
+  updated  TEXT NOT NULL
+);
+"""
+SCHEMA = SCHEMA + LANDSCAPE_SCHEMA + STORES_SCHEMA
 
 # Rückfragen vom Server an den Client, je Sicht (Spec §6.1). Eine Sicht aus
 # 0.1 bekommt beim Nachziehen „alles ablehnen“ — so hat sie sich bisher
@@ -282,6 +305,8 @@ ADDED_COLUMNS = tuple(("usage", col, decl) for col, decl in context.USAGE_COLUMN
     # keinen benutzbaren Wert; `kind` sorgt dafür, dass es nie als Schlüssel gilt.
     ("keys", "kind", "TEXT NOT NULL DEFAULT 'key'"),
     ("keys", "groups", "TEXT NOT NULL DEFAULT ''"),
+    # 0.45 (RFC-0121 D10): die Ablagetür je Zugangsprofil/Schlüssel, aus = 0.
+    ("keys", "stores", "INTEGER NOT NULL DEFAULT 0"),
     # Welche Wege eine Sicht annimmt. Sichten aus 0.2 behalten `key`.
     ("views", "ways", "TEXT NOT NULL DEFAULT 'key'"),
     # Verfahren X: Token-Endpunkt, eigener Client, Ziel-Audience (Spec §3.5).

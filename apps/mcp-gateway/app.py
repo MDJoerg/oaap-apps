@@ -58,6 +58,7 @@ import clientfiles
 import compose
 import guard
 import landscape
+import workspaces
 import signed_approval
 import signin
 import upstream
@@ -66,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.44.0"
+VERSION = "0.45.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -129,6 +130,11 @@ APPROVED_HEADER = "X-OAAP-Approved-By"
 # 0.21.0 (RFC-0101 §2.2): die Ampel eines Gesprächs als zusätzliche Decke DIESER
 # Anfrage -- verschärft die Decke des Schlüssels/Profils, lockert sie nie.
 LIGHT_HEADER = "X-OAAP-Light"
+# 0.45 (RFC-0121 Stufe 1): in welchem Arbeitsraum dieses Gespräch läuft -- die Ablagetür
+# (store_*, workspace_info) kommt nur dazu, wenn das Profil sie erlaubt (D10) und der
+# Arbeitsraum der Person gehört.
+WORKSPACE_HEADER = "X-OAAP-Workspace"
+WORKSPACES_PATH = "/mcp/_workspaces"
 _TOKEN_URL = {}
 
 # Quellen der Plattform (RFC-0073 Stufe 1, Spec §3.6): nur gesetzt, wenn das
@@ -766,6 +772,52 @@ def server_access(srow, person=None):
     return {"auth_kind": "bearer", "credential": token}, url
 
 
+def connector_call(m, person, tool, args):
+    """Ein Verb des Ablagen-Konnektors (oaap.work.stores/1) als die Person (RFC-0121 §3.3).
+
+    Der Konnektor ist ein Server des Gateways (meist eine Quelle der Plattform); der Zugang
+    ist der des Servers -- Verfahren I/A trägt die Person. Ohne Person kein Aufruf (§8.2).
+    Ein Satz des Konnektors kommt als workspaces.Invalid zurück."""
+    if not person:
+        raise workspaces.Invalid("Ohne Person kein Aufruf an eine Ablage.")
+    sysrow = workspaces.system_row(DB, m["system"])
+    srow = books.server_row(DB, sysrow["server"]) if sysrow else None
+    if not srow or srow["gone"]:
+        raise workspaces.Invalid(f"„{m['alias']}“: das Ablagesystem ist gerade nicht erreichbar.")
+    try:
+        server, url = server_access(srow, person)
+        lim = limits_of(srow)
+        us = upstream.open_session(server, url, timeout=lim["timeout_s"], max_bytes=lim["max_bytes"])
+        try:
+            ex = upstream.post(server, url, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                             "params": {"name": tool, "arguments": args}},
+                               session_id=us.id, version=us.version, timeout=lim["timeout_s"],
+                               max_bytes=lim["max_bytes"])
+        finally:
+            upstream.delete(server, url, us.id)
+    except upstream.UpstreamError as exc:
+        raise workspaces.Invalid(f"„{m['alias']}“: {exc}") from None
+    ans = ex.messages[-1] if ex.messages else {}
+    if "error" in ans:
+        raise workspaces.Invalid(f"„{m['alias']}“: {str((ans['error'] or {}).get('message', ''))[:300]}")
+    res = ans.get("result") or {}
+    text = "".join(c.get("text", "") for c in res.get("content") or []
+                   if isinstance(c, dict) and c.get("type") == "text")
+    if res.get("isError"):
+        raise workspaces.Invalid(text[:500] or f"„{m['alias']}“: der Konnektor lehnt ab.")
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = {"text": text}
+    return doc if isinstance(doc, dict) else {"value": doc}
+
+
+def ws_owner(person):
+    """Unter welcher Kennung die Arbeitsräume einer Person liegen: die der Plattform."""
+    owner = personal_owner(person)
+    return owner[1] if owner else ""
+
+
 KIND_PLURAL = {"tool": "Tools", "resource": "Resources", "template": "Resource-Vorlagen",
                "prompt": "Prompts"}
 
@@ -1157,6 +1209,7 @@ LIGHT_WORDS = {"green": "grün — Daten verlassen das Unternehmen nicht",
 TABS = (("start", "./", "Übersicht"), ("server", "./?tab=server", "Server"),
         ("sichten", "./?tab=sichten", "Sichten"),
         ("systeme", "./?tab=systeme", "Systemlandschaft"),          # 0.32
+        ("ablagen", "./?tab=ablagen", "Ablagen"),                   # 0.45 (RFC-0121)
         ("zugaenge", "./?tab=zugaenge", "Schlüssel & Profile"),
         ("assistenten", "assistenten", "Assistenten"),
         ("aufrufe", "./?tab=aufrufe", "Aufrufe & Prüfspur"),
@@ -1898,6 +1951,7 @@ def audit_tab(host, params=None):
 TAB_PAGES = lambda: {"start": ("Übersicht", lambda host, _p: start_tab(host)),
                      "server": ("Server", servers_tab),
                      "sichten": ("Sichten", views_tab), "systeme": ("Systemlandschaft", systems_tab),
+                     "ablagen": ("Ablagen", stores_tab),
                      "zugaenge": ("Schlüssel und Profile", keys_tab),
                      "anmeldung": ("Anmeldung", lambda host, _p: signin_card(host)),
                      "aufrufe": ("Aufrufe und Prüfspur", calls_tab),
@@ -2598,6 +2652,49 @@ Die Liste hält nie eine Adresse oder einen Zugang. Die Ampel kommt aus der Roll
 wenn keine gesetzt ist, und ist nie lockerer als ein Server des Systems.</p>
 {report}</div>
 <div class="card"><h2>Zielsystem anlegen</h2>{system_form(None)}</div>"""
+
+
+def stores_tab(host, params=None):
+    """0.45 (RFC-0121 §4.1): Ablagesysteme, und für welche Zugänge die Ablagetür an ist."""
+    rows = list(workspaces.systems(DB))
+    body = "".join(
+        f'<tr><td><code>{esc(r["name"])}</code><br>{esc(r["title"])}</td><td>{esc(r["kind"])}</td>'
+        f'<td><code>{esc(r["server"])}</code></td>'
+        f'<td>{badge(workspaces.system_light(DB, r), workspaces.system_light(DB, r))}</td>'
+        f'<td>{badge("green", "aktiv") if r["active"] else badge("off", "aus")}</td>'
+        f'<td><form method="post" action="store-system-delete"><input type="hidden" name="name" '
+        f'value="{esc(r["name"])}"><button class="secondary">Löschen</button></form></td></tr>'
+        for r in rows) or '<tr><td colspan="6" class="muted">Noch kein Ablagesystem.</td></tr>'
+    servers = "".join(f'<option value="{esc(s["name"])}">{esc(s["name"])}</option>'
+                      for s in books.servers(DB) if not s["gone"])
+    kinds = "".join(f'<option>{k}</option>' for k in workspaces.KINDS)
+    lights = "".join(f'<option value="{v}"{" selected" if v == "yellow" else ""}>{w}</option>'
+                     for v, w in LIGHT_CHOICES)
+    profs = "".join(
+        f'<tr><td><code>{esc(k["label"])}</code></td><td>{esc(k["kind"])}</td>'
+        f'<td>{badge("green", "an") if k["stores"] else badge("off", "aus")}</td>'
+        f'<td><form method="post" action="profile-stores"><input type="hidden" name="label" '
+        f'value="{esc(k["label"])}"><input type="hidden" name="on" value="{0 if k["stores"] else 1}">'
+        f'<button class="secondary">{"Ausschalten" if k["stores"] else "Einschalten"}</button></form></td></tr>'
+        for k in DB.execute("SELECT * FROM keys WHERE revoked='' ORDER BY label").fetchall())
+    return f"""<div class="card"><h1>Ablagen</h1>
+<p class="hint">Ein <b>Ablagesystem</b> ist ein Wiki, ein Git-Server oder ein Projektordner, in dem Personen
+ihre Arbeit ablegen. Ein Konnektor (ein MCP-Server mit den Verben von <code>oaap.work.stores</code>) macht es
+für das Gateway ansprechbar. Jeder Aufruf läuft <b>als die Person</b>; was sie dort sieht und ändern darf,
+entscheidet das System selbst. In einem <b>Arbeitsraum</b> hängt eine Person Ablagen mit Alias und Rolle
+(Quelle oder Arbeitsablage) ein; die Werkzeuge <code>store_*</code> kommen dann zu ihrer Sicht dazu.</p>
+<table class="oaap-table"><tr><th>Ablagesystem</th><th>Typ</th><th>Konnektor</th><th>Ampel</th><th>Zustand</th><th></th></tr>{body}</table></div>
+<div class="card"><h2>Ablagesystem eintragen</h2><form method="post" action="store-system-save">
+<label>Name <input name="name" required pattern="[a-z0-9][a-z0-9-]{{1,39}}"></label>
+<label>Titel <input name="title"></label>
+<label>Typ <select name="kind">{kinds}</select></label>
+<label>Konnektor (Server) <select name="server">{servers}</select></label>
+<label>Ampel <select name="light">{lights}</select></label>
+<input type="hidden" name="active" value="1"><button>Speichern</button></form></div>
+<div class="card"><h2>Ablagetür je Zugang</h2>
+<p class="hint">Aus, bis sie hier eingeschaltet wird (Grundsatz: nichts ohne Freigabe). Ein Schlüssel ohne
+Person bekommt nie Ablagen; sinnvoll ist sie für Profile, mit denen Personen kommen (Chat, Anmeldung).</p>
+<table class="oaap-table"><tr><th>Zugang</th><th>Art</th><th>Ablagetür</th><th></th></tr>{profs}</table></div>"""
 
 
 def system_page(user, roles, host, sid):
@@ -3532,6 +3629,102 @@ class Handler(BaseHTTPRequestHandler):
                                       lambda prof, v: why_not(prof, v, "platform"), see_all)
         self.send_json(200, {"v": 1, "client": carried["client"], "all": see_all, "views": rows})
 
+    # ---- Ablagetür und Arbeitsräume (0.45, RFC-0121 Stufe 1)
+
+    def store_workspace(self, key):
+        """(Arbeitsraum, '') oder (None, Grund) für diese Anfrage."""
+        wid = (self.headers.get(WORKSPACE_HEADER) or "").strip()
+        if not wid:
+            return None, "kein Arbeitsraum"
+        if "stores" not in key.keys() or not key["stores"]:
+            return None, ("Die Ablagetür ist für diesen Zugang nicht eingeschaltet "
+                          "(Verwaltung → Ablagen → Ablagetür je Zugang).")
+        if not self.person:
+            return None, "Ohne Person keine Ablagen -- ein Schlüssel allein reicht nicht."
+        ws = workspaces.ws_for(DB, ws_owner(self.person), wid)
+        if ws is None:
+            return None, "Diesen Arbeitsraum gibt es nicht (oder nicht für dich)."
+        return ws, ""
+
+    def store_call(self, key, vrow, msg_id, name, args, state, done, answer):
+        """Ein Werkzeug der Ablagetür: auflösen, Rolle prüfen, Bearbeitungsschicht, Konnektor."""
+        state.update(kind="tool", name=name, server="", source="")
+        state["procedure"] = (self.person or {}).get("procedure", "T")
+        ws, why = self.store_workspace(key)
+        if ws is None:
+            done("refused", "workspace", door="gateway")
+            answer(rpc_error(msg_id, -32003, f"Ablagetür: {why}"))
+            return
+        rank = landscape.ceiling_rank(key["ceiling"], self.asked)
+        person = self.person
+
+        def call(m, tool, a):
+            sysrow = workspaces.system_row(DB, m["system"])
+            state["server"] = sysrow["server"] if sysrow else ""
+            state["source"] = tool
+            try:
+                return connector_call(m, person, tool, a)
+            except workspaces.Invalid as exc:
+                state["server_said"] = str(exc)     # wer ablehnte: das Produkt, nicht die Tür
+                raise
+        try:
+            result, _m = workspaces.run(DB, ws, rank, name, args, call)
+        except workspaces.Invalid as exc:
+            done("refused", "store", door="server" if state.get("server_said") == str(exc)
+                 else "gateway")
+            answer(rpc_result(msg_id, {"content": [{"type": "text", "text": str(exc)}],
+                                       "isError": True}))
+            return
+        done("ok", door="")
+        answer(rpc_result(msg_id, {"content": [{"type": "text", "text": json.dumps(
+            result, ensure_ascii=False, indent=1)}], "structuredContent": result}))
+
+    def workspaces_api(self, method, path):
+        """/mcp/_workspaces über die via-Tür, als die Person (wie /mcp/_assistants):
+        GET: eigene Arbeitsräume und die Ablagesysteme; GET …/_pick?system=&what=areas|stores
+        &area=: was die Person dort sieht; POST: speichern; POST …/<id>/delete: löschen."""
+        carried = self.platform_person()
+        if carried is None:
+            self.deny()
+            return
+        owner = ws_owner(carried)
+        rest = path[len(WORKSPACES_PATH):].strip("/")
+        try:
+            if method == "GET" and not rest:
+                systems = [{"name": r["name"], "title": r["title"], "kind": r["kind"],
+                            "light": workspaces.system_light(DB, r), "active": bool(r["active"])}
+                           for r in workspaces.systems(DB)]
+                mine = workspaces.ws_of(DB, owner)
+                for w in mine:
+                    w["light"] = workspaces.ws_light(DB, w)
+                self.send_json(200, {"v": 1, "workspaces": mine, "systems": systems})
+                return
+            if method == "GET" and rest == "_pick":
+                query = dict(parse_qsl(self.path.partition("?")[2], keep_blank_values=True))
+                row = workspaces.system_row(DB, query.get("system", ""))
+                if not row or not row["active"]:
+                    raise workspaces.Invalid("Dieses Ablagesystem gibt es nicht (oder es ist aus).")
+                m = {"alias": row["name"], "system": row["name"]}
+                verb = "stores_areas" if query.get("what") == "areas" else "stores_stores"
+                args = {} if verb == "stores_areas" else \
+                    {k: query[k] for k in ("area", "offset") if query.get(k)}
+                self.send_json(200, {"v": 1, **connector_call(m, carried, verb, args)})
+                return
+            if method == "POST" and not rest:
+                raw = self.read_body(1 << 16)
+                doc = json.loads(raw or b"{}")
+                self.send_json(200, {"v": 1, "workspace": workspaces.save_ws(DB, owner, doc)})
+                return
+            if method == "POST" and rest.endswith("/delete"):
+                workspaces.delete_ws(DB, owner, rest[:-len("/delete")])
+                self.send_json(200, {"v": 1, "deleted": rest[:-len("/delete")]})
+                return
+        except ValueError as exc:     # Invalid und kaputtes JSON
+            self.send_json(400, {"v": 1, "error": str(exc)})
+            return
+        self.send_json(404, {"v": 1, "error": "Bekannt: GET /mcp/_workspaces, GET …/_pick, POST, "
+                                              "POST …/<id>/delete."})
+
     def platform_person(self):
         """Der Mensch, den die Plattform durch einen Chat herträgt (Verfahren A), oder None.
 
@@ -3579,6 +3772,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
             self.assistants_post(path)
             return
+        if path == WORKSPACES_PATH or path.startswith(WORKSPACES_PATH + "/"):
+            self.workspaces_api("POST", path)
+            return
         if path.startswith("/mcp/"):
             self.handle_mcp_post()
             return
@@ -3594,7 +3790,9 @@ class Handler(BaseHTTPRequestHandler):
                     "/system-save", "/system-delete", "/view-multi", "/view-system-add",
                     "/view-system-remove", "/view-system-approve",
                     # 0.38 (RFC-0114 Stufe 2)
-                    "/view-convert"):
+                    "/view-convert",
+                    # 0.45 (RFC-0121 Stufe 1)
+                    "/store-system-save", "/store-system-delete", "/profile-stores"):
             self.handle_admin_post(path)
             return
         self.send_json(404, {"error": "Diesen Pfad kennt das Gateway nicht."})
@@ -3691,6 +3889,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 entries = [compose.shaped(kind, i, sess.version)
                            for _, i in sorted(visible_items(vrow, key, kind).items())]
+            if kind == "tool":
+                ws, _why = self.store_workspace(key)
+                if ws:
+                    # 0.45 (RFC-0121 §4.2): die Ablagetür kommt zur Sicht dazu, nicht in sie
+                    taken = {e.get("name") for e in entries}
+                    entries = entries + [t for t in workspaces.tool_list(ws) if t["name"] not in taken]
             self.send_json(200, rpc_result(msg_id, {field: entries}))
         else:
             self.send_json(200, rpc_error(msg_id, -32601, f"Methode {method} wird in dieser "
@@ -3815,6 +4019,11 @@ class Handler(BaseHTTPRequestHandler):
             if uri_system:
                 params = dict(params, uri=inner)
         try:
+            tname = params.get("name") if method == "tools/call" else None
+            if tname in workspaces.TOOLS and self.headers.get(WORKSPACE_HEADER) \
+                    and not visible_items(vrow, key, "tool").get(tname):
+                self.store_call(key, vrow, msg_id, tname, params.get("arguments"), state, done, answer)
+                return
             if multi and method == "resources/read" and not uri_system \
                     and not landscape.plain_uri(params.get("uri")):
                 done("refused", "system_missing")
@@ -4180,6 +4389,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == ASSISTANTS_PATH or path.startswith(ASSISTANTS_PATH + "/"):
             self.assistants_get(path)
+            return
+        if path == WORKSPACES_PATH or path.startswith(WORKSPACES_PATH + "/"):
+            self.workspaces_api("GET", path)
             return
         if path.startswith("/mcp"):
             # Kein vom Server ausgehender Strom in 0.1 (Spec §6). Gleich für jede
@@ -4623,6 +4835,23 @@ class Handler(BaseHTTPRequestHandler):
                     landscape.parse_facts(form.get("facts", "")), form.get("light", ""),
                     form.get("description", ""), servers)
                 notice = f"Zielsystem „{form.get('id', '')}“ gespeichert."
+            elif path == "/store-system-save":
+                workspaces.save_system(DB, user, form.get("name", ""), form.get("title", ""),
+                                       form.get("kind", ""), form.get("server", ""),
+                                       form.get("light", "yellow"), form.get("active", "1") == "1")
+                notice = f"Ablagesystem „{form.get('name', '')}“ gespeichert."
+            elif path == "/store-system-delete":
+                workspaces.delete_system(DB, user, form.get("name", ""))
+                notice = f"Ablagesystem „{form.get('name', '')}“ gelöscht."
+            elif path == "/profile-stores":
+                on = form.get("on") == "1"
+                n = DB.execute("UPDATE keys SET stores=? WHERE label=?",
+                               (1 if on else 0, form.get("label", ""))).rowcount
+                books.log(DB, user, "key.stores", form.get("label", ""), "an" if on else "aus")
+                DB.commit()
+                notice = (f"Ablagetür für „{form.get('label', '')}“ "
+                          f"{'eingeschaltet' if on else 'ausgeschaltet'}." if n
+                          else f"Einen Zugang „{form.get('label', '')}“ gibt es nicht.")
             elif path == "/system-delete":
                 landscape.delete_system(DB, user, form.get("id", ""))
                 notice = f"Zielsystem „{form.get('id', '')}“ gelöscht."
@@ -4671,7 +4900,9 @@ POST_TAB = {"/issue": "zugaenge", "/revoke": "zugaenge", "/key-limits": "zugaeng
             "/source-sync": "server", "/server-delete": "server", "/server-save": "server",
             "/server-rename": "server",
             "/view-delete": "sichten", "/view-save": "sichten", "/view-items": "sichten",
-            "/view-copy": "sichten", "/system-save": "systeme", "/system-delete": "systeme"}
+            "/view-copy": "sichten", "/system-save": "systeme", "/system-delete": "systeme",
+            "/store-system-save": "ablagen", "/store-system-delete": "ablagen",
+            "/profile-stores": "ablagen"}
 
 
 def json_field(form, name):
@@ -5530,7 +5761,10 @@ def cli(argv):
              "        app.py view multi <sicht> <referenzsystem> | view system-add <sicht> <system> | "
              "view system-remove <sicht> <system> | view system-approve <sicht> <system> <werkzeug> | "
              "view systems <sicht> | view system-approve <sicht> <system> <name> --kind prompt|resource|template | "
-             "view convert <sicht> <referenzsystem> [<neue sicht>]   (ohne neue Sicht: nur der Plan)")
+             "view convert <sicht> <referenzsystem> [<neue sicht>]   (ohne neue Sicht: nur der Plan)\n"
+             "        app.py store set <name> --kind bookstack|forgejo|pch|bdt|github --server S [--title T] "
+             "[--light yellow] [--active ja|nein] | store list | store remove <name> | "
+             "key stores <etikett> an|aus   (RFC-0121)")
     if len(argv) < 2:
         print(usage)
         return 2
@@ -5559,6 +5793,36 @@ def cli(argv):
             for src in fetch_sources():
                 print(f'{src.get("name", ""):24} {src.get("app", "")}@{src.get("version", "")} '
                       f'{src.get("channel", ""):10} {src.get("address", "")}')
+            return 0
+        if area == "store" and action == "list":
+            for s_ in workspaces.systems(DB):
+                print(f'{s_["name"]:16} {s_["kind"]:10} {"aktiv" if s_["active"] else "aus":6} '
+                      f'{workspaces.system_light(DB, s_):6} {s_["server"]:28} {s_["title"]}')
+            return 0
+        if area == "store" and action == "set" and pos:
+            old = workspaces.system_row(DB, pos[0])
+            row = workspaces.save_system(
+                DB, "cli", pos[0], opts.get("title", old["title"] if old else pos[0]),
+                opts.get("kind", old["kind"] if old else ""), opts.get("server", old["server"] if old else ""),
+                opts.get("light", old["light"] if old else "yellow"),
+                opts.get("active", "ja" if (not old or old["active"]) else "nein") == "ja")
+            print(f'Ablagesystem {row["name"]}: {row["kind"]} über {row["server"]}, '
+                  f'Ampel {workspaces.system_light(DB, row)}')
+            return 0
+        if area == "store" and action == "remove" and pos:
+            workspaces.delete_system(DB, "cli", pos[0])
+            print(f"Ablagesystem {pos[0]} gelöscht.")
+            return 0
+        if area == "key" and action == "stores" and len(pos) == 2 and pos[1] in ("an", "aus"):
+            n = DB.execute("UPDATE keys SET stores=? WHERE label=? AND revoked=''",
+                           (1 if pos[1] == "an" else 0, pos[0])).rowcount
+            if n:
+                books.log(DB, "cli", "key.stores", pos[0], pos[1])
+            DB.commit()
+            if not n:
+                print(f"Einen gültigen Zugang „{pos[0]}“ gibt es nicht.", file=sys.stderr)
+                return 1
+            print(f"Ablagetür für {pos[0]}: {pos[1]}")
             return 0
         if area == "system" and action == "list":
             for s in landscape.systems(DB):

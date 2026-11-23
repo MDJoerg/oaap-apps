@@ -57,6 +57,7 @@ NO_TEMPLATE = {
     "store-editor": "Werkzeug des Katalogpflegers, nicht des Mandanten",
     "help": "die Plattform bringt die Vorlage „hilfe-assistent“ für dieselbe Quelle mit",
     "recherche": "die Plattform bringt die Vorlage „recherche“ mit (RFC-0116); der Betreiber gibt sie frei",
+    "bookstack": "Ablagen-Konnektor (RFC-0121): seine Werkzeuge kommen über die Ablagetür des Gateways in einen Arbeitsraum, nicht über eine Sicht",
 }
 # Eigene Oberfläche, aber kein Rahmen: der Chat ordnet selbst an (Typ A).
 NO_FRAME = {"chat"}

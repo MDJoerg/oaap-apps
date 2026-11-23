@@ -44,4 +44,5 @@ Server dahinterstehen und wo, erfährt er nie.
 - [Schlüssel und Zugangsprofile vergeben](zugang-vergeben.md)
 - [Ein Werkzeug anbinden (Claude Code, VS Code, opencode)](werkzeug-anbinden.md)
 - [Meine Werkzeuge: eigene Aufrufe und persönlicher Zugang](meine-werkzeuge.md)
+- [Ablagen und Arbeitsräume](ablagen.md)
 - [Häufige Fragen](faq.md)

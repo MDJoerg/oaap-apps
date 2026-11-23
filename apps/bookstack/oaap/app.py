@@ -25,7 +25,9 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import mcpdoor
 import setup_door
+import stores
 from wiki import Wiki, WikiError
 
 ENV = os.environ
@@ -34,6 +36,25 @@ PORT = int(ENV.get("PORT") or "8000")
 
 wiki = Wiki(ENV)
 memory = setup_door.Memory(os.path.join(DATA, "setup.json"))
+
+# RFC-0121: der Ablagen-Konnektor als MCP-Tür (/oaap/mcp, Route für alle Rollen).
+# mcpdoor liest nur fünf Kopfzeilen; der Konnektor braucht dazu die Anmeldung am
+# Realm (X-OAAP-User-Idp), um das BookStack-Konto der Person zu finden.
+_identity = mcpdoor.identity
+
+
+def _identity_with_idp(headers):
+    who = _identity(headers)
+    who["idp"] = (headers.get("X-OAAP-User-Idp") or "").strip()
+    return who
+
+
+mcpdoor.identity = _identity_with_idp
+VERSION = "0.2.0"
+door = mcpdoor.Door("oaap-bookstack-stores", VERSION,
+                    "Die Bücher des Wikis als Ablagen (oaap.work.stores/1), als die Person.")
+connector = stores.Connector(wiki, ENV)
+stores.register(door, connector)
 STATE = {"phase": "waiting", "since": None, "notes": [], "admin_group": None,
          "default_password": None, "adapter": None, "bookstack": None}
 
@@ -142,6 +163,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path, q = self._route()
+        if path == "/oaap/mcp":
+            return door.serve(self)
         if path == "/oaap/healthz":
             return self._send(200, {"ok": True, "phase": STATE["phase"]})
         if path == "/oaap/status":
@@ -162,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path, _ = self._route()
+        if path == "/oaap/mcp":
+            if STATE["phase"] != "ready":
+                return self._send(503, {"error": f"der Dienst ist noch nicht bereit ({STATE['phase']})"})
+            return door.serve(self)
         if path != "/oaap/setup":
             return self._send(404, {"error": "nicht hier"})
         if not setup_door.authorized(self.headers, ENV):

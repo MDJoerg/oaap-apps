@@ -43,7 +43,7 @@ SHARED = {
     "mcpdoor": ["spezialisten", "studio", "wegweiser", "partnerverwaltung",
                 "mitarbeiterverwaltung", "projekt", "raci", "ai-gateway", "fleetview",
                 "store-editor", "package-catalog", "marketplace", "ollama-models",
-                "rollen-rechte", "vpn-client"],
+                "rollen-rechte", "vpn-client", "bookstack:oaap/mcpdoor"],
 }
 
 

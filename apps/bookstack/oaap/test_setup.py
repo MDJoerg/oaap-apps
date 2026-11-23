@@ -66,7 +66,7 @@ class Door(unittest.TestCase):
         r1 = post(self.w, self.mem, {"v": 1, "items": [item]})
         self.assertEqual(r1[0]["result"], "made")
         made = [r for r in self.w.roles.values() if r["external_auth_id"] == "/wiki-redaktion"][0]
-        self.assertEqual(made["permissions"], EDITOR)
+        self.assertEqual(made["permissions"], sorted(EDITOR + ["access-api"]))
         self.assertEqual(made["display_name"], "Redaktion")
         r2 = post(self.w, self.mem, {"v": 1, "items": [item]})
         self.assertEqual(r2[0]["result"], "present")
@@ -75,7 +75,7 @@ class Door(unittest.TestCase):
         r = post(self.w, self.mem, {"v": 1, "items": [{"kind": "role", "id": "/verein/vorstand"}]})
         self.assertEqual(r[0]["result"], "made")
         made = [x for x in self.w.roles.values() if x["external_auth_id"] == "/verein/vorstand"][0]
-        self.assertEqual(made["permissions"], VIEWER)
+        self.assertEqual(made["permissions"], sorted(VIEWER + ["access-api"]))
         self.assertEqual(made["display_name"], "vorstand")
 
     def test_existing_role_by_hand_is_present_and_never_removed(self):
@@ -94,7 +94,7 @@ class Door(unittest.TestCase):
         self.w.roles[rid]["permissions"] = VIEWER + ["page-create-all"]
         r = post(self.w, self.mem, {"v": 1, "remove": [item]})
         self.assertEqual(r[0]["result"], "conflict")
-        self.w.roles[rid]["permissions"] = list(VIEWER)
+        self.w.roles[rid]["permissions"] = sorted(VIEWER + ["access-api"])   # wie angelegt
         r = post(self.w, self.mem, {"v": 1, "remove": [item]})
         self.assertEqual(r[0]["result"], "removed")
         r = post(self.w, self.mem, {"v": 1, "remove": [item]})

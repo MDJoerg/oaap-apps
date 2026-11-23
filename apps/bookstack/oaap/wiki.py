@@ -23,7 +23,7 @@ import urllib.request
 # Die Spalten, die diese Datei schreibt oder liest -- genau diese, nicht mehr.
 SCHEMA = {
     "api_tokens": {"name", "token_id", "secret", "user_id", "expires_at", "created_at", "updated_at"},
-    "users": {"id", "email", "password"},
+    "users": {"id", "email", "password", "external_auth_id"},
 }
 TOKEN_PREFIX = "oaap-"
 ADAPTER_EMAIL = "adapter@oaap.invalid"
@@ -116,6 +116,20 @@ class Wiki:
                 cur.execute("SELECT id FROM users WHERE email=%s", (email,))
                 row = cur.fetchone()
                 return row[0] if row else None
+        finally:
+            con.close()
+
+    def user_id_by_external(self, sub):
+        """Das Konto, das BookStack bei der Anmeldung über den Realm an `sub` gebunden hat."""
+        self._require_schema()
+        if not sub:
+            return None
+        con = self._db()
+        try:
+            with con.cursor() as cur:
+                cur.execute("SELECT id FROM users WHERE external_auth_id=%s", (sub,))
+                rows = cur.fetchall()
+                return rows[0][0] if len(rows) == 1 else None
         finally:
             con.close()
 

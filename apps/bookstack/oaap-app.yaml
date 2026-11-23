@@ -3,7 +3,7 @@ oaap_manifest: "0.18"
 app:
   id: bookstack
   name: Wiki (BookStack)
-  version: 0.1.0
+  version: 0.2.0
   type: wrapped
   description: "Ein Wiki für den Mandanten: Regale, Bücher, Kapitel, Seiten (BookStack 26.09.3). Menschen melden sich über den Anmeldedienst des Mandanten an, die Gruppen des Realms sind die Rollen im Wiki (RFC-0110 Stufe 1). Bilder und Anhänge sieht nur, wer die Seite sehen darf."
 
@@ -66,6 +66,16 @@ routes:
   - path: /oaap
     roles: [admin]
     service: oaap
+  # RFC-0121: der Ablagen-Konnektor (oaap.work.stores/1). Jede Rolle darf die Tür
+  # erreichen; was die Person sieht und ändert, entscheidet BookStack selbst.
+  - path: /oaap/mcp
+    roles: [admin, keyuser, user]
+    service: oaap
+
+# RFC-0073: die MCP-Tür der App, hier der Ablagen-Konnektor -- das MCP-Gateway
+# des Mandanten ruft sie als die Person (Verfahren I/A).
+mcp:
+  path: /oaap/mcp
 
 # RFC-0091 Stufe 3: BookStack meldet selbst über den Realm des Mandanten an,
 # sobald der Betreiber einen Client gibt (`oaap idp app <connector> --instance
@@ -145,4 +155,5 @@ docs:
       anmelden-und-rollen.md: concept
       einrichten.md: admin-guide
       sicherung-und-update.md: admin-guide
+      ablage.md: concept
       faq.md: faq

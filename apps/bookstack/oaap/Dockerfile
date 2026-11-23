@@ -16,7 +16,8 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin oaap
 
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
-COPY app.py wiki.py setup_door.py /srv/
+COPY app.py wiki.py setup_door.py stores.py /srv/
+COPY mcpdoor /srv/mcpdoor
 
 USER 10001
 EXPOSE 8000

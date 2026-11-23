@@ -264,8 +264,8 @@
       "id": "mcp-gateway",
       "name": "MCP-Gateway",
       "type": "native",
-      "version": "0.44.0",
-      "released": "2026-11-22",
+      "version": "0.45.0",
+      "released": "2026-11-23",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/mcp-gateway"
@@ -1136,7 +1136,7 @@
       "id": "bookstack",
       "name": "Wiki (BookStack)",
       "type": "wrapped",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "released": "2026-11-23",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

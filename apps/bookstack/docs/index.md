@@ -32,6 +32,7 @@ Anmeldedienst des Mandanten. Mehr dazu:
   Gruppen, Administratoren.
 - [Sicherung und Update](sicherung-und-update.md) – warum ein Update nur
   vorwärts geht und was zusammen gesichert werden muss.
+- [Das Wiki als Ablage für die KI](ablage.md) – als die Person lesen und schreiben, über einen Arbeitsraum
 - [Häufige Fragen](faq.md)
 
 ## Wie es weitergeht

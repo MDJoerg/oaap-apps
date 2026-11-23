@@ -34,6 +34,7 @@ from wiki import WikiError
 
 KINDS = ["role"]
 LIKE = {"viewer": "Viewer", "editor": "Editor"}
+API_PERMISSION = "access-api"
 SECRET_FIELDS = ("key", "token", "secret", "password", "credentials")
 ITEM_FIELDS = {"kind", "id", "title", "like"}
 MAX_ITEMS = 50
@@ -213,7 +214,10 @@ def _make(wiki, mem, it, dry, actor):
     if r:
         return "present", f"Rolle „{r.get('display_name')}“ (id {r['id']}) gilt schon für {group}"
     like = it.get("like", "viewer")
-    perms = _template(wiki, like)
+    # 0.2.0 (RFC-0121): dazu „Zugriff auf System-API“ -- ohne es kann die Plattform nicht als
+    # diese Person im Wiki arbeiten (Ablagetür). Es öffnet nur den Weg, kein Buch, keine Seite:
+    # was die Rolle sehen und ändern darf, bleibt das der Vorlage.
+    perms = sorted(set(_template(wiki, like)) | {API_PERMISSION})
     title = (it.get("title") or group.lstrip("/").split("/")[-1] or group).strip()
     if dry:
         return "would_make", f"würde Rolle „{title}“ wie „{LIKE[like]}“ für {group} anlegen"

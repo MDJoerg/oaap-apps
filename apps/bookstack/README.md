@@ -34,10 +34,22 @@ D3). Die Spalten dieser Tabelle prüft `oaap` bei jedem Start (§3.3).
 Instanz `vuebung-vuebung-wiki` im Mandanten `vuebung`, Realm mit anna,
 bert und carl. Bericht: `oaap-lab/wiki-probe/stufe1-paket.md`.
 
+## Ablagen-Konnektor (0.2.0, RFC-0121)
+
+Der Dienst `oaap` hat unter `/oaap/mcp` eine MCP-Tür (eigene Route für alle
+Rollen, `mcp:` im Manifest): die Verben von `oaap.work.stores` 0.1 als
+Werkzeuge `stores_*` (`stores.py`). Die Person kommt von der Plattform
+(`X-OAAP-User-Idp`); ihr Konto ist das mit `external_auth_id` = `sub`, das
+Token dafür entsteht bei Bedarf und bleibt im Speicher. Buch = Ablage,
+Kapitel = Ordner, Seite = Dokument. Die Rollen der Einrichtungstür bekommen
+„Zugriff auf System-API“ (`access-api`) dazu -- ohne es lehnt BookStack jeden
+Aufruf als die Person ab. Gemessen über die Ablagetür des MCP-Gateways:
+`oaap-lab/arbeitsraum-messung`, 27/27.
+
 ## Prüfen
 
 ```sh
-cd oaap && python3 -m unittest test_setup
+cd oaap && python3 -m unittest test_setup test_stores
 ```
 
 ## Hilfe
