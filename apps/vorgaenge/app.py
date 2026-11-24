@@ -59,7 +59,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.19.0"
+VERSION = "0.20.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -162,6 +162,53 @@ def flush_outbox(store):
         store.outbox_result(row["seq"], ok, err)
         print(f"Übergabe {row['handover_id'][:8]} an {p['id']}: "
               f"{'quittiert' if ok else 'nicht angekommen: ' + err}", flush=True)
+
+
+# RFC-0127 Stufe 1.5: der Status eines Vorgangs aus dem Backend einer App geht
+# an diese App zurück -- als adressiertes Ereignis über die Tür der Plattform
+# (OAAP_EVENTS_URL, OAAP_EVENTS_KEY). Ohne Schlüssel: keine Ereignisse hier.
+EVENTS_URL = os.environ.get("OAAP_EVENTS_URL", "")
+EVENTS_KEY = os.environ.get("OAAP_EVENTS_KEY", "")
+EVENTS_SECONDS = 2
+
+
+def publish_event(raw):
+    """(outcome, Fehlertext): 'sent' bei 202; 'refused' bei einer endgültigen
+    Absage der Plattform (4xx außer 429); sonst 'retry'."""
+    req = urllib.request.Request(
+        EVENTS_URL.rstrip("/") + "/", data=raw.encode("utf-8"), method="POST",
+        headers={"Authorization": "Bearer " + EVENTS_KEY,
+                 "Content-Type": "application/cloudevents+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return ("sent", "") if r.status == 202 else ("retry", f"HTTP {r.status}")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read() or b"{}").get("error", "")
+        except ValueError:
+            detail = ""
+        final = 400 <= e.code < 500 and e.code != 429
+        return ("refused" if final else "retry"), f"HTTP {e.code} {detail}".strip()
+    except (OSError, ValueError) as e:
+        return "retry", str(e)
+
+
+def flush_events(store, send=None):
+    send = send or publish_event
+    for row in store.event_outbox_due():
+        outcome, err = send(row["doc"])
+        store.event_outbox_result(row["seq"], outcome, err)
+        if outcome != "sent":
+            print(f"Ereignis {row['seq']} an {row['addressee']}: {outcome} {err}", flush=True)
+
+
+def events_loop(store):
+    while True:
+        try:
+            flush_events(store)
+        except Exception as e:      # die Ereignisse dürfen die App nie anhalten
+            print(f"Ereignisse: Lauf fehlgeschlagen: {e}", flush=True)
+        time.sleep(EVENTS_SECONDS)
 
 
 def outbox_loop(store, kick):
@@ -1952,13 +1999,15 @@ MCP_RULES = mcp_door.Rules(
 def main():
     global STORE, AUTHZ, RETENTION
     os.makedirs(DATA_DIR, exist_ok=True)
-    STORE = Store(os.path.join(DATA_DIR, "vorgaenge.db"))
+    STORE = Store(os.path.join(DATA_DIR, "vorgaenge.db"), events=bool(EVENTS_URL and EVENTS_KEY))
     RETENTION = retention_months()
     ACCEPT_DAYS_NOW[0] = accept_days()
     print(f"Löschfrist: {RETENTION} Monate nach Abschluss; beantwortet ohne "
           f"Rückmeldung geschlossen nach {ACCEPT_DAYS_NOW[0]} Tagen", flush=True)
     threading.Thread(target=retention_loop, args=(RETENTION, ACCEPT_DAYS_NOW[0]), daemon=True).start()
     threading.Thread(target=outbox_loop, args=(STORE, OUTBOX_KICK), daemon=True).start()
+    if STORE.events:
+        threading.Thread(target=events_loop, args=(STORE,), daemon=True).start()
     AUTHZ = authz_client.Authz(app=None)
     if not AUTHZ.url:
         print("OAAP_AUTHZ_URL fehlt: nur die Admins sehen den Eingang, "

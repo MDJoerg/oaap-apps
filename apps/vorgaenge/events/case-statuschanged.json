@@ -1,0 +1,8 @@
+{"type": "object", "required": ["case", "to"], "additionalProperties": false,
+ "properties": {
+   "case": {"type": "string", "maxLength": 20, "description": "Nummer des Vorgangs, V-JJJJ-NNNN"},
+   "from": {"type": "string", "maxLength": 40},
+   "to": {"type": "string", "maxLength": 40},
+   "object": {"type": "object", "additionalProperties": false,
+              "properties": {"kind": {"type": "string", "maxLength": 40},
+                             "id": {"type": "string", "maxLength": 200}}}}}

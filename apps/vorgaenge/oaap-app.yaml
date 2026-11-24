@@ -1,9 +1,9 @@
-oaap_manifest: "0.20"
+oaap_manifest: "0.21"
 
 app:
   id: vorgaenge
   name: Vorgänge
-  version: 0.19.0
+  version: 0.20.0
   type: native
   class: frontend
   description: "Melden und Klären im Mandanten: nimmt die Meldungen des Feedback-Knopfs der Plattform an (in jeder App, Herkunft vom Gateway beglaubigt) und interne Vorgänge; geklärt wird in Bereichen, die der Mandant hier oder in „Rollen & Rechte“ vergibt. Eine Instanz je Mandant. Der Knoten kündigt seinen Neustart hier als Vorgang an und schreibt die Anfragen der Mandanten an den Betreiber hierher. KI-Spezialisten (App Spezialisten) bearbeiten Vorgänge im Hintergrund: je Bereich eine Erstbearbeitung, interne Schritte, Stopp-Knopf; schreibende Aufrufe und Antworten an die Meldende nur nach Freigabe eines Menschen. Übersicht als Listenbericht mit Suche, Filtern, Sortieren und Blättern; MCP-Tür mit Suchen, Lesen, Melden und Kommentieren. Plattform ab 0.1.199"
@@ -22,6 +22,19 @@ services:
 # Die Meldungen des Knopfs kommen NICHT über diese Route, sondern über
 # /platform/feedback auf dem Ursprung der meldenden App; das Gateway
 # leitet sie unverändert hierher und setzt die Herkunft.
+# 0.20.0 (RFC-0127 Stufe 1.5, Manifest 0.21): Der Status eines Vorgangs, den
+# das Backend einer App eröffnet hat, geht als adressiertes Ereignis an genau
+# diese App zurück -- über die Tür der Plattform, nie an andere. Ein Knoten
+# vor 0.21 überspringt den Block; dann gibt es keine Ereignisse.
+events:
+  publishes:
+    - type: app.vorgaenge.case.statuschanged.v1
+      title: "Vorgang hat den Status gewechselt"
+      subject: case
+      schema: events/case-statuschanged.json
+      semantic_id: oaap-aas:Cases/1/0/StatusChanged
+      audience: addressed
+
 routes:
   - path: /
     roles: [admin, keyuser, user]

@@ -211,7 +211,10 @@ def check_fields(subkind, fields):
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, events=False):
+        # 0.20.0 (RFC-0127 Stufe 1.5): nur mit OAAP_EVENTS_KEY füllt sich der
+        # Ereignis-Ausgang -- ohne Schlüssel gibt es auf diesem Knoten keine Ereignisse
+        self.events = bool(events)
         self.lock = threading.Lock()
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -308,6 +311,15 @@ class Store:
                 handover_id TEXT NOT NULL, doc TEXT NOT NULL, created TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT '', acked TEXT NOT NULL DEFAULT '');
+            -- 0.20.0 (RFC-0127 Stufe 1.5): Statuswechsel eines Vorgangs, den das
+            -- Backend einer App eröffnet hat, an genau diese App (adressiert).
+            -- In derselben Transaktion wie der Wechsel geschrieben, danach
+            -- mindestens einmal veröffentlicht.
+            CREATE TABLE IF NOT EXISTS event_outbox (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL,
+                addressee TEXT NOT NULL, doc TEXT NOT NULL, created TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '', done TEXT NOT NULL DEFAULT '');
             """)
 
         self._members_schema()
@@ -568,6 +580,52 @@ class Store:
             (cid, _now(), actor, _clip(actor_name, 120), typ, text or "",
              json.dumps(data or {}, ensure_ascii=False), 1 if internal else 0))
         self.db.execute("UPDATE cases SET updated=? WHERE id=?", (_now(), cid))
+        if self.events and typ == "status" and (data or {}).get("to"):
+            self._status_event(cid, data)
+
+    EVENT_TYPE = "app.vorgaenge.case.statuschanged.v1"
+
+    def _status_event(self, cid, data):
+        """RFC-0127 D12, erstes Paar: nur ein Vorgang aus dem Backend einer App
+        (`submitted_by` beglaubigt = app:<Instanz>) meldet seinen Status zurück,
+        und nur an diese Instanz. Dünn: Nummer, von, nach, das Objekt der App."""
+        c = self.db.execute("SELECT number, object_kind, object_id, source_instance, tech "
+                            "FROM cases WHERE id=?", (cid,)).fetchone()
+        if not c or not c["source_instance"]:
+            return
+        att = (json.loads(c["tech"] or "{}").get("attested") or {})
+        if att.get("submitted_by") != f"app:{c['source_instance']}":
+            return
+        payload = {"case": c["number"], "from": data.get("from") or "", "to": data["to"]}
+        if c["object_id"]:
+            payload["object"] = {"kind": c["object_kind"], "id": c["object_id"]}
+        doc = {"type": self.EVENT_TYPE, "subject": c["number"],
+               "oaapto": f"instance:{c['source_instance']}", "data": payload}
+        self.db.execute("INSERT INTO event_outbox (case_id, addressee, doc, created) "
+                        "VALUES (?,?,?,?)", (cid, c["source_instance"],
+                                             json.dumps(doc, ensure_ascii=False), _now()))
+
+    def event_outbox_due(self, now=None):
+        now = now or time.time()
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                "SELECT * FROM event_outbox WHERE done='' AND next_try<=? ORDER BY seq", (now,))]
+
+    def event_outbox_result(self, seq, outcome, error="", now=None):
+        """outcome: 'sent' (202), 'refused' (die Plattform sagt endgültig nein --
+        kein zweiter Versuch, der Grund bleibt stehen) oder 'retry'."""
+        now = now or time.time()
+        with self.lock, self.db:
+            if outcome in ("sent", "refused"):
+                self.db.execute("UPDATE event_outbox SET done=?, last_error=?, attempts=attempts+1 "
+                                "WHERE seq=?", (f"{outcome} {_now()}", _clip(error, 300), seq))
+            else:
+                n = self.db.execute("SELECT attempts FROM event_outbox WHERE seq=?",
+                                    (seq,)).fetchone()["attempts"] + 1
+                # 5 s, 10, 20 ... höchstens eine Stunde
+                self.db.execute("UPDATE event_outbox SET attempts=?, next_try=?, last_error=? "
+                                "WHERE seq=?", (n, now + min(3600, 5 * 2 ** (n - 1)),
+                                                _clip(error, 300), seq))
 
     def get(self, number):
         with self.lock:
