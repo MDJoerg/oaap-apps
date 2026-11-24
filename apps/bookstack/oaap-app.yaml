@@ -1,9 +1,9 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.23"
 
 app:
   id: bookstack
   name: Wiki (BookStack)
-  version: 0.2.0
+  version: 0.2.1
   type: wrapped
   description: "Ein Wiki für den Mandanten: Regale, Bücher, Kapitel, Seiten (BookStack 26.09.3). Menschen melden sich über den Anmeldedienst des Mandanten an, die Gruppen des Realms sind die Rollen im Wiki (RFC-0110 Stufe 1). Bilder und Anhänge sieht nur, wer die Seite sehen darf."
 
@@ -76,6 +76,12 @@ routes:
 # des Mandanten ruft sie als die Person (Verfahren I/A).
 mcp:
   path: /oaap/mcp
+
+# Manifest 0.23 (Portal 2.20): die MCP-Tür ist ein Ablagen-Konnektor dieser Art.
+# Das Portal bietet damit „Für den Chat freigeben“ an; ein Knoten vor 0.23
+# überliest den Block.
+mcp_store:
+  kind: bookstack
 
 # RFC-0091 Stufe 3: BookStack meldet selbst über den Realm des Mandanten an,
 # sobald der Betreiber einen Client gibt (`oaap idp app <connector> --instance

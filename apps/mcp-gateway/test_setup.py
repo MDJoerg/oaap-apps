@@ -166,7 +166,7 @@ print("--- Form")
 st, doc = call("GET")
 ok("GET: die Arten, die das Gateway einrichten kann",
    st == 200 and doc == {"v": 1, "kinds": ["refresh", "server_light", "view", "profile", "assistant",
-                                     "server", "system"]},
+                                     "server", "system", "store"]},
    (st, doc))
 st, doc = call("POST", body=b"kein json")
 ok("kaputter Körper: 400", st == 400, (st, doc))
@@ -574,6 +574,70 @@ its = sorted((i["source"], i["effect"]) for i in books.items(app.DB, "gewachsen"
 ok("… der Lauf: Katalog neu eingelesen, das Tool als write in der Sicht",
    results(doc) == ["present", "made"] and ("help_request_guide", "write") in its, (doc, its))
 call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "gewachsen"}]})
+
+# 0.46.0 (Portal 2.20, RFC-0121): ein Ablagesystem und die Ablagetür der genannten Profile
+print("--- store: Ablagesystem + Ablagetür")
+ST_BASE = [{"kind": "view", "id": "st-sicht", "accesses": ["platform"],
+            "tools": {"server": "ws-hilfe", "effect": "read"}},
+           {"kind": "profile", "id": "st-chat", "group": "@st-chat", "views": ["st-sicht"]},
+           {"kind": "profile", "id": "st-zwei", "group": "@st-zwei", "views": ["st-sicht"]}]
+STORE = {"kind": "store", "id": "wiki", "title": "Wiki", "type": "bookstack", "server": "ws-hilfe",
+         "light": "yellow", "doors": ["st-chat"]}
+stores_of = lambda: {r["label"]: r["stores"] for r in app.DB.execute(
+    "SELECT label, stores FROM keys WHERE label LIKE 'st-%'")}
+st, doc = call("POST", body={"v": 1, "dry": True, "items": ST_BASE + [STORE]})
+ok("dry: store hinter noch nicht angelegten Profilen -> would_make",
+   results(doc)[-1] == "would_make", doc)
+call("POST", body={"v": 1, "items": ST_BASE})
+key = app.DB.execute("SELECT 1 FROM keys WHERE label='st-key'").fetchone()
+if not key:
+    books.issue(app.DB, "st-key", "test", views=["st-sicht"])
+for bad, word in ((dict(STORE, type="svn"), "type ist"), (dict(STORE, server="gibtsnicht"), "erst refresh"),
+                  (dict(STORE, doors=["st-key"]), "kein Zugangsprofil"),
+                  (dict(STORE, doors=["fehlt"]), "gibt es nicht"), (dict(STORE, id="W!"), "Ablagesystems"),
+                  (dict(STORE, token="x"), "Geheimnisse")):
+    st, doc = call("POST", body={"v": 1, "items": [bad]})
+    ok(f"KÖDER store {word}: refused, nichts angelegt",
+       results(doc) == ["refused"] and word in json.dumps(doc, ensure_ascii=False)
+       and app.DB.execute("SELECT COUNT(*) FROM store_systems").fetchone()[0] == 0, doc)
+ok("… die Ablagetür des Schlüssels blieb aus", stores_of().get("st-key") == 0, stores_of())
+st, doc = call("POST", body={"v": 1, "items": [STORE]})
+row = app.DB.execute("SELECT * FROM store_systems WHERE name='wiki'").fetchone()
+ok("store: made -- Ablagesystem bookstack über ws-hilfe, gelb; Tür nur für st-chat",
+   results(doc) == ["made"] and row and row["kind"] == "bookstack" and row["light"] == "yellow"
+   and stores_of() == {"st-chat": 1, "st-zwei": 0, "st-key": 0}, (doc, stores_of()))
+st, doc = call("POST", body={"v": 1, "items": [STORE]})
+ok("dasselbe noch einmal: present", results(doc) == ["present"], doc)
+st, doc = call("POST", body={"v": 1, "items": [dict(STORE, title="wiki (anders)")]})
+ok("ein anderer Titel ist kein conflict: present, der Titel bleibt",
+   results(doc) == ["present"] and app.DB.execute(
+       "SELECT title FROM store_systems WHERE name='wiki'").fetchone()[0] == "Wiki", doc)
+st, doc = call("POST", body={"v": 1, "items": [dict(STORE, doors=["st-chat", "st-zwei"])]})
+ok("eine weitere Tür ist nur ein Dazu: made, das System unverändert",
+   results(doc) == ["made"] and stores_of()["st-zwei"] == 1 and "Ablagetür an für st-zwei" in doc["results"][0]["note"],
+   (doc, stores_of()))
+st, doc = call("POST", body={"v": 1, "items": [dict(STORE, light="green")]})
+ok("KÖDER anders dastehendes System (Ampel): conflict, bleibt gelb",
+   results(doc) == ["conflict"] and app.DB.execute(
+       "SELECT light FROM store_systems WHERE name='wiki'").fetchone()[0] == "yellow", doc)
+st, doc = call("GET", "/oaap/setup?kind=store&id=wiki")
+ok("GET store: present, ready (Server mit Katalog), Türen genannt",
+   st == 200 and doc["state"] == "present" and doc["ready"] and "st-chat" in doc["note"], doc)
+st, doc = call("GET", "/oaap/setup?kind=store")
+ok("Liste store: das Wiki mit Typ und Ampel, keine Adresse",
+   [i["id"] for i in doc["items"]] == ["wiki"] and "bookstack" in doc["items"][0]["title"], doc)
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "store", "id": "wiki"}]})
+ok("remove trotz einer von Hand dazugekommenen Tür: removed (Türen gehören nicht dazu)",
+   results(doc) == ["removed"] and not app.DB.execute(
+       "SELECT 1 FROM store_systems WHERE name='wiki'").fetchone(), doc)
+ok("… die Ablagetüren bleiben an", stores_of()["st-chat"] == 1, stores_of())
+call("POST", body={"v": 1, "items": [STORE]})
+workspaces_mod = __import__("workspaces")
+workspaces_mod.save_system(app.DB, "mensch", "wiki", "Wiki", "bookstack", "ws-hilfe", "red")
+st, doc = call("POST", body={"v": 1, "remove": [{"kind": "store", "id": "wiki"}]})
+ok("KÖDER remove nach Menschenänderung: conflict, bleibt",
+   results(doc) == ["conflict"] and app.DB.execute(
+       "SELECT 1 FROM store_systems WHERE name='wiki'").fetchone(), doc)
 
 gw.shutdown()
 plat.shutdown()

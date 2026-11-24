@@ -22,6 +22,16 @@ Recht dazu und nimmt dir keins.
 
 ## Ablagesystem eintragen (Verwaltung)
 
+**Am einfachsten im Portal:** Auf der Seite der Wiki-Instanz, Karte „MCP“,
+Abschnitt „Für den Chat“, den Knopf **„Für den Chat freigeben“** drücken.
+Die Plattform liest die Quelle in dieses Gateway ein, gibt ihr die Ampel
+gelb (nur, wenn sie noch rot ist), trägt sie als Ablagesystem ein und
+schaltet die Ablagetür für alle Zugangsprofile dieses Gateways ein, nie
+für einen Schlüssel. Ein Aufbau aus dem Profil `ki-arbeitsplatz` mit dem
+Haken „mit Wiki“ tut dasselbe von selbst.
+
+Von Hand geht es so:
+
 1. Das System braucht einen **Konnektor**. Das Wiki (BookStack) bringt ihn
    mit: Nach der Installation erscheint die Wiki-Instanz unter „Server“ als
    Quelle der Plattform.

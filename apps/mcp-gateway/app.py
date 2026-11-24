@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.45.2"
+VERSION = "0.46.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4996,7 +4996,7 @@ def save_server(form, user):
 # Unterschied ist `conflict`.
 
 SETUP_PATH = "/oaap/setup"
-SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "server", "system")
+SETUP_KINDS = ("refresh", "server_light", "view", "profile", "assistant", "server", "system", "store")
 # 0.31.0 (RFC-0109 §12): ein Server hinter einer Destination der Plattform -- nur
 # `destination:<bindung>[/pfad]`, nie eine freie Adresse: wohin er reicht, sagt die
 # Destination, die der Betreiber oder ein freigegebenes Rezept angelegt hat.
@@ -5013,6 +5013,9 @@ SETUP_FIELDS = {
     "server": {"address", "auth", "light"},
     # 0.32 (RFC-0114): ein Zielsystem der Landschaft; `type` ist seine Art (sap, jira)
     "system": {"title", "role", "type", "active", "facts", "light", "description", "servers"},
+    # 0.46 (RFC-0121, Portal 2.20): ein Ablagesystem und die Zugangsprofile, deren
+    # Ablagetür es öffnet -- was „Für den Chat freigeben“ und ein Aufbau mit Wiki tun
+    "store": {"title", "type", "server", "light", "doors"},
 }
 SETUP_PROFILE_ID = re.compile(r"^[A-Za-z0-9@][A-Za-z0-9@._-]{0,63}$")
 SETUP_LOCK = threading.Lock()
@@ -5079,6 +5082,9 @@ def setup_observed(kind, sid):
         srow = books.server_row(DB, sid)
         return ({"address": srow["address"], "auth_kind": srow["auth_kind"],
                  "light": srow["light"], "source": srow["source"] or ""} if srow else None)
+    if kind == "store":
+        row = workspaces.system_row(DB, sid)
+        return store_observed_of(row) if row else None
     if kind == "system":
         row = landscape.system_row(DB, sid)
         return ({"title": row["title"], "role": row["role"], "type": row["kind"],
@@ -5175,6 +5181,8 @@ def setup_wish(kind, sid, item, planned, actor):
                 "active": item.get("active", True) is not False, "facts": facts, "light": light,
                 "description": str(item.get("description") or "").strip()[:landscape.DESC_MAX],
                 "servers": sorted(servers)}
+    if kind == "store":
+        return store_wish(sid, item, planned)
     if kind == "server":
         try:
             books.valid_name(sid, "eines Servers")
@@ -5435,6 +5443,113 @@ def setup_set_light(srow, light, by):
                                 if srow["auth_kind"] == "personal" else None))
 
 
+STORE_FIELDS = ("title", "type", "server", "light")
+# Was ein conflict ist: der Titel nicht -- er ist nur ein Wort für Menschen, und
+# ein Aufbau („Wiki“) und der Knopf im Portal (der Instanzname) nennen ihn
+# verschieden (gemessen auf oaap-test, 24.11.); er bleibt, wie er ist.
+STORE_CONFLICT_FIELDS = ("type", "server", "light")
+
+
+def store_doors_on():
+    """Die Zugangsprofile (nie Schlüssel), deren Ablagetür an ist, sortiert."""
+    return sorted(r["label"] for r in DB.execute(
+        "SELECT label FROM keys WHERE kind='profile' AND revoked='' AND stores=1"))
+
+
+def store_observed_of(row):
+    """Für Vergleich und Prüfspur: das Ablagesystem selbst. Die Ablagetüren stehen
+    daneben, gehören aber nicht dazu -- ein Mensch darf eine weitere einschalten, ohne
+    dass das Rückgängig der Einrichtung daran scheitert."""
+    return {"title": row["title"], "type": row["kind"], "server": row["server"],
+            "light": row["light"], "active": bool(row["active"]), "doors": store_doors_on()}
+
+
+def store_wish(sid, item, planned):
+    """Ein Ablagesystem (0.46): Name, Typ, Server, Ampel -- und `doors`, die
+    Zugangsprofile, für die die Ablagetür an sein soll. Nur Profile: ein Schlüssel
+    ohne Person bekommt nie Ablagen (oaap.work.workspaces §4)."""
+    if not workspaces.NAME_RE.match(sid):
+        raise SetupRefused("Der Name eines Ablagesystems: 2–40 Zeichen, kleine Buchstaben, "
+                           "Ziffern, Bindestrich.")
+    typ = item.get("type")
+    if typ not in workspaces.KINDS:
+        raise SetupRefused("type ist eine von " + ", ".join(workspaces.KINDS) + ".")
+    server = item.get("server")
+    if not isinstance(server, str) or not server:
+        raise SetupRefused("server: der Server des Konnektors (der Knotenschlüssel der App).")
+    srow = setup_server(server)
+    if not srow and ("refresh", server) not in planned:
+        raise SetupRefused(f"Einen Server „{server}“ gibt es nicht (erst refresh).")
+    light = item.get("light", "yellow")
+    if light not in books.LIGHTS:
+        raise SetupRefused("light ist green, yellow oder red.")
+    doors = item.get("doors", [])
+    if not isinstance(doors, list) or not all(isinstance(d, str) for d in doors):
+        raise SetupRefused("doors: eine Liste von Zugangsprofilen.")
+    for d in doors:
+        row = DB.execute("SELECT kind FROM keys WHERE label=? AND revoked=''", (d,)).fetchone()
+        if row is None and ("profile", d) in planned:
+            continue
+        if row is None:
+            raise SetupRefused(f"Ein gültiges Zugangsprofil „{d}“ gibt es nicht.")
+        if row["kind"] != "profile":
+            raise SetupRefused(f"„{d}“ ist ein Schlüssel, kein Zugangsprofil -- ein Schlüssel "
+                               "ohne Person bekommt nie Ablagen.")
+    title = str(item.get("title") or sid).strip()[:120]
+    # Der Server kann umbenannt sein (setup_server findet ihn über seine Quelle)
+    return {"title": title, "type": typ, "server": srow["name"] if srow else server,
+            "light": light, "doors": sorted(set(doors))}
+
+
+def store_item(sid, wish, dry, actor, planned):
+    """store: anlegen, was fehlt; eine Ablagetür einschalten ist nur ein Dazu und
+    nie ein conflict. Ein Ablagesystem, das anders dasteht (Typ, Server, Ampel,
+    abgeschaltet), bleibt, wie es ist: conflict. Ein anderer Titel ist keiner."""
+    by = "setup:" + actor
+    row = workspaces.system_row(DB, sid)
+    if row is not None:
+        obs = store_observed_of(row)
+        diff = [f for f in STORE_CONFLICT_FIELDS if obs[f] != wish[f]] + (
+            [] if obs["active"] else ["abgeschaltet"])
+        if diff:
+            return "conflict", ("Das Ablagesystem gibt es schon, anders in: " + ", ".join(diff)
+                                + ". Die Einrichtung lässt es, wie es ist.")
+    missing = [d for d in wish["doors"] if d not in store_doors_on()]
+    if row is not None and not missing:
+        return "present", ""
+    if dry:
+        planned.add(("store", sid))
+        bits = ([] if row is not None else [f"Ablagesystem {wish['type']} über {wish['server']}, "
+                                            f"Ampel {wish['light']}"]) \
+            + ([f"Ablagetür an für {', '.join(missing)}"] if missing else [])
+        return "would_make", "; ".join(bits) + "."
+    said = []
+    if row is None:
+        try:
+            workspaces.save_system(DB, by, sid, wish["title"], wish["type"], wish["server"],
+                                   wish["light"])
+        except ValueError as exc:
+            return "refused", str(exc)
+        said.append(f"Ablagesystem „{sid}“ angelegt ({wish['type']} über {wish['server']}, "
+                    f"Ampel {wish['light']})")
+    for d in missing:
+        DB.execute("UPDATE keys SET stores=1 WHERE label=? AND kind='profile' AND revoked=''", (d,))
+        books.log(DB, by, "key.stores", d, "an")
+    DB.commit()
+    if missing:
+        said.append("Ablagetür an für " + ", ".join(missing))
+    if row is None:
+        books.setup_remember(DB, "store", sid, actor, books.setup_digest(wish),
+                             books.setup_digest(store_digest_part(sid)))
+    return "made", "; ".join(said) + "."
+
+
+def store_digest_part(sid):
+    """Was das Rückgängig vergleicht: nur das Ablagesystem, nie die Türen."""
+    row = workspaces.system_row(DB, sid)
+    return {f: v for f, v in store_observed_of(row).items() if f != "doors"} if row else None
+
+
 def setup_make(kind, sid, wish, by):
     """Legt an, mit den Funktionen der Betreiberseite. Wirft ValueError mit einem Satz."""
     if kind == "system":
@@ -5536,6 +5651,8 @@ def setup_item(item, dry, actor, planned):
         books.setup_remember(DB, kind, sid, actor, books.setup_digest(wish),
                              books.setup_digest(setup_observed(kind, sid)))
         return "made", f"Ampel von „{srow['name']}“: red → {wish['light']}."
+    if kind == "store":
+        return store_item(sid, wish, dry, actor, planned)
     obs = setup_observed(kind, sid)
     if setup_removed_by_door(kind, sid, obs):
         if dry:
@@ -5587,7 +5704,8 @@ def setup_remove(item, actor):
     if setup_gone(kind, obs):
         books.setup_forget(DB, kind, sid)
         return "gone", ""
-    if books.setup_digest(obs) != rec["made"]:
+    made_now = store_digest_part(sid) if kind == "store" else obs
+    if books.setup_digest(made_now) != rec["made"]:
         return "conflict", "Seit der Einrichtung von Hand geändert -- es bleibt."
     try:
         if kind == "server_light":
@@ -5604,6 +5722,10 @@ def setup_remove(item, actor):
             books.delete_server(DB, by, sid)
         elif kind == "system":
             landscape.delete_system(DB, by, sid)
+        elif kind == "store":
+            # Die Ablagetüren bleiben an: ohne Ablagesystem öffnen sie nichts, und ein
+            # Mensch kann sie seither für ein anderes System brauchen.
+            workspaces.delete_system(DB, by, sid)
     except ValueError as exc:
         return "conflict", str(exc)
     books.setup_forget(DB, kind, sid)
@@ -5623,6 +5745,12 @@ def setup_state(kind, sid):
     obs = setup_observed(kind, sid)
     if setup_gone(kind, obs):
         return "absent", False, ""
+    if kind == "store":
+        srow = setup_server(obs["server"])
+        n = len(catalog_tools(srow["name"])) if srow else 0
+        return ("present", bool(obs["active"]) and n > 0,
+                f"{obs['type']} über {obs['server']}, Ampel {obs['light']}; Ablagetür an für "
+                + (", ".join(obs["doors"]) or "keinen Zugang"))
     if kind == "system":
         return "present", bool(obs["servers"]), ("aktiv" if obs["active"] else "abgeschaltet")
     if kind == "view":
@@ -5662,6 +5790,10 @@ def setup_items(kind):
     elif kind == "system":
         for s in landscape.systems(DB):
             out.append({"id": s["id"], "title": s["title"], "light": landscape.system_light(DB, s)})
+    elif kind == "store":
+        for s in workspaces.systems(DB):
+            out.append({"id": s["name"], "title": f"{s['title']} ({s['kind']})",
+                        "light": workspaces.system_light(DB, s)})
     elif kind == "assistant":
         for a in books.assistant_rows(DB):
             if a["state"] == "deleted":
