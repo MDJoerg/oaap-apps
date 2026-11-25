@@ -513,3 +513,6 @@ offene zuerst), Beliebt bei dir (Gespräche der letzten 30 Tage je Assistent und
 Breite so viele Kacheln, wie passen, dazu „mehr“; schmal fast nur Symbol und Titel. In der Leiste
 stehen Start, Kanban und Kalender über Arbeitsräume und Assistenten. Exportieren und Importieren
 der Assistenten liegen im Menü „⋯“.
+
+**0.27.1:** Der Sendeknopf trägt die Farbe der Ampel (grün, gelb, rot), sobald sie für das
+Gespräch feststeht – im laufenden Gespräch immer, im Entwurf erst nach deiner Wahl; vorher wie bisher.

@@ -161,6 +161,8 @@ check("0.25.0: Karte mit ⋯ (letzte Gespräche, Ändern, Löschen), keine Knöp
 check("0.25.0: nur die Heimat ausgeschrieben, sonst Summen", '"🏠 "' in pg and '"✏️ "' in pg and '"📖 "' in pg)
 check("0.25.0: „ohne Protokoll“ statt „privat“, mit Erklärung", "ohne Protokoll" in pg and "NOLOG_HINT" in pg
       and '> privat</label>' not in pg)
+check("0.27.1: Sendeknopf trägt die Ampel erst, wenn sie feststeht", "known = C ? !!C.light : !!DRAFT_LIGHT" in pg
+      and "#go.send-red{" in pg and "--sendink:#111827" in pg)
 
 print(f"\n{PASSED[0]} passed, {len(FAILED)} failed")
 sys.exit(1 if FAILED else 0)

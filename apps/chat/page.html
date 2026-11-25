@@ -178,13 +178,17 @@ border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 .confirm pre{white-space:pre-wrap;color:var(--ink);background:var(--panel);padding:.5rem;border-radius:.3rem}
 .hint{align-self:center;text-align:center;max-width:32rem;margin-top:2rem}
 /* ---- 0.8.0 (RFC-0101 §2): Ampel des Gesprächs */
-:root{--green:#15803d;--yellow:#a16207;--red:#b91c1c}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--green:#4ade80;--yellow:#facc15;--red:#f87171}}
-:root[data-theme=dark]{--green:#4ade80;--yellow:#facc15;--red:#f87171}
+:root{--green:#15803d;--yellow:#a16207;--red:#b91c1c;--sendink:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--green:#4ade80;--yellow:#facc15;--red:#f87171;--sendink:#111827}}
+:root[data-theme=dark]{--green:#4ade80;--yellow:#facc15;--red:#f87171;--sendink:#111827}
 .lightchip{font-size:.82rem;padding:.25rem .6rem;border-radius:1rem;white-space:nowrap;display:inline-flex;align-items:center;gap:.35rem}
 .lightchip[hidden]{display:none}
 .lightchip i,.lopt i{width:.7rem;height:.7rem;border-radius:50%;display:inline-block;flex:none}
 .l-green i{background:var(--green)} .l-yellow i{background:var(--yellow)} .l-red i{background:var(--red)}
+/* 0.27.1: der Sendeknopf trägt die Ampel, sobald sie für das Gespräch feststeht (vorher wie bisher) */
+#go.send-green{background:var(--green);border-color:var(--green);color:var(--sendink)}
+#go.send-yellow{background:var(--yellow);border-color:var(--yellow);color:var(--sendink)}
+#go.send-red{background:var(--red);border-color:var(--red);color:var(--sendink)}
 .lightwarn{align-self:stretch;background:var(--warnbg);color:var(--warn);border-radius:.6rem;padding:.7rem .9rem}
 .lightwarn p{margin:.2rem 0 .5rem;color:var(--ink)}
 .lightwarn .row button{font-size:.88rem}
@@ -814,6 +818,12 @@ async function loadLight(){
   if (!r.error) LIGHT = r;
   renderLight(); render();
 }
+// 0.27.1: Farbe des Sendeknopfs = Ampel des Gesprächs; im Entwurf erst, wenn du sie gewählt hast
+function renderSendLight(){
+  const g = $("go"), known = C ? !!C.light : !!DRAFT_LIGHT, l = convLight();
+  for (const x of ["green", "yellow", "red"]) g.classList.toggle("send-" + x, known && l === x);
+  g.title = known ? "Senden – Ampel " + LWORD[l] + ": " + LSAYS[l] : "Senden";
+}
 function renderLight(){
   const b = $("lightbtn"), l = convLight();
   b.hidden = VIEW !== "chat" || !current();
@@ -821,6 +831,7 @@ function renderLight(){
   b.append(el("i"), el("span", "", LWORD[l] + " · " + LSAYS[l]));
   b.setAttribute("aria-label", "Ampel dieses Gesprächs: " + LWORD[l] + ", " + LSAYS[l] + ". Ändern");
   renderStatusChip();
+  renderSendLight();
 }
 // Was zu rot ist, in einem Satz: das Modell, die Sicht oder beide.
 function tooRed(l){
