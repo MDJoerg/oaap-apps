@@ -1342,8 +1342,32 @@ st, r = req("POST", "/api/launchpad", {"kind": "assistants", "id": "annas"})
 check("0.26.0: leer nimmt den Eintrag heraus", st == 200 and "annas" not in r["assistants"], (st, r))
 st, r = req("GET", "/api/state")
 check("0.26.0: die Datei des Launchpads ist kein Gespräch", st == 200 and all(c["id"] != "launchpad" for c in r["conversations"]), None)
+# 0.27.0: Status je Gespräch, aktive Stunden für den Kalender
+st, r = req("GET", "/api/state")
+cs = r["conversations"]
+check("0.27.0: jedes Gespräch hat einen Status (ohne Angabe „open“) und seine Stunden",
+      cs and all(c["status"] in ("open", "question", "waiting", "done") for c in cs)
+      and all(isinstance(c["hours"], list) and all(len(h) == 13 for h in c["hours"]) for c in cs), cs[:1])
+c0 = cs[0]
+st, r = req("POST", f"/api/conv/{c0['id']}/status", {"status": "waiting"})
+st2, r2 = req("GET", "/api/state")
+again = [c for c in r2["conversations"] if c["id"] == c0["id"]][0]
+check("0.27.0: Status setzen, „letzte Änderung“ bleibt", st == 200 and r["status"] == "waiting"
+      and again["status"] == "waiting" and again["updated"] == c0["updated"], (st, r.get("status"), again.get("updated"), c0["updated"]))
+st, r = req("POST", f"/api/conv/{c0['id']}/status", {"status": "erledigt"})
+check("0.27.0: unbekannter Status abgelehnt", st == 400, (st, r))
+st, r = req("POST", f"/api/conv/{c0['id']}/status", {"status": "done"}, person="bert")
+check("0.27.0: fremdes Gespräch: 404", st == 404, (st, r))
+check("0.27.0: active_hours nimmt Anlage und Nachrichten, je Stunde einmal",
+      app.active_hours({"created": "2026-11-20T09:01:00Z", "messages": [{"at": "2026-11-20T09:30:00Z"}, {"at": "2026-11-23T14:00:00Z"}, {}]})
+      == ["2026-11-20T09", "2026-11-23T14"])
+check("0.27.0: Seite: Startseite statt letztem Gespräch, Kanban, Kalender, Status-Knopf",
+      'else showView("start");' in pg and 'id="kanview"' in pg and 'id="calview"' in pg and 'id="stbtn"' in pg
+      and 'id="kandone"' in pg and "S.conversations[0].id); else startDraft();" not in pg)
+check("0.27.0: Status nur von dir -- kein automatisches Setzen im Server",
+      app.STATUSES == ("open", "question", "waiting", "done") and 'conv["status"] = ' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"), encoding="utf-8").read().split('if action == "status":')[1][:600])
 import re as _re
-pg_icons = set(_re.findall(r"^  ([a-z]+): '<", pg.split("const LPICON = {")[1].split("};")[0], _re.M))
+pg_icons =set(_re.findall(r"^  ([a-z]+): '<", pg.split("const LPICON = {")[1].split("};")[0], _re.M))
 pg_colors = set(_re.findall(r"([a-z]+): \"#", pg.split("const LPCOLOR = {")[1].split("};")[0]))
 check("0.26.0: Seite und Server kennen dieselben Symbole und Farben",
       pg_icons == set(app.LP_ICONS) and pg_colors == set(app.LP_COLORS), (pg_icons ^ set(app.LP_ICONS), pg_colors ^ set(app.LP_COLORS)))

@@ -289,6 +289,61 @@ dialog label.inl input{width:auto;margin:0}
 #evdiff{font-size:.75rem;max-height:20rem;overflow:auto;white-space:pre-wrap;background:var(--tool);padding:.5rem;border-radius:.4rem}
 #evdiff .add{color:#15803d} #evdiff .del{color:var(--err)}
 
+/* ---- 0.27.0: Status, Kacheln, Startseite, Kanban, Kalender */
+.stchip{border:1px solid var(--line);border-radius:.9rem;background:none;font-size:.8rem;padding:.15rem .6rem;cursor:pointer}
+.tile{display:flex;align-items:center;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--tc,var(--line));border-radius:.6rem;min-width:0}
+.tile .tbody{flex:1;min-width:0;display:flex;align-items:center;gap:.55rem;border:0;background:none;padding:.55rem .6rem;text-align:left;cursor:pointer;color:var(--ink)}
+.tile .tbody .lpicon{width:1.5rem;height:1.5rem;flex:none;color:var(--accent)}
+.tile .tt{display:flex;flex-direction:column;min-width:0}
+.tile .tt b{font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .tt small{font-size:.75rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .ctxbtn{flex:none;margin-right:.2rem}
+.tile:hover{background:var(--me)}
+.tile.case-red{--tc:#dc2626}.tile.case-green{--tc:#16a34a}.tile.case-yellow{--tc:#eab308}.tile.case-grey{--tc:#9ca3af}
+.sbody{flex:1;min-height:0;overflow-y:auto;padding:1rem}
+.srh{display:flex;align-items:baseline;gap:.6rem;margin:1rem 0 .4rem}
+.srh h2{font-size:1rem;margin:0}
+.srow{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:.6rem}
+.kan{flex:1;min-height:0;overflow:auto;padding:1rem;display:grid;gap:.8rem;align-items:start}
+.kcol{background:var(--bg);border:1px solid var(--line);border-radius:.6rem;padding:.5rem;display:flex;flex-direction:column;gap:.45rem;min-height:8rem}
+.kcol.over{box-shadow:0 0 0 2px var(--accent) inset}
+.khead{display:flex;align-items:center;gap:.4rem;border-top:3px solid var(--line);padding:.35rem .2rem 0}
+.khead .n{color:var(--muted);font-size:.8rem}
+.tile.drag{opacity:.4}
+.calbody{flex:1;min-height:0;overflow:auto;padding:1rem}
+#callabel{min-width:10rem}
+.cent{display:block;width:100%;text-align:left;border:0;border-left:3px solid var(--line);background:var(--tool);border-radius:.25rem;
+padding:.1rem .35rem;margin:.12rem 0;font-size:.78rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;color:var(--ink)}
+.cent:hover{background:var(--me)}
+.cweek{display:grid;grid-template-columns:repeat(7,minmax(6.5rem,1fr));gap:.4rem}
+.cday{border:1px solid var(--line);border-radius:.5rem;padding:.35rem;min-height:12rem;background:var(--panel)}
+.cdh{font-size:.78rem;color:var(--muted);margin-bottom:.2rem}
+.today>.cdh{color:var(--accent);font-weight:700}
+.cmonth{display:grid;grid-template-columns:repeat(7,minmax(6rem,1fr));gap:.3rem}
+.cwd{font-size:.72rem;color:var(--muted);text-align:center}
+.cdate{border:1px solid var(--line);border-radius:.4rem;padding:.25rem;min-height:6rem;background:var(--panel)}
+.cdate.other{opacity:.5}
+.cmore{border:0;background:none;color:var(--accent);font-size:.75rem;padding:0;cursor:pointer}
+.cyear{display:grid;grid-template-columns:repeat(auto-fill,minmax(12rem,1fr));gap:.8rem}
+.cymh{border:0;background:none;font-weight:600;padding:.2rem 0;cursor:pointer;color:var(--ink)}
+.cymg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cyd{border:0;background:none;font-size:.7rem;padding:.15rem 0;border-radius:.25rem;cursor:pointer;color:var(--muted)}
+.cyd.has{background:rgba(59,130,246,var(--n));color:var(--ink)}
+.cyd.today{outline:1px solid var(--accent)}
+@media (max-width:800px){
+  .srow{grid-template-columns:repeat(auto-fill,minmax(5.6rem,1fr))}
+  .srow .tile{border-left:1px solid var(--line);border-top:4px solid var(--tc,var(--line))}
+  .srow .tile .tbody{flex-direction:column;gap:.25rem;padding:.6rem .3rem;text-align:center}
+  .srow .tile .tbody .lpicon{width:2rem;height:2rem}
+  .srow .tile .tt small{display:none}
+  .srow .tile .tt b{font-size:.78rem;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .srow .tile .ctxbtn{display:none}
+  .kan{grid-template-columns:1fr!important}
+  .cweek{grid-template-columns:1fr}
+  .cmonth{grid-template-columns:repeat(7,minmax(2.6rem,1fr))}
+  .cdate .cent{font-size:.65rem}
+}
+
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
 dialog::backdrop{background:rgba(0,0,0,.35)}
@@ -332,6 +387,9 @@ dialog input,dialog textarea,dialog select{width:100%}
   </div>
   <div id="convs"></div>
   <div class="sfoot">
+    <button id="startbtn" type="button">Start</button>
+    <button id="kanbtn" type="button">Kanban</button>
+    <button id="calbtn" type="button">Kalender</button>
     <button id="wsbtn" type="button">Arbeitsräume</button>
     <button id="manage" type="button">Assistenten</button>
     <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
@@ -345,6 +403,7 @@ dialog input,dialog textarea,dialog select{width:100%}
   <header>
     <button class="icon" id="sopen" type="button" title="Gespräche ein- und ausblenden" aria-label="Gespräche ein- und ausblenden">☰</button>
     <div class="htitle"><b id="ctitle">—</b><span class="muted" id="cassist"></span></div>
+    <button class="stchip" id="stbtn" type="button" hidden title="Status dieses Gesprächs – setzt nur du" aria-haspopup="menu"></button>
     <button class="lightchip" id="lightbtn" type="button" hidden title="Ampel dieses Gesprächs: was du eingeben wirst"></button>
     <details class="menu" id="menu"><summary role="button" aria-label="Menü" title="Menü">⋯</summary>
       <div class="mbody">
@@ -400,6 +459,25 @@ dialog input,dialog textarea,dialog select{width:100%}
     was du in einer Ablage darfst, entscheidet das System selbst.</p>
     <p class="err" id="wslisterr" style="margin:.5rem 1rem 0"></p>
     <div class="agrid" id="wsgrid"></div>
+  </section>
+
+  <!-- 0.27.0: Startseite, Kanban, Kalender -->
+  <section class="view" id="startview" hidden><div class="sbody" id="startbody"></div></section>
+  <section class="view" id="kanview" hidden>
+    <div class="atool">
+      <input type="search" id="kq" placeholder="Gespräche durchsuchen" aria-label="Gespräche durchsuchen">
+      <label class="inl cnote"><input type="checkbox" id="kandone"> Fertige zeigen</label>
+    </div>
+    <div class="kan" id="kanbody"></div>
+  </section>
+  <section class="view" id="calview" hidden>
+    <div class="atool">
+      <div class="seg" id="calmode"><button type="button" data-v="week">Woche</button><button type="button" data-v="month">Monat</button><button type="button" data-v="year">Jahr</button></div>
+      <button type="button" id="calprev" aria-label="zurück">‹</button><button type="button" id="caltoday">Heute</button><button type="button" id="calnext" aria-label="weiter">›</button>
+      <b id="callabel"></b>
+      <input type="search" id="calq" placeholder="Freitext" aria-label="Gespräche im Kalender durchsuchen">
+    </div>
+    <div class="calbody" id="calbody"></div>
   </section>
 
   <section class="view" id="caseview" hidden>
@@ -637,7 +715,7 @@ function openCtx(btn, actions, target){
     // 0.25.0: Überschrift und Trennlinie im Menü (Karte Arbeitsraum: letzte Gespräche, dann Pflege)
     if (a.head) { box.appendChild(el("div", "mhead", a.head)); continue; }
     if (a.sep) { if (box.children.length) box.appendChild(el("hr")); continue; }
-    const it = el("button", a.danger ? "danger" : a.sub ? "sub" : "", a.label); it.type = "button"; it.setAttribute("role", "menuitem");
+    const it = el("button", a.danger ? "danger" : a.sub ? "sub" : "", typeof a.label === "function" ? a.label(target) : a.label); it.type = "button"; it.setAttribute("role", "menuitem");
     it.onclick = ev => { ev.stopPropagation(); closeCtx(); a.run(target); };
     box.appendChild(it);
   }
@@ -691,6 +769,11 @@ const MSG_ACTIONS = [
   {label: "Kopieren", run: t => copyText(t.text, t.html)},
 ];
 const CONV_ACTIONS = [
+  // 0.27.0: Status -- setzt nur du (STATUS und statusOf stehen weiter unten; gelesen erst beim Öffnen)
+  {head: "Status"},
+  ...["open", "question", "waiting", "done"].map(s => ({label: t => (statusOf(t) === s ? "✓ " : " ") + STATUS[s].word,
+                                                     run: t => setStatus(t.id, s)})),
+  {sep: true},
   {label: "Umbenennen", run: c => renameConv(c.id, c.title)},
   {label: "Löschen", danger: true, run: c => deleteConv(c.id, c.title)},
 ];
@@ -737,6 +820,7 @@ function renderLight(){
   b.className = "lightchip l-" + l; b.textContent = "";
   b.append(el("i"), el("span", "", LWORD[l] + " · " + LSAYS[l]));
   b.setAttribute("aria-label", "Ampel dieses Gesprächs: " + LWORD[l] + ", " + LSAYS[l] + ". Ändern");
+  renderStatusChip();
 }
 // Was zu rot ist, in einem Satz: das Modell, die Sicht oder beide.
 function tooRed(l){
@@ -888,7 +972,7 @@ async function loadAllCases(){
     CASESLOADED = true;
   } catch (e) { return; }
   buildDots(); if (S) renderSide();
-  caseCount(); if (VIEW === "cases") renderCases();
+  caseCount(); if (VIEW === "cases") renderCases(); else if (VIEW === "start") renderStart();
 }
 
 // ---- 0.15.0 (RFC-0103 D9): die Ansicht „Vorgänge“. Nur die eigenen Meldungen -- was dir
@@ -1601,7 +1685,8 @@ function showCommands(){
   if (m.own.length) { box.appendChild(el("div", "grp", "Chat")); m.own.forEach(item); }
 }
 
-async function refreshState(){ S = await api("GET", "api/state"); if (S.error) return; renderSide(); if (VIEW === "asst") renderAssistants(); }
+async function refreshState(){ S = await api("GET", "api/state"); if (S.error) return; renderSide(); if (VIEW === "asst") renderAssistants();
+  else if (VIEW === "start") renderStart(); else if (VIEW === "kan") renderKanban(); else if (VIEW === "cal") renderCalendar(); }
 async function openConv(id){
   showView("chat");
   C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); loadLight(); loadCaseStatus();
@@ -1616,23 +1701,26 @@ function startDraft(aid, wsid){
 
 // ---- Ansichten der Seite: Gespräch oder Assistenten (#assistenten; die Zurück-Taste geht)
 let VIEW = "chat";
-const VIEWHASH = {asst: "#assistenten", cases: "#vorgaenge", ws: "#arbeitsraeume"};
+const VIEWHASH = {asst: "#assistenten", cases: "#vorgaenge", ws: "#arbeitsraeume", start: "#start", kan: "#kanban", cal: "#kalender"};
+const VIEWSEC = {chat: "chatview", asst: "asstview", cases: "caseview", ws: "wsview", start: "startview", kan: "kanview", cal: "calview"};
+const VIEWBTN = {asst: "manage", cases: "casesbtn", ws: "wsbtn", start: "startbtn", kan: "kanbtn", cal: "calbtn"};
 function showView(v){
   VIEW = v;
-  $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst"; $("caseview").hidden = v !== "cases";
-  $("wsview").hidden = v !== "ws";
-  $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
-  $("casesbtn").classList.toggle("on", v === "cases"); $("wsbtn").classList.toggle("on", v === "ws");
+  for (const [k, id] of Object.entries(VIEWSEC)) $(id).hidden = v !== k;
+  for (const [k, id] of Object.entries(VIEWBTN)) $(id).classList.toggle("on", v === k);
+  $("menu").hidden = v !== "chat";
   if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) { renderAssistants(); loadReadiness(); } }
   else if (v === "ws") { $("ctitle").textContent = "Arbeitsräume"; $("cassist").textContent = ""; renderWorkspaces(); }
   else if (v === "cases") { $("ctitle").textContent = "Vorgänge"; $("cassist").textContent = " · deine Meldungen an den Support"; renderCases(); }
+  else if (v === "start") { $("ctitle").textContent = "Start"; $("cassist").textContent = ""; renderStart(); }
+  else if (v === "kan") { $("ctitle").textContent = "Kanban"; $("cassist").textContent = " · Status setzt nur du"; renderKanban(); }
+  else if (v === "cal") { $("ctitle").textContent = "Kalender"; $("cassist").textContent = " · an jedem Tag, an dem du geschrieben hast"; renderCalendar(); }
   else render();
   renderLight();
   const want = VIEWHASH[v] || "";
   if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
 }
-function viewOfHash(){ return location.hash === "#assistenten" ? "asst" : location.hash === "#vorgaenge" ? "cases"
-                             : location.hash === "#arbeitsraeume" ? "ws" : "chat"; }
+function viewOfHash(){ const v = Object.keys(VIEWHASH).find(k => VIEWHASH[k] === location.hash); return v || "chat"; }
 window.addEventListener("popstate", () => showView(viewOfHash()));
 
 // ---- Kopfzeile und Menü
@@ -1668,7 +1756,7 @@ async function deleteConv(id, title){
   if (wasOpen) { C = null; SETUP = null; }
   await refreshState();
   if (!wasOpen) { toast("Gespräch gelöscht"); return; }
-  if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
+  showView("start");   // 0.27.0: nach dem Löschen zur Startseite, nicht ins nächste Gespräch
 }
 $("ren").onclick = () => { if (C) renameConv(C.id, C.title); };
 $("del").onclick = () => { if (C) deleteConv(C.id, C.title); };
@@ -2072,6 +2160,238 @@ $("lpsave").onclick = () => saveLp(false);
 $("lpreset").onclick = () => saveLp(true);
 $("lpclose").onclick = () => $("lpdlg").close();
 
+// ---- 0.27.0: Status je Gespräch (setzt nur du), Kanban, Kalender, Startseite
+const STATUS = {open: {word: "In Bearbeitung", color: "#3b82f6"}, question: {word: "Rückfrage", color: "#d97706"},
+                waiting: {word: "Wartet", color: "#9333ea"}, done: {word: "Fertig", color: "#16a34a"}};
+const statusOf = c => (c && STATUS[c.status]) ? c.status : "open";
+async function setStatus(id, st){
+  const r = await api("POST", "api/conv/" + id + "/status", {status: st});
+  if (r.error) { toast(r.error); return; }
+  const s = (S.conversations || []).find(c => c.id === id); if (s) s.status = st;
+  if (C && C.id === id) C.status = st;
+  toast("Status: " + STATUS[st].word);
+  renderLight(); renderSide();
+  if (VIEW === "kan") renderKanban(); else if (VIEW === "start") renderStart(); else if (VIEW === "cal") renderCalendar();
+}
+const statusItems = getId => [{head: "Status"}].concat(Object.keys(STATUS).map(s => ({
+  label: t => (statusOf(t) === s ? "✓ " : "\u2003") + STATUS[s].word, run: t => setStatus(getId(t), s)})));
+function renderStatusChip(){
+  const b = $("stbtn"); b.hidden = VIEW !== "chat" || !C || !C.id;
+  if (b.hidden) return;
+  const s = statusOf(C); b.textContent = STATUS[s].word; b.style.borderColor = STATUS[s].color; b.style.color = STATUS[s].color;
+}
+$("stbtn").onclick = ev => { ev.stopPropagation(); if (C) openCtx($("stbtn"), statusItems(t => t.id), C); };
+// eine Kachel für Gespräche, Arbeitsräume und Assistenten -- schmal fast nur Symbol und Titel
+function tile(title, sub, icon, color, onclick, menu){
+  const t = el("div", "tile");
+  if (color && LPCOLOR[color]) t.style.setProperty("--tc", LPCOLOR[color]);
+  const b = el("button", "tbody"); b.type = "button"; b.onclick = onclick; b.title = title + (sub ? " — " + sub : "");
+  b.appendChild(lpIcon(icon || "chat", color)); const tx = el("span", "tt");
+  tx.append(el("b", "", title)); if (sub) tx.append(el("small", "", sub));
+  b.appendChild(tx); t.appendChild(b);
+  if (menu) t.appendChild(ctxButton("Funktionen: " + title, menu.items, menu.target));
+  return t;
+}
+function convTile(c, withStatus){
+  const a = assistant(c.assistant) || {}, lp = lpOf("assistants", c.assistant), s = statusOf(c);
+  const sub = (withStatus ? STATUS[s].word + " · " : "") + (a.title || "Assistent nicht verfügbar")
+            + (c.workspace ? " · " + (c.workspace.title || c.workspace.id) : "") + " · " + when(c.updated);
+  const t = tile(c.title, sub, lp.icon || "chat", lp.color, () => openConv(c.id), {items: statusItems(x => x.id), target: c});
+  t.style.setProperty("--tc", STATUS[s].color);   // bei Gesprächen zeigt der Streifen den Status
+  return t;
+}
+
+// ---- Kanban: Spalten je Status, Fertig nur mit Schalter; ziehen am großen Bildschirm, sonst ⋯
+const KANDONE = {on: load("chat.kandone", false)};
+$("kandone").checked = KANDONE.on;
+$("kandone").onchange = () => { KANDONE.on = $("kandone").checked; keep("chat.kandone", KANDONE.on); renderKanban(); };
+$("kq").addEventListener("input", () => renderKanban());
+const convMatch = (c, q) => !q || [c.title, titleOf(c), c.workspace ? (c.workspace.title || "") : ""].join(" ").toLowerCase().includes(q);
+function renderKanban(){
+  const box = $("kanbody"); box.textContent = "";
+  const q = $("kq").value.trim().toLowerCase();
+  const cols = ["open", "question", "waiting"].concat(KANDONE.on ? ["done"] : []);
+  box.style.gridTemplateColumns = "repeat(" + cols.length + ", minmax(11rem, 1fr))";
+  for (const s of cols) {
+    const col = el("div", "kcol"); col.dataset.status = s;
+    const list = S.conversations.filter(c => statusOf(c) === s && convMatch(c, q))
+      .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")));
+    const h = el("div", "khead"); h.style.borderTopColor = STATUS[s].color;
+    h.append(el("b", "", STATUS[s].word), el("span", "n", String(list.length))); col.appendChild(h);
+    for (const c of list) {
+      const t = convTile(c, false);
+      if (!narrow()) {
+        t.draggable = true;
+        t.addEventListener("dragstart", ev => { ev.dataTransfer.setData("text/plain", c.id); ev.dataTransfer.effectAllowed = "move"; t.classList.add("drag"); });
+        t.addEventListener("dragend", () => t.classList.remove("drag"));
+      }
+      col.appendChild(t);
+    }
+    if (!list.length) col.appendChild(el("p", "muted empty", q ? "Nichts passt." : "Leer."));
+    col.addEventListener("dragover", ev => { ev.preventDefault(); col.classList.add("over"); });
+    col.addEventListener("dragleave", () => col.classList.remove("over"));
+    col.addEventListener("drop", ev => { ev.preventDefault(); col.classList.remove("over");
+      const id = ev.dataTransfer.getData("text/plain"), c = S.conversations.find(x => x.id === id);
+      if (c && statusOf(c) !== s) setStatus(id, s); });
+    box.appendChild(col);
+  }
+}
+
+// ---- Kalender: Woche, Monat, Jahr; ein Gespräch an jedem Tag, an dem darin geschrieben wurde
+const CAL = {mode: load("chat.calmode", "month"), at: new Date()};
+const WEEKDAY = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const dayKey = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+const monday = d => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - (x.getDay() + 6) % 7); return x; };
+function calIndex(q){
+  const by = new Map();
+  for (const c of S.conversations) {
+    if (!convMatch(c, q)) continue;
+    const first = c.created ? dayKey(new Date(c.created)) : "";
+    const days = new Set((c.hours || []).map(h => dayKey(new Date(h + ":00:00Z"))));
+    if (!days.size && c.updated) days.add(dayKey(new Date(c.updated)));
+    for (const k of days) { if (!by.has(k)) by.set(k, []); by.get(k).push({c, first: k === first}); }
+  }
+  for (const v of by.values()) v.sort((a, b) => String(a.c.title).localeCompare(String(b.c.title), "de"));
+  return by;
+}
+function calEntry(e){
+  const b = el("button", "cent"); b.type = "button";
+  b.style.borderLeftColor = STATUS[statusOf(e.c)].color;
+  b.textContent = (e.first ? "" : "↻ ") + e.c.title;
+  b.title = e.c.title + " — " + titleOf(e.c) + (e.first ? " · angelegt" : " · fortgesetzt") + " · " + STATUS[statusOf(e.c)].word;
+  b.onclick = () => openConv(e.c.id); return b;
+}
+for (const b of document.querySelectorAll("#calmode button"))
+  b.onclick = () => { CAL.mode = b.dataset.v; keep("chat.calmode", CAL.mode); renderCalendar(); };
+$("calprev").onclick = () => calStep(-1); $("calnext").onclick = () => calStep(1);
+$("caltoday").onclick = () => { CAL.at = new Date(); renderCalendar(); };
+$("calq").addEventListener("input", () => renderCalendar());
+function calStep(n){
+  const d = new Date(CAL.at);
+  if (CAL.mode === "week") d.setDate(d.getDate() + 7 * n);
+  else if (CAL.mode === "month") d.setMonth(d.getMonth() + n, 1);
+  else d.setFullYear(d.getFullYear() + n);
+  CAL.at = d; renderCalendar();
+}
+function renderCalendar(){
+  for (const b of document.querySelectorAll("#calmode button")) b.classList.toggle("on", b.dataset.v === CAL.mode);
+  const q = $("calq").value.trim().toLowerCase(), idx = calIndex(q), box = $("calbody"); box.textContent = "";
+  const today = dayKey(new Date()), at = CAL.at;
+  if (CAL.mode === "week") {
+    const m = monday(at), end = new Date(m); end.setDate(m.getDate() + 6);
+    $("callabel").textContent = m.toLocaleDateString("de-DE", {day: "2-digit", month: "2-digit"}) + " – "
+      + end.toLocaleDateString("de-DE", {day: "2-digit", month: "2-digit", year: "numeric"});
+    const g = el("div", "cweek");
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(m); d.setDate(m.getDate() + i); const k = dayKey(d);
+      const col = el("div", "cday" + (k === today ? " today" : ""));
+      col.appendChild(el("div", "cdh", WEEKDAY[i] + " " + d.getDate() + "."));
+      for (const e of idx.get(k) || []) col.appendChild(calEntry(e));
+      g.appendChild(col);
+    }
+    box.appendChild(g);
+  } else if (CAL.mode === "month") {
+    $("callabel").textContent = at.toLocaleDateString("de-DE", {month: "long", year: "numeric"});
+    const first = new Date(at.getFullYear(), at.getMonth(), 1), start = monday(first);
+    const g = el("div", "cmonth");
+    for (const w of WEEKDAY) g.appendChild(el("div", "cwd", w));
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start); d.setDate(start.getDate() + i);
+      if (i >= 28 && i % 7 === 0 && d > first && d.getMonth() !== at.getMonth()) break;   // nur ganze Wochen
+      const k = dayKey(d), list = idx.get(k) || [];
+      const cell = el("div", "cdate" + (d.getMonth() !== at.getMonth() ? " other" : "") + (k === today ? " today" : ""));
+      cell.appendChild(el("div", "cdh", String(d.getDate())));
+      for (const e of list.slice(0, 3)) cell.appendChild(calEntry(e));
+      if (list.length > 3) {
+        const more = el("button", "cmore", "+" + (list.length - 3) + " mehr"); more.type = "button";
+        more.onclick = () => { CAL.mode = "week"; CAL.at = d; renderCalendar(); }; cell.appendChild(more);
+      }
+      g.appendChild(cell);
+    }
+    box.appendChild(g);
+  } else {
+    $("callabel").textContent = String(at.getFullYear());
+    const g = el("div", "cyear");
+    for (let mo = 0; mo < 12; mo++) {
+      const mb = el("div", "cym"), first = new Date(at.getFullYear(), mo, 1);
+      const h = el("button", "cymh", MONTHS[mo]); h.type = "button";
+      h.onclick = () => { CAL.mode = "month"; CAL.at = first; renderCalendar(); }; mb.appendChild(h);
+      const grid = el("div", "cymg");
+      for (const w of WEEKDAY) grid.appendChild(el("span", "cwd", w[0]));
+      for (let i = 0; i < (first.getDay() + 6) % 7; i++) grid.appendChild(el("span"));
+      for (let d = new Date(first); d.getMonth() === mo; d.setDate(d.getDate() + 1)) {
+        const k = dayKey(d), n = (idx.get(k) || []).length, dd = new Date(d);
+        const c = el("button", "cyd" + (k === today ? " today" : ""), String(d.getDate())); c.type = "button";
+        if (n) { c.classList.add("has"); c.style.setProperty("--n", String(Math.min(1, .25 + n * .2))); c.title = n + (n === 1 ? " Gespräch" : " Gespräche"); }
+        c.onclick = () => { CAL.mode = "week"; CAL.at = dd; renderCalendar(); };
+        grid.appendChild(c);
+      }
+      mb.appendChild(grid); g.appendChild(mb);
+    }
+    box.appendChild(g);
+  }
+  if (q && !idx.size) box.appendChild(el("p", "muted", "Kein Gespräch passt."));
+}
+
+// ---- Startseite: Reihen wie bei einer Mediathek; je Breite begrenzt, „mehr“ zeigt alle
+const SROWOPEN = {};
+function perRow(){ const w = $("startbody").clientWidth || innerWidth; return Math.max(2, Math.floor(w / (narrow() ? 104 : 236))); }
+function startRow(box, key, title, tiles){
+  if (!tiles.length) return;
+  const head = el("div", "srh"); head.appendChild(el("h2", "", title));
+  const n = perRow(), open = !!SROWOPEN[key];
+  if (tiles.length > n) {
+    const m = el("button", "hbtn", open ? "weniger" : "mehr (" + tiles.length + ")"); m.type = "button";
+    m.onclick = () => { SROWOPEN[key] = !open; renderStart(); }; head.appendChild(m);
+  }
+  box.appendChild(head);
+  const row = el("div", "srow"); for (const t of open ? tiles : tiles.slice(0, n)) row.appendChild(t);
+  box.appendChild(row);
+}
+function renderStart(){
+  const box = $("startbody"); box.textContent = "";
+  if (!S || !S.conversations) return;
+  const top = el("div", "row");
+  const nb = el("button", "primary", "Neues Gespräch"); nb.type = "button"; nb.onclick = () => startDraft(); top.appendChild(nb);
+  box.appendChild(top);
+  const byUpd = (x, y) => String(y.updated || "").localeCompare(String(x.updated || ""));
+  startRow(box, "go", "Weiterbearbeiten", S.conversations.filter(c => statusOf(c) !== "done").sort(byUpd).map(c => convTile(c, true)));
+  startRow(box, "done", "Zuletzt fertig", S.conversations.filter(c => statusOf(c) === "done").sort(byUpd).map(c => convTile(c, false)));
+  const lastIn = {};
+  for (const c of S.conversations) if (c.workspace && String(c.updated || "") > String(lastIn[c.workspace.id] || "")) lastIn[c.workspace.id] = c.updated;
+  startRow(box, "ws", "Letzte Arbeitsräume", WS.workspaces.slice().sort((a, b) => String(lastIn[b.id] || "").localeCompare(String(lastIn[a.id] || "")) || a.title.localeCompare(b.title, "de"))
+    .map(w => { const lp = lpOf("workspaces", w.id);
+      return tile(w.title, lastIn[w.id] ? "zuletzt " + when(lastIn[w.id]) : "noch kein Gespräch", lp.icon || "folder", lp.color, () => startInWs(w.id)); }));
+  if (CASESLOADED) {
+    const rows = caseRows().sort((a, b) => (CASE_ENDED.includes(a.st.status) - CASE_ENDED.includes(b.st.status)) || String(b.updated).localeCompare(String(a.updated)));
+    startRow(box, "cases", "Vorgänge", rows.map(r => { const t = tile(r.number + (r.title ? " · " + r.title : ""), r.status + " · " + when(r.updated), "flag", "",
+      () => { if (r.conv) openConv(r.conv.id); else if (r.st.url) open(r.st.url, "_blank", "noopener"); });
+      const d = dotOf(r.st); if (d) t.classList.add("case-" + d); return t; }));
+  }
+  // beliebt: wie oft du in den letzten 30 Tagen ein Gespräch mit ihm / darin begonnen hast (D: deine eigene)
+  const since = new Date(Date.now() - 30 * 864e5).toISOString(), cnt = {};
+  for (const c of S.conversations) {
+    if (String(c.created || "") < since) continue;
+    if (assistant(c.assistant)) cnt["a:" + c.assistant] = (cnt["a:" + c.assistant] || 0) + 1;
+    if (c.workspace && WS.workspaces.some(w => w.id === c.workspace.id)) cnt["w:" + c.workspace.id] = (cnt["w:" + c.workspace.id] || 0) + 1;
+  }
+  let pop = Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(([k, n]) => ({k, n}));
+  if (!pop.length) pop = S.assistants.filter(a => a.state !== "inactive").map(a => ({k: "a:" + a.id, n: 0}));
+  startRow(box, "pop", "Beliebt bei dir", pop.map(({k, n}) => {
+    const id = k.slice(2);
+    if (k[0] === "a") { const a = assistant(id), lp = lpOf("assistants", id);
+      return tile(a.title, "Assistent" + (n ? " · " + n + (n === 1 ? " Gespräch" : " Gespräche") : ""), lp.icon || "chat", lp.color, () => startDraft(id)); }
+    const w = WS.workspaces.find(x => x.id === id), lp = lpOf("workspaces", id);
+    return tile(w.title, "Arbeitsraum · " + n + (n === 1 ? " Gespräch" : " Gespräche"), lp.icon || "folder", lp.color, () => startInWs(id));
+  }));
+  if (box.children.length === 1) box.appendChild(el("p", "muted", "Noch nichts da. Beginne ein Gespräch – mit einem Assistenten oder in einem Arbeitsraum."));
+}
+let START_RT = 0;
+addEventListener("resize", () => { clearTimeout(START_RT); START_RT = setTimeout(() => { if (VIEW === "start") renderStart(); }, 150); });
+$("startbtn").onclick = () => { closeDrawer(); showView("start"); };
+$("kanbtn").onclick = () => { closeDrawer(); showView("kan"); };
+$("calbtn").onclick = () => { closeDrawer(); showView("cal"); };
+
 // ---- Arbeitsräume (0.22.0, RFC-0121 §5.1): im MCP-Gateway, gelesen und geschrieben als du
 // 0.24.0: eigene Ansicht mit Karten (wie die Assistenten); unter dem Chat steht nur noch, in welchem
 // Arbeitsraum das Gespräch läuft. Jede Ablage lässt sich auf einen Ordner einschränken.
@@ -2080,7 +2400,7 @@ async function loadWs(){
   WS = r.error ? {workspaces: [], systems: [], error: r.error} : {workspaces: r.workspaces || [], systems: r.systems || [], error: ""};
   if (DRAFT_WS && !WS.workspaces.some(w => w.id === DRAFT_WS)) DRAFT_WS = null;
   renderSide();
-  if (VIEW === "ws") renderWorkspaces();
+  if (VIEW === "ws") renderWorkspaces(); else if (VIEW === "start") renderStart();
 }
 function wsTitle(id){ const w = WS.workspaces.find(x => x.id === id); return w ? w.title : id; }
 function renderWsPick(){
@@ -2323,11 +2643,10 @@ $("wssave").onclick = async () => {
   $("who").textContent = "Chat " + S.version;
   loadMe();
   loadFeedback();
-  if (location.hash === "#assistenten") showView("asst");
-  else if (location.hash === "#arbeitsraeume") showView("ws");
-  else if (location.hash === "#vorgaenge") showView("cases");
+  const hv = viewOfHash();
+  if (hv !== "chat") showView(hv);
   else if (ASK) { startDraft(); $("t").value = ASK; $("t").dispatchEvent(new Event("input")); $("t").focus(); }
-  else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();
+  else showView("start");   // 0.27.0: die Startseite statt des letzten Gesprächs
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
   if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);
   for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));

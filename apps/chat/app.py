@@ -48,7 +48,7 @@ import loop
 import store
 import workspace
 
-VERSION = "0.26.0"
+VERSION = "0.27.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -232,14 +232,35 @@ def load_conv(person, cid):
         return None
 
 
-def save_conv(person, conv):
+def save_conv(person, conv, touch=True):
     os.makedirs(person_dir(person), exist_ok=True)
-    conv["updated"] = now()
+    if touch:
+        conv["updated"] = now()
     path = conv_path(person, conv["id"])
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(conv, f, ensure_ascii=False)
     os.replace(tmp, path)
+
+
+# 0.27.0: Status je Gespräch -- setzt nur die Person (Jörg, D1); fehlt er, gilt „open“
+STATUSES = ("open", "question", "waiting", "done")
+
+
+def conv_status(c):
+    s = c.get("status")
+    return s if s in STATUSES else "open"
+
+
+def active_hours(c, limit=400):
+    """Die Stunden (UTC, „YYYY-MM-DDTHH“), in denen im Gespräch geschrieben wurde -- für den
+    Kalender (an jedem aktiven Tag, D: Jörg); der Browser rechnet sie in seine Zeitzone um."""
+    seen = []
+    for at in [c.get("created")] + [m.get("at") for m in c.get("messages") or [] if isinstance(m, dict)]:
+        h = str(at or "")[:13]
+        if len(h) == 13 and h not in seen:
+            seen.append(h)
+    return seen[-limit:]
 
 
 def list_convs(person):
@@ -255,7 +276,8 @@ def list_convs(person):
                 out.append({"id": c["id"], "title": c.get("title") or "Neues Gespräch",
                             "assistant": c.get("assistant"), "updated": c.get("updated", ""),
                             "created": c.get("created", ""), "workspace": c.get("workspace"),
-                            "private": bool(c.get("private"))})
+                            "private": bool(c.get("private")), "status": conv_status(c),
+                            "hours": active_hours(c)})
     return sorted(out, key=lambda c: c["updated"], reverse=True)
 
 
@@ -1472,7 +1494,7 @@ def view_of(conv):
             "light": conv_light(conv), "stars": conv.get("stars"),
             "rateable": any(rateable(m) for m in conv["messages"]),
             "cases": conv.get("cases") or [],
-            "workspace": conv.get("workspace"), "private": bool(conv.get("private")),
+            "workspace": conv.get("workspace"), "private": bool(conv.get("private")), "status": conv_status(conv),
             "answered": any(final_answer(m) for m in conv["messages"])}
 
 
@@ -1912,7 +1934,7 @@ class Handler(BaseHTTPRequestHandler):
                 gw_name = ""
             doc, err = unhappy_case(conv, a, gw_name, body)
             return self.json(400, {"error": err}) if doc is None else self.json(200, {"case": doc})
-        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light|rate|case)$", path)
+        m = re.match(r"^/api/conv/([a-z0-9]{12})/(send|step|delete|rename|light|rate|case|status)$", path)
         if not m:
             return self.send(404, "text/plain", "nicht hier")
         cid, action = m.groups()
@@ -1926,6 +1948,14 @@ class Handler(BaseHTTPRequestHandler):
             if action == "delete":
                 os.remove(conv_path(person, cid))
                 return self.json(200, {"deleted": cid})
+            if action == "status":
+                # 0.27.0: nur die Person setzt ihn; „letzte Änderung“ bleibt die letzte Arbeit
+                st = str(body.get("status") or "")
+                if st not in STATUSES:
+                    return self.json(400, {"error": "Status: open, question, waiting oder done."})
+                conv["status"] = st
+                save_conv(person, conv, touch=False)
+                return self.json(200, view_of(conv))
             if action == "rename":
                 title = " ".join(str(body.get("title") or "").split())[:80]
                 if not title:

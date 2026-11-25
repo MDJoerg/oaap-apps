@@ -491,3 +491,25 @@ andere sehen ihre eigene Anordnung. `GET /api/launchpad` liefert die Einträge u
 herausnehmen); unbekannte Symbole und Farben lehnt der Server ab. Die Karte eines Assistenten
 hat Ändern, Auswertung, (De)aktivieren und Löschen jetzt im Menü; der Knopf heißt wie beim
 Arbeitsraum „Gespräch beginnen“.
+
+## Status, Kanban, Kalender, Startseite (0.27.0)
+
+**Status** je Gespräch: In Bearbeitung (Vorgabe), Rückfrage, Wartet, Fertig. Ihn setzt **nur die
+Person** – über den Knopf oben im Gespräch, das Menü „⋯“ in der Leiste und auf jeder Karte oder
+durch Ziehen im Kanban. `POST /api/conv/<id>/status {status}`; „letzte Änderung“ bleibt dabei
+unverändert (sie meint die letzte Arbeit).
+
+**Kanban** (`#kanban`): Spalten In Bearbeitung, Rückfrage, Wartet; „Fertig“ nur mit dem Schalter
+„Fertige zeigen“ (merkt sich der Browser). Am großen Bildschirm Karten ziehen, sonst Menü; Suche.
+
+**Kalender** (`#kalender`): Woche, Monat, Jahr, ‹ Heute ›, Freitext. Ein Gespräch steht an jedem
+Tag, an dem darin geschrieben wurde (↻ = fortgesetzt); der Server liefert dazu je Gespräch die
+Stunden (`hours`, UTC), der Browser rechnet in seine Zeitzone um. Monat „+n mehr“ und Jahr führen
+in die Woche.
+
+**Startseite** (`#start`, statt des letzten Gesprächs, auch nach dem Löschen): „Neues Gespräch“,
+dann Reihen Weiterbearbeiten, Zuletzt fertig, Letzte Arbeitsräume, Vorgänge (eigene Meldungen,
+offene zuerst), Beliebt bei dir (Gespräche der letzten 30 Tage je Assistent und Arbeitsraum). Je
+Breite so viele Kacheln, wie passen, dazu „mehr“; schmal fast nur Symbol und Titel. In der Leiste
+stehen Start, Kanban und Kalender über Arbeitsräume und Assistenten. Exportieren und Importieren
+der Assistenten liegen im Menü „⋯“.
