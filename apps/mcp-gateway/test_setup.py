@@ -639,6 +639,41 @@ ok("KÖDER remove nach Menschenänderung: conflict, bleibt",
    results(doc) == ["conflict"] and app.DB.execute(
        "SELECT 1 FROM store_systems WHERE name='wiki'").fetchone(), doc)
 
+# 0.51.0 (RFC-0133 §3, D3): ein Zugangsprofil bringt mit stores: true seine Ablagetür mit
+print("--- profile.stores: Ablagetür am Zugangsprofil")
+P3 = {"kind": "profile", "id": "st-drei", "group": "@st-drei", "views": ["st-sicht"], "stores": True}
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [P3]})
+ok("dry: neues Profil mit stores -> would_make, nennt die Tür, nichts angelegt",
+   results(doc) == ["would_make"] and "Ablagetür an" in doc["results"][0]["note"]
+   and "st-drei" not in stores_of(), doc)
+st, doc = call("POST", body={"v": 1, "items": [P3]})
+ok("Profil NACH dem Ablagesystem angelegt: made, Tür an (kein zweiter store-Lauf nötig)",
+   results(doc) == ["made"] and stores_of().get("st-drei") == 1 and "Ablagetür an" in doc["results"][0]["note"],
+   (doc, stores_of()))
+st, doc = call("POST", body={"v": 1, "items": [P3]})
+ok("dasselbe noch einmal: present", results(doc) == ["present"], doc)
+app.DB.execute("UPDATE keys SET stores=0 WHERE label='st-drei'"); app.DB.commit()
+st, doc = call("POST", body={"v": 1, "dry": True, "items": [P3]})
+ok("dry: vorhandenes Profil ohne Tür -> would_make", results(doc) == ["would_make"], doc)
+st, doc = call("POST", body={"v": 1, "items": [P3]})
+ok("vorhandenes Profil ohne Tür: die Tür ist nur ein Dazu -> made, kein conflict",
+   results(doc) == ["made"] and stores_of()["st-drei"] == 1, (doc, stores_of()))
+st, doc = call("POST", body={"v": 1, "items": [dict(P3, id="st-vier", group="@st-vier", stores=False)]})
+ok("stores: false -> Profil ohne Tür", results(doc) == ["made"] and stores_of().get("st-vier") == 0,
+   (doc, stores_of()))
+st, doc = call("POST", body={"v": 1, "items": [dict(P3, id="st-fuenf", group="@st-fuenf", stores="ja")]})
+ok("KÖDER stores: \"ja\" -> refused, nichts angelegt",
+   results(doc) == ["refused"] and "st-fuenf" not in stores_of(), doc)
+st, doc = call("POST", body={"v": 1, "items": [dict(P3, ceiling="red")]})
+ok("KÖDER anders dastehendes Profil mit stores: conflict, Ampel bleibt, keine Tür-Notiz",
+   results(doc) == ["conflict"] and app.DB.execute(
+       "SELECT ceiling FROM keys WHERE label='st-drei'").fetchone()[0] == "yellow", doc)
+key_row = app.DB.execute("SELECT stores FROM keys WHERE label='st-key'").fetchone()
+st, doc = call("POST", body={"v": 1, "items": [dict(P3, id="st-key")]})
+ok("KÖDER stores auf einem Schlüssel-Etikett: conflict, die Tür des Schlüssels bleibt aus",
+   results(doc) == ["conflict"] and app.DB.execute(
+       "SELECT stores FROM keys WHERE label='st-key'").fetchone()[0] == key_row[0] == 0, doc)
+
 gw.shutdown()
 plat.shutdown()
 print("")

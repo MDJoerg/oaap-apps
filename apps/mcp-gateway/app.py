@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.50.0"
+VERSION = "0.51.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -5083,7 +5083,7 @@ SETUP_FIELDS = {
     "refresh": set(),
     "server_light": {"light"},
     "view": {"accesses", "tools", "max_effect", "prompts", "writes"},   # prompts 0.42.0, writes 0.43.0 (RFC-0119 3a/3b)
-    "profile": {"group", "views", "ceiling", "max_effect"},
+    "profile": {"group", "views", "ceiling", "max_effect", "stores"},   # stores 0.51.0 (RFC-0133 §3)
     "assistant": {"title", "view", "gateway", "model", "greeting", "visibility", "system",
                   "commands", "views", "support_queue"},
     "server": {"address", "auth", "light"},
@@ -5689,7 +5689,41 @@ def setup_refresh(sid, dry, planned):
 
 
 def setup_item(item, dry, actor, planned):
-    """Ein Wunsch: (result, note)."""
+    """Ein Wunsch: (result, note). 0.51.0 (RFC-0133 §3, D3): ein Zugangsprofil mit
+    `"stores": true` bringt seine Ablagetür selbst mit -- beim Anlegen und, wenn es schon
+    da ist, als Dazu (nie ein conflict), wie es ein store-Eintrag mit `doors` tut. Die Tür
+    steht nicht im Wunsch, damit ältere Läufe dieselbe Prüfsumme behalten."""
+    if item.get("kind") == "profile" and "stores" in item:
+        if item["stores"] not in (True, False):
+            return "refused", "stores ist true oder false."
+        want = item["stores"] is True
+        item = {k: v for k, v in item.items() if k != "stores"}
+        result, note = setup_item_core(item, dry, actor, planned)
+        if not want or result not in ("made", "present", "would_make"):
+            return result, note
+        return setup_profile_door(item["id"], result, note, dry, actor)
+    return setup_item_core(item, dry, actor, planned)
+
+
+def setup_profile_door(sid, result, note, dry, actor):
+    """Die Ablagetür eines Zugangsprofils der Einrichtung einschalten (stores: true)."""
+    row = DB.execute("SELECT stores FROM keys WHERE label=? AND kind='profile' AND revoked=''",
+                     (sid,)).fetchone()
+    if row is not None and row["stores"]:
+        return result, note
+    said = "Ablagetür an"
+    if dry or row is None:            # im Probelauf: das Profil kommt erst noch
+        return ("would_make" if result == "present" else result,
+                "; ".join(x for x in (note, said + ".") if x))
+    DB.execute("UPDATE keys SET stores=1 WHERE label=? AND kind='profile' AND revoked=''", (sid,))
+    books.log(DB, "setup:" + actor, "key.stores", sid, "an")
+    DB.commit()
+    return ("made" if result == "present" else result), "; ".join(
+        x for x in (note.rstrip("."), said + ".") if x)
+
+
+def setup_item_core(item, dry, actor, planned):
+    """Ein Wunsch ohne den Schalter stores: (result, note)."""
     kind, sid = item["kind"], item["id"]
     if kind not in SETUP_KINDS:
         return "refused", "Diese Art kennt das MCP-Gateway nicht; es kennt " + ", ".join(SETUP_KINDS) + "."

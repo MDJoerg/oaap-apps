@@ -3,7 +3,7 @@ oaap_manifest: "0.18"
 app:
   id: mcp-gateway
   name: MCP-Gateway
-  version: 0.50.0
+  version: 0.51.0
   type: native
   class: frontend
   description: "Die Tür für KI-Werkzeuge: MCP-Server hinter einem Endpunkt je Sicht. Werkzeuge, Ressourcen und Prompts mehrerer Server einzeln freigeben, mit festgehaltenem Text, festen Argumenten, Grenzen und Wirkungsklassen; hinein mit API-Schlüssel, Anmeldung am Anmeldedienst des Mandanten oder als Person aus einem Chat der Plattform; Ampel je Server, Schutz der Server, Verbrauchsmessung ohne Argumente und Ergebnisse. Meine Werkzeuge zeigt jeder Person ihre eigenen Aufrufe und nimmt ihren persönlichen Zugang zu einem Server an; die Assistenten der Chats liegen hier mit Revisionen."
