@@ -1941,7 +1941,23 @@ function wsMountRow(first){
   };
   sys.onchange = fillStores;
   store.onchange = () => { alias.value = slugAlias(store.options[store.selectedIndex].textContent); };
-  row.append(sys, store, alias, role, home, rm);
+  // 0.23.0 (RFC-0121 §5.1): eine neue Ablage anlegen, als du -- das Ablagesystem entscheidet
+  const mk = el("button", "", "Neu…"); mk.type = "button"; mk.title = "Neue Ablage in diesem System anlegen (z. B. ein privates Repository)";
+  mk.onclick = async () => {
+    const title = (prompt("Name der neuen Ablage:") || "").trim();
+    if (!title) return;
+    mk.disabled = true;
+    const r = await api("POST", "api/workspaces/pick", {system: sys.value, title});
+    mk.disabled = false;
+    if (r.error) { $("wserr").textContent = r.error; return; }
+    await fillStores();
+    const id = (r.store || {}).id;
+    if (id && [...store.options].some(o => o.value === id)) store.value = id;
+    else { const o = el("option", "", (r.store || {}).title || id); o.value = id; store.appendChild(o); store.value = id; }
+    alias.value = slugAlias(store.options[store.selectedIndex].textContent); role.value = "work";
+    $("wserr").textContent = "Angelegt: " + id + ".";
+  };
+  row.append(sys, store, mk, alias, role, home, rm);
   row.read = () => ({alias: alias.value.trim(), system: sys.value, store: store.value, role: role.value,
                      home: home.checked, title: store.selectedIndex >= 0 ? store.options[store.selectedIndex].textContent : ""});
   if (WS.systems.length) fillStores();

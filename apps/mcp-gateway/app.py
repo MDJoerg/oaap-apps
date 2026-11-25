@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.46.0"
+VERSION = "0.47.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -810,6 +810,26 @@ def connector_call(m, person, tool, args):
     except ValueError:
         doc = {"text": text}
     return doc if isinstance(doc, dict) else {"value": doc}
+
+
+STORE_ABOUT = {}            # Ablagesystem -> (about, bis); about hängt nicht an der Person
+STORE_ABOUT_TTL = 600
+
+
+def store_about(m, person):
+    """`stores_about` des Konnektors hinter einer Einhängung, zehn Minuten gemerkt
+    (0.47: die Tür bietet Verschieben und Löschen nur an, wenn er sie nennt). None, wenn
+    er gerade nicht antwortet -- dann wird nichts Ungesagtes angeboten."""
+    now = time.time()
+    hit = STORE_ABOUT.get(m["system"])
+    if hit and hit[1] > now:
+        return hit[0]
+    try:
+        about = connector_call(m, person, "stores_about", {})
+    except workspaces.Invalid:
+        about = None
+    STORE_ABOUT[m["system"]] = (about, now + (STORE_ABOUT_TTL if about else 60))
+    return about
 
 
 def ws_owner(person):
@@ -3710,6 +3730,32 @@ class Handler(BaseHTTPRequestHandler):
                     {k: query[k] for k in ("area", "offset") if query.get(k)}
                 self.send_json(200, {"v": 1, **connector_call(m, carried, verb, args)})
                 return
+            if method == "POST" and rest == "_pick":
+                # 0.47 (RFC-0121 §5.1): aus der Auswahl eine neue Ablage anlegen, als die
+                # Person -- nur wenn der Konnektor create_store nennt; das Produkt entscheidet
+                raw = self.read_body(1 << 14)
+                want = json.loads(raw or b"{}")
+                if not isinstance(want, dict):
+                    raise workspaces.Invalid("Erwartet: {system, title, area?}.")
+                row = workspaces.system_row(DB, str(want.get("system") or ""))
+                if not row or not row["active"]:
+                    raise workspaces.Invalid("Dieses Ablagesystem gibt es nicht (oder es ist aus).")
+                title = str(want.get("title") or "").strip()[:100]
+                if not title:
+                    raise workspaces.Invalid("Wie soll die neue Ablage heißen?")
+                m = {"alias": row["name"], "system": row["name"]}
+                about = connector_call(m, carried, "stores_about", {})
+                if not about.get("create_store"):
+                    raise workspaces.Invalid(f"In „{row['title']}“ legt der Chat keine neuen Ablagen an.")
+                args = {"title": title}
+                if str(want.get("area") or "").strip():
+                    args["area"] = str(want["area"]).strip()[:100]
+                made = connector_call(m, carried, "stores_create_store", args)
+                books.log(DB, f"person:{owner}", "store.create", f"{row['name']}:{made.get('id')}", title)
+                DB.commit()   # log schreibt ohne commit
+                self.send_json(200, {"v": 1, "store": {"id": made.get("id"),
+                                                       "title": made.get("title") or title}})
+                return
             if method == "POST" and not rest:
                 raw = self.read_body(1 << 16)
                 doc = json.loads(raw or b"{}")
@@ -3722,7 +3768,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:     # Invalid und kaputtes JSON
             self.send_json(400, {"v": 1, "error": str(exc)})
             return
-        self.send_json(404, {"v": 1, "error": "Bekannt: GET /mcp/_workspaces, GET …/_pick, POST, "
+        self.send_json(404, {"v": 1, "error": "Bekannt: GET /mcp/_workspaces, GET …/_pick, POST …/_pick, POST, "
                                               "POST …/<id>/delete."})
 
     def platform_person(self):
@@ -3894,7 +3940,9 @@ class Handler(BaseHTTPRequestHandler):
                 if ws:
                     # 0.45 (RFC-0121 §4.2): die Ablagetür kommt zur Sicht dazu, nicht in sie
                     taken = {e.get("name") for e in entries}
-                    entries = entries + [t for t in workspaces.tool_list(ws) if t["name"] not in taken]
+                    person = self.person
+                    entries = entries + [t for t in workspaces.tool_list(
+                        ws, lambda m: store_about(m, person)) if t["name"] not in taken]
             self.send_json(200, rpc_result(msg_id, {field: entries}))
         else:
             self.send_json(200, rpc_error(msg_id, -32601, f"Methode {method} wird in dieser "

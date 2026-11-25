@@ -80,7 +80,18 @@ names = [t["name"] for t in W.tool_list(ws)]
 check("schreibende Werkzeuge mit Arbeitsablage", "store_write" in names and "store_edit" in names)
 ro = W.save_ws(db, "u1", {"id": "nur-lesen", "title": "x", "mounts": [
     dict(GOOD["mounts"][0])]})
-check("Werkzeugliste fest benannt", set(names) == set(W.TOOLS))
+check("ohne about kein Verschieben/Löschen", set(names) == set(W.TOOLS) - set(W.DECLARED), str(names))
+can = {"move": True, "remove": "documents"}
+names2 = [t["name"] for t in W.tool_list(ws, lambda m: can)]
+check("Werkzeugliste fest benannt (Konnektor kann alles)", set(names2) == set(W.TOOLS), str(names2))
+check("BookStack ohne move/remove: nicht angeboten",
+      "store_move" not in [t["name"] for t in W.tool_list(ws, lambda m: {"move": False})])
+check("Quelle allein: kein Verschieben, auch wenn der Konnektor es kann",
+      "store_move" not in [t["name"] for t in W.tool_list(
+          {"mounts": [dict(GOOD["mounts"][1], home=False)]}, lambda m: can)])
+rm_def = W.DEFS["store_remove"]
+check("Löschen ist schreibend und destruktiv",
+      rm_def["_meta"]["oaap/effect"] == "write" and rm_def["annotations"]["destructiveHint"] is True)
 eff = {t["name"]: t["_meta"]["oaap/effect"] for t in W.tool_list(ws)}
 check("Wirkungsklasse für den Chat: lesen ohne, schreiben mit Zustimmung",
       eff["store_read"] == "read" and eff["workspace_info"] == "read" and eff["store_edit"] == "write")
@@ -93,6 +104,7 @@ class Fake:
                      ("2", "/recht/satzung"): ("# Satzung\n" + "x" * 50, 1),
                      ("1", "/lang"): ("# Lang\n\n" + ("Ein Absatz. " * 60), 1)}
         self.calls = []
+        self.about = {"move": True, "remove": "documents"}
 
     def __call__(self, m, tool, a):
         self.calls.append((m["alias"], tool, dict(a)))
@@ -110,6 +122,17 @@ class Fake:
                 raise W.Invalid("Revision passt nicht.")
             self.docs[key] = (a["text"], r + 1)
             return {"path": a["path"], "revision": str(r + 1), "created": r == 0}
+        if tool == "stores_about":
+            return dict(self.about)
+        if tool == "stores_move":
+            t_, r_ = self.docs.pop(key)
+            self.docs[(a["store"], a["to"])] = (t_, r_)
+            return {"path": a["to"], "kind": "document", "files": 1}
+        if tool == "stores_remove":
+            if self.docs[key][1] != int(a["revision"]):
+                raise W.Invalid("Revision passt nicht.")
+            del self.docs[key]
+            return {"removed": True, "note": "Historie behält sie."}
         if tool == "stores_list":
             return {"items": [{"name": "stand", "kind": "document"}]}
         if tool == "stores_search":
@@ -168,6 +191,27 @@ check("neues Dokument ohne Revision", out["created"] is True)
 # Suche: Treffer außerhalb der Einhängung fallen weg
 s, _ = run("store_search", {"path": "satzung:/", "query": "x"})
 check("Suche bleibt in der Einhängung", [h["path"] for h in s["hits"]] == ["satzung:/satzung"], str(s))
+# 0.47: verschieben und löschen
+out, _ = run("store_move", {"path": "notizen:/neu", "to": "notizen:/archiv/neu"})
+check("verschieben innerhalb der Ablage", out["path"] == "notizen:/archiv/neu" and out["from"] == "notizen:/neu"
+      and ("1", "/archiv/neu") in f.docs and ("1", "/neu") not in f.docs, str(out))
+n = len(f.calls)
+msg = raises(run, "store_move", {"path": "notizen:/archiv/neu", "to": "satzung:/neu"})
+check("verschieben zwischen Ablagen abgelehnt, Konnektor nicht gerufen", msg and len(f.calls) == n, msg)
+msg = raises(run, "store_move", {"path": "satzung:/satzung", "to": "satzung:/x"})
+check("verschieben in einer Quelle abgelehnt", msg and "Quelle" in msg and len(f.calls) == n, msg)
+msg = raises(run, "store_move", {"path": "notizen:/archiv/neu", "to": "notizen:/../x"})
+check("Ziel außerhalb löst nicht auf", msg is not None, msg)
+msg = raises(run, "store_remove", {"path": "notizen:/archiv/neu"})
+check("löschen ohne Revision abgelehnt", msg and "Revision" in msg, msg)
+out, _ = run("store_remove", {"path": "notizen:/archiv/neu", "revision": "1"})
+check("löschen mit Revision", out["removed"] and ("1", "/archiv/neu") not in f.docs, str(out))
+f.about = {"move": False, "remove": False}
+msg = raises(run, "store_move", {"path": "notizen:/stand", "to": "notizen:/x"})
+check("Konnektor ohne move: abgelehnt, stores_move nicht gerufen",
+      msg and "kann das nicht" in msg and f.calls[-1][1] == "stores_about", msg)
+f.about = {"move": True, "remove": "documents"}
+
 # K13: Ampel
 books.save_server(db, "test", "wiki-src", "http://wiki:8000/oaap/mcp", "none", "yellow", {})
 msg = raises(run, "store_read", {"path": "notizen:/stand"})

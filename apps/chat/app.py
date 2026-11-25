@@ -48,7 +48,7 @@ import loop
 import store
 import workspace
 
-VERSION = "0.22.1"
+VERSION = "0.23.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -1774,6 +1774,14 @@ class Handler(BaseHTTPRequestHandler):
         if mw:
             st, doc = gw_ws("POST", f"/{mw.group(1)}/delete" if mw.group(1) else "", assertion,
                             None if mw.group(1) else body)
+            if st == 200:
+                return self.json(200, doc)
+            return self.json(st if st in (400, 403, 404) else 502,
+                             {"error": (doc or {}).get("error") or " ".join(gw_errors(st, doc))})
+        if path == "/api/workspaces/pick":
+            # 0.23.0 (RFC-0121 §5.1): eine neue Ablage aus der Auswahl, als die Person
+            want = {k: str(body.get(k) or "")[:100] for k in ("system", "title", "area") if body.get(k)}
+            st, doc = gw_ws("POST", "/_pick", assertion, want)
             if st == 200:
                 return self.json(200, doc)
             return self.json(st if st in (400, 403, 404) else 502,
