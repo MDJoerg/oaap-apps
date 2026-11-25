@@ -447,9 +447,18 @@ rounds = 1
 while r.get("state") == "more" and rounds < 20:
     _, r = req("POST", f"/api/conv/{c3['id']}/step", {})
     rounds += 1
-check(f"Schleife endet nach {loop.MAX_MODEL_TURNS} Modellzügen mit einem Satz",
-      r["state"] == "done" and "aufgehört" in r["messages"][-1]["content"]
+check(f"0.29.0: Schleife pausiert nach {loop.MAX_MODEL_TURNS} Modellzügen mit einer Frage des Chats",
+      r["state"] == "done" and r["messages"][-1].get("pause") is True and r["messages"][-1].get("by") == "chat"
+      and "weitermachen" in r["messages"][-1]["content"]
       and sum(1 for m in r["messages"] if m["role"] == "assistant") == loop.MAX_MODEL_TURNS + 1, rounds)
+st, r = req("POST", f"/api/conv/{c3['id']}/send", {"text": "Mach weiter."})
+more = 1
+while r.get("state") == "more" and more < 20:
+    _, r = req("POST", f"/api/conv/{c3['id']}/step", {})
+    more += 1
+check("0.29.0: „Mach weiter.“ gibt das Modell wieder frei (es antwortet, keine sofortige Pause)",
+      r["state"] == "done" and r["messages"][[i for i, m in enumerate(r["messages"]) if m["role"] == "user"][-1]]["content"] == "Mach weiter."
+      and r["messages"][-1].get("by") != "chat" and r["messages"][-1]["role"] == "assistant", r["messages"][-3:])
 
 st, r = req("POST", f"/api/conv/{c3['id']}/delete", {}, person="bert")
 check("bert löscht annas Gespräch nicht", st == 404)

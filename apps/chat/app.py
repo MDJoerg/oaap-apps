@@ -49,7 +49,7 @@ import qr
 import store
 import workspace
 
-VERSION = "0.28.0"
+VERSION = "0.29.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -754,9 +754,11 @@ def step(person, person_name, assertion, assistant, conv, decision):
                           "Nicht abgelegt: " + str(result)[:400])})
             return "done"
     if loop.model_turns_since_user(msgs) >= loop.MAX_MODEL_TURNS:
-        msgs.append({"role": "assistant", "at": now(), "content":
-                     f"Ich habe nach {loop.MAX_MODEL_TURNS} Runden aufgehört, ohne fertig zu "
-                     "werden. Formuliere die Frage bitte enger."})
+        # 0.29.0 (Jörg): eine Pause, kein Abbruch -- der Satz ist der des Chats (by: chat, geht
+        # nie ans Modell); „Weitermachen“ schickt „Mach weiter.“ und gibt die nächsten Schritte frei
+        msgs.append({"role": "assistant", "by": "chat", "pause": True, "at": now(), "content":
+                     f"Ich habe {loop.MAX_MODEL_TURNS} Schritte gemacht und bin noch nicht fertig. "
+                     "Soll ich weitermachen?"})
         return "done"
     if assistant.get("view"):
         way = way or McpWay(person, assertion, assistant, conv_light(conv), ws_of(conv))
@@ -1489,6 +1491,8 @@ def view_of(conv):
                            else loop.call_args(c)[0]} for c in m["tool_calls"]]
         if m.get("by") == "chat":
             x["by"] = "chat"
+        if m.get("pause"):
+            x["pause"] = True
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
             "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),

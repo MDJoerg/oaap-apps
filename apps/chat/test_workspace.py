@@ -163,6 +163,9 @@ check("0.25.0: „ohne Protokoll“ statt „privat“, mit Erklärung", "ohne P
       and '> privat</label>' not in pg)
 check("0.27.1: Sendeknopf trägt die Ampel erst, wenn sie feststeht", "known = C ? !!C.light : !!DRAFT_LIGHT" in pg
       and "#go.send-red{" in pg and "--sendink:#111827" in pg)
+check("0.29.0: Sendeknopf ist ein Symbol mit Beschriftung für Screenreader, Pause hat „Weitermachen“",
+      'id="go" aria-label="Senden"' in pg and '<path d="M4 12l16-8-6 16-2.5-6.5z"/>' in pg
+      and '"Weitermachen"' in pg and '"Mach weiter."' in pg)
 
 print(f"\n{PASSED[0]} passed, {len(FAILED)} failed")
 sys.exit(1 if FAILED else 0)

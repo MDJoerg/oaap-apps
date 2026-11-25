@@ -532,3 +532,8 @@ zu legen (Android: die Abfrage des Browsers, `beforeinstallprompt`; iPhone: kurz
 „Teilen → Zum Home-Bildschirm“); nach „Später“ oder „So geht’s“ wieder nach 30 Tagen, nie wenn
 er schon vom Startbildschirm läuft; immer im Profilmenü. Vom Startbildschirm startet er ohne
 Browserleiste (Manifest `display: standalone`) -- ein Vollbild ohne Tippen erlaubt kein Browser.
+
+**0.29.0:** Nach sechs Modellschritten seit der letzten Nachricht der Person (`loop.MAX_MODEL_TURNS`)
+bricht ein Gespräch nicht mehr ab, es pausiert: ein Satz des Chats (`by: chat`, `pause`, geht nie
+ans Modell) mit dem Knopf „Weitermachen“, der „Mach weiter.“ schickt und die nächsten Schritte
+freigibt. Senden ist ein Symbol (Papierflieger), „Senden“ steht in `aria-label`.

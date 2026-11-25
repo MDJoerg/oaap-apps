@@ -320,7 +320,7 @@
       "id": "chat",
       "name": "Chat",
       "type": "native",
-      "version": "0.28.0",
+      "version": "0.29.0",
       "released": "2026-11-25",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",

@@ -210,6 +210,10 @@ border-radius:.4rem;padding:.35rem .6rem;max-width:46rem}
 #cmds .grp{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;margin:.3rem .5rem .1rem}
 form.send{display:flex;gap:.5rem;align-items:flex-end}
 form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
+/* 0.29.0: Senden als Symbol (Papierflieger), Beschriftung für Screenreader in aria-label */
+#go{display:inline-flex;align-items:center;justify-content:center;width:2.6rem;height:2.4rem;padding:0;flex:none}
+#go svg{width:1.25rem;height:1.25rem}
+.pausego{align-self:flex-start;margin-top:calc(var(--gap) * -.4)}
 .crow{display:flex;gap:.5rem;align-items:center;font-size:.8rem;color:var(--muted);margin-top:.35rem;flex-wrap:wrap}
 .crow select{font-size:.8rem;padding:.15rem .3rem;max-width:16rem}
 .crow .note{margin-left:auto}
@@ -439,7 +443,7 @@ dialog input,dialog textarea,dialog select{width:100%}
     <div class="composer">
       <div id="cmds"></div>
       <form id="f" class="send"><textarea id="t" rows="1" placeholder="Nachricht … (/ für Befehle)" maxlength="4000" aria-label="Nachricht"></textarea>
-        <button class="primary" id="go">Senden</button></form>
+        <button class="primary" id="go" aria-label="Senden" title="Senden"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 16-2.5-6.5z"/><path d="M11.5 13.5L20 4"/></svg></button></form>
       <div class="crow"><label for="pick">Assistent</label><select id="pick"></select>
         <span class="wschip" id="wschip" hidden></span>
         <label class="inl" id="wsprivl" hidden><input type="checkbox" id="wspriv"> ohne Protokoll</label>
@@ -849,6 +853,7 @@ function renderSendLight(){
   const g = $("go"), known = C ? !!C.light : !!DRAFT_LIGHT, l = convLight();
   for (const x of ["green", "yellow", "red"]) g.classList.toggle("send-" + x, known && l === x);
   g.title = known ? "Senden – Ampel " + LWORD[l] + ": " + LSAYS[l] : "Senden";
+  g.setAttribute("aria-label", g.title);
 }
 function renderLight(){
   const b = $("lightbtn"), l = convLight();
@@ -1430,8 +1435,14 @@ function msgNodes(m, i){
   } else if (m.role === "assistant" && m.content) {
     const d = mdEl(m.content);
     out.push(withCtx(d, m.content, d.innerHTML));
+    // 0.29.0: an der Rundengrenze eine Pause -- „Weitermachen“ gibt die nächsten Schritte frei
+    if (m.pause && C && typeof i === "number" && i === C.messages.length - 1) {
+      const b = el("button", "primary pausego", "Weitermachen"); b.type = "button";
+      b.onclick = () => { if (busy) return; $("t").value = "Mach weiter."; $("f").requestSubmit(); };
+      out.push(b);
+    }
     if (m.rate && typeof i === "number") out.push(rateRow(i));
-    else if (FEEDBACK && typeof i === "number" && C && !m.calls) out.push(sadOnly(i));
+    else if (FEEDBACK && typeof i === "number" && C && !m.calls && m.by !== "chat") out.push(sadOnly(i));
     for (const k of (C && C.cases || []).filter(x => x.index === i)) out.push(caseMark(k));
   }
   for (const c of m.calls || []) out.push(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
