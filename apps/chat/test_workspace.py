@@ -156,5 +156,11 @@ check("0.24.0: Ändern behält die Kennung", "WS_EDIT ? WS_EDIT.id" in pg)
 check("0.24.1: „Neu…“ gesperrt, wo das Ablagesystem create_store false meldet; unbekannt bleibt offen",
       "mk.disabled = s.create_store === false" in pg and "das sagt das Ablagesystem selbst" in pg)
 
+check("0.25.0: Karte mit ⋯ (letzte Gespräche, Ändern, Löschen), keine Knöpfe Ändern/Löschen mehr",
+      'menu.push({head: "Letzte Gespräche"})' in pg and 'el("button", "edit", "Ändern")' not in pg.split("function renderWorkspaces")[1].split("function wsMountRow")[0])
+check("0.25.0: nur die Heimat ausgeschrieben, sonst Summen", '"🏠 "' in pg and '"✏️ "' in pg and '"📖 "' in pg)
+check("0.25.0: „ohne Protokoll“ statt „privat“, mit Erklärung", "ohne Protokoll" in pg and "NOLOG_HINT" in pg
+      and '> privat</label>' not in pg)
+
 print(f"\n{PASSED[0]} passed, {len(FAILED)} failed")
 sys.exit(1 if FAILED else 0)

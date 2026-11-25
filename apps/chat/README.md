@@ -471,3 +471,9 @@ gewählt über `GET /api/workspaces/pick?what=folders&system=&store=&path=` (MCP
 0.48.0); der Ordner begrenzt, was das Gespräch sieht, er ist kein Recht im Ablagesystem.
 **0.24.1:** „Neu…“ ist gesperrt (mit Grund als Hinweis), wo das Ablagesystem in seiner
 Selbstauskunft `create_store: false` meldet (MCP-Gateway ab 0.49.0 gibt es je System mit).
+**0.25.0:** Die Karte eines Arbeitsraums folgt der Karte eines Assistenten: Titel mit Menü „⋯“
+(letzte fünf Gespräche, Ändern, Löschen), Ampel, Beschreibung, nur die Heimat ausgeschrieben
+(🏠), die übrigen Ablagen als Summen (✏️ Arbeitsablagen, 📖 Quellen, Namen im Hinweis), dann
+Assistent und „Gespräch beginnen“. Der Haken „privat“ heißt jetzt **„ohne Protokoll“**: er
+sagt nur, dass `/abschluss` nichts ins Protokoll der Heimat schreibt; das Gespräch selbst sieht
+in beiden Fällen nur die Person.

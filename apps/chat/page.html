@@ -96,6 +96,13 @@ transform:rotate(-45deg);transition:transform .15s}
 #ctx{position:fixed;z-index:40;margin:0;right:auto;width:max-content;max-width:calc(100vw - 16px)}
 #ctx[hidden]{display:none}
 #ctx button.danger{color:var(--err)}
+#ctx .mhead{padding:.35rem .7rem .15rem;font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+#ctx button.sub{font-size:.88rem;max-width:20rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 0.25.0: Karte Arbeitsraum wie die Karte Assistent -- Titel mit ⋯, Heimat, Summen */
+.acard .chead{display:flex;align-items:flex-start;gap:.3rem}
+.acard .chead h3{flex:1;min-width:0}
+.acard .home{font-size:.85rem;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acard .sums{display:flex;gap:.7rem;font-size:.82rem;color:var(--muted)}
 #toast{position:fixed;left:50%;bottom:5.5rem;transform:translateX(-50%);background:var(--ink);color:var(--panel);
 padding:.45rem .9rem;border-radius:.5rem;font-size:.88rem;z-index:50;pointer-events:none}
 #toast[hidden]{display:none}
@@ -207,9 +214,6 @@ form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
 .wschip{font-size:.82rem;border:1px solid var(--line);border-radius:.9rem;padding:.1rem .55rem;background:var(--tool)}
 .wschip button{border:0;background:none;padding:0 0 0 .3rem;cursor:pointer;color:var(--muted)}
 .wschip[hidden],#wsprivl[hidden]{display:none}
-.acard ul.mnt{margin:.1rem 0;padding-left:1rem;font-size:.82rem;color:var(--muted)}
-.acard .recent{display:flex;flex-direction:column;align-items:flex-start;font-size:.85rem}
-.acard .recent button{border:0;background:none;padding:.1rem 0;color:var(--accent);text-align:left;cursor:pointer}
 .acard .start{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
 .acard .start select{flex:1;min-width:8rem;font-size:.85rem;padding:.25rem .3rem}
 .acard .start label{display:inline-flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--muted)}
@@ -353,7 +357,7 @@ dialog input,dialog textarea,dialog select{width:100%}
         <button class="primary" id="go">Senden</button></form>
       <div class="crow"><label for="pick">Assistent</label><select id="pick"></select>
         <span class="wschip" id="wschip" hidden></span>
-        <label class="inl" id="wsprivl" hidden title="Kein Protokolleintrag am Ende, der Titel erscheint für niemanden sonst"><input type="checkbox" id="wspriv"> privat</label>
+        <label class="inl" id="wsprivl" hidden><input type="checkbox" id="wspriv"> ohne Protokoll</label>
         <span class="note">Jede Runde läuft als du. Was etwas ändert, läuft erst nach deiner Zustimmung.</span></div>
     </div>
   </section>
@@ -606,7 +610,10 @@ function openCtx(btn, actions, target){
   const box = $("ctx"); box.textContent = "";
   for (const a of actions) {
     if (a.show && !a.show(target)) continue;
-    const it = el("button", a.danger ? "danger" : "", a.label); it.type = "button"; it.setAttribute("role", "menuitem");
+    // 0.25.0: Überschrift und Trennlinie im Menü (Karte Arbeitsraum: letzte Gespräche, dann Pflege)
+    if (a.head) { box.appendChild(el("div", "mhead", a.head)); continue; }
+    if (a.sep) { if (box.children.length) box.appendChild(el("hr")); continue; }
+    const it = el("button", a.danger ? "danger" : a.sub ? "sub" : "", a.label); it.type = "button"; it.setAttribute("role", "menuitem");
     it.onclick = ev => { ev.stopPropagation(); closeCtx(); a.run(target); };
     box.appendChild(it);
   }
@@ -615,7 +622,7 @@ function openCtx(btn, actions, target){
   const r = btn.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight;
   box.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
   box.style.top = (r.bottom + h + 8 > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + "px";
-  box.firstChild.focus();
+  const first = box.querySelector("button"); if (first) first.focus();
 }
 function closeCtx(){
   if (CTX_FROM) CTX_FROM.setAttribute("aria-expanded", "false");
@@ -626,7 +633,7 @@ document.addEventListener("keydown", ev => {
   if (!CTX_FROM) return;
   if (ev.key === "Escape") { const b = CTX_FROM; closeCtx(); b.focus(); return; }
   if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
-    const items = [...$("ctx").children], i = items.indexOf(document.activeElement);
+    const items = [...$("ctx").querySelectorAll("button")], i = items.indexOf(document.activeElement);
     ev.preventDefault(); items[(i + (ev.key === "ArrowDown" ? 1 : items.length - 1)) % items.length].focus();
   }
 });
@@ -1933,6 +1940,7 @@ function renderWsPick(){
   const chip = $("wschip"); chip.textContent = "";
   const id = C ? (C.workspace && C.workspace.id) : DRAFT_WS;
   chip.hidden = !id;
+  $("wsprivl").title = NOLOG_HINT;
   $("wsprivl").hidden = !id; $("wspriv").disabled = !!C;
   if (C) $("wspriv").checked = !!C.private;
   if (!id) return;
@@ -1962,6 +1970,10 @@ function startInWs(wsid, aid, priv){
   }
 }
 const ROLEWORD = {source: "Quelle", work: "Arbeitsablage"};
+// 0.25.0: „privat“ hieß nur: /abschluss schreibt nichts ins Protokoll -- jetzt sagt der Haken das
+const NOLOG_HINT = "Mit Haken: /abschluss trägt nichts ins Protokoll der Heimatablage ein und nennt den Titel nirgends. "
+  + "Ohne Haken schreibt /abschluss oben ins Protokoll einen Eintrag: Datum, Titel, dein Name, was sich geändert hat – "
+  + "lesbar für alle, die die Heimatablage lesen dürfen. Das Gespräch selbst sieht in beiden Fällen nur du.";
 function renderWorkspaces(){
   const box = $("wsgrid"); box.textContent = "";
   $("wslisterr").textContent = WS.error || (!WS.systems.length && !WS.error
@@ -1971,47 +1983,57 @@ function renderWorkspaces(){
   const list = WS.workspaces.filter(w => !q || [w.title, w.description || "", ...w.mounts.map(m => m.alias + " " + (m.title || m.store))]
     .join(" ").toLowerCase().includes(q));
   for (const w of list) {
+    // 0.25.0 (Jörg): wie die Karte eines Assistenten -- Titel und ⋯ (letzte Gespräche, Ändern,
+    // Löschen), nur die Heimat ausgeschrieben, die übrigen Ablagen als Summen
     const card = el("div", "acard");
-    card.appendChild(el("h3", "", w.title));
+    const head = el("div", "chead");
+    head.appendChild(el("h3", "", w.title));
+    const convs = S.conversations.filter(c => c.workspace && c.workspace.id === w.id)
+      .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || ""))).slice(0, 5);
+    const menu = [];
+    if (convs.length) {
+      menu.push({head: "Letzte Gespräche"});
+      for (const c of convs) menu.push({label: c.title + " · " + when(c.updated), sub: true, run: () => openConv(c.id)});
+      menu.push({sep: true});
+    }
+    menu.push({label: "Ändern", show: () => !narrow(), run: () => openWsDlg(w)});
+    menu.push({label: "Löschen", danger: true, show: () => !narrow(), run: async () => {
+      if (!confirm("Arbeitsraum „" + w.title + "“ löschen? Die Ablagen selbst bleiben, wie sie sind; die Gespräche auch.")) return;
+      const r = await api("POST", "api/workspaces/" + w.id + "/delete");
+      $("wslisterr").textContent = r.error || ""; await loadWs();
+    }});
+    head.appendChild(ctxButton("Funktionen: " + w.title, menu, w));
+    card.appendChild(head);
     const tags = el("div");
     tags.appendChild(el("span", "badge", "Ampel " + (LWORD[w.light] || w.light || "?")));
-    tags.appendChild(el("span", "badge", w.mounts.length + (w.mounts.length === 1 ? " Ablage" : " Ablagen")));
     card.appendChild(tags);
-    if (w.description) card.appendChild(el("p", "", w.description));
-    const ul = el("ul", "mnt");
-    for (const m of w.mounts)
-      ul.appendChild(el("li", "", m.alias + " = " + (m.title || m.store) + (m.folder && m.folder !== "/" ? " · Ordner " + m.folder : "")
-                                  + " · " + ROLEWORD[m.role] + (m.home ? " · Heimat" : "")));
-    card.appendChild(ul);
-    const convs = S.conversations.filter(c => c.workspace && c.workspace.id === w.id)
-      .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || ""))).slice(0, 3);
-    if (convs.length) {
-      const rc = el("div", "recent");
-      for (const c of convs) {
-        const b = el("button", "", c.title); b.type = "button"; b.title = titleOf(c) + " · " + when(c.updated);
-        b.onclick = () => openConv(c.id); rc.appendChild(b);
-      }
-      card.appendChild(rc);
+    if (w.description) card.appendChild(el("p", "", w.description.length > 140 ? w.description.slice(0, 140) + " …" : w.description));
+    const home = w.mounts.find(m => m.home);
+    if (home) {
+      const h = el("div", "home", "🏠 " + (home.title || home.store) + (home.folder && home.folder !== "/" ? " · " + home.folder : ""));
+      h.title = "Heimat: " + home.alias + " = " + (home.title || home.store) + " — hier liegen Stand und Protokoll";
+      card.appendChild(h);
+    }
+    const work = w.mounts.filter(m => m.role === "work" && !m.home), src = w.mounts.filter(m => m.role === "source");
+    if (work.length || src.length) {
+      const s = el("div", "sums");
+      const names = ms => ms.map(m => m.alias + " = " + (m.title || m.store)).join(", ");
+      if (work.length) { const x = el("span", "", "✏️ " + work.length); x.title = (work.length === 1 ? "1 weitere Arbeitsablage: " : work.length + " weitere Arbeitsablagen: ") + names(work); s.appendChild(x); }
+      if (src.length) { const x = el("span", "", "📖 " + src.length); x.title = (src.length === 1 ? "1 Quelle (nur lesen): " : src.length + " Quellen (nur lesen): ") + names(src); s.appendChild(x); }
+      card.appendChild(s);
     }
     // Gespräch beginnen: mit welchem Assistenten -- vorbelegt mit dem zuletzt hier benutzten
     const st = el("div", "start");
     const sel = el("select"); sel.setAttribute("aria-label", "Assistent für das neue Gespräch");
     for (const a of S.assistants.filter(a => a.state !== "inactive")) { const o = el("option", "", a.title); o.value = a.id; sel.appendChild(o); }
     const last = lastAssistantIn(w.id); if (last) sel.value = last;
-    const pl = el("label"); const pv = el("input"); pv.type = "checkbox"; pl.append(pv, document.createTextNode("privat"));
-    pl.title = "Kein Protokolleintrag am Ende, der Titel erscheint für niemanden sonst";
+    const pl = el("label"); const pv = el("input"); pv.type = "checkbox"; pl.append(pv, document.createTextNode("ohne Protokoll"));
+    pl.title = NOLOG_HINT;
     st.append(sel, pl); card.appendChild(st);
     const acts = el("div", "acts");
     const go = el("button", "primary", "Gespräch beginnen"); go.type = "button"; go.disabled = !sel.options.length;
     go.onclick = () => startInWs(w.id, sel.value, pv.checked);
-    const e = el("button", "edit", "Ändern"); e.type = "button"; e.onclick = () => openWsDlg(w);
-    const d = el("button", "edit", "Löschen"); d.type = "button";
-    d.onclick = async () => {
-      if (!confirm("Arbeitsraum „" + w.title + "“ löschen? Die Ablagen selbst bleiben, wie sie sind; die Gespräche auch.")) return;
-      const r = await api("POST", "api/workspaces/" + w.id + "/delete");
-      $("wslisterr").textContent = r.error || ""; await loadWs();
-    };
-    acts.append(go, e, d); card.appendChild(acts); box.appendChild(card);
+    acts.appendChild(go); card.appendChild(acts); box.appendChild(card);
   }
   if (!list.length) box.appendChild(el("p", "muted", WS.workspaces.length ? "Kein Arbeitsraum passt."
     : narrow() ? "Noch kein Arbeitsraum." : "Noch kein Arbeitsraum. Lege mit „Neuer Arbeitsraum“ einen an."));
