@@ -239,6 +239,13 @@ mnt = {"folder": "/a"}
 check("Rand: /a enthält /a/x, nicht /ab", W.inside(mnt, "/a/x") and W.inside(mnt, "/a") and not W.inside(mnt, "/ab"))
 check("Rand: mount_path lässt /ab unberührt", W.mount_path(mnt, "/ab/x") == "/ab/x" and W.mount_path(mnt, "/a/x") == "/x")
 check("Rand: Wurzel enthält alles", W.inside({"folder": "/"}, "/irgendwo"))
+# 0.49: create_store für die Auswahl
+check("Auswahl: create_store nur bei ausdrücklich true",
+      W.system_caps({"create_store": True}) == {"create_store": True}
+      and W.system_caps({"create_store": False}) == {"create_store": False}
+      and W.system_caps({"create_store": "ja"}) == {"create_store": False}
+      and W.system_caps({}) == {"create_store": False})
+check("Auswahl: keine Antwort heißt unbekannt, nicht nein", W.system_caps(None) == {"create_store": None})
 
 # K13: Ampel
 books.save_server(db, "test", "wiki-src", "http://wiki:8000/oaap/mcp", "none", "yellow", {})

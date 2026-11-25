@@ -153,6 +153,8 @@ check("0.24.0: Seitenleiste je Arbeitsraum, immer da",
 check("0.24.0: Ordner geht mit, gewählt über what=folders",
       "what=folders" in pg and "role: role.value, folder," in pg)
 check("0.24.0: Ändern behält die Kennung", "WS_EDIT ? WS_EDIT.id" in pg)
+check("0.24.1: „Neu…“ gesperrt, wo das Ablagesystem create_store false meldet; unbekannt bleibt offen",
+      "mk.disabled = s.create_store === false" in pg and "das sagt das Ablagesystem selbst" in pg)
 
 print(f"\n{PASSED[0]} passed, {len(FAILED)} failed")
 sys.exit(1 if FAILED else 0)

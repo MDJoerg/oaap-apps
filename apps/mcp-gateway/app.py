@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.48.0"
+VERSION = "0.49.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -772,7 +772,7 @@ def server_access(srow, person=None):
     return {"auth_kind": "bearer", "credential": token}, url
 
 
-def connector_call(m, person, tool, args):
+def connector_call(m, person, tool, args, timeout=None):
     """Ein Verb des Ablagen-Konnektors (oaap.work.stores/1) als die Person (RFC-0121 §3.3).
 
     Der Konnektor ist ein Server des Gateways (meist eine Quelle der Plattform); der Zugang
@@ -787,11 +787,12 @@ def connector_call(m, person, tool, args):
     try:
         server, url = server_access(srow, person)
         lim = limits_of(srow)
-        us = upstream.open_session(server, url, timeout=lim["timeout_s"], max_bytes=lim["max_bytes"])
+        wait = min(lim["timeout_s"], timeout) if timeout else lim["timeout_s"]
+        us = upstream.open_session(server, url, timeout=wait, max_bytes=lim["max_bytes"])
         try:
             ex = upstream.post(server, url, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                              "params": {"name": tool, "arguments": args}},
-                               session_id=us.id, version=us.version, timeout=lim["timeout_s"],
+                               session_id=us.id, version=us.version, timeout=wait,
                                max_bytes=lim["max_bytes"])
         finally:
             upstream.delete(server, url, us.id)
@@ -816,7 +817,7 @@ STORE_ABOUT = {}            # Ablagesystem -> (about, bis); about hängt nicht a
 STORE_ABOUT_TTL = 600
 
 
-def store_about(m, person):
+def store_about(m, person, timeout=None):
     """`stores_about` des Konnektors hinter einer Einhängung, zehn Minuten gemerkt
     (0.47: die Tür bietet Verschieben und Löschen nur an, wenn er sie nennt). None, wenn
     er gerade nicht antwortet -- dann wird nichts Ungesagtes angeboten."""
@@ -825,7 +826,7 @@ def store_about(m, person):
     if hit and hit[1] > now:
         return hit[0]
     try:
-        about = connector_call(m, person, "stores_about", {})
+        about = connector_call(m, person, "stores_about", {}, timeout=timeout)
     except workspaces.Invalid:
         about = None
     STORE_ABOUT[m["system"]] = (about, now + (STORE_ABOUT_TTL if about else 60))
@@ -3711,8 +3712,13 @@ class Handler(BaseHTTPRequestHandler):
         rest = path[len(WORKSPACES_PATH):].strip("/")
         try:
             if method == "GET" and not rest:
+                # 0.49: create_store aus dem gemerkten stores_about (zehn Minuten), damit der
+                # Chat „Neu…“ nur anbietet, wo das Ablagesystem neue Ablagen anlegt
                 systems = [{"name": r["name"], "title": r["title"], "kind": r["kind"],
-                            "light": workspaces.system_light(DB, r), "active": bool(r["active"])}
+                            "light": workspaces.system_light(DB, r), "active": bool(r["active"]),
+                            **workspaces.system_caps(
+                                store_about({"alias": r["name"], "system": r["name"]}, carried, timeout=5)
+                                if r["active"] else None)}
                            for r in workspaces.systems(DB)]
                 mine = workspaces.ws_of(DB, owner)
                 for w in mine:
@@ -3751,6 +3757,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise workspaces.Invalid("Wie soll die neue Ablage heißen?")
                 m = {"alias": row["name"], "system": row["name"]}
                 about = connector_call(m, carried, "stores_about", {})
+                STORE_ABOUT[row["name"]] = (about, time.time() + STORE_ABOUT_TTL)   # frisch gemerkt
                 if not about.get("create_store"):
                     raise workspaces.Invalid(f"In „{row['title']}“ legt der Chat keine neuen Ablagen an.")
                 args = {"title": title}

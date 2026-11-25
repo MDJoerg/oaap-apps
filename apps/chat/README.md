@@ -469,3 +469,5 @@ zeigt jeden Arbeitsraum mit „+ Neues Gespräch“. Unter dem Gespräch steht n
 Arbeitsraum es läuft. Im Dialog lässt sich jede Ablage auf einen **Ordner** einschränken,
 gewählt über `GET /api/workspaces/pick?what=folders&system=&store=&path=` (MCP-Gateway ab
 0.48.0); der Ordner begrenzt, was das Gespräch sieht, er ist kein Recht im Ablagesystem.
+**0.24.1:** „Neu…“ ist gesperrt (mit Grund als Hinweis), wo das Ablagesystem in seiner
+Selbstauskunft `create_store: false` meldet (MCP-Gateway ab 0.49.0 gibt es je System mit).

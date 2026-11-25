@@ -2094,6 +2094,16 @@ function wsMountRow(first, pre){
     alias.value = slugAlias(store.options[store.selectedIndex].textContent); role.value = "work"; folder = "/"; showFolder();
     $("wserr").textContent = "Angelegt: " + id + ".";
   };
+  // 0.24.1: „Neu…“ nur, wo das Ablagesystem neue Ablagen anlegt (create_store aus stores_about,
+  // MCP-Gateway ab 0.49.0); unbekannt (null, älteres Gateway) = anbieten, das Gateway prüft
+  const mkState = () => {
+    const s = WS.systems.find(x => x.name === sys.value) || {};
+    mk.disabled = s.create_store === false;
+    mk.title = s.create_store === false
+      ? "„" + (s.title || sys.value) + "“ legt keine neuen Ablagen an – das sagt das Ablagesystem selbst."
+      : "Neue Ablage in diesem System anlegen (z. B. ein privates Repository)";
+  };
+  sys.addEventListener("change", mkState); mkState();
   l1.append(sys, store, mk, rm);
   l2.append(fb, alias, role, hl);
   row.append(l1, l2, fp);

@@ -48,7 +48,7 @@ import loop
 import store
 import workspace
 
-VERSION = "0.24.0"
+VERSION = "0.24.1"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()

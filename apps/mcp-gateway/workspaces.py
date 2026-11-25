@@ -265,6 +265,15 @@ def mount_path(m, real):
     return real[len(base):] or "/" if base and inside(m, real) else real
 
 
+def system_caps(about):
+    """0.49: was die Auswahl dem Chat über ein Ablagesystem sagt, aus `stores_about` seines
+    Konnektors. None = gerade unbekannt (keine Antwort): der Chat bietet es dann an und
+    das Gateway prüft beim Anlegen noch einmal."""
+    if not isinstance(about, dict):
+        return {"create_store": None}
+    return {"create_store": about.get("create_store") is True}
+
+
 MAX_PICK_FOLDERS = 200
 
 
