@@ -246,6 +246,17 @@ check("Auswahl: create_store nur bei ausdrücklich true",
       and W.system_caps({"create_store": "ja"}) == {"create_store": False}
       and W.system_caps({}) == {"create_store": False})
 check("Auswahl: keine Antwort heißt unbekannt, nicht nein", W.system_caps(None) == {"create_store": None})
+# 0.49.1: BDT-TEAM 0.903 legt die Erklärungen in `capabilities` und antwortet mit `store`
+bdt = {"kind": "bdt", "capabilities": {"create_store": True, "move": False, "remove": False}}
+check("about verschachtelt: create_store gilt", W.system_caps(bdt) == {"create_store": True})
+check("about verschachtelt: move/remove false bleiben false",
+      not W.declares(bdt, "store_move") and not W.declares(bdt, "store_remove"))
+check("about: oben gilt vor capabilities",
+      W.flat_about({"move": False, "capabilities": {"move": True}})["move"] is False
+      and W.flat_about({"move": True})["move"] is True and W.flat_about(None) is None)
+check("Antwort mit store statt id", W.made_store({"store": "p1", "title": "Plan"}, "x") == {"id": "p1", "title": "Plan"}
+      and W.made_store({"id": "o/r"}, "Neu") == {"id": "o/r", "title": "Neu"})
+check("Antwort ohne Kennung ist kein Erfolg", raises(W.made_store, {"title": "x"}, "x") is not None)
 
 # K13: Ampel
 books.save_server(db, "test", "wiki-src", "http://wiki:8000/oaap/mcp", "none", "yellow", {})

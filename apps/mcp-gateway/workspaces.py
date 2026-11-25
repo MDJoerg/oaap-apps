@@ -265,13 +265,35 @@ def mount_path(m, real):
     return real[len(base):] or "/" if base and inside(m, real) else real
 
 
+def flat_about(about):
+    """0.49.1: was ein Konnektor in `about` erklärt, flach. Der Vertrag meint die Felder
+    aus §3.1 oben (Forgejo); BDT-TEAM (0.903) legt sie in ein Objekt `capabilities`.
+    Beides gilt; steht ein Feld an beiden Stellen, gilt das obere."""
+    if not isinstance(about, dict):
+        return about
+    caps = about.get("capabilities")
+    if not isinstance(caps, dict):
+        return about
+    return {**caps, **{k: v for k, v in about.items() if k != "capabilities"}}
+
+
+def made_store(answer, title):
+    """0.49.1: die Antwort auf stores_create_store -> {id, title}. Der Vertrag sagt `id`;
+    BDT-TEAM (0.903) sagt `store`. Ohne beides ist es kein Erfolg."""
+    a = answer if isinstance(answer, dict) else {}
+    sid = str(a.get("id") or a.get("store") or "").strip()
+    if not sid:
+        raise Invalid("Das Ablagesystem hat angelegt, aber keine Kennung genannt.")
+    return {"id": sid, "title": str(a.get("title") or title)}
+
+
 def system_caps(about):
     """0.49: was die Auswahl dem Chat über ein Ablagesystem sagt, aus `stores_about` seines
     Konnektors. None = gerade unbekannt (keine Antwort): der Chat bietet es dann an und
     das Gateway prüft beim Anlegen noch einmal."""
     if not isinstance(about, dict):
         return {"create_store": None}
-    return {"create_store": about.get("create_store") is True}
+    return {"create_store": flat_about(about).get("create_store") is True}
 
 
 MAX_PICK_FOLDERS = 200
@@ -493,7 +515,7 @@ DEFS = {
 def declares(about, tool):
     """Ob ein Konnektor laut `about` das Verb hinter einem Werkzeug der Tür kann."""
     verb = DECLARED.get(tool)
-    return verb is None or bool((about or {}).get(verb))
+    return verb is None or bool((flat_about(about) or {}).get(verb))
 
 
 def tool_list(ws, about_of=None):

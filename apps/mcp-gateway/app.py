@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.49.0"
+VERSION = "0.49.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -826,7 +826,7 @@ def store_about(m, person, timeout=None):
     if hit and hit[1] > now:
         return hit[0]
     try:
-        about = connector_call(m, person, "stores_about", {}, timeout=timeout)
+        about = workspaces.flat_about(connector_call(m, person, "stores_about", {}, timeout=timeout))
     except workspaces.Invalid:
         about = None
     STORE_ABOUT[m["system"]] = (about, now + (STORE_ABOUT_TTL if about else 60))
@@ -3756,18 +3756,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not title:
                     raise workspaces.Invalid("Wie soll die neue Ablage heißen?")
                 m = {"alias": row["name"], "system": row["name"]}
-                about = connector_call(m, carried, "stores_about", {})
+                about = workspaces.flat_about(connector_call(m, carried, "stores_about", {}))
                 STORE_ABOUT[row["name"]] = (about, time.time() + STORE_ABOUT_TTL)   # frisch gemerkt
                 if not about.get("create_store"):
                     raise workspaces.Invalid(f"In „{row['title']}“ legt der Chat keine neuen Ablagen an.")
                 args = {"title": title}
                 if str(want.get("area") or "").strip():
                     args["area"] = str(want["area"]).strip()[:100]
-                made = connector_call(m, carried, "stores_create_store", args)
-                books.log(DB, f"person:{owner}", "store.create", f"{row['name']}:{made.get('id')}", title)
+                made = workspaces.made_store(connector_call(m, carried, "stores_create_store", args), title)
+                books.log(DB, f"person:{owner}", "store.create", f"{row['name']}:{made['id']}", title)
                 DB.commit()   # log schreibt ohne commit
-                self.send_json(200, {"v": 1, "store": {"id": made.get("id"),
-                                                       "title": made.get("title") or title}})
+                self.send_json(200, {"v": 1, "store": made})
                 return
             if method == "POST" and not rest:
                 raw = self.read_body(1 << 16)
