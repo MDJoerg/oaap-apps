@@ -477,3 +477,17 @@ Selbstauskunft `create_store: false` meldet (MCP-Gateway ab 0.49.0 gibt es je Sy
 Assistent und „Gespräch beginnen“. Der Haken „privat“ heißt jetzt **„ohne Protokoll“**: er
 sagt nur, dass `/abschluss` nichts ins Protokoll der Heimat schreibt; das Gespräch selbst sieht
 in beiden Fällen nur die Person.
+
+## Launchpad (0.26.0)
+
+Jede Person ordnet ihre Assistenten und Arbeitsräume selbst: **Symbol** (feste Auswahl von 24
+Linien-Symbolen, nimmt die Farbe an), **Farbe** (acht Töne, als Streifen links und am Symbol) und
+**Gruppe** (freier Name, höchstens 40 Zeichen). Beide Seiten sind gleich gebaut: Kachel mit Kopf
+(Symbol, Titel, Menü „⋯“ mit „Darstellung …“ und der Pflege), Gruppen auf- und zuklappbar (nur
+dieser Browser), darin alphabetisch, „Ohne Gruppe“ zuletzt; Suche findet auch den Gruppennamen.
+Gespeichert im Chat je Person (`people/<person>/launchpad.json`), also auf jedem Gerät gleich;
+andere sehen ihre eigene Anordnung. `GET /api/launchpad` liefert die Einträge und die Auswahl,
+`POST /api/launchpad {kind, id, icon?, color?, group?}` setzt einen Eintrag (alles leer =
+herausnehmen); unbekannte Symbole und Farben lehnt der Server ab. Die Karte eines Assistenten
+hat Ändern, Auswertung, (De)aktivieren und Löschen jetzt im Menü; der Knopf heißt wie beim
+Arbeitsraum „Gespräch beginnen“.

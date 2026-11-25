@@ -1315,12 +1315,37 @@ check("0.17.0: kein Knopf „Neues Gespräch“ in der Leiste; Vorgänge zwische
       and pg.index('id="manage"') < pg.index('id="casesbtn"') < pg.index('id="nset"'), None)
 check("0.17.0: Gruppieren-Einstellung entfällt, /neu beginnt ohne den alten Knopf",
       'data-k="group"' not in pg and 'run: () => startDraft($("pick").value)' in pg, None)
-check("0.17.0: schmal: Pflege (Neu, Export, Import, Ändern, Löschen, Auswertung) aus, Karte nur „Neues Gespräch“",
+check("0.17.0/0.26.0: schmal: Pflege (Neu, Export, Import; im Menü Ändern, Löschen, Auswertung) aus, Karte nur „Gespräch beginnen“",
       ".edit{display:none!important}" in pg and 'class="primary edit" id="anewbtn"' in pg
       and 'id="aexp" class="edit"' in pg and 'class="imp edit"' in pg
-      and 'el("button", "edit", "Ändern")' in pg and 'el("button", "edit", "Löschen")' in pg
-      and pg.count('el("button", "edit", "Auswertung")') == 2
-      and 'el("button", "primary", "Neues Gespräch")' in pg, None)
+      and '{label: "Ändern", show: () => !narrow()' in pg and '{label: "Löschen", danger: true, show: () => !narrow()' in pg
+      and pg.count('{label: "Auswertung", show: () => !narrow()') == 2
+      and 'el("button", "primary", "Gespräch beginnen")' in pg, None)
+# 0.26.0: Launchpad -- Symbol, Farbe, Gruppe je Person
+st, r = req("GET", "/api/launchpad")
+check("0.26.0: Launchpad leer, mit Auswahl", st == 200 and r["assistants"] == {} and r["workspaces"] == {}
+      and "folder" in r["icons"] and "blue" in r["colors"], (st, r))
+st, r = req("POST", "/api/launchpad", {"kind": "assistants", "id": "annas", "icon": "code", "color": "teal", "group": "  Kunde   A "})
+check("0.26.0: Eintrag gesetzt, Gruppe bereinigt", st == 200 and r["assistants"]["annas"] == {"icon": "code", "color": "teal", "group": "Kunde A"}, (st, r))
+st, r2 = req("GET", "/api/launchpad", person="bert")
+check("0.26.0: je Person -- bert sieht annas Anordnung nicht", st == 200 and r2["assistants"] == {}, r2)
+st, r = req("POST", "/api/launchpad", {"kind": "assistants", "id": "annas", "icon": "<svg>"})
+check("0.26.0: unbekanntes Symbol abgelehnt", st == 400 and "Symbol" in r["error"], (st, r))
+st, r = req("POST", "/api/launchpad", {"kind": "assistants", "id": "annas", "color": "#ff0000"})
+check("0.26.0: freie Farbe abgelehnt", st == 400 and "Farbe" in r["error"], (st, r))
+st, r = req("POST", "/api/launchpad", {"kind": "views", "id": "x", "icon": "code"})
+check("0.26.0: unbekannte Art abgelehnt", st == 400, (st, r))
+st, r = req("POST", "/api/launchpad", {"kind": "workspaces", "id": "../x", "icon": "code"})
+check("0.26.0: Kennung mit Pfad abgelehnt", st == 400, (st, r))
+st, r = req("POST", "/api/launchpad", {"kind": "assistants", "id": "annas"})
+check("0.26.0: leer nimmt den Eintrag heraus", st == 200 and "annas" not in r["assistants"], (st, r))
+st, r = req("GET", "/api/state")
+check("0.26.0: die Datei des Launchpads ist kein Gespräch", st == 200 and all(c["id"] != "launchpad" for c in r["conversations"]), None)
+import re as _re
+pg_icons = set(_re.findall(r"^  ([a-z]+): '<", pg.split("const LPICON = {")[1].split("};")[0], _re.M))
+pg_colors = set(_re.findall(r"([a-z]+): \"#", pg.split("const LPCOLOR = {")[1].split("};")[0]))
+check("0.26.0: Seite und Server kennen dieselben Symbole und Farben",
+      pg_icons == set(app.LP_ICONS) and pg_colors == set(app.LP_COLORS), (pg_icons ^ set(app.LP_ICONS), pg_colors ^ set(app.LP_COLORS)))
 
 check("0.17.0: Kontextmenü: ein Symbol an jeder Nachricht (Kopieren) und jedem Gespräch der Leiste "
       "(Umbenennen, Löschen); erweiterbar über MSG_ACTIONS / CONV_ACTIONS",

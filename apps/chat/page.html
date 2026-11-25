@@ -56,7 +56,7 @@ padding:.55rem .4rem .35rem;font-size:.82rem;font-weight:600;color:var(--ink)}
 .tree-h:hover,.grp-h:hover{background:var(--me)}
 .tree-h svg{width:1.05rem;height:1.05rem;flex:none;color:var(--accent)}
 .tree-h .n,.grp-h .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:.75rem}
-.tree-h .chev,.grp-h .chev{width:.8rem;flex:none;color:var(--muted);display:inline-flex;justify-content:center}
+.tree-h .chev,.grp-h .chev,.lpgrp .chev{width:.8rem;flex:none;color:var(--muted);display:inline-flex;justify-content:center}
 .chev::before{content:"";width:.36rem;height:.36rem;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;
 transform:rotate(-45deg);transition:transform .15s}
 [aria-expanded=true]>.chev::before{transform:rotate(45deg) translate(-1px,-1px)}
@@ -103,6 +103,17 @@ transform:rotate(-45deg);transition:transform .15s}
 .acard .chead h3{flex:1;min-width:0}
 .acard .home{font-size:.85rem;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .acard .sums{display:flex;gap:.7rem;font-size:.82rem;color:var(--muted)}
+/* 0.26.0: Launchpad -- Symbol im Kopf, Farbe als Streifen, Gruppen über die ganze Breite */
+.acard .chead .lpicon{width:1.35rem;height:1.35rem;flex:none;margin-top:.05rem;color:var(--accent)}
+.lpgrp{grid-column:1/-1;display:flex;align-items:center;gap:.45rem;border:0;background:none;padding:.5rem .2rem .1rem;
+font-size:.85rem;font-weight:600;color:var(--ink);text-align:left;cursor:pointer;border-radius:.4rem}
+.lpgrp:hover{background:var(--me)}
+.lpgrp .n{margin-left:.2rem;font-weight:400;color:var(--muted);font-size:.78rem}
+.lppick{display:flex;flex-wrap:wrap;gap:.3rem}
+.lppick button{width:2.2rem;height:2.2rem;padding:0;display:inline-flex;align-items:center;justify-content:center;border-radius:.45rem}
+.lppick button .lpicon{width:1.3rem;height:1.3rem}
+.lppick button.on{box-shadow:0 0 0 2px var(--accent)}
+.lppick .lpc{border:1px solid var(--line)}
 #toast{position:fixed;left:50%;bottom:5.5rem;transform:translateX(-50%);background:var(--ink);color:var(--panel);
 padding:.45rem .9rem;border-radius:.5rem;font-size:.88rem;z-index:50;pointer-events:none}
 #toast[hidden]{display:none}
@@ -469,6 +480,17 @@ dialog input,dialog textarea,dialog select{width:100%}
   <div class="row"><button type="button" id="wsadd">+ Ablage</button></div>
   <p class="err" id="wserr"></p>
   <div class="row"><button class="primary" type="button" id="wssave">Arbeitsraum anlegen</button></div>
+</dialog>
+
+<!-- 0.26.0: Darstellung einer Kachel -- nur für dich -->
+<dialog id="lpdlg">
+  <div class="dhead"><b id="lptitle">Darstellung</b><button type="button" class="hbtn" id="lpclose">Schließen</button></div>
+  <p class="muted" style="font-size:.85rem">Symbol, Farbe und Gruppe gelten nur für dich; andere sehen ihre eigene Anordnung.</p>
+  <label>Symbol</label><div class="lppick" id="lpicons"></div>
+  <label>Farbe</label><div class="lppick" id="lpcolors"></div>
+  <label for="lpgroup">Gruppe (leer = ohne Gruppe)</label><input id="lpgroup" maxlength="40" list="lpgroups"><datalist id="lpgroups"></datalist>
+  <p class="err" id="lperr"></p>
+  <div class="row"><button class="primary" type="button" id="lpsave">Übernehmen</button><button type="button" id="lpreset">Zurücksetzen</button></div>
 </dialog>
 
 <dialog id="setdlg">
@@ -1776,60 +1798,9 @@ function renderAssistants(){
   const box = $("alist"); box.textContent = "";
   const q = $("aq").value.trim().toLowerCase(), f = $("ascope").value;
   const list = S.assistants.filter(a =>
-    (!q || [a.title, a.id, a.view, a.model, a.greeting || ""].join(" ").toLowerCase().includes(q)) &&
+    (!q || [a.title, a.id, a.view, a.model, a.greeting || "", lpOf("assistants", a.id).group || ""].join(" ").toLowerCase().includes(q)) &&
     (f === "all" || (f === "mine" ? a.manage : a.visibility.scope === f)));
-  for (const a of list) {
-    const card = el("div", "acard");
-    card.appendChild(el("h3", "", a.title));
-    const tags = el("div");
-    for (const t of [scopeWord(a), a.origin === "config" ? "verwaltet über die Konfiguration" : "",
-                     a.rev ? "Fassung " + a.rev : "", a.state === "inactive" ? "deaktiviert" : "",
-                     a.tools_gone === "all" ? "Werkzeuge gibt es nicht mehr" :
-                       a.tools_gone === "some" ? "ein Teil der Werkzeuge fehlt" : "",
-                     a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
-      if (t) tags.appendChild(el("span", "badge", t));
-    card.appendChild(tags);
-    const g = (a.greeting || "").replace(/[*_`#>\[\]]/g, "");
-    if (g) card.appendChild(el("p", "", g.length > 140 ? g.slice(0, 140) + " …" : g));
-    card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · " + (a.view ? "Sicht " + a.view : "ohne Werkzeuge")));
-    const acts = el("div", "acts");
-    const go = el("button", "primary", "Neues Gespräch"); go.type = "button";
-    go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive" || a.tools_gone === "all"; acts.appendChild(go);
-    // 0.21.0 (RFC-0119 §6): die App hinter den Werkzeugen wurde entfernt
-    if (a.tools_gone === "all")
-      card.appendChild(el("p", "err", "Die Werkzeuge dieses Assistenten gibt es nicht mehr – die App dahinter wurde entfernt."));
-    // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
-    const r = READY[a.id];
-    if (r && r.missing_tools) {
-      const m = el("p", "err", r.missing_tools + (r.missing_tools === 1 ? " Werkzeug" : " Werkzeuge") + " noch nicht eingerichtet – ");
-      const lk = el("a", "", "einrichten");
-      if (r.me) { lk.href = r.me; lk.target = "_blank"; lk.rel = "noopener"; }
-      else { lk.href = "#"; lk.onclick = e => { e.preventDefault(); checkSetup(a.id); }; }
-      m.appendChild(lk); card.insertBefore(m, card.children[2] || null);
-    }
-    if (a.manage) {
-      const e = el("button", "edit", "Ändern"); e.type = "button";
-      e.onclick = async () => { fill(await api("GET", "api/assistants/" + a.id)); $("dlg").showModal(); };
-      const d = el("button", "edit", "Löschen"); d.type = "button";
-      d.onclick = async () => { if (!confirm("Assistent " + a.title + " löschen?")) return;
-        const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
-        $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
-      acts.append(e, d);
-      if (a.origin === "gateway") {
-        const ev = el("button", "edit", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
-        // 0.9.0: deaktivieren heißt -- nicht mehr angeboten, die Revisionen bleiben.
-        const t = el("button", "edit", a.state === "inactive" ? "Aktivieren" : "Deaktivieren"); t.type = "button";
-        t.onclick = async () => {
-          const r = await api("POST", "api/assistants/" + a.id + "/state", {state: a.state === "inactive" ? "active" : "inactive"});
-          $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); };
-        acts.append(t);
-      }
-    }
-    if (!a.manage && S.tenant_admin && a.origin === "gateway") {
-      const ev = el("button", "edit", "Auswertung"); ev.type = "button"; ev.onclick = () => openEval(a); acts.append(ev);
-    }
-    card.appendChild(acts); box.appendChild(card);
-  }
+  drawGrouped(box, "assistants", list, a => a.id, a => a.title, asstCard);
   if (!list.length) box.appendChild(el("p", "muted", S.assistants.length ? "Kein Assistent passt." :
     narrow() ? "Für dich ist noch kein Assistent sichtbar." : "Noch kein Assistent. Lege mit „Neuer Assistent“ einen an."));
   if (!S.teams_known) box.appendChild(el("p", "muted", "Deine Team-Berechtigungen sind gerade nicht lesbar — Team-Assistenten fehlen in der Liste."));
@@ -1843,6 +1814,57 @@ function renderAssistants(){
       $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ("Übernommen: " + r.migrated + "."); await refreshState(); };
     const acts = el("div", "acts"); acts.appendChild(b); m.appendChild(acts); box.insertBefore(m, box.firstChild);
   }
+}
+function asstCard(a){
+    const card = el("div", "acard");
+    // 0.26.0: wie die Karte eines Arbeitsraums -- Pflege im Menü ⋯, Symbol/Farbe/Gruppe für dich
+    const menu = [{label: "Darstellung …", run: () => openLp("assistants", a.id, a.title)}];
+    if (a.manage) {
+      menu.push({sep: true});
+      menu.push({label: "Ändern", show: () => !narrow(), run: async () => { fill(await api("GET", "api/assistants/" + a.id)); $("dlg").showModal(); }});
+      if (a.origin === "gateway") {
+        menu.push({label: "Auswertung", show: () => !narrow(), run: () => openEval(a)});
+        // 0.9.0: deaktivieren heißt -- nicht mehr angeboten, die Revisionen bleiben.
+        menu.push({label: a.state === "inactive" ? "Aktivieren" : "Deaktivieren", show: () => !narrow(), run: async () => {
+          const r = await api("POST", "api/assistants/" + a.id + "/state", {state: a.state === "inactive" ? "active" : "inactive"});
+          $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); }});
+      }
+      menu.push({label: "Löschen", danger: true, show: () => !narrow(), run: async () => {
+        if (!confirm("Assistent " + a.title + " löschen?")) return;
+        const r = await api("POST", "api/assistants/" + a.id + "/delete", {});
+        $("alisterr").textContent = (r.errors || []).join(" ") || r.error || ""; await refreshState(); }});
+    } else if (S.tenant_admin && a.origin === "gateway") {
+      menu.push({sep: true}, {label: "Auswertung", show: () => !narrow(), run: () => openEval(a)});
+    }
+    lpHead(card, "assistants", a.id, a.title, menu);
+    const tags = el("div");
+    for (const t of [scopeWord(a), a.origin === "config" ? "verwaltet über die Konfiguration" : "",
+                     a.rev ? "Fassung " + a.rev : "", a.state === "inactive" ? "deaktiviert" : "",
+                     a.tools_gone === "all" ? "Werkzeuge gibt es nicht mehr" :
+                       a.tools_gone === "some" ? "ein Teil der Werkzeuge fehlt" : "",
+                     a.views ? "Ansichten" : "", a.commands ? "/Befehle" : ""])
+      if (t) tags.appendChild(el("span", "badge", t));
+    card.appendChild(tags);
+    const g = (a.greeting || "").replace(/[*_`#>\[\]]/g, "");
+    if (g) card.appendChild(el("p", "", g.length > 140 ? g.slice(0, 140) + " …" : g));
+    card.appendChild(el("p", "", a.id + " · Modell " + a.model + " · " + (a.view ? "Sicht " + a.view : "ohne Werkzeuge")));
+    const acts = el("div", "acts");
+    const go = el("button", "primary", "Gespräch beginnen"); go.type = "button";
+    go.onclick = () => startDraft(a.id); go.disabled = a.state === "inactive" || a.tools_gone === "all"; acts.appendChild(go);
+    // 0.21.0 (RFC-0119 §6): die App hinter den Werkzeugen wurde entfernt
+    if (a.tools_gone === "all")
+      card.appendChild(el("p", "err", "Die Werkzeuge dieses Assistenten gibt es nicht mehr – die App dahinter wurde entfernt."));
+    // 0.7.0 (RFC-0095 §5): Werkzeuge, die für dich noch nicht eingerichtet sind.
+    const r = READY[a.id];
+    if (r && r.missing_tools) {
+      const m = el("p", "err", r.missing_tools + (r.missing_tools === 1 ? " Werkzeug" : " Werkzeuge") + " noch nicht eingerichtet – ");
+      const lk = el("a", "", "einrichten");
+      if (r.me) { lk.href = r.me; lk.target = "_blank"; lk.rel = "noopener"; }
+      else { lk.href = "#"; lk.onclick = e => { e.preventDefault(); checkSetup(a.id); }; }
+      m.appendChild(lk); card.insertBefore(m, card.children[2] || null);
+    }
+    card.appendChild(acts);
+    return card;
 }
 $("manage").onclick = async () => { closeDrawer(); showView("asst"); await refreshState(); };
 $("aq").addEventListener("input", renderAssistants);
@@ -1925,6 +1947,125 @@ const ASK = (() => {
     return f;
   } catch (e) { return ""; }
 })();
+// ---- Launchpad (0.26.0): Symbol, Farbe und Gruppe je Person -- für Assistenten und Arbeitsräume
+// gleich gebaut. Gespeichert im Chat (api/launchpad); Gruppen klappen auf und zu (nur dieser
+// Browser), innerhalb einer Gruppe alphabetisch, „Ohne Gruppe“ zuletzt.
+const LPICON = {
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  document: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
+  code: '<path d="M9 8l-4 4 4 4M15 8l4 4-4 4M13 6l-2 12"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  tool: '<path d="M14.5 6.5a4 4 0 0 0-5.3 5.1L4 16.8 7.2 20l5.2-5.2a4 4 0 0 0 5.1-5.3l-2.4 2.4-2.6-.6-.6-2.6z"/>',
+  person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  people: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><circle cx="17" cy="9" r="2.8"/><path d="M16 14.2a5.5 5.5 0 0 1 6 5.8"/>',
+  bulb: '<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+  chart: '<path d="M4 20V4M4 20h16"/><path d="M8 16v-5M12 16V8M16 16v-3"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  book: '<path d="M4 4h6a3 3 0 0 1 2 1 3 3 0 0 1 2-1h6v15h-6a2 2 0 0 0-2 2 2 2 0 0 0-2-2H4z"/><path d="M12 5v16"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+  home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2M3 12h18"/>',
+  cart: '<path d="M3 4h2l2.4 11h11l2-8H6.2"/><circle cx="9" cy="19" r="1.4"/><circle cx="17" cy="19" r="1.4"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/>',
+  cloud: '<path d="M7 18h10a4 4 0 0 0 .6-8 6 6 0 0 0-11.4 1.6A3.3 3.3 0 0 0 7 18z"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+  rocket: '<path d="M14 4c3 0 6 3 6 6-2 4-6 7-9 8l-5-5c1-3 4-7 8-9z"/><circle cx="14.5" cy="9.5" r="1.5"/><path d="M6 13l-2 1 1 4 4 1 1-2M7 17l-3 3"/>',
+  heart: '<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/>',
+  box: '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/>',
+};
+const LPCOLOR = {blue: "#3b82f6", green: "#16a34a", amber: "#d97706", red: "#dc2626",
+                 purple: "#9333ea", pink: "#db2777", teal: "#0d9488", slate: "#64748b"};
+const LPCOLORWORD = {blue: "Blau", green: "Grün", amber: "Bernstein", red: "Rot", purple: "Lila", pink: "Pink", teal: "Petrol", slate: "Schiefer"};
+const LPKINDWORD = {assistants: "Assistent", workspaces: "Arbeitsraum"};
+let LP = {assistants: {}, workspaces: {}};
+const LPFOLD = load("chat.lpfold", {});
+async function loadLaunchpad(){
+  const r = await api("GET", "api/launchpad");
+  if (!r.error) LP = {assistants: r.assistants || {}, workspaces: r.workspaces || {}};
+}
+const lpOf = (kind, id) => (LP[kind] || {})[id] || {};
+function lpIcon(name, color){
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8"); svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true"); svg.innerHTML = LPICON[name] || ""; svg.classList.add("lpicon");
+  if (color && LPCOLOR[color]) svg.style.color = LPCOLOR[color];
+  return svg;
+}
+// Kopf einer Kachel: Symbol (falls gewählt) + Titel + ⋯; die Farbe als Streifen links
+function lpHead(card, kind, id, title, menu){
+  const lp = lpOf(kind, id), head = el("div", "chead");
+  if (lp.icon) head.appendChild(lpIcon(lp.icon, lp.color));
+  head.appendChild(el("h3", "", title));
+  head.appendChild(ctxButton("Funktionen: " + title, menu, null));
+  if (lp.color && LPCOLOR[lp.color]) card.style.borderLeft = "4px solid " + LPCOLOR[lp.color];
+  card.appendChild(head);
+}
+// Kacheln nach Gruppe: Gruppen alphabetisch, „Ohne Gruppe“ zuletzt, darin alphabetisch
+function drawGrouped(box, kind, items, idOf, titleOfIt, cardOf){
+  const groups = new Map();
+  for (const it of items) { const g = lpOf(kind, idOf(it)).group || ""; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(it); }
+  const keys = [...groups.keys()].sort((a, b) => a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, "de"));
+  const plain = keys.length === 1 && keys[0] === "";      // ohne jede Gruppe: keine Überschrift
+  for (const g of keys) {
+    const list = groups.get(g).sort((a, b) => titleOfIt(a).localeCompare(titleOfIt(b), "de"));
+    const fk = kind + ":" + g, open = !LPFOLD[fk];
+    if (!plain) {
+      const h = el("button", "lpgrp"); h.type = "button"; h.setAttribute("aria-expanded", String(open));
+      h.append(el("span", "chev"), el("span", "", g || "Ohne Gruppe"), el("span", "n", String(list.length)));
+      h.onclick = () => { if (open) LPFOLD[fk] = true; else delete LPFOLD[fk]; keep("chat.lpfold", LPFOLD);
+                          kind === "assistants" ? renderAssistants() : renderWorkspaces(); };
+      box.appendChild(h);
+      if (!open) continue;
+    }
+    for (const it of list) box.appendChild(cardOf(it));
+  }
+}
+const lpGroups = kind => [...new Set(Object.values(LP[kind] || {}).map(x => x.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, "de"));
+// Dialog „Darstellung“: Symbol, Farbe, Gruppe -- nur für dich
+let LPEDIT = null;
+function openLp(kind, id, title){
+  const cur = lpOf(kind, id);
+  LPEDIT = {kind, id, icon: cur.icon || "", color: cur.color || ""};
+  $("lptitle").textContent = "Darstellung: " + title;
+  $("lpgroup").value = cur.group || ""; $("lperr").textContent = "";
+  const dl = $("lpgroups"); dl.textContent = "";
+  for (const g of lpGroups(kind)) { const o = el("option"); o.value = g; dl.appendChild(o); }
+  drawLpPick(); $("lpdlg").showModal();
+}
+function drawLpPick(){
+  const ib = $("lpicons"); ib.textContent = "";
+  const none = el("button", "lpi" + (LPEDIT.icon ? "" : " on"), "–"); none.type = "button"; none.title = "kein Symbol";
+  none.onclick = () => { LPEDIT.icon = ""; drawLpPick(); }; ib.appendChild(none);
+  for (const n of Object.keys(LPICON)) {
+    const b = el("button", "lpi" + (LPEDIT.icon === n ? " on" : "")); b.type = "button"; b.title = n; b.setAttribute("aria-label", n);
+    b.appendChild(lpIcon(n, LPEDIT.color)); b.onclick = () => { LPEDIT.icon = n; drawLpPick(); }; ib.appendChild(b);
+  }
+  const cb = $("lpcolors"); cb.textContent = "";
+  const nc = el("button", "lpc" + (LPEDIT.color ? "" : " on"), "–"); nc.type = "button"; nc.title = "keine Farbe";
+  nc.onclick = () => { LPEDIT.color = ""; drawLpPick(); }; cb.appendChild(nc);
+  for (const [n, hex] of Object.entries(LPCOLOR)) {
+    const b = el("button", "lpc" + (LPEDIT.color === n ? " on" : "")); b.type = "button"; b.title = LPCOLORWORD[n];
+    b.setAttribute("aria-label", LPCOLORWORD[n]); b.style.background = hex;
+    b.onclick = () => { LPEDIT.color = n; drawLpPick(); }; cb.appendChild(b);
+  }
+}
+async function saveLp(clear){
+  const body = clear ? {kind: LPEDIT.kind, id: LPEDIT.id} :
+    {kind: LPEDIT.kind, id: LPEDIT.id, icon: LPEDIT.icon, color: LPEDIT.color, group: $("lpgroup").value};
+  const r = await api("POST", "api/launchpad", body);
+  if (r.error) { $("lperr").textContent = r.error; return; }
+  LP = {assistants: r.assistants || {}, workspaces: r.workspaces || {}};
+  $("lpdlg").close();
+  LPEDIT.kind === "assistants" ? renderAssistants() : renderWorkspaces();
+}
+$("lpsave").onclick = () => saveLp(false);
+$("lpreset").onclick = () => saveLp(true);
+$("lpclose").onclick = () => $("lpdlg").close();
+
 // ---- Arbeitsräume (0.22.0, RFC-0121 §5.1): im MCP-Gateway, gelesen und geschrieben als du
 // 0.24.0: eigene Ansicht mit Karten (wie die Assistenten); unter dem Chat steht nur noch, in welchem
 // Arbeitsraum das Gespräch läuft. Jede Ablage lässt sich auf einen Ordner einschränken.
@@ -1980,17 +2121,20 @@ function renderWorkspaces(){
     ? "Die Verwaltung hat noch kein Ablagesystem eingetragen (MCP-Gateway, Reiter Ablagen)." : "");
   $("wsnewbtn").disabled = !WS.systems.length;
   const q = $("wq").value.trim().toLowerCase();
-  const list = WS.workspaces.filter(w => !q || [w.title, w.description || "", ...w.mounts.map(m => m.alias + " " + (m.title || m.store))]
-    .join(" ").toLowerCase().includes(q));
-  for (const w of list) {
+  const list = WS.workspaces.filter(w => !q || [w.title, w.description || "", lpOf("workspaces", w.id).group || "",
+    ...w.mounts.map(m => m.alias + " " + (m.title || m.store))].join(" ").toLowerCase().includes(q));
+  drawGrouped(box, "workspaces", list, w => w.id, w => w.title, wsCard);
+  if (!list.length) box.appendChild(el("p", "muted", WS.workspaces.length ? "Kein Arbeitsraum passt."
+    : narrow() ? "Noch kein Arbeitsraum." : "Noch kein Arbeitsraum. Lege mit „Neuer Arbeitsraum“ einen an."));
+}
+function wsCard(w){
+  {
     // 0.25.0 (Jörg): wie die Karte eines Assistenten -- Titel und ⋯ (letzte Gespräche, Ändern,
     // Löschen), nur die Heimat ausgeschrieben, die übrigen Ablagen als Summen
     const card = el("div", "acard");
-    const head = el("div", "chead");
-    head.appendChild(el("h3", "", w.title));
     const convs = S.conversations.filter(c => c.workspace && c.workspace.id === w.id)
       .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || ""))).slice(0, 5);
-    const menu = [];
+    const menu = [{label: "Darstellung …", run: () => openLp("workspaces", w.id, w.title)}, {sep: true}];
     if (convs.length) {
       menu.push({head: "Letzte Gespräche"});
       for (const c of convs) menu.push({label: c.title + " · " + when(c.updated), sub: true, run: () => openConv(c.id)});
@@ -2002,8 +2146,7 @@ function renderWorkspaces(){
       const r = await api("POST", "api/workspaces/" + w.id + "/delete");
       $("wslisterr").textContent = r.error || ""; await loadWs();
     }});
-    head.appendChild(ctxButton("Funktionen: " + w.title, menu, w));
-    card.appendChild(head);
+    lpHead(card, "workspaces", w.id, w.title, menu);
     const tags = el("div");
     tags.appendChild(el("span", "badge", "Ampel " + (LWORD[w.light] || w.light || "?")));
     card.appendChild(tags);
@@ -2033,10 +2176,9 @@ function renderWorkspaces(){
     const acts = el("div", "acts");
     const go = el("button", "primary", "Gespräch beginnen"); go.type = "button"; go.disabled = !sel.options.length;
     go.onclick = () => startInWs(w.id, sel.value, pv.checked);
-    acts.appendChild(go); card.appendChild(acts); box.appendChild(card);
+    acts.appendChild(go); card.appendChild(acts);
+    return card;
   }
-  if (!list.length) box.appendChild(el("p", "muted", WS.workspaces.length ? "Kein Arbeitsraum passt."
-    : narrow() ? "Noch kein Arbeitsraum." : "Noch kein Arbeitsraum. Lege mit „Neuer Arbeitsraum“ einen an."));
 }
 $("wsbtn").onclick = async () => { closeDrawer(); showView("ws"); await loadWs(); };
 $("wq").addEventListener("input", renderWorkspaces);
@@ -2169,7 +2311,7 @@ $("wssave").onclick = async () => {
 };
 
 (async () => {
-  await refreshState();
+  await Promise.all([refreshState(), loadLaunchpad()]);
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
   loadWs();
   $("who").textContent = "Chat " + S.version;

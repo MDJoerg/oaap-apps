@@ -48,7 +48,7 @@ import loop
 import store
 import workspace
 
-VERSION = "0.25.0"
+VERSION = "0.26.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -165,6 +165,63 @@ def person_dir(person):
 
 def conv_path(person, cid):
     return os.path.join(person_dir(person), cid + ".json")
+
+
+# 0.26.0: Launchpad -- jede Person ordnet ihre Assistenten und Arbeitsräume selbst (Symbol aus
+# einer festen Auswahl, Farbe aus einer festen Palette, Gruppe als freier Name). Liegt im Chat je
+# Person (people/<p>/launchpad.json; der Name passt nicht auf CONV, ist also kein Gespräch).
+LP_ICONS = ("folder", "document", "code", "calendar", "tool", "person", "people", "bulb", "chart",
+            "chat", "mail", "book", "star", "flag", "home", "briefcase", "cart", "shield", "globe",
+            "cloud", "gear", "rocket", "heart", "box")
+LP_COLORS = ("blue", "green", "amber", "red", "purple", "pink", "teal", "slate")
+LP_KINDS = ("assistants", "workspaces")
+LP_MAX = 300                     # Einträge je Art
+LP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def launchpad_path(person):
+    return os.path.join(person_dir(person), "launchpad.json")
+
+
+def load_launchpad(person):
+    try:
+        with open(launchpad_path(person), encoding="utf-8") as f:
+            doc = json.load(f)
+    except (FileNotFoundError, ValueError):
+        doc = {}
+    return {k: doc.get(k) if isinstance(doc.get(k), dict) else {} for k in LP_KINDS}
+
+
+def set_launchpad(person, kind, item, icon=None, color=None, group=None):
+    """Setzt Symbol, Farbe und Gruppe eines Eintrags; leere Werte nehmen ihn heraus. Wirft
+    ValueError mit einem Satz. Gibt das ganze Launchpad zurück."""
+    if kind not in LP_KINDS:
+        raise ValueError("Art: assistants oder workspaces.")
+    item = str(item or "").strip()
+    if not LP_ID.match(item):
+        raise ValueError("Unbekannte Kennung.")
+    icon = str(icon or "").strip()
+    color = str(color or "").strip()
+    group = " ".join(str(group or "").split())[:40]
+    if icon and icon not in LP_ICONS:
+        raise ValueError("Dieses Symbol gibt es nicht.")
+    if color and color not in LP_COLORS:
+        raise ValueError("Diese Farbe gibt es nicht.")
+    lp = load_launchpad(person)
+    entry = {k: v for k, v in (("icon", icon), ("color", color), ("group", group)) if v}
+    if entry:
+        if item not in lp[kind] and len(lp[kind]) >= LP_MAX:
+            raise ValueError(f"Höchstens {LP_MAX} Einträge.")
+        lp[kind][item] = entry
+    else:
+        lp[kind].pop(item, None)
+    os.makedirs(person_dir(person), exist_ok=True)
+    path = launchpad_path(person)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(lp, f, ensure_ascii=False)
+    os.replace(tmp, path)
+    return lp
 
 
 def load_conv(person, cid):
@@ -1486,6 +1543,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(401, {"error": "Keine angemeldete Person."})
         who = self.who()
         home = Home(self.headers.get(ASSERTION, "").strip())
+        if path == "/api/launchpad":
+            # 0.26.0: die eigene Anordnung (Symbol, Farbe, Gruppe) und was zur Wahl steht
+            return self.json(200, {**load_launchpad(person), "icons": list(LP_ICONS), "colors": list(LP_COLORS)})
         if path == "/api/state":
             return self.json(200, {
                 "user": self.headers.get("X-OAAP-User", ""), "version": VERSION,
@@ -1768,6 +1828,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(400, {"error": "Kein JSON-Objekt."})
         who = self.who()
         assertion = self.headers.get(ASSERTION, "").strip()
+        if path == "/api/launchpad":
+            # 0.26.0: einen Eintrag der eigenen Anordnung setzen (leer = herausnehmen)
+            try:
+                lp = set_launchpad(person, body.get("kind"), body.get("id"), body.get("icon"),
+                                   body.get("color"), body.get("group"))
+            except ValueError as exc:
+                return self.json(400, {"error": str(exc)})
+            return self.json(200, lp)
         if path.startswith("/api/assistants"):
             return self.assistants_post(path, body, who, Home(assertion))
         mw = re.match(r"^/api/workspaces(?:/([a-z0-9][a-z0-9-]{1,47})/delete)?$", path)
