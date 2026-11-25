@@ -2118,6 +2118,12 @@ rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 33, "method": "tools/call",
 row = rows_after("SELECT confirmed, procedure FROM usage WHERE view='a-sicht' ORDER BY id", _n_a + 1)
 check("0.7.2: X-OAAP-Confirmed: yes vom Chat -> confirmed=yes in der Messzeile (Verfahren A)",
       row and row[-1]["confirmed"] == "yes" and row[-1]["procedure"] == "A", [dict(r) for r in row][-2:])
+# 0.50: Herkunft der Zustimmung einer Person (Chat-Freigaben) -- nur bekannte Wörter
+check("0.50: X-OAAP-Consent wird zu einem festen Satz, Fremdes fällt weg",
+      app.consent_word("click") == "Person: Klick" and app.consent_word("GRANT:workspace") == "Person: Freigabe (Arbeitsraum)"
+      and app.consent_word("grant:conversation") == "Person: Freigabe (Gespräch)"
+      and app.consent_word("grant:assistant") == "Person: Freigabe (Assistent)"
+      and app.consent_word("Anna hat es erlaubt") == "" and app.consent_word(None) == "")
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 4, "method": "tools/list"}, sid, uid="u-bert")
 check("dieselbe Sitzung mit einer ANDEREN Person: Sitzung unbekannt", st in (400, 404), (st, msgs))
 st, _, msgs = rpc_a("a-sicht", {"jsonrpc": "2.0", "id": 5, "method": "tools/list"}, sid,

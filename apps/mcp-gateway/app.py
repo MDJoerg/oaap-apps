@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.49.1"
+VERSION = "0.50.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -124,6 +124,17 @@ ASSISTANT_REV_RE = re.compile(r"^([a-z0-9][a-z0-9-]{0,47})(?:@([1-9][0-9]{0,8}))
 # 0.7.2 (RFC-0074 §5.6): der Chat sagt, dass die Person DIESEN Aufruf bestätigt hat.
 # Nur zur Auskunft in der Messzeile, nur bei Verfahren A; nie eine Erlaubnis.
 CONFIRMED_HEADER = "X-OAAP-Confirmed"
+# 0.50 (Chat-Freigaben): woher die Zustimmung einer Person kam -- Klick oder Freigabe mit Reichweite
+CONSENT_HEADER = "X-OAAP-Consent"
+CONSENT_WORDS = {"click": "Person: Klick", "grant:conversation": "Person: Freigabe (Gespräch)",
+                 "grant:assistant": "Person: Freigabe (Assistent)",
+                 "grant:workspace": "Person: Freigabe (Arbeitsraum)"}
+
+
+def consent_word(raw):
+    """Was im Protokoll (usage.approved_by) über die Zustimmung einer Person steht; "" für
+    einen fehlenden oder unbekannten Wert -- ein Satz von außen wird nie wörtlich übernommen."""
+    return CONSENT_WORDS.get((raw or "").strip().lower(), "")
 # 0.34 (RFC-0105 §7.1): die Person, die genau diesen Aufruf freigab (ein Spezialist schreibt
 # nie auf eigenes Wort). Eine Angabe des Aufrufers, gemessen und gezeigt, nicht geprüft.
 APPROVED_HEADER = "X-OAAP-Approved-By"
@@ -3671,6 +3682,8 @@ class Handler(BaseHTTPRequestHandler):
         """Ein Werkzeug der Ablagetür: auflösen, Rolle prüfen, Bearbeitungsschicht, Konnektor."""
         state.update(kind="tool", name=name, server="", source="")
         state["procedure"] = (self.person or {}).get("procedure", "T")
+        if name in workspaces.WRITE_TOOLS and (self.headers.get(CONFIRMED_HEADER) or "").strip().lower() == "yes":
+            state["approved_by"] = consent_word(self.headers.get(CONSENT_HEADER))   # 0.50
         ws, why = self.store_workspace(key)
         if ws is None:
             done("refused", "workspace", door="gateway")
@@ -4139,6 +4152,9 @@ class Handler(BaseHTTPRequestHandler):
                                      "X-OAAP-Approved-By)."))
                     return
                 state["approved_by"] = who_ok
+            if kind == "tool" and self.person and item["effect"] != "read"                     and (self.headers.get(CONFIRMED_HEADER) or "").strip().lower() == "yes":
+                # 0.50: der Chat sagt, ob die Person geklickt hat oder eine Freigabe galt
+                state["approved_by"] = consent_word(self.headers.get(CONSENT_HEADER))
             doc = json.loads(item["approved_doc"])
             server_name = item["server"]
             arguments = params.get("arguments")

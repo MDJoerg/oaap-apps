@@ -363,6 +363,16 @@ border-radius:.7rem;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:.6rem .7rem;di
 #instbody ol{padding-left:1.2rem;font-size:.9rem}
 #instbody li{margin:.35rem 0}
 
+/* ---- 0.30.0: Freigaben */
+.confirm .grantsel{margin:.4rem 0 .2rem;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;font-size:.85rem}
+.confirm .grantsel select{width:auto;font-size:.85rem;padding:.2rem .3rem}
+.grantmark{align-self:flex-start;border:0;background:none;padding:0 .2rem;cursor:pointer;color:var(--accent);font-size:.78rem;margin-top:calc(var(--gap) * -.5)}
+#grantlist table{border-collapse:collapse;width:100%;font-size:.85rem}
+#grantlist td{border-bottom:1px solid var(--line);padding:.35rem .3rem;vertical-align:middle}
+#grantlist td.acts{white-space:nowrap;text-align:right}
+#grantlist td.acts button{font-size:.78rem;padding:.15rem .5rem}
+#grantlist tr.paused td:not(.acts){opacity:.5}
+
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
 dialog::backdrop{background:rgba(0,0,0,.35)}
@@ -447,7 +457,7 @@ dialog input,dialog textarea,dialog select{width:100%}
       <div class="crow"><label for="pick">Assistent</label><select id="pick"></select>
         <span class="wschip" id="wschip" hidden></span>
         <label class="inl" id="wsprivl" hidden><input type="checkbox" id="wspriv"> ohne Protokoll</label>
-        <span class="note">Jede Runde läuft als du. Was etwas ändert, läuft erst nach deiner Zustimmung.</span></div>
+        <span class="note">Jede Runde läuft als du. Was etwas ändert, läuft erst nach deiner Zustimmung &ndash; oder unter einer <a href="#" id="grantlink">Freigabe</a>.</span></div>
     </div>
   </section>
 
@@ -605,6 +615,15 @@ dialog input,dialog textarea,dialog select{width:100%}
 <dialog id="instdlg">
   <div class="dhead"><b>Chat auf den Startbildschirm</b><button type="button" class="hbtn" id="instclose">Schließen</button></div>
   <div id="instbody"></div>
+</dialog>
+
+<!-- 0.30.0: Freigaben -- ein Werkzeug in einer Reichweite, bis du sie widerrufst -->
+<dialog id="grantdlg">
+  <div class="dhead"><b>Deine Freigaben</b><button type="button" class="hbtn" id="grantclose">Schließen</button></div>
+  <p class="muted" style="font-size:.85rem">Unter einer Freigabe läuft ein Werkzeug ohne Rückfrage &ndash; nur dieses eine,
+  nur in der genannten Reichweite. Löschen fragt immer, außer du hast es für ein Gespräch erlaubt.</p>
+  <div id="grantlist"></div>
+  <p class="err" id="granterr"></p>
 </dialog>
 
 <dialog id="setdlg">
@@ -1448,9 +1467,17 @@ function msgNodes(m, i){
   for (const c of m.calls || []) out.push(el("div", "call", "Werkzeug " + c.name + " " + JSON.stringify(c.arguments || {})));
   if (m.role === "tool") {
     const d = el("details", "result");
-    d.appendChild(el("summary", "", "Ergebnis " + (m.name || "") + (m.confirmed === true ? " · von dir freigegeben" :
+    d.appendChild(el("summary", "", "Ergebnis " + (m.name || "") + (m.grant && !m.grant.new ? " · unter einer Freigabe" :
+                                                             m.confirmed === true ? " · von dir freigegeben" :
                                                              m.confirmed === false ? " · von dir abgelehnt" : "")));
     d.appendChild(el("pre", "", m.content)); out.push(d);
+    if (m.grant) {        // 0.30.0: die Freigabe sichtbar -- ein Klick widerruft sie
+      const g = el("button", "grantmark", "🔓 " + (m.grant.new ? "Freigabe angelegt: " : "Freigabe: ") + (m.name || "") + " " + GRANTWORD[m.grant.scope] + " · widerrufen");
+      g.type = "button"; g.title = "Diese Freigabe löschen; danach fragt der Chat wieder";
+      g.onclick = async () => { if (confirm("Freigabe für " + m.name + " " + GRANTWORD[m.grant.scope] + " löschen?"))
+        await grantAct({id: m.grant.id, scope: m.grant.scope, target: C && C.id}, "delete"); };
+      out.push(g);
+    }
     const a = C ? assistant(C.assistant) : null;
     if (m.view && a && a.views) out.push(viewFrame(m));
   }
@@ -1496,8 +1523,18 @@ function render(status){
       "Der Assistent möchte etwas " + (k.effect === "execute" ? "ausführen" : "ändern") + " — als du:"));
     if (k.note) box.appendChild(el("div", "", "⚠ " + k.note));
     box.appendChild(el("pre", "", k.name + " " + JSON.stringify(k.arguments, null, 2)));
+    // 0.30.0: nur dieses Mal -- oder als Freigabe für dieses Werkzeug in einer Reichweite
+    let sel = null;
+    if ((k.scopes || []).length) {
+      const row = el("div", "grantsel"); sel = el("select"); sel.setAttribute("aria-label", "Wie oft erlauben");
+      const o0 = el("option", "", "nur dieses Mal"); o0.value = ""; sel.appendChild(o0);
+      for (const s of k.scopes) { const o = el("option", "", GRANTWORD[s] + " erlauben"); o.value = s; sel.appendChild(o); }
+      row.append(el("span", "muted", k.name + ":"), sel);
+      if (k.destructive) row.appendChild(el("span", "muted", "Löschen fragt sonst immer."));
+      box.appendChild(row);
+    }
     const ok = el("button", "primary", "Ausführen"), no = el("button", "", "Ablehnen");
-    ok.onclick = () => decide(k.call, true); no.onclick = () => decide(k.call, false);
+    ok.onclick = () => decide(k.call, true, sel ? sel.value : ""); no.onclick = () => decide(k.call, false);
     box.append(ok, " ", no); tail.appendChild(box);
   }
   if (PENDING) tail.appendChild(el("div", "msg user pending", PENDING));
@@ -1665,9 +1702,44 @@ async function drive(path, body, text){
   await refreshState();
   if (!narrow()) $("t").focus();
 }
-function decide(call, ok){
-  drive("api/conv/" + C.id + "/step", {decision: {call, ok}}, ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
+function decide(call, ok, grant){
+  const d = {call, ok}; if (ok && grant) d.grant = grant;
+  drive("api/conv/" + C.id + "/step", {decision: d}, ok ? "Werkzeug läuft, danach denkt das Modell …" : "Das Modell denkt …");
 }
+// ---- 0.30.0: Freigaben -- sehen, pausieren, löschen
+const GRANTWORD = {conversation: "in diesem Gespräch", assistant: "für diesen Assistenten", workspace: "in diesem Arbeitsraum"};
+const GRANTSHORT = {conversation: "Gespräch", assistant: "Assistent", workspace: "Arbeitsraum"};
+async function grantAct(g, act){
+  const r = await api("POST", "api/grants/" + g.id + "/" + act, g.scope === "conversation" ? {conv: g.target || (C && C.id)} : {});
+  if (r.error) { toast(r.error); return false; }
+  toast(act === "delete" ? "Freigabe gelöscht" : act === "pause" ? "Freigabe pausiert" : "Freigabe wieder aktiv");
+  return true;
+}
+async function openGrants(){
+  const r = await api("GET", "api/grants" + (C && C.id ? "?conv=" + C.id : ""));
+  $("granterr").textContent = r.error || "";
+  const box = $("grantlist"); box.textContent = "";
+  const list = r.grants || [];
+  if (!list.length) box.appendChild(el("p", "muted", "Keine Freigaben. Im Bestätigungsdialog kannst du ein Werkzeug für ein Gespräch, einen Assistenten oder einen Arbeitsraum erlauben."));
+  else {
+    const tb = el("table");
+    for (const g of list) {
+      const tr = el("tr", g.paused ? "paused" : "");
+      tr.append(el("td", "", g.tool), el("td", "muted", GRANTSHORT[g.scope] + (g.title ? ": " + g.title : "")),
+                el("td", "muted", g.paused ? "pausiert" : "aktiv · seit " + when(g.created)));
+      const a = el("td", "acts");
+      const p = el("button", "", g.paused ? "Aktivieren" : "Pausieren"); p.type = "button";
+      p.onclick = async () => { if (await grantAct(g, g.paused ? "resume" : "pause")) openGrants(); };
+      const d = el("button", "", "Löschen"); d.type = "button";
+      d.onclick = async () => { if (await grantAct(g, "delete")) openGrants(); };
+      a.append(p, " ", d); tr.appendChild(a); tb.appendChild(tr);
+    }
+    box.appendChild(tb);
+  }
+  if (!$("grantdlg").open) $("grantdlg").showModal();
+}
+$("grantlink").onclick = ev => { ev.preventDefault(); openGrants(); };
+$("grantclose").onclick = () => $("grantdlg").close();
 
 // ---- /Befehle: eine Suchliste, die immer etwas sagt
 let CMDSAID = "";

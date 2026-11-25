@@ -537,3 +537,12 @@ Browserleiste (Manifest `display: standalone`) -- ein Vollbild ohne Tippen erlau
 bricht ein Gespräch nicht mehr ab, es pausiert: ein Satz des Chats (`by: chat`, `pause`, geht nie
 ans Modell) mit dem Knopf „Weitermachen“, der „Mach weiter.“ schickt und die nächsten Schritte
 freigibt. Senden ist ein Symbol (Papierflieger), „Senden“ steht in `aria-label`.
+
+## Freigaben (0.30.0, RFC-0132)
+
+Im Bestätigungsdialog: „nur dieses Mal“ oder ein Werkzeug **in diesem Gespräch**, **für diesen
+Assistenten** oder **in diesem Arbeitsraum** erlauben – bis zum Widerruf. Löschende Werkzeuge
+(`destructiveHint`) nur für das Gespräch. Aufrufe unter einer Freigabe tragen „🔓 Freigabe … ·
+widerrufen“; unten führt „Freigabe“ zur Liste (pausieren, aktivieren, löschen). Gesprächs-
+Freigaben stehen im Gespräch, die anderen in `people/<p>/grants.json`. `GET /api/grants?conv=`,
+`POST /api/grants/<id>/delete|pause|resume`. Ans Gateway geht `X-OAAP-Consent: click | grant:<…>`.

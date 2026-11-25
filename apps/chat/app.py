@@ -49,7 +49,7 @@ import qr
 import store
 import workspace
 
-VERSION = "0.29.0"
+VERSION = "0.30.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -225,6 +225,87 @@ def set_launchpad(person, kind, item, icon=None, color=None, group=None):
     return lp
 
 
+# 0.30.0: Freigaben (Jörg, D1-D4) -- statt jeden schreibenden Aufruf einzeln zu bestätigen,
+# erlaubt die Person EIN Werkzeug in einer Reichweite: dieses Gespräch, dieser Assistent, dieser
+# Arbeitsraum. Löschende Werkzeuge (destructiveHint) nur für das Gespräch. Bis zum Widerruf; jede
+# Freigabe ist am Aufruf zu sehen und in der Liste zu pausieren oder zu löschen.
+GRANT_SCOPES = ("conversation", "assistant", "workspace")
+GRANT_MAX = 200
+TOOL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def grants_path(person):
+    return os.path.join(person_dir(person), "grants.json")
+
+
+def load_grants(person):
+    try:
+        with open(grants_path(person), encoding="utf-8") as f:
+            doc = json.load(f)
+    except (FileNotFoundError, ValueError):
+        doc = {}
+    return [g for g in doc.get("grants") or [] if isinstance(g, dict) and g.get("scope") in ("assistant", "workspace")]
+
+
+def save_grants(person, grants):
+    os.makedirs(person_dir(person), exist_ok=True)
+    path = grants_path(person)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"grants": grants[-GRANT_MAX:]}, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def find_grant(person, conv, tool, destructive):
+    """Die Freigabe, unter der dieses Werkzeug in diesem Gespräch ohne Klick läuft, oder None."""
+    for g in conv.get("grants") or []:
+        if g.get("tool") == tool and not g.get("paused"):
+            return dict(g, scope="conversation")
+    if destructive:
+        return None                     # D2: Löschen höchstens für das Gespräch
+    ws = (conv.get("workspace") or {}).get("id")
+    for g in load_grants(person):
+        if g.get("tool") != tool or g.get("paused"):
+            continue
+        if g["scope"] == "assistant" and g.get("target") == conv.get("assistant"):
+            return g
+        if g["scope"] == "workspace" and ws and g.get("target") == ws:
+            return g
+    return None
+
+
+def add_grant(person, conv, tool, scope, destructive, assistant_title=""):
+    """Legt eine Freigabe an (oder findet die gleiche). Gibt sie zurück oder None, wenn die
+    Reichweite hier nicht geht (Arbeitsraum ohne Arbeitsraum, Löschen über das Gespräch hinaus)."""
+    if scope not in GRANT_SCOPES or not TOOL_RE.match(tool or ""):
+        return None
+    if destructive and scope != "conversation":
+        return None
+    ws = conv.get("workspace") or {}
+    if scope == "workspace" and not ws.get("id"):
+        return None
+    new = {"id": "g" + secrets.token_hex(6), "tool": tool, "created": now(), "paused": False}
+    if scope == "conversation":
+        have = [g for g in conv.setdefault("grants", []) if g.get("tool") == tool]
+        if have:
+            have[0]["paused"] = False
+            return dict(have[0], scope="conversation")
+        conv["grants"].append(new)
+        return dict(new, scope="conversation")
+    target = conv.get("assistant") if scope == "assistant" else ws["id"]
+    title = assistant_title if scope == "assistant" else (ws.get("title") or ws["id"])
+    grants = load_grants(person)
+    for g in grants:
+        if g["scope"] == scope and g.get("target") == target and g.get("tool") == tool:
+            g["paused"] = False
+            save_grants(person, grants)
+            return g
+    new.update(scope=scope, target=target, title=str(title)[:120])
+    grants.append(new)
+    save_grants(person, grants)
+    return new
+
+
 def load_conv(person, cid):
     try:
         with open(conv_path(person, cid), encoding="utf-8") as f:
@@ -324,6 +405,8 @@ def mcp_post(url, msg, session, assertion, assistant_id, confirmed=False, light=
         headers[workspace.WS_HEADER] = ws      # 0.22.0 (RFC-0121): die Ablagetür des Gateways
     if confirmed:
         headers["X-OAAP-Confirmed"] = "yes"
+        if isinstance(confirmed, str):
+            headers["X-OAAP-Consent"] = confirmed     # 0.30.0: click | grant:<Reichweite>
     if session:
         headers["Mcp-Session-Id"] = session
         headers["MCP-Protocol-Version"] = MCP_VERSION
@@ -721,27 +804,43 @@ def step(person, person_name, assertion, assistant, conv, decision):
         name = c["function"]["name"]
         args, bad = loop.call_args(c)
         eff = "write" if c.get("by") == "chat" else effects.get(name)
+        destructive = name in (conv.get("destructive") or [])
+        decided = bool(decision and decision.get("call") == c["id"])
+        grant = (find_grant(person, conv, name, destructive)
+                 if eff not in (None, "read") and not bad and c.get("by") != "chat" and not decided else None)
         if eff is None:
             result, note = f"Fehler: Ein Werkzeug {name} gibt es in dieser Sicht nicht.", {}
         elif bad:
             result, note = "Fehler: " + bad, {}
-        elif eff != "read" and not (decision and decision.get("call") == c["id"]):
-            conv["confirm"] = {"call": c["id"], "name": name, "effect": eff, "arguments": args}
+        elif eff != "read" and not decided and not grant:
+            conv["confirm"] = {"call": c["id"], "name": name, "effect": eff, "arguments": args,
+                               "destructive": destructive,
+                               "scopes": [] if c.get("by") == "chat" else
+                               ["conversation"] if destructive else
+                               ["conversation", "assistant"] + (["workspace"] if ws_of(conv) else [])}
             if c.get("by") == "chat":
                 shown, note = workspace.confirm_view(c, c.get("note", ""))
                 conv["confirm"].update(arguments=shown, note=note, by="chat")
             return "confirm"
-        elif eff != "read" and not decision.get("ok"):
+        elif eff != "read" and not grant and not decision.get("ok"):
             result, note = loop.REFUSED, {"confirmed": False}
         else:
+            made = None
+            if eff != "read" and decided and decision.get("grant") and c.get("by") != "chat":
+                made = add_grant(person, conv, name, str(decision.get("grant")), destructive,
+                                 assistant.get("title") or "")
+            consent = False if eff == "read" else ("grant:" + grant["scope"] if grant else "click")
             way = way or McpWay(person, assertion, assistant, conv_light(conv), ws_of(conv))
             if assistant.get("views") and name in conv.get("ui", {}):
-                result, raw = way.call_raw(name, args, confirmed=eff != "read")
+                result, raw = way.call_raw(name, args, confirmed=consent)
                 note = {"view": conv["ui"][name]["resourceUri"], "raw": raw, "arguments": args}
             else:
-                result, note = way.call(name, args, confirmed=eff != "read"), {}
+                result, note = way.call(name, args, confirmed=consent), {}
             if eff != "read":
                 note["confirmed"] = True
+            g = grant or made
+            if g:
+                note["grant"] = {"id": g["id"], "scope": g["scope"], "new": bool(made and not grant)}
         msgs.append(dict({"role": "tool", "tool_call_id": c["id"], "name": name,
                           "content": result, "at": now()}, **note))
         conv.pop("confirm", None)
@@ -770,6 +869,8 @@ def step(person, person_name, assertion, assistant, conv, decision):
     tools, effects_now = loop.tools_for_model(listed)
     effects.clear()
     effects.update(effects_now)
+    conv["destructive"] = sorted(t["name"] for t in listed if isinstance(t, dict) and isinstance(t.get("name"), str)
+                                 and (t.get("annotations") or {}).get("destructiveHint") is True)
     conv["ui"] = loop.ui_map(listed) if assistant.get("views") else {}
     reply = ask_model(assistant, person_name, msgs, tools, conv_light(conv), assertion,
                       conv.get("ws_context", ""))
@@ -1493,6 +1594,8 @@ def view_of(conv):
             x["by"] = "chat"
         if m.get("pause"):
             x["pause"] = True
+        if m.get("grant"):
+            x["grant"] = m["grant"]
         shown.append(x)
     return {"id": conv["id"], "title": conv.get("title") or "Neues Gespräch",
             "assistant": conv.get("assistant"), "messages": shown, "confirm": conv.get("confirm"),
@@ -1576,6 +1679,15 @@ class Handler(BaseHTTPRequestHandler):
             if not (text.startswith("https://") or text.startswith("http://")) or len(text) > qr.MAX_BYTES                     or any(ord(ch) < 32 for ch in text):
                 return self.json(400, {"error": "Nur eine Adresse (http/https), höchstens 213 Zeichen."})
             return self.send(200, "image/svg+xml", qr.svg(qr.encode(text)).encode("utf-8"), cache="no-store")
+        if path == "/api/grants":
+            # 0.30.0: alle Freigaben der Person, dazu die des offenen Gesprächs
+            cid = url_qs(url_parse(self.path).query).get("conv", [""])[0]
+            out = [dict(g) for g in load_grants(person)]
+            if CONV.match(cid or ""):
+                conv = load_conv(person, cid)
+                for g in (conv or {}).get("grants") or []:
+                    out.append(dict(g, scope="conversation", target=cid, title=(conv or {}).get("title") or ""))
+            return self.json(200, {"grants": out})
         if path == "/api/launchpad":
             # 0.26.0: die eigene Anordnung (Symbol, Farbe, Gruppe) und was zur Wahl steht
             return self.json(200, {**load_launchpad(person), "icons": list(LP_ICONS), "colors": list(LP_COLORS)})
@@ -1861,6 +1973,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(400, {"error": "Kein JSON-Objekt."})
         who = self.who()
         assertion = self.headers.get(ASSERTION, "").strip()
+        mg = re.match(r"^/api/grants/(g[0-9a-f]{12})/(delete|pause|resume)$", path)
+        if mg:
+            # 0.30.0: eine Freigabe löschen, pausieren oder wieder aktivieren
+            gid, act = mg.groups()
+            cid = str(body.get("conv") or "")
+            if CONV.match(cid):
+                lock = conv_lock(person, cid)
+                if not lock.acquire(timeout=5):
+                    return self.json(409, {"error": "In diesem Gespräch läuft gerade eine Runde; gleich noch einmal."})
+                try:
+                    conv = load_conv(person, cid)
+                    hit = [g for g in (conv or {}).get("grants") or [] if g.get("id") == gid]
+                    if hit:
+                        if act == "delete":
+                            conv["grants"] = [g for g in conv["grants"] if g.get("id") != gid]
+                        else:
+                            hit[0]["paused"] = act == "pause"
+                        save_conv(person, conv, touch=False)
+                        return self.json(200, {"ok": True})
+                finally:
+                    lock.release()
+            grants = load_grants(person)
+            hit = [g for g in grants if g.get("id") == gid]
+            if not hit:
+                return self.json(404, {"error": "Diese Freigabe gibt es nicht (mehr)."})
+            if act == "delete":
+                grants = [g for g in grants if g.get("id") != gid]
+            else:
+                hit[0]["paused"] = act == "pause"
+            save_grants(person, grants)
+            return self.json(200, {"ok": True})
         if path == "/api/launchpad":
             # 0.26.0: einen Eintrag der eigenen Anordnung setzen (leer = herausnehmen)
             try:

@@ -131,7 +131,7 @@ check("/ablegen fragt erst um Zustimmung, mit Hinweis und ohne den Text",
 st = app.step("p1", "Anna", "assert", A, c, {"call": c["confirm"]["call"], "ok": True})
 check("nach Zustimmung schreibt der Chat, kein Modellzug, Satz „Abgelegt“",
       st == "done" and len(MODEL) == n_model and c["messages"][-1]["content"].startswith("Abgelegt: notizen:/arbeitsraum/")
-      and CALLS[-1][2] == "store_write" and CALLS[-1][3] is True, c["messages"][-1])
+      and CALLS[-1][2] == "store_write" and CALLS[-1][3] == "click", c["messages"][-1])   # 0.30.0: Herkunft statt True
 handled = app.workspace_command("p1", "Anna", "assert", A, c, "/stand")
 check("/stand wird eine Bitte an den Assistenten", handled and c["messages"][-1]["command"] == "stand"
       and "notizen:/arbeitsraum/stand" in c["messages"][-1]["content"])

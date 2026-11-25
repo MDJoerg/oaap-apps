@@ -74,6 +74,8 @@ DOOR = []          # (Werkzeug, Zusicherung, Assistent)
 MODEL = []         # Rümpfe an das Modell
 BAD_ASSERTION = {"on": False}
 CONFIRMED = []     # X-OAAP-Confirmed je Aufruf an der Tür
+CONSENT = []       # 0.30.0: X-OAAP-Consent je Aufruf (click | grant:…)
+EXTRA = {"remove": False}   # 0.30.0: das löschende Werkzeug nur im Abschnitt Freigaben
 # fachliche Berechtigungen (RFC-0045) wie der Dienst der Plattform sie nennt
 GRANTS = {
     "id-anna": [{"object": "assistant", "activities": ["use", "manage"], "fields": {"team": ["service"]}}],
@@ -217,7 +219,9 @@ class Fake(BaseHTTPRequestHandler):
                      "_meta": {"oaap/effect": "read"}},
                     {"name": "add_entry", "inputSchema": {"type": "object"},
                      "_meta": {"oaap/effect": "write"}, "annotations": {"readOnlyHint": True}},
-                    {"name": "legacy", "inputSchema": {"type": "object"}}]}})
+                    {"name": "legacy", "inputSchema": {"type": "object"}}] + ([
+                    {"name": "remove_entry", "inputSchema": {"type": "object"},
+                     "_meta": {"oaap/effect": "write"}, "annotations": {"destructiveHint": True}}] if EXTRA["remove"] else [])}})
             if m == "prompts/list":
                 return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {"prompts": [
                     {"name": "wochenbericht", "description": "Bericht für ein Projekt",
@@ -233,6 +237,7 @@ class Fake(BaseHTTPRequestHandler):
                 p = body["params"]
                 DOOR.append((p["name"], a, self.headers.get("X-OAAP-Assistant"), p["arguments"]))
                 CONFIRMED.append(self.headers.get("X-OAAP-Confirmed", ""))
+                CONSENT.append(self.headers.get("X-OAAP-Consent", ""))
                 return self.reply(200, {"jsonrpc": "2.0", "id": 2, "result": {
                     "content": [{"type": "text", "text": f"Ergebnis {p['name']} für {a.split('-')[1]}"}]}})
         if self.path == "/v1/chat/completions":
@@ -248,6 +253,7 @@ class Fake(BaseHTTPRequestHandler):
                 call = {"Projekte?": ("list_projects", "{}"), "Karte?": ("karte", '{"nr": "V-1"}'),
                         "Eintrag": ("add_entry", '{"project": "pA", "text": "neu"}'),
                         "Alt": ("legacy", "{}"), "Erfunden": ("delete_all", "{}"),
+                        "Entferne": ("remove_entry", '{"id": "e1"}'),
                         "Kaputt": ("list_projects", "{nicht json")}.get(q)
             if call:
                 msg = {"role": "assistant", "content": "", "tool_calls": [
@@ -396,6 +402,85 @@ check("zugestimmt: genau ein Aufruf an der Tür, Vermerk confirmed=true",
       len(DOOR) == calls + 1 and DOOR[-1][0] == "add_entry" and DOOR[-1][3] == {"project": "pA", "text": "neu"}
       and [m for m in r["messages"] if m["role"] == "tool"][-1]["confirmed"] is True, r)
 
+check("0.30.0: ein Klick schickt X-OAAP-Consent: click", CONSENT[-1] == "click", CONSENT[-3:])
+
+# 0.30.0: Freigaben -- je Werkzeug, Reichweite Gespräch/Assistent/Arbeitsraum, Löschen nur fürs Gespräch
+req("POST", f"/api/conv/{cid}/send", {"text": "Eintrag"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: die Bestätigung nennt die möglichen Reichweiten (ohne Arbeitsraum keinen Arbeitsraum)",
+      r["state"] == "confirm" and r["confirm"]["scopes"] == ["conversation", "assistant"] and r["confirm"]["destructive"] is False, r.get("confirm"))
+calls = len(DOOR)
+st, r = req("POST", f"/api/conv/{cid}/step", {"decision": {"call": r["confirm"]["call"], "ok": True, "grant": "assistant"}})
+tm = [m for m in r["messages"] if m["role"] == "tool"][-1]
+check("0.30.0: zugestimmt mit „für diesen Assistenten“: läuft, Freigabe angelegt, Herkunft noch Klick",
+      len(DOOR) == calls + 1 and tm["grant"]["scope"] == "assistant" and tm["grant"]["new"] is True and CONSENT[-1] == "click", tm)
+gid = tm["grant"]["id"]
+req("POST", f"/api/conv/{cid}/send", {"text": "Eintrag"})
+st, r = req("POST", f"/api/conv/{cid}/step", {})
+tm = [m for m in r["messages"] if m["role"] == "tool"][-1]
+check("0.30.0: nächster Aufruf desselben Werkzeugs läuft ohne Rückfrage, mit Vermerk und grant:assistant ans Gateway",
+      r["state"] == "done" and len(DOOR) == calls + 2 and tm["grant"] == {"id": gid, "scope": "assistant", "new": False}
+      and CONSENT[-1] == "grant:assistant" and CONFIRMED[-1] == "yes", (r.get("state"), tm, CONSENT[-2:]))
+_, c4 = req("POST", "/api/conv", {"assistant": "projekte"})
+req("POST", f"/api/conv/{c4['id']}/send", {"text": "Eintrag"})
+st, r = req("POST", f"/api/conv/{c4['id']}/step", {})
+check("0.30.0: … auch in einem neuen Gespräch mit demselben Assistenten", r["state"] == "done" and len(DOOR) == calls + 3, r.get("state"))
+st, g = req("GET", f"/api/grants?conv={cid}")
+check("0.30.0: die Liste zeigt die Freigabe (Werkzeug, Reichweite, Ziel, Titel)",
+      st == 200 and any(x["id"] == gid and x["tool"] == "add_entry" and x["scope"] == "assistant" and x["target"] == "projekte"
+                        and x["title"] for x in g["grants"]), g)
+st, gb = req("GET", "/api/grants", person="bert")
+check("0.30.0: bert sieht annas Freigaben nicht", st == 200 and gb["grants"] == [], gb)
+st, x = req("POST", f"/api/grants/{gid}/pause", {}, person="bert")
+check("0.30.0: bert pausiert annas Freigabe nicht", st == 404, (st, x))
+st, x = req("POST", f"/api/grants/{gid}/pause", {})
+req("POST", f"/api/conv/{cid}/send", {"text": "Eintrag"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: pausiert: es wird wieder gefragt", st == 200 and r["state"] == "confirm", r.get("state"))
+req("POST", f"/api/conv/{cid}/step", {"decision": {"call": r["confirm"]["call"], "ok": False}})
+req("POST", f"/api/grants/{gid}/resume", {})
+req("POST", f"/api/conv/{cid}/send", {"text": "Eintrag"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: wieder aktiv: läuft ohne Rückfrage", r["state"] == "done", r.get("state"))
+st, x = req("POST", f"/api/grants/{gid}/delete", {})
+req("POST", f"/api/conv/{cid}/send", {"text": "Eintrag"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: gelöscht: es wird wieder gefragt", st == 200 and r["state"] == "confirm", r.get("state"))
+req("POST", f"/api/conv/{cid}/step", {"decision": {"call": r["confirm"]["call"], "ok": False}})
+# Löschen: nur für das Gespräch
+EXTRA["remove"] = True
+req("POST", f"/api/conv/{cid}/send", {"text": "Entferne"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: löschendes Werkzeug: nur die Reichweite Gespräch angeboten",
+      r["state"] == "confirm" and r["confirm"]["destructive"] is True and r["confirm"]["scopes"] == ["conversation"], r.get("confirm"))
+st, r = req("POST", f"/api/conv/{cid}/step", {"decision": {"call": r["confirm"]["call"], "ok": True, "grant": "assistant"}})
+tm = [m for m in r["messages"] if m["role"] == "tool"][-1]
+check("0.30.0: Köder: Löschen „für den Assistenten“ läuft einmal, legt aber keine Freigabe an",
+      tm.get("confirmed") is True and "grant" not in tm, tm)
+req("POST", f"/api/conv/{cid}/send", {"text": "Entferne"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: … beim nächsten Mal wird wieder gefragt", r["state"] == "confirm", r.get("state"))
+st, r = req("POST", f"/api/conv/{cid}/step", {"decision": {"call": r["confirm"]["call"], "ok": True, "grant": "conversation"}})
+req("POST", f"/api/conv/{cid}/send", {"text": "Entferne"})
+_, r = req("POST", f"/api/conv/{cid}/step", {})
+check("0.30.0: Löschen für dieses Gespräch erlaubt: läuft hier ohne Rückfrage, grant:conversation",
+      r["state"] == "done" and CONSENT[-1] == "grant:conversation", (r.get("state"), CONSENT[-1:]))
+req("POST", f"/api/conv/{c4['id']}/send", {"text": "Entferne"})
+_, r = req("POST", f"/api/conv/{c4['id']}/step", {})
+check("0.30.0: … in einem anderen Gespräch wird wieder gefragt", r["state"] == "confirm", r.get("state"))
+req("POST", f"/api/conv/{c4['id']}/step", {"decision": {"call": r["confirm"]["call"], "ok": False}})
+st, g = req("GET", f"/api/grants?conv={cid}")
+cg = [x for x in g["grants"] if x["scope"] == "conversation"]
+check("0.30.0: die Freigabe des Gesprächs steht in der Liste und lässt sich löschen",
+      len(cg) == 1 and cg[0]["tool"] == "remove_entry"
+      and req("POST", f"/api/grants/{cg[0]['id']}/delete", {"conv": cid})[0] == 200
+      and not [x for x in req("GET", f"/api/grants?conv={cid}")[1]["grants"] if x["scope"] == "conversation"], g)
+st, r = req("POST", f"/api/conv/{cid}/step", {"decision": {"call": "x", "ok": True, "grant": "workspace"}})
+EXTRA["remove"] = False
+check("0.30.0: Arbeitsraum-Freigabe ohne Arbeitsraum: add_grant lehnt ab",
+      app.add_grant("id-anna", {"assistant": "projekte"}, "add_entry", "workspace", False) is None
+      and app.add_grant("id-anna", {"assistant": "projekte"}, "x y", "assistant", False) is None)
+
 req("POST", f"/api/conv/{cid}/send", {"text": "Alt"})
 _, r = req("POST", f"/api/conv/{cid}/step", {})
 check("Werkzeug ohne Angabe des Gateways: wird erfragt", r["state"] == "confirm" and r["confirm"]["name"] == "legacy", r)
@@ -472,7 +557,7 @@ check("Assistent mit token: ungültig (D1)",
 
 # ------------------------------------------------ Stufe 3: Bestätigung am Gateway
 check("§5.6: bestätigter Schreibaufruf trägt X-OAAP-Confirmed: yes, lesende nicht",
-      [c for d, c in zip(DOOR, CONFIRMED) if d[0] == "add_entry"] == ["yes"]
+      [c for d, c in zip(DOOR, CONFIRMED) if d[0] == "add_entry"] and all(c == "yes" for d, c in zip(DOOR, CONFIRMED) if d[0] in ("add_entry", "remove_entry"))
       and all(c == "" for d, c in zip(DOOR, CONFIRMED) if d[0] == "list_projects"),
       list(zip([d[0] for d in DOOR], CONFIRMED)))
 
