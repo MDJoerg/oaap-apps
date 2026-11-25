@@ -381,8 +381,10 @@ dialog input,dialog textarea,dialog select{width:100%}
         <option value="private">privat</option><option value="context">Team</option><option value="tenant">Mandant</option></select>
       <button class="primary edit" id="anewbtn" type="button">+ Neuer Assistent</button>
       <a id="atpl" class="edit" target="_blank" rel="noopener" hidden title="Im Portal: die Vorlage bringt Sicht, Zugang und Modell mit">Aus Vorlage …</a>
-      <a id="aexp" class="edit" href="api/assistants/export" download="assistenten.json">Exportieren</a>
-      <label class="imp edit">Importieren <input type="file" id="aimp" accept="application/json" hidden></label>
+      <!-- 0.26.1: Exportieren und Importieren im Menü ⋯ -->
+      <span class="edit" id="amore"></span>
+      <a id="aexp" href="api/assistants/export" download="assistenten.json" hidden>Exportieren</a>
+      <input type="file" id="aimp" accept="application/json" hidden>
     </div>
     <p class="err" id="alisterr" style="margin:.5rem 1rem 0"></p>
     <div class="agrid" id="alist"></div>
@@ -1889,6 +1891,10 @@ F.onsubmit = async ev => {
   $("dlg").close(); $("alisterr").textContent = "„" + a.title + "“ gespeichert.";
   await refreshState();
 };
+$("amore").appendChild(ctxButton("Weitere Funktionen", [
+  {label: "Exportieren", run: () => $("aexp").click()},
+  {label: "Importieren …", run: () => $("aimp").click()},
+], null));
 $("aimp").onchange = async ev => {
   const f = ev.target.files[0]; if (!f) return;
   let doc; try { doc = JSON.parse(await f.text()); } catch (e) { $("alisterr").textContent = "Die Datei ist kein JSON."; return; }

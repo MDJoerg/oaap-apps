@@ -1317,7 +1317,8 @@ check("0.17.0: Gruppieren-Einstellung entfällt, /neu beginnt ohne den alten Kno
       'data-k="group"' not in pg and 'run: () => startDraft($("pick").value)' in pg, None)
 check("0.17.0/0.26.0: schmal: Pflege (Neu, Export, Import; im Menü Ändern, Löschen, Auswertung) aus, Karte nur „Gespräch beginnen“",
       ".edit{display:none!important}" in pg and 'class="primary edit" id="anewbtn"' in pg
-      and 'id="aexp" class="edit"' in pg and 'class="imp edit"' in pg
+      and '<span class="edit" id="amore"></span>' in pg and '{label: "Exportieren", run: () => $("aexp").click()}' in pg
+      and '{label: "Importieren …", run: () => $("aimp").click()}' in pg
       and '{label: "Ändern", show: () => !narrow()' in pg and '{label: "Löschen", danger: true, show: () => !narrow()' in pg
       and pg.count('{label: "Auswertung", show: () => !narrow()') == 2
       and 'el("button", "primary", "Gespräch beginnen")' in pg, None)
