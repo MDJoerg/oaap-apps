@@ -459,3 +459,13 @@ Chat selbst (ein Aufruf mit `by: chat`, durch dieselbe Zustimmung, nie ans Model
 Gespräch, dessen Ampel lockerer ist als die des Arbeitsraums, beginnt nicht (409 mit
 `needs_light`). Arbeitsräume anlegen und löschen: `/api/workspaces` (durchgereicht an
 `/mcp/_workspaces` des Gateways, als die Person). Tests: `test_workspace.py`.
+
+**0.24.0 (`oaap.work.workspaces` 0.4):** Arbeitsräume haben eine eigene Ansicht
+(`#arbeitsraeume`, Knopf über „Assistenten“) mit einer Karte je Arbeitsraum: Ampel, Ablagen mit
+Ordner und Rolle, die letzten Gespräche, Wahl des Assistenten (vorbelegt mit dem zuletzt dort
+benutzten), „privat“ und **Gespräch beginnen**; „Ändern“ speichert unter derselben Kennung. Die
+Leiste gruppiert nach Arbeitsraum (nicht nach Ablage, damit ein Gespräch einmal dasteht) und
+zeigt jeden Arbeitsraum mit „+ Neues Gespräch“. Unter dem Gespräch steht nur noch, in welchem
+Arbeitsraum es läuft. Im Dialog lässt sich jede Ablage auf einen **Ordner** einschränken,
+gewählt über `GET /api/workspaces/pick?what=folders&system=&store=&path=` (MCP-Gateway ab
+0.48.0); der Ordner begrenzt, was das Gespräch sieht, er ist kein Recht im Ablagesystem.

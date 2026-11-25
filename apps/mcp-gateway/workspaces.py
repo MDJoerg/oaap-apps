@@ -253,9 +253,44 @@ def real_path(m, path):
     return p
 
 
+def inside(m, real):
+    """Liegt der Pfad im Produkt im Ordner der Einhängung? ('/a' enthält '/ab' nicht.)"""
+    base = m["folder"].rstrip("/")
+    p = str(real or "/")
+    return not base or p == base or p.startswith(base + "/")
+
+
 def mount_path(m, real):
     base = m["folder"].rstrip("/")
-    return real[len(base):] or "/" if base and real.startswith(base) else real
+    return real[len(base):] or "/" if base and inside(m, real) else real
+
+
+MAX_PICK_FOLDERS = 200
+
+
+def pick_folders(call, m, store, path):
+    """0.48 (RFC-0121 §5.1): die Unterordner eines Ordners einer Ablage, als die Person --
+    für die Ordnerwahl beim Einhängen. Nie rekursiv, nur Ordner, höchstens 200."""
+    store = str(store or "").strip()
+    if not store or len(store) > 200:
+        raise Invalid("Welche Ablage (store)?")
+    p = norm_path(path or "/", "Ordner")
+    out = call(m, "stores_list", {"store": store, "path": p})
+    folders = []
+    for it in out.get("items") or []:
+        if not isinstance(it, dict) or it.get("kind") != "folder":
+            continue
+        name = str(it.get("name") or "").strip("/")
+        if not name or "/" in name:
+            continue
+        try:
+            sub = norm_path(p.rstrip("/") + "/" + name, "Ordner")
+        except Invalid:
+            continue          # versteckt oder unerlaubt: nicht wählbar
+        folders.append({"name": name, "title": str(it.get("title") or name)[:120], "path": sub})
+    folders.sort(key=lambda f: f["name"].lower())
+    return {"store": store, "path": p, "folders": folders[:MAX_PICK_FOLDERS],
+            "more": len(folders) > MAX_PICK_FOLDERS}
 
 
 def light_ok(db, m, rank):
@@ -490,7 +525,7 @@ def run(db, ws, rank, name, args, call):
             if usable:
                 try:
                     e = call(m, "stores_entry", {"store": m["store"]})
-                    if e.get("path") and (m["folder"] == "/" or str(e["path"]).startswith(m["folder"])):
+                    if e.get("path") and inside(m, e["path"]):
                         entry = _addr(m, e["path"])
                 except Invalid:
                     usable = False
@@ -519,10 +554,9 @@ def run(db, ws, rank, name, args, call):
     if name == "store_search":
         out = call(m, "stores_search", {**st, "query": str(args.get("query") or "")})
         hits = []
-        base = m["folder"].rstrip("/")
         for h in out.get("hits") or []:
             p = str(h.get("path") or "/")
-            if base and not (p == base or p.startswith(base + "/")):
+            if not inside(m, p):
                 continue          # außerhalb der Einhängung: nicht adressierbar, nicht gezeigt
             hits.append({**h, "path": _addr(m, p)})
         return {"query": out.get("query"), "hits": hits, "note": FOREIGN}, m

@@ -141,5 +141,18 @@ v = app.view_of(dict(c, title="T"))
 check("der Browser sieht das Ablegen ohne den Text", "- Person: Anna" not in json.dumps(v, ensure_ascii=False) and
       any(m.get("by") == "chat" for m in v["messages"]) and v["workspace"]["id"] == "verein")
 
+# 0.24.0: Arbeitsräume als Karten, Ordnerwahl je Ablage
+pg = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html"), encoding="utf-8").read()
+check("0.24.0: Ansicht Arbeitsräume über den Assistenten, mit eigener Adresse",
+      pg.index('id="wsbtn"') < pg.index('id="manage"') and '#arbeitsraeume' in pg and 'id="wsview"' in pg)
+check("0.24.0: unter dem Chat keine Auswahl mehr, nur der Hinweis", 'id="wspick"' not in pg and 'id="wschip"' in pg)
+check("0.24.0: das Gespräch nimmt den Arbeitsraum der Karte", "workspace: DRAFT_WS || undefined" in pg
+      and "Gespräch beginnen" in pg and "lastAssistantIn(" in pg)
+check("0.24.0: Seitenleiste je Arbeitsraum, immer da",
+      'id: "workspaces", title: "Arbeitsräume", icon: "workspace", open: true, always: true' in pg)
+check("0.24.0: Ordner geht mit, gewählt über what=folders",
+      "what=folders" in pg and "role: role.value, folder," in pg)
+check("0.24.0: Ändern behält die Kennung", "WS_EDIT ? WS_EDIT.id" in pg)
+
 print(f"\n{PASSED[0]} passed, {len(FAILED)} failed")
 sys.exit(1 if FAILED else 0)

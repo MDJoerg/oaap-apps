@@ -192,10 +192,28 @@ form.send textarea{flex:1;resize:none;max-height:12rem;line-height:1.4}
 .crow .note{margin-left:auto}
 .crow label.inl{display:flex;align-items:center;gap:.25rem}
 .crow label.inl input{width:auto;margin:0}
-.wsrow{display:grid;grid-template-columns:1fr 1.4fr .8fr .8fr auto auto;gap:.35rem;align-items:center;margin:.3rem 0}
-.wsrow select,.wsrow input{font-size:.85rem;padding:.2rem .3rem;margin:0}
-.wsitem{border:1px solid var(--line);border-radius:.5rem;padding:.5rem .7rem;margin:.4rem 0}
-.wsitem small{color:var(--muted)}
+/* 0.24.0: eine Ablage im Arbeitsraum in zwei Zeilen -- was, und wie eingehängt (Ordner, Alias, Rolle, Heimat) */
+#wsdlg{width:min(46rem,calc(100vw - 2rem))}
+.wsrow{border:1px solid var(--line);border-radius:.5rem;padding:.4rem .5rem;margin:.4rem 0}
+.wsrow .ln{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin:.15rem 0}
+.wsrow select,.wsrow input:not([type=radio]){font-size:.85rem;padding:.2rem .3rem;margin:0;width:auto;flex:1;min-width:7rem}
+.wsrow button{font-size:.8rem;padding:.2rem .5rem}
+.wsrow .fbtn{flex:1.4;min-width:9rem;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wsrow label.inl{margin:0;font-size:.8rem}
+.fpick{border-top:1px dashed var(--line);margin-top:.35rem;padding-top:.35rem;font-size:.85rem}
+.fpick .fl{max-height:12rem;overflow-y:auto;display:flex;flex-direction:column}
+.fpick .fl button{text-align:left;border:0;background:none;padding:.25rem .4rem;border-radius:.3rem}
+.fpick .fl button:hover{background:var(--me)}
+.wschip{font-size:.82rem;border:1px solid var(--line);border-radius:.9rem;padding:.1rem .55rem;background:var(--tool)}
+.wschip button{border:0;background:none;padding:0 0 0 .3rem;cursor:pointer;color:var(--muted)}
+.wschip[hidden],#wsprivl[hidden]{display:none}
+.acard ul.mnt{margin:.1rem 0;padding-left:1rem;font-size:.82rem;color:var(--muted)}
+.acard .recent{display:flex;flex-direction:column;align-items:flex-start;font-size:.85rem}
+.acard .recent button{border:0;background:none;padding:.1rem 0;color:var(--accent);text-align:left;cursor:pointer}
+.acard .start{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}
+.acard .start select{flex:1;min-width:8rem;font-size:.85rem;padding:.25rem .3rem}
+.acard .start label{display:inline-flex;gap:.25rem;align-items:center;font-size:.8rem;color:var(--muted)}
+.acard .start input{width:auto;margin:0}
 
 /* ---- Assistenten */
 .atool{flex:none;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;padding:.7rem 1rem;border-bottom:1px solid var(--line);background:var(--panel)}
@@ -299,6 +317,7 @@ dialog input,dialog textarea,dialog select{width:100%}
   </div>
   <div id="convs"></div>
   <div class="sfoot">
+    <button id="wsbtn" type="button">Arbeitsräume</button>
     <button id="manage" type="button">Assistenten</button>
     <button id="casesbtn" type="button" hidden>Vorgänge <span class="n" id="casesn"></span></button>
     <button id="nset" type="button">Einstellungen</button>
@@ -333,9 +352,8 @@ dialog input,dialog textarea,dialog select{width:100%}
       <form id="f" class="send"><textarea id="t" rows="1" placeholder="Nachricht … (/ für Befehle)" maxlength="4000" aria-label="Nachricht"></textarea>
         <button class="primary" id="go">Senden</button></form>
       <div class="crow"><label for="pick">Assistent</label><select id="pick"></select>
-        <label for="wspick">Arbeitsraum</label><select id="wspick"><option value="">—</option></select>
-        <label class="inl" id="wsprivl" title="Kein Protokolleintrag am Ende, der Titel erscheint für niemanden sonst"><input type="checkbox" id="wspriv"> privat</label>
-        <button type="button" id="wsman" class="hbtn" title="Arbeitsräume anlegen und ändern">Arbeitsräume …</button>
+        <span class="wschip" id="wschip" hidden></span>
+        <label class="inl" id="wsprivl" hidden title="Kein Protokolleintrag am Ende, der Titel erscheint für niemanden sonst"><input type="checkbox" id="wspriv"> privat</label>
         <span class="note">Jede Runde läuft als du. Was etwas ändert, läuft erst nach deiner Zustimmung.</span></div>
     </div>
   </section>
@@ -353,6 +371,18 @@ dialog input,dialog textarea,dialog select{width:100%}
     </div>
     <p class="err" id="alisterr" style="margin:.5rem 1rem 0"></p>
     <div class="agrid" id="alist"></div>
+  </section>
+
+  <!-- 0.24.0 (RFC-0121 §5.1): Arbeitsräume als Karten, wie die Assistenten -->
+  <section class="view" id="wsview" hidden>
+    <div class="atool">
+      <input type="search" id="wq" placeholder="Arbeitsräume durchsuchen" aria-label="Arbeitsräume durchsuchen">
+      <button class="primary edit" id="wsnewbtn" type="button">+ Neuer Arbeitsraum</button>
+    </div>
+    <p class="muted" style="margin:.5rem 1rem 0;font-size:.85rem">Ein Arbeitsraum bündelt Ablagen für deine Gespräche. Jeder Zugriff läuft als du &mdash;
+    was du in einer Ablage darfst, entscheidet das System selbst.</p>
+    <p class="err" id="wslisterr" style="margin:.5rem 1rem 0"></p>
+    <div class="agrid" id="wsgrid"></div>
   </section>
 
   <section class="view" id="caseview" hidden>
@@ -424,17 +454,13 @@ dialog input,dialog textarea,dialog select{width:100%}
 </dialog>
 
 <dialog id="wsdlg">
-  <div class="dhead"><b>Arbeitsräume</b><button type="button" class="hbtn" id="wsclose">Schließen</button></div>
-  <p class="muted" style="font-size:.88rem">Ein Arbeitsraum bündelt Ablagen für deine Gespräche: jede mit einem kurzen
-  Alias und einer Rolle &mdash; <b>Quelle</b> (nur lesen) oder <b>Arbeitsablage</b> (auch schreiben). Genau eine
-  Arbeitsablage ist die <b>Heimat</b>; dort liegen Stand und Protokoll. Jeder Zugriff läuft als du &mdash; was du
-  in einer Ablage darfst, entscheidet das System selbst.</p>
-  <div id="wslist"></div>
-  <h3 style="margin:.8rem 0 .2rem">Neuer Arbeitsraum</h3>
+  <div class="dhead"><b id="wsdtitle">Neuer Arbeitsraum</b><button type="button" class="hbtn" id="wsclose">Schließen</button></div>
+  <p class="muted" style="font-size:.88rem">Jede Ablage bekommt einen kurzen Alias und eine Rolle &mdash; <b>Quelle</b>
+  (nur lesen) oder <b>Arbeitsablage</b> (auch schreiben). Mit <b>Ordner</b> sieht das Gespräch nur diesen Ordner der
+  Ablage. Genau eine Arbeitsablage ist die <b>Heimat</b>; dort liegen Stand und Protokoll.</p>
   <label for="wstitle">Titel</label><input id="wstitle" maxlength="120">
   <label for="wsdesc">Beschreibung (optional)</label><input id="wsdesc" maxlength="1000">
   <label>Ablagen</label>
-  <div class="wsrow muted" style="font-size:.75rem"><span>System</span><span>Ablage</span><span>Alias</span><span>Rolle</span><span>Heimat</span><span></span></div>
   <div id="wsmounts"></div>
   <div class="row"><button type="button" id="wsadd">+ Ablage</button></div>
   <p class="err" id="wserr"></p>
@@ -499,6 +525,8 @@ let S = null, C = null, busy = false, CMDS = [], SETUP = null, PENDING = null, S
 let LIGHT = null, DRAFT_LIGHT = null, FEEDBACK = null;
 // 0.22.0 (RFC-0121): Arbeitsräume und Ablagesysteme, wie das MCP-Gateway sie der Person nennt
 let WS = {workspaces: [], systems: [], error: ""};
+// 0.24.0: der Arbeitsraum des nächsten Gesprächs -- gewählt auf seiner Karte, nicht mehr unter dem Chat
+let DRAFT_WS = null;
 const $ = id => document.getElementById(id);
 function el(tag, cls, text){const e=document.createElement(tag); if(cls) e.className=cls;
   if(text!==undefined) e.textContent=text; return e;}
@@ -1084,6 +1112,7 @@ function when(iso){
 const ICON = {
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   assistants: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13v1M15 13v1M9.5 17h5"/><circle cx="12" cy="3.5" r=".8"/>',
+  workspace: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 11h18"/>',
 };
 function icon(name){
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
@@ -1112,12 +1141,16 @@ const TREES = [
        children: [...years.get(y).keys()].sort((a, b) => b - a).map(m => ({
          key: y + "-" + (m + 1), label: MONTHS[m], open: false, convs: years.get(y).get(m)}))}));
    }},
-  {id: "workspaces", title: "Arbeitsräume", icon: "assistants", open: true, small: titleOf,
-   nodes(list){
+  // 0.24.0: immer da, je Arbeitsraum seine Gespräche (auch ein Arbeitsraum ohne Gespräch);
+  // nach Arbeitsraum, nicht nach Ablage -- ein Gespräch steht so genau einmal da
+  {id: "workspaces", title: "Arbeitsräume", icon: "workspace", open: true, always: true, small: titleOf,
+   nodes(list, q){
      const g = new Map();
-     for (const c of list) { if (!c.workspace) continue; const k = c.workspace.title || c.workspace.id;
-       if (!g.has(k)) g.set(k, []); g.get(k).push(c); }
-     return [...g].map(([k, cs]) => ({key: k, label: k, open: !FOLD.has("ws:" + k), convs: cs}));
+     if (!q) for (const w of WS.workspaces) g.set(w.id, {label: w.title, convs: []});
+     for (const c of list) { if (!c.workspace) continue; const id = c.workspace.id;
+       if (!g.has(id)) g.set(id, {label: c.workspace.title || id, convs: []}); g.get(id).convs.push(c); }
+     return [...g].map(([id, x]) => ({key: id, label: x.label, open: !FOLD.has("ws:" + x.label), convs: x.convs,
+       start: WS.workspaces.some(w => w.id === id) ? () => startInWs(id) : null}));
    }},
   {id: "assistants", title: "Assistenten", icon: "assistants", open: true, always: true, small: c => when(c.updated),
    nodes(list){
@@ -1153,6 +1186,11 @@ function drawNodes(box, nodes, path, depth, small, q){
     if (!open) continue;
     if (n.children) drawNodes(box, n.children, key, depth + 1, small, q);
     else for (const c of n.convs) box.appendChild(convBtn(c, small, depth + 1));
+    if (n.start) {                       // 0.24.0: ein neues Gespräch gleich in diesem Arbeitsraum
+      const b = el("button", "conv muted", "+ Neues Gespräch"); b.type = "button";
+      b.style.paddingLeft = (1.6 + depth * .8) + "rem"; b.style.fontSize = ".85rem";
+      b.onclick = () => { closeDrawer(); n.start(); }; box.appendChild(b);
+    }
   }
 }
 function renderSide(){
@@ -1167,7 +1205,7 @@ function renderSide(){
     .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")));
   const box = $("convs"); box.textContent = "";
   for (const t of TREES) {
-    const nodes = t.nodes(list);
+    const nodes = t.nodes(list, q);
     if (!nodes.length && !t.always) continue;           // Kalender erst, wenn es Gespräche gibt
     const key = "t:" + t.id, open = isOpen(key, t.open, q);
     const h = el("button", "tree-h"); h.type = "button"; h.setAttribute("aria-expanded", String(open));
@@ -1176,7 +1214,8 @@ function renderSide(){
     h.onclick = () => flip(key, open); box.appendChild(h);
     if (!open) continue;
     drawNodes(box, nodes, key, 1, t.small, q);
-    if (!nodes.length) box.appendChild(el("div", "muted empty", q ? "Kein Gespräch passt." : "Noch keine Gespräche."));
+    if (!nodes.length) box.appendChild(el("div", "muted empty", q ? "Kein Gespräch passt." :
+      t.id === "workspaces" ? "Noch kein Arbeitsraum." : "Noch keine Gespräche."));
   }
 }
 
@@ -1536,29 +1575,33 @@ async function openConv(id){
   showView("chat");
   C = await api("GET", "api/conv/" + id); SHOWN = {id: null, n: 0}; render(); renderSide(); loadCommands(); loadLight(); loadCaseStatus();
 }
-function startDraft(aid){
+function startDraft(aid, wsid){
   showView("chat");
   C = null; SETUP = null; PENDING = null; SHOWN = {id: null, n: 0}; DRAFT_LIGHT = null;
+  DRAFT_WS = wsid || null; $("wspriv").checked = false;
   renderSide(); if (aid && assistant(aid)) $("pick").value = aid;
   render(); loadCommands(); loadLight(); closeDrawer(); if (!narrow()) $("t").focus();
 }
 
 // ---- Ansichten der Seite: Gespräch oder Assistenten (#assistenten; die Zurück-Taste geht)
 let VIEW = "chat";
-const VIEWHASH = {asst: "#assistenten", cases: "#vorgaenge"};
+const VIEWHASH = {asst: "#assistenten", cases: "#vorgaenge", ws: "#arbeitsraeume"};
 function showView(v){
   VIEW = v;
   $("chatview").hidden = v !== "chat"; $("asstview").hidden = v !== "asst"; $("caseview").hidden = v !== "cases";
+  $("wsview").hidden = v !== "ws";
   $("menu").hidden = v !== "chat"; $("manage").classList.toggle("on", v === "asst");
-  $("casesbtn").classList.toggle("on", v === "cases");
+  $("casesbtn").classList.toggle("on", v === "cases"); $("wsbtn").classList.toggle("on", v === "ws");
   if (v === "asst") { $("ctitle").textContent = "Assistenten"; $("cassist").textContent = ""; if (S) { renderAssistants(); loadReadiness(); } }
+  else if (v === "ws") { $("ctitle").textContent = "Arbeitsräume"; $("cassist").textContent = ""; renderWorkspaces(); }
   else if (v === "cases") { $("ctitle").textContent = "Vorgänge"; $("cassist").textContent = " · deine Meldungen an den Support"; renderCases(); }
   else render();
   renderLight();
   const want = VIEWHASH[v] || "";
   if (location.hash !== want) history.pushState(null, "", want || location.pathname + location.search);
 }
-function viewOfHash(){ return location.hash === "#assistenten" ? "asst" : location.hash === "#vorgaenge" ? "cases" : "chat"; }
+function viewOfHash(){ return location.hash === "#assistenten" ? "asst" : location.hash === "#vorgaenge" ? "cases"
+                             : location.hash === "#arbeitsraeume" ? "ws" : "chat"; }
 window.addEventListener("popstate", () => showView(viewOfHash()));
 
 // ---- Kopfzeile und Menü
@@ -1615,8 +1658,8 @@ $("f").onsubmit = async ev => {
     setBusy(true, "Gespräch wird angelegt …");
     const dl = convLight();
     const r = await api("POST", "api/conv", {assistant: $("pick").value, light: dl,
-                                             workspace: $("wspick").value || undefined,
-                                             private: $("wspick").value && $("wspriv").checked || undefined,
+                                             workspace: DRAFT_WS || undefined,
+                                             private: DRAFT_WS && $("wspriv").checked || undefined,
                                              sure: LRANK[dl] > LRANK[(S && S.default_light) || "green"] || undefined});
     if (r.error) { PENDING = null; busy = false; $("go").disabled = false; $("t").disabled = false;
       $("t").value = text; grow(); render(el("div", "err", r.error));
@@ -1876,71 +1919,165 @@ const ASK = (() => {
   } catch (e) { return ""; }
 })();
 // ---- Arbeitsräume (0.22.0, RFC-0121 §5.1): im MCP-Gateway, gelesen und geschrieben als du
+// 0.24.0: eigene Ansicht mit Karten (wie die Assistenten); unter dem Chat steht nur noch, in welchem
+// Arbeitsraum das Gespräch läuft. Jede Ablage lässt sich auf einen Ordner einschränken.
 async function loadWs(){
   const r = await api("GET", "api/workspaces");
   WS = r.error ? {workspaces: [], systems: [], error: r.error} : {workspaces: r.workspaces || [], systems: r.systems || [], error: ""};
-  renderWsPick();
+  if (DRAFT_WS && !WS.workspaces.some(w => w.id === DRAFT_WS)) DRAFT_WS = null;
+  renderSide();
+  if (VIEW === "ws") renderWorkspaces();
 }
+function wsTitle(id){ const w = WS.workspaces.find(x => x.id === id); return w ? w.title : id; }
 function renderWsPick(){
-  const sel = $("wspick"), was = sel.value; sel.textContent = "";
-  const none = el("option", "", "—"); none.value = ""; sel.appendChild(none);
-  for (const w of WS.workspaces) { const o = el("option", "", w.title); o.value = w.id; sel.appendChild(o); }
-  if (C && C.workspace) {
-    if (!WS.workspaces.some(w => w.id === C.workspace.id)) { const o = el("option", "", C.workspace.title || C.workspace.id); o.value = C.workspace.id; sel.appendChild(o); }
-    sel.value = C.workspace.id;
-  } else if (C) sel.value = ""; else if (WS.workspaces.some(w => w.id === was)) sel.value = was;
-  sel.disabled = !!C; $("wspriv").disabled = !!C; $("wspriv").checked = !!(C && C.private);
-  $("wsprivl").hidden = !(C ? C.workspace : sel.value);
-  sel.title = WS.error || (C ? "Der Arbeitsraum eines Gesprächs bleibt." : "Optional: das Gespräch beginnt mit dem Stand dieses Arbeitsraums.");
+  const chip = $("wschip"); chip.textContent = "";
+  const id = C ? (C.workspace && C.workspace.id) : DRAFT_WS;
+  chip.hidden = !id;
+  $("wsprivl").hidden = !id; $("wspriv").disabled = !!C;
+  if (C) $("wspriv").checked = !!C.private;
+  if (!id) return;
+  chip.appendChild(document.createTextNode("im Arbeitsraum " + (C ? C.workspace.title || id : wsTitle(id))));
+  chip.title = C ? "Der Arbeitsraum eines Gesprächs bleibt." : "Das Gespräch beginnt mit dem Stand dieses Arbeitsraums.";
+  if (!C) {
+    const x = el("button", "", "×"); x.type = "button"; x.title = "Ohne Arbeitsraum beginnen"; x.setAttribute("aria-label", x.title);
+    x.onclick = () => { DRAFT_WS = null; renderWsPick(); };
+    chip.appendChild(x);
+  }
 }
-// 0.22.1: ein strenger eingestufter Arbeitsraum fragt gleich nach der Ampel, nicht erst beim Senden
-$("wspick").onchange = () => {
-  renderWsPick();
-  const w = WS.workspaces.find(x => x.id === $("wspick").value);
-  if (!C && w && LRANK[w.light] > LRANK[convLight()]) {
+// Der Assistent, mit dem du in diesem Arbeitsraum zuletzt gesprochen hast
+function lastAssistantIn(wsid){
+  const c = S.conversations.filter(x => x.workspace && x.workspace.id === wsid && assistant(x.assistant))
+    .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || "")))[0];
+  return c ? c.assistant : "";
+}
+function startInWs(wsid, aid, priv){
+  const w = WS.workspaces.find(x => x.id === wsid); if (!w) return;
+  startDraft(aid || lastAssistantIn(wsid) || $("pick").value, wsid);
+  $("wspriv").checked = !!priv; renderWsPick();
+  // 0.22.1: ein strenger eingestufter Arbeitsraum fragt gleich nach der Ampel, nicht erst beim Senden
+  if (LRANK[w.light] > LRANK[convLight()]) {
     LRETRY = false;
     openLight(w.light, w.light, "Der Arbeitsraum „" + w.title + "“ ist " + LWORD[w.light] + " eingestuft. "
               + "Ein Gespräch darin braucht mindestens diese Ampel.");
   }
-};
-const ROLEWORD = {source: "Quelle", work: "Arbeitsablage"};
-function renderWsList(){
-  const box = $("wslist"); box.textContent = "";
-  if (WS.error) box.appendChild(el("p", "err", WS.error));
-  if (!WS.workspaces.length) box.appendChild(el("p", "muted", "Noch kein Arbeitsraum."));
-  for (const w of WS.workspaces) {
-    const d = el("div", "wsitem");
-    d.appendChild(el("b", "", w.title + " "));
-    d.appendChild(el("small", "", "Ampel " + (LWORD[w.light] || w.light || "?")));
-    const ul = el("div", "muted");
-    ul.textContent = w.mounts.map(m => m.alias + " = " + (m.title || m.store) + " · " + ROLEWORD[m.role] + (m.home ? " · Heimat" : "")).join("  |  ");
-    d.appendChild(ul);
-    const del = el("button", "", "Löschen"); del.type = "button";
-    del.onclick = async () => {
-      if (!confirm("Arbeitsraum „" + w.title + "“ löschen? Die Ablagen selbst bleiben, wie sie sind.")) return;
-      const r = await api("POST", "api/workspaces/" + w.id + "/delete");
-      $("wserr").textContent = r.error || ""; await loadWs(); renderWsList();
-    };
-    d.appendChild(del); box.appendChild(d);
-  }
 }
-function wsMountRow(first){
-  const row = el("div", "wsrow");
-  const sys = el("select"); for (const s of WS.systems.filter(x => x.active)) { const o = el("option", "", s.title + " (" + (LWORD[s.light] || s.light) + ")"); o.value = s.name; sys.appendChild(o); }
-  const store = el("select"); const alias = el("input"); alias.placeholder = "alias"; alias.maxLength = 24;
-  const role = el("select"); for (const [v, t] of [["work", "Arbeitsablage"], ["source", "Quelle"]]) { const o = el("option", "", t); o.value = v; role.appendChild(o); }
-  const home = el("input"); home.type = "radio"; home.name = "wshome"; home.checked = !!first; home.title = "Heimat";
+const ROLEWORD = {source: "Quelle", work: "Arbeitsablage"};
+function renderWorkspaces(){
+  const box = $("wsgrid"); box.textContent = "";
+  $("wslisterr").textContent = WS.error || (!WS.systems.length && !WS.error
+    ? "Die Verwaltung hat noch kein Ablagesystem eingetragen (MCP-Gateway, Reiter Ablagen)." : "");
+  $("wsnewbtn").disabled = !WS.systems.length;
+  const q = $("wq").value.trim().toLowerCase();
+  const list = WS.workspaces.filter(w => !q || [w.title, w.description || "", ...w.mounts.map(m => m.alias + " " + (m.title || m.store))]
+    .join(" ").toLowerCase().includes(q));
+  for (const w of list) {
+    const card = el("div", "acard");
+    card.appendChild(el("h3", "", w.title));
+    const tags = el("div");
+    tags.appendChild(el("span", "badge", "Ampel " + (LWORD[w.light] || w.light || "?")));
+    tags.appendChild(el("span", "badge", w.mounts.length + (w.mounts.length === 1 ? " Ablage" : " Ablagen")));
+    card.appendChild(tags);
+    if (w.description) card.appendChild(el("p", "", w.description));
+    const ul = el("ul", "mnt");
+    for (const m of w.mounts)
+      ul.appendChild(el("li", "", m.alias + " = " + (m.title || m.store) + (m.folder && m.folder !== "/" ? " · Ordner " + m.folder : "")
+                                  + " · " + ROLEWORD[m.role] + (m.home ? " · Heimat" : "")));
+    card.appendChild(ul);
+    const convs = S.conversations.filter(c => c.workspace && c.workspace.id === w.id)
+      .sort((x, y) => String(y.updated || "").localeCompare(String(x.updated || ""))).slice(0, 3);
+    if (convs.length) {
+      const rc = el("div", "recent");
+      for (const c of convs) {
+        const b = el("button", "", c.title); b.type = "button"; b.title = titleOf(c) + " · " + when(c.updated);
+        b.onclick = () => openConv(c.id); rc.appendChild(b);
+      }
+      card.appendChild(rc);
+    }
+    // Gespräch beginnen: mit welchem Assistenten -- vorbelegt mit dem zuletzt hier benutzten
+    const st = el("div", "start");
+    const sel = el("select"); sel.setAttribute("aria-label", "Assistent für das neue Gespräch");
+    for (const a of S.assistants.filter(a => a.state !== "inactive")) { const o = el("option", "", a.title); o.value = a.id; sel.appendChild(o); }
+    const last = lastAssistantIn(w.id); if (last) sel.value = last;
+    const pl = el("label"); const pv = el("input"); pv.type = "checkbox"; pl.append(pv, document.createTextNode("privat"));
+    pl.title = "Kein Protokolleintrag am Ende, der Titel erscheint für niemanden sonst";
+    st.append(sel, pl); card.appendChild(st);
+    const acts = el("div", "acts");
+    const go = el("button", "primary", "Gespräch beginnen"); go.type = "button"; go.disabled = !sel.options.length;
+    go.onclick = () => startInWs(w.id, sel.value, pv.checked);
+    const e = el("button", "edit", "Ändern"); e.type = "button"; e.onclick = () => openWsDlg(w);
+    const d = el("button", "edit", "Löschen"); d.type = "button";
+    d.onclick = async () => {
+      if (!confirm("Arbeitsraum „" + w.title + "“ löschen? Die Ablagen selbst bleiben, wie sie sind; die Gespräche auch.")) return;
+      const r = await api("POST", "api/workspaces/" + w.id + "/delete");
+      $("wslisterr").textContent = r.error || ""; await loadWs();
+    };
+    acts.append(go, e, d); card.appendChild(acts); box.appendChild(card);
+  }
+  if (!list.length) box.appendChild(el("p", "muted", WS.workspaces.length ? "Kein Arbeitsraum passt."
+    : narrow() ? "Noch kein Arbeitsraum." : "Noch kein Arbeitsraum. Lege mit „Neuer Arbeitsraum“ einen an."));
+}
+$("wsbtn").onclick = async () => { closeDrawer(); showView("ws"); await loadWs(); };
+$("wq").addEventListener("input", renderWorkspaces);
+
+// ---- Eine Ablage im Dialog: System, Ablage (oder Neu…), Ordner, Alias, Rolle, Heimat
+function wsMountRow(first, pre){
+  const row = el("div", "wsrow"), l1 = el("div", "ln"), l2 = el("div", "ln");
+  const sys = el("select"); sys.setAttribute("aria-label", "Ablagesystem");
+  for (const s of WS.systems.filter(x => x.active || (pre && pre.system === x.name))) {
+    const o = el("option", "", s.title + " (" + (LWORD[s.light] || s.light) + ")"); o.value = s.name; sys.appendChild(o); }
+  if (pre) sys.value = pre.system;
+  const store = el("select"); store.setAttribute("aria-label", "Ablage");
+  const alias = el("input"); alias.placeholder = "Alias"; alias.maxLength = 24; alias.setAttribute("aria-label", "Alias");
+  const role = el("select"); role.setAttribute("aria-label", "Rolle");
+  for (const [v, t] of [["work", "Arbeitsablage"], ["source", "Quelle"]]) { const o = el("option", "", t); o.value = v; role.appendChild(o); }
+  const hl = el("label", "inl"); const home = el("input"); home.type = "radio"; home.name = "wshome"; home.checked = !!first;
+  hl.append(home, document.createTextNode("Heimat"));
   const rm = el("button", "", "×"); rm.type = "button"; rm.title = "Ablage entfernen"; rm.onclick = () => row.remove();
-  const fillStores = async () => {
+  // 0.24.0: Ordner -- das Gespräch sieht nur diesen Ordner der Ablage; gewählt aus dem, was du dort siehst
+  let folder = (pre && pre.folder) || "/";
+  const fb = el("button", "fbtn"); fb.type = "button"; fb.title = "Auf einen Ordner der Ablage einschränken";
+  const fp = el("div", "fpick"); fp.hidden = true;
+  const showFolder = () => { fb.textContent = "Ordner: " + (folder === "/" ? "/ (ganze Ablage)" : folder); };
+  showFolder();
+  const browse = async path => {
+    fp.textContent = ""; fp.hidden = false;
+    const head = el("div", "row");
+    head.appendChild(el("b", "", path));
+    const take = el("button", "primary", "Diesen Ordner nehmen"); take.type = "button";
+    take.onclick = () => { folder = path; showFolder(); fp.hidden = true; };
+    const close = el("button", "", "Abbrechen"); close.type = "button"; close.onclick = () => { fp.hidden = true; };
+    head.append(take, close); fp.appendChild(head);
+    const fl = el("div", "fl"); fp.appendChild(fl);
+    if (path !== "/") {
+      const up = el("button", "", "↑ " + (path.replace(/\/[^/]+$/, "") || "/")); up.type = "button";
+      up.onclick = () => browse(path.replace(/\/[^/]+$/, "") || "/"); fl.appendChild(up);
+    }
+    const wait = el("span", "muted", "… lädt"); fl.appendChild(wait);
+    const r = await api("GET", "api/workspaces/pick?what=folders&system=" + encodeURIComponent(sys.value)
+                        + "&store=" + encodeURIComponent(store.value) + "&path=" + encodeURIComponent(path));
+    wait.remove();
+    if (r.error) { fl.appendChild(el("span", "err", r.error)); return; }
+    for (const f of r.folders || []) {
+      const b = el("button", "", "📁 " + f.title); b.type = "button"; b.onclick = () => browse(f.path); fl.appendChild(b);
+    }
+    if (!(r.folders || []).length) fl.appendChild(el("span", "muted", "Keine Unterordner."));
+    if (r.more) fl.appendChild(el("span", "muted", "Nur die ersten 200 Ordner."));
+  };
+  fb.onclick = () => { if (!store.value) { $("wserr").textContent = "Erst eine Ablage wählen."; return; } browse(folder); };
+  const fillStores = async keep => {
     store.textContent = ""; store.appendChild(el("option", "", "… lädt"));
     const r = await api("GET", "api/workspaces/pick?system=" + encodeURIComponent(sys.value));
     store.textContent = "";
     if (r.error) { const o = el("option", "", r.error.slice(0, 80)); o.value = ""; store.appendChild(o); return; }
     for (const s of r.stores || []) { const o = el("option", "", s.title); o.value = s.id; store.appendChild(o); }
-    if (!alias.value && store.options.length) alias.value = slugAlias(store.options[0].textContent);
+    if (keep) {                       // beim Ändern: die gespeicherte Ablage, auch wenn die Liste sie nicht (mehr) nennt
+      if (![...store.options].some(o => o.value === keep.store)) {
+        const o = el("option", "", keep.title || keep.store); o.value = keep.store; store.appendChild(o); }
+      store.value = keep.store;
+    } else if (!alias.value && store.options.length) alias.value = slugAlias(store.options[0].textContent);
   };
-  sys.onchange = fillStores;
-  store.onchange = () => { alias.value = slugAlias(store.options[store.selectedIndex].textContent); };
+  sys.onchange = () => { folder = "/"; showFolder(); fp.hidden = true; fillStores(); };
+  store.onchange = () => { alias.value = slugAlias(store.options[store.selectedIndex].textContent); folder = "/"; showFolder(); fp.hidden = true; };
   // 0.23.0 (RFC-0121 §5.1): eine neue Ablage anlegen, als du -- das Ablagesystem entscheidet
   const mk = el("button", "", "Neu…"); mk.type = "button"; mk.title = "Neue Ablage in diesem System anlegen (z. B. ein privates Repository)";
   mk.onclick = async () => {
@@ -1954,35 +2091,49 @@ function wsMountRow(first){
     const id = (r.store || {}).id;
     if (id && [...store.options].some(o => o.value === id)) store.value = id;
     else { const o = el("option", "", (r.store || {}).title || id); o.value = id; store.appendChild(o); store.value = id; }
-    alias.value = slugAlias(store.options[store.selectedIndex].textContent); role.value = "work";
+    alias.value = slugAlias(store.options[store.selectedIndex].textContent); role.value = "work"; folder = "/"; showFolder();
     $("wserr").textContent = "Angelegt: " + id + ".";
   };
-  row.append(sys, store, mk, alias, role, home, rm);
-  row.read = () => ({alias: alias.value.trim(), system: sys.value, store: store.value, role: role.value,
+  l1.append(sys, store, mk, rm);
+  l2.append(fb, alias, role, hl);
+  row.append(l1, l2, fp);
+  if (pre) { alias.value = pre.alias; role.value = pre.role; home.checked = !!pre.home; }
+  row.read = () => ({alias: alias.value.trim(), system: sys.value, store: store.value, role: role.value, folder,
                      home: home.checked, title: store.selectedIndex >= 0 ? store.options[store.selectedIndex].textContent : ""});
-  if (WS.systems.length) fillStores();
+  if (WS.systems.length) fillStores(pre);
   return row;
 }
 const slugAlias = t => (t || "").toLowerCase().replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue").replace(/ß/g, "ss")
   .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "ablage";
-$("wsman").onclick = async () => {
-  await loadWs(); renderWsList(); $("wserr").textContent = "";
-  $("wstitle").value = ""; $("wsdesc").value = ""; $("wsmounts").textContent = "";
+// Der Dialog legt an (w fehlt) oder ändert (w = der Arbeitsraum, gleiche Kennung)
+let WS_EDIT = null;
+function openWsDlg(w){
+  WS_EDIT = w || null; $("wserr").textContent = "";
+  $("wsdtitle").textContent = w ? "Arbeitsraum ändern" : "Neuer Arbeitsraum";
+  $("wssave").textContent = w ? "Speichern" : "Arbeitsraum anlegen";
+  $("wstitle").value = w ? w.title : ""; $("wsdesc").value = w ? w.description || "" : "";
+  $("wsmounts").textContent = "";
   if (!WS.systems.length) $("wserr").textContent = WS.error || "Die Verwaltung hat noch kein Ablagesystem eingetragen (MCP-Gateway, Reiter Ablagen).";
+  else if (w) for (const m of w.mounts) $("wsmounts").appendChild(wsMountRow(m.home, m));
   else $("wsmounts").appendChild(wsMountRow(true));
   $("wsdlg").showModal();
-};
+}
+$("wsnewbtn").onclick = () => openWsDlg(null);
 $("wsclose").onclick = () => $("wsdlg").close();
 $("wsadd").onclick = () => { if (WS.systems.length) $("wsmounts").appendChild(wsMountRow(!$("wsmounts").children.length)); };
 $("wssave").onclick = async () => {
   const title = $("wstitle").value.trim();
   const mounts = [...$("wsmounts").children].map(r => r.read());
-  const id = slugAlias(title).slice(0, 40) + "-" + Math.random().toString(36).slice(2, 6);
-  const r = await api("POST", "api/workspaces", {id, title, description: $("wsdesc").value.trim(), mounts});
+  const id = WS_EDIT ? WS_EDIT.id : slugAlias(title).slice(0, 40) + "-" + Math.random().toString(36).slice(2, 6);
+  const doc = {id, title, description: $("wsdesc").value.trim(), mounts};
+  if (WS_EDIT && WS_EDIT.assistants && WS_EDIT.assistants.length) doc.assistants = WS_EDIT.assistants;
+  if (WS_EDIT && WS_EDIT.home_folder) doc.home_folder = WS_EDIT.home_folder;
+  const r = await api("POST", "api/workspaces", doc);
   if (r.error) { $("wserr").textContent = r.error; return; }
-  await loadWs(); renderWsList(); $("wstitle").value = ""; $("wsdesc").value = ""; $("wsmounts").textContent = "";
-  $("wsmounts").appendChild(wsMountRow(true)); $("wserr").textContent = "Angelegt: " + r.workspace.title + ".";
-  if (!C) { $("wspick").value = r.workspace.id; renderWsPick(); }
+  $("wsdlg").close();
+  await loadWs();
+  toast((WS_EDIT ? "Gespeichert: " : "Angelegt: ") + r.workspace.title);
+  WS_EDIT = null;
 };
 
 (async () => {
@@ -1993,6 +2144,7 @@ $("wssave").onclick = async () => {
   loadMe();
   loadFeedback();
   if (location.hash === "#assistenten") showView("asst");
+  else if (location.hash === "#arbeitsraeume") showView("ws");
   else if (location.hash === "#vorgaenge") showView("cases");
   else if (ASK) { startDraft(); $("t").value = ASK; $("t").dispatchEvent(new Event("input")); $("t").focus(); }
   else if (S.conversations.length) await openConv(S.conversations[0].id); else startDraft();

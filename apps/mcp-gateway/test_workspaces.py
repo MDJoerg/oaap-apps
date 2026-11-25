@@ -212,6 +212,34 @@ check("Konnektor ohne move: abgelehnt, stores_move nicht gerufen",
       msg and "kann das nicht" in msg and f.calls[-1][1] == "stores_about", msg)
 f.about = {"move": True, "remove": "documents"}
 
+# 0.48: Ordnerwahl beim Einhängen und der Rand des Ordners
+seen = []
+
+
+def lister(m, tool, a):
+    seen.append((tool, dict(a)))
+    return {"items": [{"name": "Zeta", "kind": "folder"}, {"name": "akten", "kind": "folder", "title": "Akten"},
+                      {"name": "plan.md", "kind": "document"}, {"name": ".git", "kind": "folder"},
+                      {"name": "a/b", "kind": "folder"}, "kaputt"]}
+
+
+pf = W.pick_folders(lister, {"alias": "git", "system": "git"}, "anna/notizen", "/projekte/")
+check("Ordnerwahl: nur Ordner, sortiert, mit vollem Pfad",
+      [x["path"] for x in pf["folders"]] == ["/projekte/akten", "/projekte/Zeta"]
+      and pf["folders"][0]["title"] == "Akten" and pf["path"] == "/projekte", str(pf))
+check("Ordnerwahl ruft stores_list mit normiertem Pfad",
+      seen[-1] == ("stores_list", {"store": "anna/notizen", "path": "/projekte"}), str(seen))
+check("Ordnerwahl: versteckter Ordner und Schrägstrich im Namen nicht wählbar",
+      not any(x["name"] in (".git", "a/b") for x in pf["folders"]))
+n = len(seen)
+check("Ordnerwahl: .. abgelehnt, Konnektor nicht gerufen",
+      raises(W.pick_folders, lister, {}, "s", "/a/../b") and len(seen) == n)
+check("Ordnerwahl: ohne Ablage abgelehnt", raises(W.pick_folders, lister, {}, "", "/") is not None)
+mnt = {"folder": "/a"}
+check("Rand: /a enthält /a/x, nicht /ab", W.inside(mnt, "/a/x") and W.inside(mnt, "/a") and not W.inside(mnt, "/ab"))
+check("Rand: mount_path lässt /ab unberührt", W.mount_path(mnt, "/ab/x") == "/ab/x" and W.mount_path(mnt, "/a/x") == "/x")
+check("Rand: Wurzel enthält alles", W.inside({"folder": "/"}, "/irgendwo"))
+
 # K13: Ampel
 books.save_server(db, "test", "wiki-src", "http://wiki:8000/oaap/mcp", "none", "yellow", {})
 msg = raises(run, "store_read", {"path": "notizen:/stand"})

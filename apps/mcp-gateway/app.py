@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.47.0"
+VERSION = "0.48.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -3702,7 +3702,7 @@ class Handler(BaseHTTPRequestHandler):
     def workspaces_api(self, method, path):
         """/mcp/_workspaces über die via-Tür, als die Person (wie /mcp/_assistants):
         GET: eigene Arbeitsräume und die Ablagesysteme; GET …/_pick?system=&what=areas|stores
-        &area=: was die Person dort sieht; POST: speichern; POST …/<id>/delete: löschen."""
+        &area=: was die Person dort sieht; what=folders&store=&path=: Unterordner (0.48); POST: speichern; POST …/<id>/delete: löschen."""
         carried = self.platform_person()
         if carried is None:
             self.deny()
@@ -3725,6 +3725,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not row or not row["active"]:
                     raise workspaces.Invalid("Dieses Ablagesystem gibt es nicht (oder es ist aus).")
                 m = {"alias": row["name"], "system": row["name"]}
+                if query.get("what") == "folders":
+                    # 0.48 (RFC-0121 §5.1): Ordnerwahl beim Einhängen, als die Person
+                    self.send_json(200, {"v": 1, **workspaces.pick_folders(
+                        lambda mm, verb, args: connector_call(mm, carried, verb, args),
+                        m, query.get("store", ""), query.get("path", "/"))})
+                    return
                 verb = "stores_areas" if query.get("what") == "areas" else "stores_stores"
                 args = {} if verb == "stores_areas" else \
                     {k: query[k] for k in ("area", "offset") if query.get(k)}
