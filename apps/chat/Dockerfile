@@ -12,7 +12,7 @@ RUN apt-get update \
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin chat
 WORKDIR /srv
 # ACHTUNG: jedes neue Modul einzeln hier nennen.
-COPY app.py loop.py store.py authz_client.py workspace.py page.html /srv/
+COPY app.py loop.py store.py authz_client.py workspace.py qr.py page.html /srv/
 # 0.9.0: Prüfung und Sichtbarkeit von Assistenten, Kopie aus lib/assistants (check-shared.py)
 COPY assistants/ /srv/assistants/
 COPY static/ /srv/static/

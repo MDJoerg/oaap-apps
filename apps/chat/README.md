@@ -516,3 +516,19 @@ der Assistenten liegen im Menü „⋯“.
 
 **0.27.1:** Der Sendeknopf trägt die Farbe der Ampel (grün, gelb, rot), sobald sie für das
 Gespräch feststeht – im laufenden Gespräch immer, im Entwurf erst nach deiner Wahl; vorher wie bisher.
+
+## Auf dem Handy (0.28.0)
+
+Das Profilmenü (unten in der Leiste) zeigt am großen Bildschirm **„Auf dem Handy öffnen …“**: ein
+QR-Code mit der Adresse des Chats (`GET /api/qr?text=…` liefert SVG; Kodierer `qr.py` aus der
+Wegweiser-App, ohne Fremdbibliothek, höchstens 213 Zeichen, nur http/https). Hat die Person eine
+bestätigte E-Mail, trägt die Adresse `?login_hint=<E-Mail>`; ab Plattform 0.1.379 füllt der
+Anmeldedienst damit das Namensfeld in Keycloak vor (der Name der Plattform passt nicht immer zum
+Realm, die E-Mail nimmt Keycloak an). Das Kennwort bleibt. Der Chat nimmt `login_hint` beim Laden
+aus der Adresse.
+
+Auf dem Handy erscheint beim ersten Mal ein Hinweis, den Chat als Symbol auf den Startbildschirm
+zu legen (Android: die Abfrage des Browsers, `beforeinstallprompt`; iPhone: kurze Anleitung über
+„Teilen → Zum Home-Bildschirm“); nach „Später“ oder „So geht’s“ wieder nach 30 Tagen, nie wenn
+er schon vom Startbildschirm läuft; immer im Profilmenü. Vom Startbildschirm startet er ohne
+Browserleiste (Manifest `display: standalone`) -- ein Vollbild ohne Tippen erlaubt kein Browser.

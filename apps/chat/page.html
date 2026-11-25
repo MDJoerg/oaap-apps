@@ -77,6 +77,7 @@ transform:rotate(-45deg);transition:transform .15s}
 .sme .mbody{top:auto;bottom:calc(100% + .3rem);left:auto;right:0}
 .sme .mbody a,.sme .mbody button{display:block;width:100%;text-align:left;border:0;background:none;padding:.5rem .7rem;color:inherit;text-decoration:none;font:inherit;cursor:pointer}
 .sme .mbody a:hover,.sme .mbody button:hover{background:var(--me)}
+.sme .mbody [hidden]{display:none}
 .sme .mwho{padding:.3rem .7rem;font-size:.75rem;color:var(--muted)}
 #scrim{display:none}
 
@@ -348,6 +349,16 @@ padding:.1rem .35rem;margin:.12rem 0;font-size:.78rem;overflow:hidden;text-overf
   .cdate .cent{font-size:.65rem}
 }
 
+/* ---- 0.28.0: QR-Code und Hinweis für den Startbildschirm */
+.qrbox{display:flex;justify-content:center;margin:.6rem 0}
+.qrbox img{width:240px;height:240px;image-rendering:pixelated;background:#fff;padding:.4rem;border-radius:.5rem}
+#instbar{position:fixed;left:.6rem;right:.6rem;bottom:.6rem;z-index:45;background:var(--panel);border:1px solid var(--line);
+border-radius:.7rem;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:.6rem .7rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.88rem}
+#instbar[hidden]{display:none}
+#instbar span{flex:1;min-width:10rem}
+#instbody ol{padding-left:1.2rem;font-size:.9rem}
+#instbody li{margin:.35rem 0}
+
 /* ---- Dialoge */
 dialog{border:1px solid var(--line);border-radius:.7rem;background:var(--panel);color:var(--ink);width:min(40rem,calc(100vw - 2rem));max-height:90vh}
 dialog::backdrop{background:rgba(0,0,0,.35)}
@@ -498,6 +509,7 @@ dialog input,dialog textarea,dialog select{width:100%}
 
 <div id="ctx" class="mbody" role="menu" hidden></div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
+<div id="instbar" role="region" aria-label="Chat auf den Startbildschirm" hidden></div>
 <dialog id="sdlg"><div id="sbox"></div></dialog>
 <dialog id="lightdlg">
   <div class="dhead"><b>Ampel dieses Gesprächs</b><button type="button" class="hbtn" id="lightclose">Schließen</button></div>
@@ -575,6 +587,20 @@ dialog input,dialog textarea,dialog select{width:100%}
   <label for="lpgroup">Gruppe (leer = ohne Gruppe)</label><input id="lpgroup" maxlength="40" list="lpgroups"><datalist id="lpgroups"></datalist>
   <p class="err" id="lperr"></p>
   <div class="row"><button class="primary" type="button" id="lpsave">Übernehmen</button><button type="button" id="lpreset">Zurücksetzen</button></div>
+</dialog>
+
+<!-- 0.28.0: auf dem Handy öffnen (QR) und Symbol auf dem Startbildschirm -->
+<dialog id="qrdlg">
+  <div class="dhead"><b>Auf dem Handy öffnen</b><button type="button" class="hbtn" id="qrclose">Schließen</button></div>
+  <p class="muted" style="font-size:.88rem">Scanne den Code mit der Kamera deines Handys. Der Chat öffnet sich im Browser;
+  danach kannst du ihn als Symbol auf den Startbildschirm legen &ndash; dann startet er ohne Browserleiste.</p>
+  <div class="qrbox"><img id="qrimg" alt="QR-Code mit der Adresse des Chats" width="240" height="240"></div>
+  <p class="muted" style="font-size:.8rem;word-break:break-all" id="qrurl"></p>
+  <p class="muted" style="font-size:.8rem" id="qrhint"></p>
+</dialog>
+<dialog id="instdlg">
+  <div class="dhead"><b>Chat auf den Startbildschirm</b><button type="button" class="hbtn" id="instclose">Schließen</button></div>
+  <div id="instbody"></div>
 </dialog>
 
 <dialog id="setdlg">
@@ -2028,6 +2054,14 @@ async function loadMe(){
     const m = el("div", "mbody");
     m.appendChild(el("div", "mwho", me.username));
     if (c.portal) { const a = el("a", "", "Portal"); a.href = c.portal; m.appendChild(a); }
+    // 0.28.0: am großen Bildschirm der QR-Code, auf dem Handy die Hilfe für den Startbildschirm
+    // (beim Öffnen entschieden, nicht beim Laden -- das Fenster kann seither breiter oder schmaler sein)
+    const qa = el("button", "", "Auf dem Handy öffnen …"); qa.type = "button";
+    qa.onclick = () => { d.open = false; openQr(me); };
+    const qb = el("button", "", "Auf den Startbildschirm …"); qb.type = "button";
+    qb.onclick = () => { d.open = false; installHelp(); };
+    m.append(qa, qb);
+    d.addEventListener("toggle", () => { if (d.open) { qa.hidden = narrow(); qb.hidden = !narrow() || standalone(); } });
     if (me.links && me.links.password) { const a = el("a", "", "Passwort ändern"); a.href = me.links.password; m.appendChild(a); }
     // Abmelden ist ein POST, nie ein Link (Leitfaden §5.1)
     const f = el("form"); f.method = "post"; f.action = (me.links && me.links.logout) || "/auth/logout";
@@ -2044,6 +2078,11 @@ async function loadMe(){
 // ?frage=<a started question>&kontext=app:<id>[/<object>]. The question
 // becomes the draft of a NEW conversation -- never sent by itself, the
 // person finishes it. The address is cleaned so a reload does not repeat it.
+// 0.28.0: ?login_hint= gehört der Anmeldung (Keycloak füllt damit den Namen vor); der Chat
+// braucht ihn nicht und nimmt ihn aus der Adresse, damit er nicht in Lesezeichen landet
+(() => { try { const q = new URLSearchParams(location.search);
+  if (q.has("login_hint")) { q.delete("login_hint"); const s = q.toString();
+    history.replaceState(null, "", location.pathname + (s ? "?" + s : "") + location.hash); } } catch (e) {} })();
 const ASK = (() => {
   try {
     const q = new URLSearchParams(location.search);
@@ -2647,6 +2686,54 @@ $("wssave").onclick = async () => {
   WS_EDIT = null;
 };
 
+// ---- 0.28.0: auf dem Handy öffnen, Symbol auf dem Startbildschirm
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function openQr(me){
+  // Adresse des Chats; mit bestätigter E-Mail als login_hint füllt der Anmeldedienst den Namen vor
+  // (nur ein Vorschlag fürs Namensfeld -- das Kennwort bleibt; der Name der Plattform passt nicht immer zum Realm)
+  const base = location.origin + location.pathname;
+  const url = base + (me && me.email ? "?login_hint=" + encodeURIComponent(me.email) : "");
+  $("qrimg").src = "api/qr?text=" + encodeURIComponent(url.length <= 213 ? url : base);
+  $("qrurl").textContent = base;
+  $("qrhint").textContent = me && me.email ? "Dein Anmeldename (" + me.email + ") ist auf dem Handy schon eingetragen; das Kennwort gibst du dort ein."
+                                           : "Auf dem Handy meldest du dich einmal mit deinem Namen und Kennwort an.";
+  $("qrdlg").showModal();
+}
+$("qrclose").onclick = () => $("qrdlg").close();
+let INSTALL_EVT = null;
+addEventListener("beforeinstallprompt", ev => { ev.preventDefault(); INSTALL_EVT = ev; });
+addEventListener("appinstalled", () => { INSTALL_EVT = null; $("instbar").hidden = true; keep("chat.installhint", Date.now() + 3650 * 864e5); });
+async function installHelp(){
+  $("instbar").hidden = true;
+  if (Date.now() >= (load("chat.installhint", 0) || 0)) keep("chat.installhint", Date.now() + 30 * 864e5);   // gesehen: 30 Tage Ruhe
+  if (INSTALL_EVT) {                        // Android/Chrome: der Browser fragt selbst
+    INSTALL_EVT.prompt();
+    try { const c = await INSTALL_EVT.userChoice; if (c && c.outcome === "accepted") keep("chat.installhint", Date.now() + 3650 * 864e5); } catch (e) {}
+    INSTALL_EVT = null; return;
+  }
+  const box = $("instbody"); box.textContent = "";
+  const ol = el("ol");
+  const steps = isIOS()
+    ? ["Tippe unten in Safari auf das Teilen-Symbol (Quadrat mit Pfeil nach oben).", "Wähle „Zum Home-Bildschirm“.", "Tippe auf „Hinzufügen“."]
+    : ["Öffne das Menü des Browsers (⋮ oben rechts).", "Wähle „Zum Startbildschirm hinzufügen“ oder „App installieren“.", "Bestätige mit „Hinzufügen“."];
+  for (const s of steps) ol.appendChild(el("li", "", s));
+  box.appendChild(ol);
+  box.appendChild(el("p", "muted", "Vom Startbildschirm aus startet der Chat ohne Browserleiste, wie eine App."));
+  $("instdlg").showModal();
+}
+$("instclose").onclick = () => $("instdlg").close();
+// beim ersten Mal auf dem Handy, später wieder nach 30 Tagen -- nicht, wenn er schon vom Startbildschirm läuft
+function maybeInstallBar(){
+  if (!narrow() || standalone() || Date.now() < (load("chat.installhint", 0) || 0)) return;
+  const bar = $("instbar"); bar.textContent = "";
+  bar.appendChild(el("span", "", "Leg den Chat als Symbol auf deinen Startbildschirm – dann startet er wie eine App."));
+  const yes = el("button", "primary", "So geht’s"); yes.type = "button"; yes.onclick = installHelp;
+  const no = el("button", "", "Später"); no.type = "button";
+  no.onclick = () => { bar.hidden = true; keep("chat.installhint", Date.now() + 30 * 864e5); };
+  bar.append(yes, no); bar.hidden = false;
+}
+
 (async () => {
   await Promise.all([refreshState(), loadLaunchpad()]);
   if (S.error) { $("log").appendChild(el("div", "err", S.error)); return; }
@@ -2661,6 +2748,7 @@ $("wssave").onclick = async () => {
   // Fehlt dem Chat ein Teil, zeigt er gleich, welches -- statt erst beim ersten Senden.
   if ((!S.client || !S.model) && (C || S.assistants.length)) checkSetup(C ? C.assistant : S.assistants[0].id);
   for (const e of S.errors || []) $("log").appendChild(el("div", "err", e));
+  setTimeout(maybeInstallBar, 1500);
 })();
 </script>
 </body>

@@ -1366,8 +1366,27 @@ check("0.27.0: Seite: Startseite statt letztem Gespräch, Kanban, Kalender, Stat
       and 'id="kandone"' in pg and "S.conversations[0].id); else startDraft();" not in pg)
 check("0.27.0: Status nur von dir -- kein automatisches Setzen im Server",
       app.STATUSES == ("open", "question", "waiting", "done") and 'conv["status"] = ' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"), encoding="utf-8").read().split('if action == "status":')[1][:600])
+# 0.28.0: QR-Code fürs Handy, Hilfe für den Startbildschirm, login_hint
+import qr as _qr  # noqa: E402
+import urllib.parse as _up  # noqa: E402
+_raw = urllib.request.Request(BASE + "/api/qr?text=" + _up.quote("https://chat.pxx.example/?login_hint=a%40b.de", safe=""),
+                              headers={"X-OAAP-User": "anna", "X-OAAP-User-Id": "id-anna", "X-OAAP-Roles": "user"})
+try:
+    with urllib.request.urlopen(_raw, timeout=10) as _r:
+        _ct, _body = _r.headers.get("Content-Type"), _r.read().decode()
+except urllib.error.HTTPError as _e:
+    _ct, _body = str(_e.code), ""
+check("0.28.0: QR-Code als SVG", _ct == "image/svg+xml" and _body.startswith("<svg") and "<path" in _body, (_ct, _body[:80]))
+st, r = req("GET", "/api/qr?text=" + _up.quote("javascript:alert(1)", safe=""))
+check("0.28.0: QR nur für http/https-Adressen", st == 400, (st, r))
+st, r = req("GET", "/api/qr?text=" + _up.quote("https://x/" + "a" * 300, safe=""))
+check("0.28.0: QR höchstens 213 Zeichen", st == 400, (st, r))
+check("0.28.0: QR-Kodierer derselbe wie im Wegweiser (213 Byte = Version 10)", len(_qr.encode("x" * 213)) == 57)
+check("0.28.0: Seite: QR im Profilmenü am großen Bildschirm, Startbildschirm-Hilfe auf dem Handy, login_hint aus der Adresse",
+      '"Auf dem Handy öffnen …"' in pg and "beforeinstallprompt" in pg and "maybeInstallBar" in pg
+      and 'q.has("login_hint")' in pg and '"?login_hint=" + encodeURIComponent(me.email)' in pg)
 import re as _re
-pg_icons =set(_re.findall(r"^  ([a-z]+): '<", pg.split("const LPICON = {")[1].split("};")[0], _re.M))
+pg_icons = set(_re.findall(r"^  ([a-z]+): '<", pg.split("const LPICON = {")[1].split("};")[0], _re.M))
 pg_colors = set(_re.findall(r"([a-z]+): \"#", pg.split("const LPCOLOR = {")[1].split("};")[0]))
 check("0.26.0: Seite und Server kennen dieselben Symbole und Farben",
       pg_icons == set(app.LP_ICONS) and pg_colors == set(app.LP_COLORS), (pg_icons ^ set(app.LP_ICONS), pg_colors ^ set(app.LP_COLORS)))

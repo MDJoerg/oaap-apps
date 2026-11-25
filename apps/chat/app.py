@@ -39,16 +39,17 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import unquote
+from urllib.parse import parse_qs as url_qs, unquote, urlparse as url_parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import authz_client
 import loop
+import qr
 import store
 import workspace
 
-VERSION = "0.27.1"
+VERSION = "0.28.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("CHAT_DATA_DIR", "/data")
 CLIENT_KEY = (os.environ.get("OAAP_MCP_CLIENT_KEY") or "").strip()
@@ -1565,6 +1566,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(401, {"error": "Keine angemeldete Person."})
         who = self.who()
         home = Home(self.headers.get(ASSERTION, "").strip())
+        if path == "/api/qr":
+            # 0.28.0: QR-Code der Chat-Adresse fürs Handy (Profilmenü) -- als SVG, ohne Fremdbibliothek
+            text = url_qs(url_parse(self.path).query).get("text", [""])[0]
+            if not (text.startswith("https://") or text.startswith("http://")) or len(text) > qr.MAX_BYTES                     or any(ord(ch) < 32 for ch in text):
+                return self.json(400, {"error": "Nur eine Adresse (http/https), höchstens 213 Zeichen."})
+            return self.send(200, "image/svg+xml", qr.svg(qr.encode(text)).encode("utf-8"), cache="no-store")
         if path == "/api/launchpad":
             # 0.26.0: die eigene Anordnung (Symbol, Farbe, Gruppe) und was zur Wahl steht
             return self.json(200, {**load_launchpad(person), "icons": list(LP_ICONS), "colors": list(LP_COLORS)})
