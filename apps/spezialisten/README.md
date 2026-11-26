@@ -97,6 +97,16 @@ jemand wieder zulässt.
   dann prüfen die Menschen.
 - Jeder ausgeführte Aufruf, der scheitert, trägt `failed`: Er ist kein Beleg.
 
+**Zwei Befunde der Messung behoben (0.8.1):**
+- Vorgänge nennt die Agenten im Verlauf unter ihrem Label, diese App kennt sie unter eigenen Namen.
+  Der Leiter nahm deshalb das Label als Empfänger eines Auftrags. Jetzt übersetzt der Lauf Labels im
+  Verlauf in die Namen dieser App (abgeglichen über die Kennung), der Rahmen nennt das Team ausdrücklich,
+  und ein Auftrag an ein Label geht an denselben Spezialisten.
+- Kleine Modelle schreiben einen Werkzeugaufruf manchmal als Text. Der Lauf liest ihn dann wie einen
+  echten -- nur für Werkzeuge, die er ohnehin anbietet, in den Formen `{"name": …, "arguments": {…}}`
+  (auch in `<tool_call>` oder ```` ```json ````), `name {…}` und `name({…})`. Es gelten dieselben Regeln:
+  was ändert, wird Plan; ob geschlossen wird, entscheidet Vorgänge.
+
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 
 Für jeden Spezialisten gibt es drei Dinge, jedes mit eigenem Schlüssel.

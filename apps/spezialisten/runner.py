@@ -37,8 +37,13 @@ Tor geliefert hat (Werkzeug „abschliessen“) -- mit dem ausgeführten, freige
 oder mit der Begründung, warum nichts zu ändern war. Ob das reicht, entscheidet Vorgänge, nicht das
 Modell. Mit „pruefen_markieren“ legt er einen Vorgang zur Prüfung vor. Ein prüfender Spezialist liest
 markierte Vorgänge nur und liefert genau ein Urteil: in Ordnung, Nacharbeit oder keins.
+
+0.8.1 (Befunde der Messung 26.11.): Labels aus Vorgänge werden im Verlauf zu den Namen dieser App, damit
+der Leiter sein Team nicht unter falschem Namen beauftragt. Ein als Text geschriebener Aufruf eines
+angebotenen Werkzeugs zählt wie ein echter (kleine Modelle).
 """
 import json
+import re
 import secrets
 import urllib.parse
 import time
@@ -381,9 +386,23 @@ def team_of(spec, case):
     return {n: known[n] for n in names if known.get(n) and known[n] in allowed}
 
 
-def case_as_data(case):
+def aliases(spec, case):
+    """0.8.1: {Label in Vorgänge: Name hier} für das Team eines Leiters. Vorgänge nennt die Agenten im
+    Verlauf unter ihrem Label; das Modell kennt sein Team unter den Namen dieser App und nahm sonst das
+    Label als Empfänger (gemessen auf oaap-test 26.11.). Abgeglichen über die Kennung."""
+    by_uid = {uid: name for name, uid in (spec.get("team_map") or {}).items()}
+    out = {}
+    for p in case.get("taskable") or []:
+        if isinstance(p, dict) and p.get("name") and by_uid.get(p.get("uid")) and p["name"] != by_uid[p["uid"]]:
+            out[p["name"]] = by_uid[p["uid"]]
+    return out
+
+
+def case_as_data(case, names=None):
     """Der Vorgang als zitierte Daten (RFC-0105 §8.1): was die Person schrieb, und der Verlauf.
-    Eigene Werkzeugaufrufe früherer Läufe nicht -- ihre Notizen und Enden schon."""
+    Eigene Werkzeugaufrufe früherer Läufe nicht -- ihre Notizen und Enden schon. `names` übersetzt
+    Labels aus Vorgänge in die Namen dieser App (0.8.1)."""
+    names = names or {}
     lines = [f"Nummer: {case['number']}", f"Art: {case.get('kind', '')}", f"Bereich: {case.get('queue_title', '')}",
              f"Betreff: {case['title']}", "Beschreibung:", case.get("description") or "(leer)"]
     if case.get("fields"):
@@ -398,7 +417,7 @@ def case_as_data(case):
             continue
         if e["type"] == "status" and not e.get("text"):
             continue
-        who = "du (früherer Lauf)" if e.get("by_me") else e.get("by", "")
+        who = "du (früherer Lauf)" if e.get("by_me") else names.get(e.get("by", ""), e.get("by", ""))
         tag = "intern" if e.get("internal") else "öffentlich"
         text = e.get("text", "")[:2000]
         if step.get("kind") == "plan":
@@ -418,12 +437,14 @@ def case_as_data(case):
         elif e["type"] == "status":
             text = f"Status-Text: {text}"
         elif e["type"] == "consult":
-            text = f"Rückfrage #{e['seq']} an {(e.get('consult') or {}).get('to_name', '')}: {text}"
+            to = (e.get("consult") or {}).get("to_name", "")
+            text = f"Rückfrage #{e['seq']} an {names.get(to, to)}: {text}"
         elif e["type"] == "consult_answer":
             text = f"Antwort auf Rückfrage #{(e.get('consult') or {}).get('consult')}: {text}"
         elif e["type"] == "task":
             k = e.get("consult") or {}
-            text = f"Auftrag {k.get('n', '')} (#{e['seq']}) an {k.get('to_name', '')}: {text}"
+            to = k.get("to_name", "")
+            text = f"Auftrag {k.get('n', '')} (#{e['seq']}) an {names.get(to, to)}: {text}"
         elif e["type"] == "task_result":
             text = f"Ergebnis zu Auftrag #{(e.get('consult') or {}).get('consult')}: {text}"
         elif e["type"] == "approval":
@@ -456,6 +477,48 @@ def pending_approved(case):
     return out
 
 
+def calls_from_text(text, names):
+    """0.8.1: kleine Modelle schreiben einen Werkzeugaufruf manchmal als Text statt als tool_call
+    (gemessen auf oaap-test 26.11.: „pruefung_abgeben { "ergebnis": … }“). Gelesen werden nur Werkzeuge,
+    die dieser Lauf ohnehin anbietet, in drei Formen: {"name": …, "arguments": {…}} (auch in <tool_call>
+    oder ```json), name {…} und name({…}). Zurück: (Text davor, [tool_calls]) -- leer, wenn nichts passt.
+    Es gelten dieselben Regeln wie für einen echten Aufruf: was ändert, wird Plan; schließen prüft Vorgänge."""
+    dec = json.JSONDecoder()
+    calls, i, first = [], 0, None
+    while True:
+        i = text.find("{", i)
+        if i < 0:
+            break
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            i += 1
+            continue
+        name, args, at = None, None, i
+        if isinstance(obj, dict) and obj.get("name") in names:
+            name = obj["name"]
+            args = obj.get("arguments", obj.get("parameters", {}))
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = None
+        elif isinstance(obj, dict):
+            lo = max(0, i - 120)
+            m = re.search(r"([A-Za-z_][\w\-]*)[\s(:`]*$", text[lo:i])
+            if m and m.group(1) in names:
+                name, args, at = m.group(1), obj, lo + m.start(1)
+        if name and isinstance(args, dict):
+            first = at if first is None else first
+            calls.append({"id": f"text-{len(calls) + 1}", "type": "function",
+                          "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}})
+        i = end
+    if not calls:
+        return text, []
+    before = re.sub(r"(<tool_call>|```(json)?)\s*$", "", text[:first].rstrip()).strip()
+    return before, calls
+
+
 def short(v, n):
     v = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
     return v if len(v) <= n else v[:n - 1] + "…"
@@ -470,6 +533,17 @@ class Run:
         self.clock, self.log = clock, log
         self.id = secrets.token_hex(4)
         self.steps = 0
+
+    def _turn(self, messages, fns):
+        """Ein Schritt des Modells. 0.8.1: ein als Text geschriebener Aufruf eines angebotenen Werkzeugs
+        zählt wie ein echter (calls_from_text)."""
+        msg = self.model.turn(messages, fns)
+        if not msg.get("tool_calls") and fns:
+            text, calls = calls_from_text(msg.get("content") or "", {f["function"]["name"] for f in fns})
+            if calls:
+                self.log(f"Lauf {self.id}: {len(calls)} Werkzeugaufruf(e) aus dem Text gelesen")
+                msg = dict(msg, content=text, tool_calls=calls)
+        return msg
 
     def _entry(self, number, kind, text, **data):
         self.cases.entry(number, kind, text, run=self.id, assistant=self.spec["assistant"], **data)
@@ -503,6 +577,7 @@ class Run:
             lifted = lifted_tools(s)
             consultable = case.get("consultable") or []
             team = team_of(s, case)
+            names = aliases(s, case) if team else {}
             closable = bool(s.get("leads") and case.get("from_gate"))
             fns = openai_tools(mcp_tools, draft=bool(s.get("public")), consultable=consultable, lifted=lifted,
                                team=team, lead=bool(s.get("leads")), closable=closable)
@@ -510,11 +585,14 @@ class Run:
             if closable:
                 proofs = ", ".join(f"#{p['seq']} ({p.get('tool', '')})" for p in case.get("proofs") or []) or "keine"
                 frame += CLOSE_FRAME.replace("{proofs}", proofs)
+            if team:
+                frame += ("Dein Team (Aufträge gehen NUR an diese Namen, genau so geschrieben): "
+                          + "; ".join(team) + ". Andere Namen im Verlauf sind keine Empfänger.\n")
             if s.get("leads") and not team:
                 frame += ("Aufträge sind an diesem Vorgang nicht mehr möglich (Grenze erreicht oder kein Team): "
                           "fasse zusammen und gib zurück.\n")
             messages = [{"role": "system", "content": frame + (s.get("system") or "")},
-                        {"role": "user", "content": case_as_data(case)}]
+                        {"role": "user", "content": case_as_data(case, names)}]
             while True:
                 if self.steps >= s["max_steps"]:
                     return self._limit(number, f"{s['max_steps']} Schritte erreicht")
@@ -524,7 +602,7 @@ class Run:
                     self._entry(number, "end", "Angehalten von einem Menschen; der Lauf endet hier.",
                                 reason="stopped", steps=self.steps)
                     return "stopped"
-                msg = self.model.turn(messages, fns)
+                msg = self._turn(messages, fns)
                 self.steps += 1
                 calls = msg.get("tool_calls") or []
                 text = (msg.get("content") or "").strip()
@@ -567,6 +645,7 @@ class Run:
                             continue
                         if name == TASK_TOOL and team:
                             to, t = str(args.get("an") or "").strip(), str(args.get("auftrag") or "").strip()
+                            to = names.get(to, to)      # 0.8.1: das Label aus dem Verlauf meint denselben
                             if to not in team:
                                 done, res = False, f"„{to}“ gehört nicht zu deinem Team ({', '.join(team)})."
                             else:
@@ -671,7 +750,7 @@ class Run:
                 if self.steps >= s["max_steps"] or self.clock() - started > s["max_minutes"] * 60:
                     answer = "Keine Antwort: die Grenze des Laufs ist erreicht, bevor ich fertig war."
                     break
-                msg = self.model.turn(messages, fns)
+                msg = self._turn(messages, fns)
                 self.steps += 1
                 calls = msg.get("tool_calls") or []
                 if not calls:
@@ -736,7 +815,7 @@ class Run:
                     break
                 if self.steps and self.cases.case(number).get("stopped"):
                     return "stopped"
-                msg = self.model.turn(messages, fns)
+                msg = self._turn(messages, fns)
                 self.steps += 1
                 calls = msg.get("tool_calls") or []
                 if not calls:
@@ -796,7 +875,7 @@ class Run:
                 if self.steps >= s["max_steps"] or self.clock() - started > s["max_minutes"] * 60:
                     verdict = ("none", "Kein Urteil: die Grenze des Laufs ist erreicht, bevor ich fertig war.")
                     break
-                msg = self.model.turn(messages, fns)
+                msg = self._turn(messages, fns)
                 self.steps += 1
                 calls = msg.get("tool_calls") or []
                 if not calls:

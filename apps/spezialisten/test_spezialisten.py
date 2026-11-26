@@ -753,6 +753,39 @@ try:
     st, page = vg_call("GET", f"/v/{n15}", MEL)
     ok("C: KÖDER: die meldende Seite sieht weder Merkmal noch Prüfung", "zur Prüfung" not in page
        and "Kein Urteil" not in page, "")
+
+    # ------------------------------------------------------------ 0.8.1: die zwei Befunde der Messung
+    n16 = report("MM03: Material gesperrt", "Benutzer UTE sieht Material 4711 nicht.")
+    as_gate(n16)
+    SCRIPT["plan"] = [("text", 'Ich schaue nach. find_dumps {"report": "MM03"}'),
+                      ("text", '<tool_call>{"name": "abschliessen", "arguments": {"text": "Das Material ist frei.", '
+                               '"ohne_aenderung": "Keine Sperre gefunden."}}</tool_call>'),
+                      ("text", 'pruefung_abgeben {   "ergebnis": "in_ordnung", "text": "Begründung passt." }')]
+    SEEN.clear(); CALLS.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n16)
+    rv = [e for e in c["entries"] if e["type"] == "review"]
+    ok("B2: ein als Text geschriebener lesender Aufruf läuft wie ein echter",
+       [x["name"] for x in CALLS] == ["find_dumps"]
+       and any(e["step"]["kind"] == "note" and e["text"] == "Ich schaue nach." for e in steps_of(n16)), CALLS)
+    ok("B2: „abschliessen“ als Text: Vorgänge prüft wie sonst, geschlossen ohne Änderung, zur Prüfung",
+       c["status"] == "closed" and any(e["type"] == "review_mark" for e in c["entries"]), c["status"])
+    ok("B2: das Urteil als Text zählt -- „in Ordnung“ statt „kein Urteil“",
+       len(rv) == 1 and rv[0]["review"].get("result") == "ok", rv)
+    ok("B2: KÖDER: ein unbekanntes Werkzeug im Text bleibt Text",
+       runner.calls_from_text('loesche_alles {"x": 1}', {"find_dumps"}) == ('loesche_alles {"x": 1}', []), "")
+    ok("B1: der Leiter bekommt die Namen seines Teams im Rahmen",
+       "Dein Team (Aufträge gehen NUR an diese Namen, genau so geschrieben): Basis-Check (KI)." in sys13, sys13[-400:])
+    al = runner.aliases({"team_map": {"Recherche (KI)": "ur"}},
+                        {"taskable": [{"name": "RFC-0134 Probe", "uid": "ur"}, {"name": "Fremd", "uid": "ux"}]})
+    data = runner.case_as_data({"number": "V-1", "title": "t", "entries": [
+        {"seq": 5, "at": "2026-11-26T10:00", "by": "RFC-0134 Probe", "type": "task_result", "text": "x",
+         "consult": {"consult": 4}},
+        {"seq": 4, "at": "2026-11-26T09:00", "by": "Leiter", "type": "task", "text": "y",
+         "consult": {"to_name": "RFC-0134 Probe", "n": 1}}]}, al)
+    ok("B1: Labels aus Vorgänge werden im Verlauf zu den Namen dieser App",
+       al == {"RFC-0134 Probe": "Recherche (KI)"} and "RFC-0134 Probe" not in data
+       and "an Recherche (KI)" in data and "Recherche (KI) (intern)" in data.replace("(öffentlich)", "(intern)"), data)
     vg_call("POST", "/bereiche/pruefung", ADMIN, {"queue": "analyse", "share": "10", "uid": ""}, form=True)
     S.save(dict(base, id=sid, active="1", leads="", team=""), "chef", LIM)
 
