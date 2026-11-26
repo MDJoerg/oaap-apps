@@ -107,6 +107,12 @@ jemand wieder zulässt.
   (auch in `<tool_call>` oder ```` ```json ````), `name {…}` und `name({…})`. Es gelten dieselben Regeln:
   was ändert, wird Plan; ob geschlossen wird, entscheidet Vorgänge.
 
+**Letzter Zug an der Grenze (0.8.2, gemessen in bec):** Erreicht ein Lauf seine Grenze (Schritte oder
+Minuten), bekommt das Modell noch einen Zug ohne Werkzeuge und fasst zusammen, was es bis dahin hat:
+belegt, Vermutung, offen. Das wird das Ergebnis eines Auftrags („Unvollständig … was ich bis dahin habe“),
+die Antwort einer Rückfrage, ein Zusatz zu „kein Urteil“ oder eine Notiz des Leiters vor der Rückgabe.
+Vorher ging an der Grenze alles verloren: Die Recherche hatte zehn Mal gesucht und gelesen und lieferte nichts.
+
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 
 Für jeden Spezialisten gibt es drei Dinge, jedes mit eigenem Schlüssel.

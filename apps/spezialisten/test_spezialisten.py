@@ -304,13 +304,20 @@ try:
     # ------------------------------------------------------------ 2. Grenze der Schritte
     n2 = report("Zweiter Fall", "Etwas hakt.")
     S.save(dict(base, id=sid, active="1", max_steps="2"), "chef", LIM)
-    SCRIPT["plan"] = [("tool", "find_dumps", {"report": "A"})] * 5
+    SCRIPT["plan"] = [("tool", "find_dumps", {"report": "A"})] * 2 + [("text", "Zwischenstand: A zweimal gelesen, Ursache offen.")] \
+        + [("tool", "find_dumps", {"report": "A"})] * 2
+    SEEN.clear()
     app.poll_once(log=lambda *a: None)
     c = case(n2)
     ends = [e for e in c["entries"] if e["type"] == "spec" and e["step"]["kind"] == "end"]
     ok("Grenze: nach 2 Schritten endet der Lauf mit „Grenze“ und gibt zurück",
        ends and ends[0]["step"].get("reason") == "limit" and c["responsible"] == "", [e["text"] for e in ends])
-    ok("der dritte Modellzug kam nie", len(SCRIPT["plan"]) == 3, len(SCRIPT["plan"]))
+    ok("0.8.2: an der Grenze ein letzter Zug ohne Werkzeuge, danach keiner mehr",
+       len(SCRIPT["plan"]) == 2 and len(SEEN) == 3 and not SEEN[2].get("tools")
+       and "KEIN Werkzeug" in SEEN[2]["messages"][-1]["content"], (len(SCRIPT["plan"]), len(SEEN)))
+    ok("0.8.2: der Zwischenstand steht als Notiz vor dem Ende",
+       any(e["type"] == "spec" and e["step"]["kind"] == "note" and "Zwischenstand: A zweimal" in e["text"]
+           for e in c["entries"]), "")
     S.save(dict(base, id=sid, active="1"), "chef", LIM)
 
     # ------------------------------------------------------------ 3. Stopp mitten im Lauf

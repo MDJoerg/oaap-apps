@@ -41,6 +41,10 @@ markierte Vorgänge nur und liefert genau ein Urteil: in Ordnung, Nacharbeit ode
 0.8.1 (Befunde der Messung 26.11.): Labels aus Vorgänge werden im Verlauf zu den Namen dieser App, damit
 der Leiter sein Team nicht unter falschem Namen beauftragt. Ein als Text geschriebener Aufruf eines
 angebotenen Werkzeugs zählt wie ein echter (kleine Modelle).
+
+0.8.2 (gemessen in bec 26.11.): An der Grenze eines Laufs (Schritte oder Minuten) gibt es einen letzten Zug
+ohne Werkzeuge: das Modell fasst zusammen, was es bis dahin hat -- als Ergebnis eines Auftrags, als Antwort,
+im „kein Urteil“ oder als Notiz des Leiters. Vorher ging an der Grenze alles verloren.
 """
 import json
 import re
@@ -595,9 +599,9 @@ class Run:
                         {"role": "user", "content": case_as_data(case, names)}]
             while True:
                 if self.steps >= s["max_steps"]:
-                    return self._limit(number, f"{s['max_steps']} Schritte erreicht")
+                    return self._limit(number, f"{s['max_steps']} Schritte erreicht", messages)
                 if self.clock() - started > s["max_minutes"] * 60:
-                    return self._limit(number, f"{s['max_minutes']} Minuten erreicht")
+                    return self._limit(number, f"{s['max_minutes']} Minuten erreicht", messages)
                 if self.steps and self.cases.case(number).get("stopped"):
                     self._entry(number, "end", "Angehalten von einem Menschen; der Lauf endet hier.",
                                 reason="stopped", steps=self.steps)
@@ -748,7 +752,8 @@ class Run:
             answer = ""
             while not answer:
                 if self.steps >= s["max_steps"] or self.clock() - started > s["max_minutes"] * 60:
-                    answer = "Keine Antwort: die Grenze des Laufs ist erreicht, bevor ich fertig war."
+                    answer = self._wrapup(messages, "Antwort") or \
+                        "Keine Antwort: die Grenze des Laufs ist erreicht, bevor ich fertig war."
                     break
                 msg = self._turn(messages, fns)
                 self.steps += 1
@@ -811,7 +816,10 @@ class Run:
             result = ""
             while not result:
                 if self.steps >= s["max_steps"] or self.clock() - started > s["max_minutes"] * 60:
-                    result = "Kein vollständiges Ergebnis: die Grenze des Laufs ist erreicht, bevor ich fertig war."
+                    result = self._wrapup(messages, "Ergebnis")
+                    result = ("Unvollständig (Grenze des Laufs erreicht) -- was ich bis dahin habe:\n\n" + result
+                              if result else
+                              "Kein vollständiges Ergebnis: die Grenze des Laufs ist erreicht, bevor ich fertig war.")
                     break
                 if self.steps and self.cases.case(number).get("stopped"):
                     return "stopped"
@@ -873,7 +881,9 @@ class Run:
             verdict = None
             while verdict is None:
                 if self.steps >= s["max_steps"] or self.clock() - started > s["max_minutes"] * 60:
-                    verdict = ("none", "Kein Urteil: die Grenze des Laufs ist erreicht, bevor ich fertig war.")
+                    seen = self._wrapup(messages, "Befund")
+                    verdict = ("none", "Kein Urteil: die Grenze des Laufs ist erreicht, bevor ich fertig war."
+                               + (f" Was ich bis dahin gesehen habe: {seen}" if seen else ""))
                     break
                 msg = self._turn(messages, fns)
                 self.steps += 1
@@ -921,7 +931,26 @@ class Run:
         self.tools.light = light
         self.model.light = light
 
-    def _limit(self, number, why):
+    WRAPUP = ("Die Grenze dieses Laufs ist erreicht. Rufe KEIN Werkzeug mehr auf. Schreibe jetzt dein {what} aus dem, "
+              "was du bis hierher herausgefunden hast: was belegt ist (mit Quelle oder Werkzeug), was Vermutung ist, "
+              "und was offen bleibt.")
+
+    def _wrapup(self, messages, what):
+        """0.8.2: an der Grenze ein letzter Zug ohne Werkzeuge -- das Modell fasst zusammen, was es bis dahin hat.
+        Vorher ging alles verloren (gemessen in bec 26.11.: die Recherche las 10 Schritte, lieferte nichts).
+        Leer, wenn das Modell nichts sagt oder nicht erreichbar ist."""
+        try:
+            msg = self.model.turn(messages + [{"role": "user", "content": self.WRAPUP.format(what=what)}], [])
+        except Unreachable as e:
+            self.log(f"Lauf {self.id}: Zusammenfassung an der Grenze nicht möglich: {e}")
+            return ""
+        return (msg.get("content") or "").strip()[:9000]
+
+    def _limit(self, number, why, messages=None):
+        if messages:
+            summary = self._wrapup(messages, "Zwischenstand für die Zuständigen")
+            if summary:
+                self._entry(number, "note", summary)
         self._entry(number, "end", f"Grenze: {why}. Zurück an die Zuständigen.", reason="limit", steps=self.steps)
         self.cases.give_back(number, f"Grenze erreicht ({why}).", self.id)
         return "limit"
