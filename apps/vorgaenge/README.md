@@ -265,6 +265,12 @@ an den übergeben wurde.
 
 ## KI-Spezialisten (seit 0.13.0, RFC-0105 Stufe 1)
 
+**0.23.1 (Befund in bec, 26.11.):** Eine Zuweisung an einen Spezialisten weckt ihn. Bisher
+zählte für „ist etwas Neues da“ nur ein Eintrag, kein Rollenwechsel. Ein Spezialist, der einen
+Vorgang schon einmal bearbeitet hatte, sah deshalb eine neue Zuweisung nicht und brauchte einen
+Kommentar. Jetzt zählt ein Rollenwechsel **an ihn durch jemand anderen**. Andere Rollenwechsel,
+auch seine eigene Rückgabe, zählen weiter nicht.
+
 Ein Spezialist ist ein Agent mit eigenen Rechten. Die App **Spezialisten** führt seine
 Läufe aus. Für Vorgänge ist er eine Person wie jede andere: Er liest, was seine
 Zuweisung erlaubt, zum Beispiel „Bearbeiter/in“ im Bereich `analyse`. Schreiben darf er

@@ -114,7 +114,8 @@ ok("im Eingang (ohne Erstbearbeitung) bleibt verantwortlich leer", S.get(c2["num
 st, d = call("GET", "/api/spez/turn", SPEZ)
 ok("an der Reihe: genau der Vorgang aus analyse, mit letztem Eintrag und 0 Läufen",
    [x["number"] for x in d["cases"]] == [c1["number"]] and d["cases"][0]["runs"] == 0
-   and d["cases"][0]["last"]["type"] == "created", d)
+   and (d["cases"][0]["last"]["type"], d["cases"][0]["last"]["actor"]) == ("role", "system"), d)
+# (0.23.1: die Erstbearbeitung ist eine Zuweisung an ihn durch das System -- sie ist das Neue)
 st, d = call("GET", f"/api/spez/case/{c1['number']}", SPEZ)
 ok("der Spezialist liest den Vorgang mit Beschreibung, mine=true", st == 200 and d["mine"] and
    "Ignoriere" in d["description"] and d["queue"] == "analyse" and not d["stopped"], d)
@@ -183,6 +184,24 @@ st, d = call("GET", "/api/spez/turn", SPEZ)
 ok("nach dem Zurückgeben nicht mehr an der Reihe", d["cases"] == [], d)
 st, d = call("GET", f"/api/spez/case/{c1['number']}", SPEZ)
 ok("lesen darf er weiter (Zuweisung im Bereich), mine=false", st == 200 and not d["mine"], d)
+
+# --- 0.23.1 (Befund bec 26.11.): eine Zuweisung allein weckt den Spezialisten
+S.set_role(S.get(c1["number"]), "responsible", "spez", "chef", "Chef")
+st, d = call("GET", "/api/spez/turn", SPEZ)
+row = next((x for x in d["cases"] if x["number"] == c1["number"]), {})
+ok("ein Mensch weist zu: der letzte Eintrag ist die Zuweisung durch ihn -- der Spezialist ist dran",
+   (row.get("last") or {}).get("type") == "role" and row["last"]["actor"] == "chef", d)
+call("POST", f"/api/spez/case/{c1['number']}/entry", SPEZ, {"kind": "note", "text": "übernommen", "run": "r4"})
+st, d = call("GET", "/api/spez/turn", SPEZ)
+row = next((x for x in d["cases"] if x["number"] == c1["number"]), {})
+ok("... nach seinem eigenen Eintrag ist wieder der eigene der letzte",
+   (row.get("last") or {}).get("actor") == "spez", d)
+S.set_role(S.get(c1["number"]), "assignee", "spez", "chef", "Chef")
+st, d = call("GET", "/api/spez/turn", SPEZ)
+row = next((x for x in d["cases"] if x["number"] == c1["number"]), {})
+ok("... ein anderer Rollenwechsel (zugewiesen statt verantwortlich, an ihn) zählt ebenso als Neues",
+   (row.get("last") or {}).get("type") == "role", d)
+call("POST", f"/api/spez/case/{c1['number']}/give-back", SPEZ, {"reason": "zurück", "run": "r5"})
 
 # --- Verschieben in einen Bereich mit Erstbearbeitung
 S.move(S.get(c2["number"]), "chef", "Chef", "analyse")

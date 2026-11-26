@@ -1,5 +1,9 @@
 # MCP-Gateway
 
+**0.53.1:** Ein Agent, der über Verfahren P liest, steht in der Messzeile mit seiner
+Benutzerkennung (`user_sub`, Aussteller `platform`), wie eine Person aus dem Chat
+(Befund RFC-0134 M2).
+
 MCP-Server hinter **einem Endpunkt je Sicht**. Ein KI-Client — Claude
 Code, Copilot, ein eigener Agent — spricht mit `/mcp/<sicht>` wie mit
 einem einzigen MCP-Server und erfährt nie, welche Server dahinterstehen

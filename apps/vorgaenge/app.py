@@ -69,7 +69,7 @@ from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, 
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, REVIEW_REASON, REVIEW_RESULT,
                    STATUS_LABEL, SUBSTATUS, TASKS_MAX, Refused, Store, canonical)
 
-VERSION = "0.23.0"
+VERSION = "0.23.1"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")

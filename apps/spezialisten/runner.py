@@ -42,6 +42,10 @@ markierte Vorgänge nur und liefert genau ein Urteil: in Ordnung, Nacharbeit ode
 der Leiter sein Team nicht unter falschem Namen beauftragt. Ein als Text geschriebener Aufruf eines
 angebotenen Werkzeugs zählt wie ein echter (kleine Modelle).
 
+0.8.3 (Befund bec 26.11.): Schlägt das Modell einen ändernden Aufruf ohne ein Wort dazu vor, fragt der
+Lauf in einem Zug ohne Werkzeuge nach der Begründung für die Person, die freigibt. Kommt keine, steht dort,
+was aufgerufen werden soll -- nie mehr nur „ohne Begründung“.
+
 0.8.2 (gemessen in bec 26.11.): An der Grenze eines Laufs (Schritte oder Minuten) gibt es einen letzten Zug
 ohne Werkzeuge: das Modell fasst zusammen, was es bis dahin hat -- als Ergebnis eines Auftrags, als Antwort,
 im „kein Urteil“ oder als Notiz des Leiters. Vorher ging an der Grenze alles verloren.
@@ -696,7 +700,7 @@ class Run:
                                              "content": short(result, TOOL_RESULT_MAX)})
                             continue
                         if name in kinds and kinds[name] != "read":
-                            self._entry(number, "plan", text or "(ohne Begründung des Modells)",
+                            self._entry(number, "plan", text or self._reason(messages, name, args),
                                         tool=name, arguments=args)
                             self._entry(number, "end", f"{name} ändert etwas; der Aufruf liegt zur Freigabe vor.",
                                         reason="needs_approval", steps=self.steps)
@@ -945,6 +949,24 @@ class Run:
             self.log(f"Lauf {self.id}: Zusammenfassung an der Grenze nicht möglich: {e}")
             return ""
         return (msg.get("content") or "").strip()[:9000]
+
+    REASON = ("Du willst das Werkzeug {name} mit diesen Argumenten aufrufen: {args}. Es ändert etwas, "
+              "deshalb gibt ein Mensch den Aufruf frei. Schreibe für diesen Menschen in ein bis zwei Sätzen, "
+              "warum der Aufruf nötig ist und was er bewirkt. Nur die Begründung, kein Aufruf.")
+
+    def _reason(self, messages, name, args):
+        """0.8.3: die Begründung eines Plans, wenn das Modell zum Aufruf nichts schrieb (bec 26.11.:
+        Sonnet schrieb den einen Satz nicht). Ein Zug ohne Werkzeuge auf dem Verlauf OHNE den
+        Aufruf selbst (ein offener Aufruf ohne Antwort ist für die Schnittstelle kein Verlauf)."""
+        base = messages[:-1] if messages and messages[-1].get("tool_calls") else messages
+        try:
+            msg = self.model.turn(base + [{"role": "user", "content": self.REASON.format(
+                name=name, args=short(args, 1500))}], [])
+            said = (msg.get("content") or "").strip()[:2000]
+        except Unreachable as e:
+            self.log(f"Lauf {self.id}: Begründung des Plans nicht erhalten: {e}")
+            said = ""
+        return said or f"Vorgeschlagen: {name} {short(args, 400)} (das Modell schrieb keine Begründung)."
 
     def _limit(self, number, why, messages=None):
         if messages:

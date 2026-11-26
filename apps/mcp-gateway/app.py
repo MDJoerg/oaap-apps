@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.53.0"
+VERSION = "0.53.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -748,6 +748,19 @@ def agent_assertion(agent_key):
     return tok
 
 
+def assertion_subject(tok):
+    """0.53.1: die Benutzerkennung (`sub`) in einer Zusicherung, die die Plattform uns gab -- nur
+    für die Messzeile gelesen, nicht geprüft (prüfen tut die Destination). '' wenn unlesbar."""
+    import base64
+    try:
+        part = tok.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        sub = claims.get("sub") if isinstance(claims, dict) else ""
+        return sub if isinstance(sub, str) else ""
+    except (IndexError, ValueError):
+        return ""
+
+
 def propagate_access(person, agent_key=""):
     """Verfahren P (0.12, RFC-0066 Form A): die Person über eine Destination bis ins Zielsystem.
 
@@ -767,8 +780,10 @@ def propagate_access(person, agent_key=""):
     if agent_key and not person:
         # RFC-0134 D10 (a): der Agent des Server-Eintrags, als er selbst -- kein Rückfall
         # für eine Person (D8): eine Person kommt immer mit ihrer eigenen Zusicherung.
+        tok = agent_assertion(agent_key)
+        # 0.53.1 (Befund RFC-0134 M2): der Agent steht in der Messzeile wie eine Person
         return {"auth_kind": "none", "credential": "", "door": "destination",
-                "headers": {USER_ASSERTION: agent_assertion(agent_key)}}
+                "headers": {USER_ASSERTION: tok}, "agent_sub": assertion_subject(tok)}
     if person and person.get("token"):
         raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
                        "(Verfahren P). Das geht heute mit einer Person aus einem Chat der "
@@ -4290,7 +4305,9 @@ class Handler(BaseHTTPRequestHandler):
             books.record(DB, key, vrow["name"], state["kind"], state["name"], state["server"],
                          state["source"], state["outcome"], state["reason"],
                          (time.monotonic() - t0) * 1000, bytes_up, state["down"],
-                         person=self.person, procedure=state.get("procedure", "T"),
+                         person=self.person or ({"iss": "platform", "sub": state["agent_sub"]}
+                                                if state.get("agent_sub") else None),
+                         procedure=state.get("procedure", "T"),
                          status=state["status"], door=state["door"], light=self.asked,
                          system=state.get("system", ""), approved_by=state.get("approved_by", ""))
             if state["sse"]:
@@ -4313,6 +4330,8 @@ class Handler(BaseHTTPRequestHandler):
             state["procedure"] = "I"
         try:
             server, url = server_access(srow, self.person)
+            if server.get("agent_sub"):
+                state["agent_sub"] = server["agent_sub"]
         except NoPersonal as exc:
             # RFC-0095 §4.3: abgelehnt, bevor etwas hinausgeht; der Automat zählt es nicht.
             done("refused", "personal", door="gateway")

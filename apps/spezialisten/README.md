@@ -7,6 +7,11 @@ Ein **Spezialist** ist eine festgehaltene Assistenten-Revision (`analyse@3`) mit
 eines Menschen. Die Regel „ein Assistent trägt keine Rechte“ gilt im Chat weiter. Der
 Spezialist ist der ausdrücklich verwaltete Sonderfall.
 
+**0.8.3 (Befund in bec, 26.11.):** Schlägt das Modell einen ändernden Aufruf vor, ohne ein Wort
+dazu zu schreiben, fragt der Lauf in einem Zug ohne Werkzeuge nach der Begründung für die Person,
+die freigibt. Kommt keine, steht im Plan, was aufgerufen werden soll, nie mehr nur „ohne
+Begründung des Modells“.
+
 ## Was ein Lauf tut
 
 1. Die App fragt alle 30 s die App **Vorgänge** (ab 0.13.0), welche Vorgänge an diesem

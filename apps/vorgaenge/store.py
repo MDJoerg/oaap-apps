@@ -905,8 +905,13 @@ class Store:
                 f"({','.join('?' * len(OPEN))}) ORDER BY updated LIMIT 200", [uid] + list(OPEN)).fetchall()
             out = []
             for c in rows:
+                # 0.23.1 (Befund bec 26.11.): eine Zuweisung AN uid durch jemand anderen zählt als
+                # Neues -- vorher weckte nur ein Kommentar; andere Rollenwechsel (auch die eigene
+                # Rückgabe) bleiben außen vor
                 last = self.db.execute("SELECT seq, actor, type, at FROM entries WHERE case_id=? "
-                                       "AND type != 'role' ORDER BY seq DESC LIMIT 1", (c["id"],)).fetchone()
+                                       "AND (type != 'role' OR (json_extract(data, '$.to') = ? "
+                                       "AND actor != ?)) ORDER BY seq DESC LIMIT 1",
+                                       (c["id"], uid, uid)).fetchone()
                 runs = self.db.execute("SELECT COUNT(DISTINCT json_extract(data, '$.run')) FROM entries "
                                        "WHERE case_id=? AND actor=? AND type='spec'", (c["id"], uid)).fetchone()[0]
                 out.append({"number": c["number"], "title": c["title"], "status": c["status"],
