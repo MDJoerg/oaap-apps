@@ -41,6 +41,18 @@ Ein Spezialist mit dem Haken **„leitet“** verteilt Teilaufgaben an die Spezi
   (bis 8) und in den Einstellungen von Vorgänge; die kleinere Zahl gilt.
 - Auftrag und Ergebnis stehen im Vorgang im Reiter *Intern*. Die meldende Person sieht sie nicht.
 
+## Schließen und Prüfen
+
+Kam ein Vorgang von einem anderen System (über ein Tor), darf der Leiter ihn **schließen** – mit
+einem Beleg (dem freigegebenen und gelungenen Aufruf) oder mit der Begründung, warum nichts zu
+ändern war. Sein Schließtext ist öffentlich: ihn liest das System, das den Vorgang geliefert hat.
+
+**Zur Prüfung** geht ein Vorgang, wenn der Leiter es will, wenn ihn jemand von Hand markiert, wenn
+er ohne Änderung geschlossen wurde, wenn eine Grenze erreicht war, wenn etwas ohne Einzelfreigabe
+lief, und zufällig als Stichprobe (in Vorgänge je Bereich, Standard 10 %). Prüfen können die
+Zuständigen des Bereichs und ein dort eingetragener prüfender Spezialist – nie der, der die Arbeit
+gemacht hat. „Nacharbeit“ öffnet den Vorgang wieder, und der Leiter ist wieder dran.
+
 ## Ampel des Bereichs
 
 Hat der Bereich in Vorgänge eine Ampel, nutzt der Spezialist nur Modelle und Sichten bis zu

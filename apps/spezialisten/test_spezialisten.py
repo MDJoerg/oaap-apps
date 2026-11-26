@@ -201,6 +201,8 @@ class Ki(BaseHTTPRequestHandler):
         SEEN.append(body)
         AI_LIGHT.append(self.headers.get("X-OAAP-Light", ""))
         step = SCRIPT["plan"].pop(0) if SCRIPT["plan"] else ("text", "Nichts mehr zu tun.")
+        if step[0] == "call":           # 0.8.0: Argumente, die erst beim Zug feststehen (eine Belegnummer)
+            step = step[1]()
         if step[0] == "deny":
             return self._send(403, {"error": {"message": "Ampel"}})
         if step[0] == "tool":
@@ -648,6 +650,110 @@ try:
        and case(n12)["responsible"] == "", SEEN[0]["messages"][1]["content"][-400:])
     st, page = vg_call("GET", f"/v/{n12}", MEL)
     ok("L: KÖDER: die Meldende sieht weder Auftrag noch Ergebnis", "M_BEST_EKO" not in page and "Auftrag" not in page, "")
+    # ------------------------------------------------------------ 0.8.0 (RFC-0134 Stufe 3): schließen, prüfen
+    import sqlite3
+
+    def as_gate(n):
+        """Wie eine Lieferung durch ein Tor (RFC-0135): der Bezug des Vorgangs ist `gate`."""
+        db = sqlite3.connect(os.path.join(DATA, "vg.db"))
+        with db:
+            db.execute("UPDATE cases SET object_kind='gate', object_id=? WHERE number=?", (f"sap-support/{n}", n))
+        db.close()
+
+    ok("C: KÖDER: an einem Vorgang einer Person bietet der Lauf kein „abschliessen“ an, aber „pruefen_markieren“",
+       "abschliessen" not in lead_tools and "pruefen_markieren" in lead_tools, lead_tools)
+    vg_call("POST", "/bereiche/pruefung", ADMIN, {"queue": "analyse", "share": "0", "uid": ""}, form=True)
+    SCRIPT["plan"] = [("text", "aufgeräumt")] * 5
+    app.poll_once(log=lambda *a: None)
+    n13 = report("ME21N: keine Berechtigung", "Benutzer KLAUS kann keine Bestellung anlegen.")
+    as_gate(n13)
+    SCRIPT["plan"] = [("tool", "file_solution", {"text": "Rolle Z_EINKAUF an KLAUS"}, "Die Rolle fehlt.")]
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    tools13 = [t["function"]["name"] for t in SEEN[0]["tools"]]
+    sys13 = SEEN[0]["messages"][0]["content"]
+    ok("C: aus einem Tor: der Leiter bekommt „abschliessen“ und den Rahmen dazu (öffentlich, Belege: keine)",
+       "abschliessen" in tools13 and "ÖFFENTLICH" in sys13 and "Mögliche Belege: keine" in sys13, tools13)
+    plan13 = [e for e in steps_of(n13) if e["step"]["kind"] == "plan"]
+    approve(n13, plan13[-1]["seq"])
+
+    def close_with_proof():
+        proofs = case(n13)["proofs"]
+        return ("tool", "abschliessen", {"text": "Die Rolle Z_EINKAUF ist zugeordnet. Bitte ME21N erneut versuchen.",
+                                         "beleg": proofs[0]["seq"] if proofs else 0})
+    SCRIPT["plan"] = [("tool", "abschliessen", {"text": "Erledigt.", "beleg": 1}),
+                      ("call", close_with_proof)]
+    SEEN.clear(); CALLS.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n13)
+    tool13 = [e for e in steps_of(n13) if e["step"]["kind"] == "tool"]
+    ok("C: der freigegebene Aufruf lief zuerst und steht als Beleg im Rahmen",
+       [x["name"] for x in CALLS] == ["file_solution"] and tool13 and not tool13[0]["step"].get("failed")
+       and f"#{tool13[0]['seq']} (file_solution)" in SEEN[0]["messages"][0]["content"], (CALLS, tool13))
+    ok("C: KÖDER: ein falscher Beleg -- nicht geschlossen, das Modell erfährt den Grund von Vorgänge",
+       "Nicht geschlossen" in SEEN[1]["messages"][-1]["content"] and "belegt nichts" in SEEN[1]["messages"][-1]["content"],
+       SEEN[1]["messages"][-1])
+    ok("C: mit dem richtigen Beleg geschlossen: durch die Leitung, Lauf endet „abgeschlossen“",
+       c["status"] == "closed" and "closed" in {r["reason"] for r in S.runs() if r["case_number"] == n13}
+       and any(e["type"] == "status" and not e["internal"] and "Z_EINKAUF ist zugeordnet" in e["text"]
+               for e in c["entries"]), (c["status"], S.runs()[:1]))
+    ok("C: die Meldende (hier das andere System) liest den Schließtext",
+       "Z_EINKAUF ist zugeordnet" in vg_call("GET", f"/v/{n13}", MEL)[1], "")
+
+    n14 = report("ME23N: Bestellung nicht sichtbar", "Benutzer EVA sieht Bestellung 4500000123 nicht.")
+    as_gate(n14)
+    SCRIPT["plan"] = [("tool", "find_dumps", {"report": "ME23N"}),
+                      ("tool", "pruefen_markieren", {"grund": "EVA hat womöglich zu viele Rechte."}),
+                      ("text", "Ich bin mir nicht sicher; bitte prüfen.")]
+    app.poll_once(log=lambda *a: None)
+    c = case(n14)
+    ok("C: der Leiter markiert zur Prüfung, sein Lauf geht weiter und gibt zurück",
+       c["review_reasons"] == ["lead"] and c["responsible"] == ""
+       and any(e["type"] == "review_mark" for e in c["entries"]), (c["review_reasons"], c["responsible"]))
+
+    # die Grenzen der Tests oben haben ältere Vorgänge markiert (richtig so, Vorgänge 0.23); hier zählt nur n14
+    db = sqlite3.connect(os.path.join(DATA, "vg.db"))
+    with db:
+        n_old = db.execute("UPDATE cases SET review_mark='' WHERE number != ? AND review_mark != ''", (n14,)).rowcount
+    db.close()
+    ok("C: die Grenzen der Läufe oben haben Vorgänge zur Prüfung markiert", n_old >= 1, n_old)
+    st, _ = vg_call("POST", "/bereiche/pruefung", ADMIN, {"queue": "analyse", "share": "0", "uid": "basis"}, form=True)
+    SCRIPT["plan"] = [("tool", "find_dumps", {"report": "ME23N"}),
+                      ("tool", "file_solution", {"text": "korrigieren"}),
+                      ("tool", "pruefung_abgeben", {"ergebnis": "nacharbeit",
+                                                    "text": "Die Rechte von EVA sind nicht geprüft; SU53 lesen."})]
+    SEEN.clear(); CALLS.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n14)
+    rv = [e for e in c["entries"] if e["type"] == "review"]
+    ok("C: der Prüfer bekommt den Prüfrahmen, nur lesende Werkzeuge und „pruefung_abgeben“",
+       SEEN and "PRÜFST" in SEEN[0]["messages"][0]["content"] and "<pruefgrund>lead</pruefgrund>" in SEEN[0]["messages"][1]["content"]
+       and [t["function"]["name"] for t in SEEN[0]["tools"]] == ["find_dumps", "pruefung_abgeben"],
+       [(m["messages"][0]["content"][:30], m["messages"][1]["content"][:40]) for m in SEEN])
+    ok("C: KÖDER: ein änderndes Werkzeug läuft in der Prüfung nie",
+       not [x for x in CALLS if x["name"] == "file_solution"], CALLS)
+    ok("C: genau ein Urteil „Nacharbeit“ vom Prüfer, das Merkmal ist weg",
+       len(rv) == 1 and rv[0]["by"] == "Basis-Check (KI)" and rv[0]["review"].get("result") == "rework"
+       and c["review_reasons"] == [], (rv, c["review_reasons"]))
+
+    n15 = report("ME22N: Freigabe fehlt", "Benutzer OTTO kann nicht freigeben.")
+    as_gate(n15)
+    SCRIPT["plan"] = [("tool", "abschliessen", {"text": "Die Freigabe ist nicht nötig; OTTO arbeitet ohne Strategie.",
+                                                "ohne_aenderung": "Die Bestellung hat keine Freigabestrategie."}),
+                      ("text", "Ich weiß es nicht genau.")]
+    app.poll_once(log=lambda *a: None)
+    c = case(n15)
+    rv = [e for e in c["entries"] if e["type"] == "review"]
+    ok("C: ohne Änderung geschlossen -> zur Prüfung; der Prüfer ohne Urteil -> „kein Urteil“, das Merkmal bleibt",
+       c["status"] == "closed" and c["review_reasons"] == ["no_write"] and len(rv) == 1
+       and rv[0]["review"].get("result") == "none", (c["status"], c["review_reasons"], rv))
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    ok("C: nach „kein Urteil“ ist der Prüfer an diesem Merkmal nicht mehr dran", not SEEN, len(SEEN))
+    st, page = vg_call("GET", f"/v/{n15}", MEL)
+    ok("C: KÖDER: die meldende Seite sieht weder Merkmal noch Prüfung", "zur Prüfung" not in page
+       and "Kein Urteil" not in page, "")
+    vg_call("POST", "/bereiche/pruefung", ADMIN, {"queue": "analyse", "share": "10", "uid": ""}, form=True)
     S.save(dict(base, id=sid, active="1", leads="", team=""), "chef", LIM)
 
     # ------------------------------------------------------------ 8. die Seite

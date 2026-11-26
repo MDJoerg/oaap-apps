@@ -164,6 +164,28 @@ Aufträge stehen in derselben Tabelle wie Rückfragen (Spalte `kind`), zählen a
 deren Grenzen. Ein Beauftragter ist nie verantwortlich und kann deshalb weder Schritte
 schreiben noch Aufträge geben (Tiefe eins).
 
+## Schließen durch den Leiter, Prüfung (seit 0.23.0, RFC-0134 Stufe 3)
+
+Liefert ein anderes System einen Vorgang durch ein Tor, kann der leitende Spezialist ihn
+selbst schließen. Ob er darf, entscheidet diese App, nicht das Modell:
+
+| Aufruf | Wer | Regel |
+|---|---|---|
+| `GET /api/spez/case/<n>` | jeder Spezialist, der lesen darf | dazu `from_gate`, `proofs` (gelungene Aufrufe nach einer Freigabe oder unter aufgehobener Freigabe: Belege), `review_reasons`, `reviewing` (ich soll prüfen) |
+| `POST /api/spez/case/<n>/close` `{text, proof \| no_write, run, assistant}` | nur der verantwortliche Spezialist | nur Vorgänge aus einem Tor; nichts offen (Rückfrage, Auftrag, Plan); Beleg = gelungener Aufruf NACH der Freigabe in diesem Vorgang, sonst `no_write` mit Begründung (dann zur Prüfung); Status `closed`, Markierung „durch die Leitung“, der Text ist öffentlich (das liest das Tor als Antwort) |
+| `POST /api/spez/case/<n>/mark` `{reason}` | nur der verantwortliche Spezialist | zur Prüfung, Grund „vom Leiter“ |
+| `POST /api/spez/case/<n>/review` `{result: ok \| rework \| none, text}` | nur der prüfende Spezialist des Bereichs, einmal je Markierung | `none` = kein Urteil, dann prüfen die Menschen |
+
+**Zur Prüfung** kommt ein Vorgang durch den Leiter, von Hand (Formular am Vorgang) und von
+selbst: geschlossen ohne Änderung, eine Grenze des Laufs, ein Aufruf unter aufgehobener
+Freigabe und als **Stichprobe** der Vorgänge, die der Leiter mit Beleg schließt (je Bereich,
+Standard 10 %, Seite des Bereichs → *Prüfung*). Dort trägt der tenant_admin auch einen
+prüfenden Spezialisten ein; er bekommt markierte Vorgänge, sobald niemand mehr daran arbeitet,
+und nie die eigenen. Die Übersicht hat die Ansicht *zur Prüfung*. Die Prüfung (Menschen mit
+„Bearbeiten“ im Bereich oder der Prüfer) ist „in Ordnung“ oder „Nacharbeit“; Nacharbeit
+öffnet einen beendeten Vorgang wieder, der Leiter bleibt verantwortlich und ist wieder dran.
+Merkmal und Prüfung sind intern.
+
 ## Lieferungen durch ein Tor (seit 0.21.0, RFC-0135 Stufe 1)
 
 Ein anderes System (SAP per SM59, ein Node-RED-Flow, ein Formular) liefert an
@@ -503,6 +525,7 @@ python3 apps/vorgaenge/test_mcp.py
 python3 apps/vorgaenge/test_stage2.py   # zwei Mandanten, Übergabe und Antwort, Backend
 python3 apps/vorgaenge/test_gate.py     # Lieferungen durch ein Tor (RFC-0135)
 python3 apps/vorgaenge/test_tasks.py    # Aufträge eines Leiters (RFC-0134 Stufe 2)
+python3 apps/vorgaenge/test_close_review.py   # Schließen durch den Leiter, Prüfung (Stufe 3)
 ```
 
 Der Test startet einen echten Server und setzt die Gateway-Kopfzeilen

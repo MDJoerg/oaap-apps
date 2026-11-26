@@ -66,10 +66,10 @@ import authz_client
 import gates
 import mcp_door
 from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, TASKS_MAX,
-                   Refused, Store, canonical)
+                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, REVIEW_REASON, REVIEW_RESULT,
+                   STATUS_LABEL, SUBSTATUS, TASKS_MAX, Refused, Store, canonical)
 
-VERSION = "0.22.0"
+VERSION = "0.23.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -806,6 +806,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.first_responder_post(who, f)
             if p == "/bereiche/ampel":
                 return self.queue_light_post(who, f)
+            if p == "/bereiche/pruefung":
+                return self.queue_review_post(who, f)
             if p == "/bereiche/freigabeschluessel":
                 return self.approval_key_post(who, f)
             if p == "/partner":
@@ -824,7 +826,7 @@ class Handler(BaseHTTPRequestHandler):
     # Zuweisung erlaubt, und schreibt nur, wo er verantwortlich ist. Nur JSON (kein Formular).
     def spez_case(self, who, number):
         c = self.store.get(mcp_door.case_number(number))
-        if not c or not can_see(who, c) or not can_read_internal(who, c):
+        if not c or not ((can_see(who, c) and can_read_internal(who, c)) or self.store.reviewing(who.id, c)):
             raise Refused("Diesen Vorgang gibt es nicht, oder er liegt nicht in deinen Bereichen.")
         return c
 
@@ -838,6 +840,9 @@ class Handler(BaseHTTPRequestHandler):
                 c = self.spez_case(who, rest[5:])
                 qt = {q["id"]: q["title"] for q in self.store.queues()}
                 tech = c["tech"] or {}
+                # Plan -> Eintrag der Freigabe; ein Beleg ist erst ein Aufruf NACH der Freigabe
+                approved_plans = {e["data"].get("plan"): e["seq"] for e in c["entries"]
+                                  if e["type"] == "approval" and e["data"].get("ok")}
                 return self.json(200, {
                     "number": c["number"], "title": c["title"], "description": c["body"],
                     "kind": KIND_LABEL.get(c["kind"], c["kind"]), "status": c["status"],
@@ -863,6 +868,16 @@ class Handler(BaseHTTPRequestHandler):
                                  if c["responsible"] == who.id else []),
                     "tasks_used": sum(1 for k in c["consults"] if k.get("kind") == "task"),
                     "tasks_max": tasks_max(),
+                    # 0.23.0 (RFC-0134 §7/§8): ob der Leiter schließen darf, womit er es belegt,
+                    # das Prüfmerkmal, und ob ich hier prüfen soll
+                    "from_gate": c["object_kind"] == "gate",
+                    "proofs": [{"seq": e["seq"], "tool": e["data"].get("tool") or ""} for e in c["entries"]
+                               if e["type"] == "spec" and e["data"].get("kind") == "tool"
+                               and ((approved_plans.get(e["data"].get("plan")) or e["seq"]) < e["seq"]
+                                    or e["data"].get("lifted_by"))
+                               and not e["data"].get("failed")],
+                    "review_reasons": c["review_reasons"],
+                    "reviewing": self.store.reviewing(who.id, c) and not c.get("review_spec"),
                     "consultable": ([{"name": p["name"], "specialist": p["specialist"]}
                                      for p in self.store.consultable(c, who.id)]
                                     if c["responsible"] == who.id else []),
@@ -870,13 +885,17 @@ class Handler(BaseHTTPRequestHandler):
                                  "by_me": e["actor"] == who.id, "type": e["type"], "text": e["text"],
                                  "internal": bool(e.get("internal")),
                                  **({"step": {k: e["data"].get(k) for k in ("kind", "run", "assistant", "tool", "reason",
-                                                                           "arguments", "sha256", "plan")
+                                                                           "arguments", "sha256", "plan", "lifted_by",
+                                                                           "failed", "proof")
                                               if e["data"].get(k) is not None}} if e["type"] == "spec" else {}),
                                  **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind", "token")}}
                                     if e["type"] == "approval" else {}),
                                  **({"consult": {k: e["data"].get(k) for k in ("to_name", "specialist", "consult", "n")
                                                  if e["data"].get(k) is not None}}
-                                    if e["type"] in ("consult", "consult_answer", "task", "task_result") else {})}
+                                    if e["type"] in ("consult", "consult_answer", "task", "task_result") else {}),
+                                 **({"review": {k: e["data"].get(k) for k in ("reason", "result", "reasons")
+                                                if e["data"].get(k) is not None}}
+                                    if e["type"] in ("review_mark", "review") else {})}
                                 for e in c["entries"]]})
         except Refused as e:
             return self.json(404, {"error": str(e)})
@@ -892,7 +911,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.json(400, {"error": "Kein JSON-Objekt."})
         parts = rest.split("/")
-        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back", "consult", "answer", "task"):
+        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back", "consult", "answer", "task",
+                                                                     "close", "mark", "review"):
             return self.json(404, {"error": "unbekannt"})
         try:
             c = self.spez_case(who, parts[1])
@@ -918,6 +938,18 @@ class Handler(BaseHTTPRequestHandler):
                 seq = self.store.task(c, who.id, who.name, hit[0]["uid"], doc.get("text", ""), meta,
                                       tasks_max=tasks_max())
                 return self.json(200, {"ok": True, "task": seq, "to": hit[0]["name"]})
+            if parts[2] == "close":
+                # 0.23.0 (RFC-0134 §7): der Leiter schließt mit Beleg -- die Regeln stehen im Store
+                self.store.close_by_lead(c, who.id, who.name, str(doc.get("text") or ""), doc.get("proof") or 0,
+                                         str(doc.get("no_write") or ""), meta)
+                return self.json(200, {"ok": True, "closed": True})
+            if parts[2] == "mark":
+                self.store.mark_review(c, who.id, who.name, str(doc.get("reason") or ""), by="lead")
+                return self.json(200, {"ok": True})
+            if parts[2] == "review":
+                self.store.review(c, who.id, who.name, str(doc.get("result") or ""), str(doc.get("text") or ""),
+                                  by_spec=True)
+                return self.json(200, {"ok": True})
             if parts[2] == "answer":
                 try:
                     seq = int(doc.get("consult") or 0)
@@ -927,7 +959,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(200, {"ok": True})
             if parts[2] == "entry":
                 data = {k: doc.get(k) for k in ("run", "assistant", "tool", "arguments", "ms", "call_id",
-                                                "reason", "steps", "plan", "approved_by", "lifted_by")
+                                                "reason", "steps", "plan", "approved_by", "lifted_by", "failed")
                         if doc.get(k) is not None}
                 self.store.spec_entry(c, who.id, who.name, doc.get("kind", ""), doc.get("text", ""), data)
                 return self.json(200, {"ok": True})
@@ -940,6 +972,12 @@ class Handler(BaseHTTPRequestHandler):
         if not who.manager:
             raise Refused("Die Ampel eines Bereichs stellt der Mandanten-Administrator ein.")
         self.store.set_queue_light(f.get("queue", ""), f.get("light", ""), who.id)
+        return self.redirect(queue_href(f.get("queue", "")))
+
+    def queue_review_post(self, who, f):
+        if not who.manager:
+            raise Refused("Die Prüfung eines Bereichs stellt der Mandanten-Administrator ein.")
+        self.store.set_queue_review(f.get("queue", ""), f.get("share", ""), f.get("uid", ""), who.id)
         return self.redirect(queue_href(f.get("queue", "")))
 
     def approval_key_page(self, who, msg=""):
@@ -1500,8 +1538,9 @@ Betreff und Text.</p>
         qt = {x["id"]: x["title"] for x in queues}
         readable = who.readable(queues)
         view = arg("view")
-        view = view if view in ("mine", "assigned") else ""
-        status = arg("status", "all" if arg("alle") == "1" else "open")
+        view = view if view in ("mine", "assigned", "review") else ""
+        # „zur Prüfung“ zeigt auch beendete Vorgänge (die meisten markierten sind geschlossen)
+        status = arg("status", "all" if arg("alle") == "1" or view == "review" else "open")
         status = status if status in ("open", "all") or status in STATUS_LABEL else "open"
         queue = arg("queue")
         text = arg("q")[:200]
@@ -1545,6 +1584,9 @@ Betreff und Text.</p>
             out = [r for r in out if who.id in (r["reporter"], r["responsible"], r["assignee"]) or r["id"] in asked]
         elif view == "assigned":
             out = [r for r in out if who.id in (r["responsible"], r["assignee"]) or r["id"] in asked]
+        elif view == "review":
+            # 0.23.0 (RFC-0134 §8): markierte Vorgänge -- nur für die Bearbeitenden, auch beendete
+            out = [r for r in out if r.get("review_mark") and r["id"] in handled]
         if queue:
             out = [r for r in out if r["queue"] == queue]
         if text:
@@ -1575,7 +1617,8 @@ Betreff und Text.</p>
                 f"<label>Suchen<input type=search name=q value='{esc(text)}' placeholder='Nummer, Betreff, Text'></label>"
                 "<label>Ansicht" + sel("view", view, (
                     ("", "alles, was ich sehe"), ("mine", "meine (gemeldet, verantwortlich, zugewiesen)"),
-                    ("assigned", "mir zugewiesen oder von mir verantwortet"))) + "</label>"
+                    ("assigned", "mir zugewiesen oder von mir verantwortet"),
+                    ("review", "zur Prüfung"))) + "</label>"
                 "<label>Bereich" + sel("queue", queue, [("", "alle Bereiche")] + [
                     (x, qt.get(x, x)) for x in seen_queues]) + "</label>"
                 "<label>Status" + sel("status", status, [("open", "offen"), ("all", "alle")] + [
@@ -1586,11 +1629,15 @@ Betreff und Text.</p>
                 + "</form>")
         mine_now = sum(1 for r in rows.values() if r["status"] in OPEN
                        and who.id in (r["responsible"], r["assignee"]))
+        to_review = sum(1 for r in rows.values() if r.get("review_mark") and r["id"] in handled
+                        and who.may("triage", r["queue"]))
         quick = ("<p class='muted quick'>"
                  + (f"<a href='{esc(link(view='assigned', status='open', queue=''))}'>Mir zugewiesen oder von "
                     f"mir verantwortet ({mine_now})</a>" if mine_now else "")
                  + (f"<a href='{esc(link(view='', status='open', queue=''))}'>In meinen Bereichen</a>"
                     if readable else "")
+                 + (f"<a href='{esc(link(view='review', status='all', queue=''))}'>Zur Prüfung ({to_review})</a>"
+                    if to_review else "")
                  + f"<a href='{esc(link(view='mine', status='open', queue=''))}'>Von mir gemeldet</a>"
                  + f"<a href='{esc(link(view='', status='all', queue=''))}'>auch erledigte</a></p>")
         head = ""
@@ -1695,7 +1742,7 @@ Betreff und Text.</p>
             if log:
                 body += ("<h2>Zuletzt geändert</h2><div class=oaap-tablewrap><table class=oaap-table><tbody>" + "".join(
                     f"<tr><td class=muted>{esc(x['at'][:16].replace('T', ' '))}</td><td>{esc(x['queue'])}</td>"
-                    f"<td>{esc(x['name']) if x['action'] in ('set', 'remove') else ''} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt' if x['action'] == 'remove' else 'Ampel ' + LIGHT_WORD.get(x['kind'] if x['kind'] != '-' else '', x['kind']) if x['action'] == 'light' else 'Freigabeschlüssel neu erzeugt' if x['action'] == 'approval_key' else esc(x['action'])}</td>"
+                    f"<td>{esc(x['name']) if x['action'] in ('set', 'remove') else ''} {'eingetragen als ' + kind_word.get(x['kind'], x['kind']) if x['action'] == 'set' else 'entfernt' if x['action'] == 'remove' else 'Ampel ' + LIGHT_WORD.get(x['kind'] if x['kind'] != '-' else '', x['kind']) if x['action'] == 'light' else 'Freigabeschlüssel neu erzeugt' if x['action'] == 'approval_key' else 'Prüfung: Stichprobe ' + esc(x['kind']) if x['action'] == 'review' else esc(x['action'])}</td>"
                     f"<td class=muted>von {esc(x['actor_name'])}</td></tr>" for x in log) + "</tbody></table></div>")
             body += """<h2>Bereich anlegen</h2>
 <form method=post action=/bereiche class=inline>
@@ -1755,12 +1802,28 @@ Betreff und Text.</p>
                           f"<p class=muted>Ein Spezialist schickt diese Ampel an das KI- und das MCP-Gateway. Sie "
                           f"nehmen dann nur Modelle und Sichten bis zu dieser Farbe – grün ist am strengsten. "
                           f"Ohne eigene gelten die Decken seiner Schlüssel. Unterschriebene Freigaben: "
-                          f"<a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p>"))
+                          f"<a href=/bereiche/freigabeschluessel>Freigabeschlüssel</a>.</p>")
+                + af.card("Prüfung",
+                          f"<form method=post action=/bereiche/pruefung class=inline>"
+                          f"<input type=hidden name=queue value='{esc(q['id'])}'>"
+                          f"<div><label>Stichprobe (%)</label><input name=share type=number min=0 max=100 "
+                          f"value='{int(q.get('review_share') or 0)}' style='width:6rem'></div>"
+                          f"<div><label>Prüfender Spezialist (KI)</label><select name=uid><option value=''>keiner – "
+                          f"nur Menschen</option>"
+                          + "".join(f"<option value='{esc(p['uid'])}'{' selected' if p['uid'] == q.get('reviewer') else ''}>"
+                                    f"{esc(p['name'])}</option>" for p in people if p["uid"] in self.store.specialists())
+                          + f"</select></div><button>Speichern</button></form>"
+                          f"<p class=muted>Von den Vorgängen, die ein leitender Spezialist schließt, geht dieser Anteil "
+                          f"zufällig zur Prüfung – zusätzlich zu denen, die er selbst markiert, die ohne Änderung "
+                          f"geschlossen wurden, die an eine Grenze stießen oder in denen etwas ohne Einzelfreigabe "
+                          f"lief. Prüfen können die Zuständigen und, wenn eingetragen, ein Spezialist; er prüft nie "
+                          f"seine eigene Arbeit. „Nacharbeit“ öffnet den Vorgang wieder.</p>"))
         head = (f"<div class=oaap-objhead><h1>{esc(q['title'])}</h1>"
                 + af.facts([("Kennung", f"<code>{esc(q['id'])}</code>"),
                             ("Zuständige", str(len(mem))),
                             ("Erstbearbeitung", f"{KI} {esc(fr_name)}" if fr_name else "keine"),
-                            ("Ampel", esc(LIGHT_WORD.get(q.get("light") or "", "keine eigene")))]) + "</div>")
+                            ("Ampel", esc(LIGHT_WORD.get(q.get("light") or "", "keine eigene"))),
+                            ("Stichprobe", f"{int(q.get('review_share') or 0)} %")]) + "</div>")
         return self.send(200, page(q["title"], head + body, "queues", h1=False,
                                    back=af.back("/bereiche", "Zu den Bereichen"),
                                    obj=f"Bereich:{q['id']}", obj_title=q["title"]))
@@ -1917,6 +1980,16 @@ Betreff und Text.</p>
                 box.append(f"<div class='card c-rat'><div class=muted>{when} · {who_} {KI} · {head}</div>"
                            f"<div class=body data-md>{esc(e['text'])}</div></div>")
                 continue
+            elif e["type"] in ("review_mark", "review"):
+                # 0.23.0 (RFC-0134 §8): Prüfmerkmal und Prüfung -- intern
+                if e["type"] == "review_mark":
+                    head = "zur Prüfung markiert: " + esc(REVIEW_REASON.get(d.get("reason"), d.get("reason") or ""))
+                else:
+                    head = "Prüfung: " + esc(REVIEW_RESULT.get(d.get("result"), "kein Urteil"))
+                ai = " " + KI if e["actor"] in specs else ""
+                text_ = f"<div class=body data-md>{esc(e['text'])}</div>" if e["text"] else ""
+                box.append(f"<div class='card c-int'><div class=muted>{when} · {who_}{ai} · {head}</div>{text_}</div>")
+                continue
             elif e["type"] == "spec_stop":
                 box.append(f"<div class=card><div class=muted>{when} · {who_} · Spezialist "
                            f"{'angehalten' if d.get('on') else 'wieder zugelassen'}</div></div>")
@@ -1955,6 +2028,22 @@ Betreff und Text.</p>
                           f"<label>Frage (intern; die Befragten antworten einmal und werden nicht verantwortlich)</label>"
                           f"<textarea name=text maxlength=10000 required></textarea>"
                           f"<p><button>Rückfrage stellen</button></p></form></div>")
+        # 0.23.0 (RFC-0134 §8): prüfen, wenn markiert; markieren, wenn nicht -- wer den Bereich bearbeitet
+        if who.may("triage", c["queue"]):
+            reasons = ", ".join(REVIEW_REASON.get(x, x) for x in c["review_reasons"])
+            if c["review_reasons"]:
+                forms += (f"<div class=card><h2 style='margin-top:0'>Zur Prüfung ({esc(reasons)})</h2>"
+                          f"<form method=post action='{base}/pruefung'>"
+                          f"<label>Ergebnis der Prüfung (intern; bei Nacharbeit Pflicht)</label>"
+                          f"<textarea name=text maxlength=10000></textarea>"
+                          f"<p><button name=result value=ok class=primary>In Ordnung</button> "
+                          f"<button name=result value=rework>Nacharbeit</button></p></form>"
+                          f"<p class=muted>„Nacharbeit“ öffnet einen beendeten Vorgang wieder; der Leiter ist dann "
+                          f"wieder dran.</p></div>")
+            else:
+                forms += (f"<div class=card><form method=post action='{base}/pruefmarke' class=inline>"
+                          f"<input name=text required maxlength=2000 placeholder='Grund' style='width:20rem'>"
+                          f"<button>Zur Prüfung markieren</button></form></div>")
         if c["reporter"] == who.id and c["status"] == "answered":
             # 0.9.0 (RFC-0103 D10): abnehmen oder wieder öffnen -- dieselben Regeln wie im Chat
             forms += (f"<div class=card><h2 style='margin-top:0'>Passt die Lösung?</h2>"
@@ -2051,7 +2140,9 @@ Betreff und Text.</p>
                   '<button type=button data-md-mode=formatted aria-pressed=true>Formatiert</button>'
                   '<button type=button data-md-mode=raw aria-pressed=false>Roh</button></div>')
         overview = (f"<div class=card>{toggle}<div><b>{esc(KIND_LABEL.get(c['kind'], c['kind']))}</b> · "
-                    f"{pill(c['status'], c.get('mark', ''), c['reporter'] == who.id)} · Bereich "
+                    f"{pill(c['status'], c.get('mark', ''), c['reporter'] == who.id)}"
+                    + (" " + af.badge("zur Prüfung", "warn") if c["review_reasons"] and handles(who, c) else "")
+                    + f" · Bereich "
                     f"{esc(qt.get(c['queue'], c['queue']))} · "
                     f"gemeldet von {esc(c['reporter_name'])}</div>{obj}{src}{observers}"
                     f"<div class=body data-md style='margin-top:.6rem'>{esc(c['body'])}</div></div>"
@@ -2164,6 +2255,14 @@ Betreff und Text.</p>
             except ValueError:
                 raise Refused("Unbekannte Rückfrage.")
             self.store.answer_consult(c, who.id, who.name, seq, f.get("text", ""))
+        elif action == "pruefmarke":
+            if not who.may("triage", c["queue"]):
+                raise Refused("Zur Prüfung markiert, wer den Bereich bearbeitet.")
+            self.store.mark_review(c, who.id, who.name, f.get("text", ""), by="person")
+        elif action == "pruefung":
+            if not who.may("triage", c["queue"]):
+                raise Refused("Prüfen darf, wer den Bereich bearbeitet.")
+            self.store.review(c, who.id, who.name, f.get("result", ""), f.get("text", ""))
         elif action == "spezstop":
             if not who.may("triage", c["queue"]):
                 raise Refused("Anhalten darf, wer den Bereich bearbeitet.")
@@ -2179,7 +2278,8 @@ Betreff und Text.</p>
 
 
 SPEC_END = {"done": "fertig", "gave_back": "zurückgegeben", "limit": "Grenze erreicht",
-            "stopped": "angehalten", "error": "Fehler", "needs_approval": "wartet auf Freigabe"}
+            "stopped": "angehalten", "error": "Fehler", "needs_approval": "wartet auf Freigabe",
+            "closed": "abgeschlossen durch die Leitung"}
 
 
 MCP_RULES = mcp_door.Rules(

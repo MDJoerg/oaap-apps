@@ -84,7 +84,18 @@ jemand wieder zulässt.
 - Grenzen: ein Auftrag zur Zeit; höchstens `Aufträge je Vorgang` (1–8) am Leiter und
   `VORGAENGE_TASKS_MAX` in Vorgänge, die kleinere gilt. Danach bekommt der Leiter das Werkzeug
   nicht mehr und muss zusammenfassen und zurückgeben. Aufträge zählen nicht als Rückfragen.
-- Abschließen durch den Leiter und das Prüfmerkmal kommen mit Stufe 3.
+
+**Schließen und Prüfen (seit 0.8.0, RFC-0134 Stufe 3, Vorgänge ab 0.23.0):**
+- Kam der Vorgang von einem anderen System (Tor), bekommt der Leiter `abschliessen` (text, beleg
+  oder ohne_aenderung) und im Rahmen die möglichen Belege. Der Text ist öffentlich: ihn liest das
+  System. Ob Beleg oder Begründung reichen, entscheidet Vorgänge; lehnt es ab, erfährt das Modell
+  den Grund. Ohne Änderung geht der Vorgang von selbst zur Prüfung.
+- Jeder Leiter hat `pruefen_markieren` (grund); der Lauf geht danach weiter.
+- Ein **prüfender Spezialist** (in Vorgänge je Bereich eingetragen) liest markierte Vorgänge, bekommt
+  nur lesende Werkzeuge und `pruefung_abgeben` (in_ordnung, nacharbeit, kein_urteil) und liefert
+  genau ein Urteil. Ohne klares Urteil (Grenze, Modell ohne Werkzeug) liefert er „kein Urteil“,
+  dann prüfen die Menschen.
+- Jeder ausgeführte Aufruf, der scheitert, trägt `failed`: Er ist kein Beleg.
 
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 

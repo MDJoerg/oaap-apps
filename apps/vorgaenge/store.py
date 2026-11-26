@@ -16,8 +16,8 @@ Server zu starten:
 """
 import hashlib
 import json
+import random
 import re
-import hashlib
 import sqlite3
 import threading
 import time
@@ -72,6 +72,13 @@ CONSULT_SPECIALISTS_MAX = 3
 SPEC_TO_SPEC_IN_ROW = 2
 # 0.22.0 (RFC-0134 §5, D4): Aufträge des Leiters je Vorgang (Mandant nur niedriger), einer zur Zeit
 TASKS_MAX = 8
+# 0.23.0 (RFC-0134 §8, D8): warum ein Vorgang zur Prüfung steht, und was die Prüfung ergab.
+# Mehrere Gründe sammeln sich (Komma), eine Prüfung löscht sie alle.
+REVIEW_REASON = {"lead": "vom Leiter", "person": "von Hand", "no_write": "geschlossen ohne Änderung",
+                 "limit": "Grenze erreicht", "lifted": "Änderung ohne Einzelfreigabe", "sample": "Stichprobe"}
+REVIEW_RESULT = {"ok": "in Ordnung", "rework": "Nacharbeit"}
+# D8 (b): Anteil der vom Leiter geschlossenen Vorgänge, die als Stichprobe zur Prüfung gehen (je Bereich)
+REVIEW_SHARE = 10
 
 
 def _with_substatus(nxt):
@@ -96,7 +103,9 @@ def _with_substatus(nxt):
 NEXT = _with_substatus(NEXT)
 # 0.9.0 (RFC-0103 D10/D11): wie ein Vorgang geschlossen wurde -- eine Markierung am
 # Schließen, kein eigener Status. Leer: von den Bearbeitenden geschlossen.
-MARK_LABEL = {"accepted": "Lösung passt", "no_response": "ohne Rückmeldung"}
+MARK_LABEL = {"accepted": "Lösung passt", "no_response": "ohne Rückmeldung",
+              # 0.23.0 (RFC-0134 §7, D7): der Leiter schloss einen Vorgang eines anderen Systems mit Beleg
+              "closed_by_lead": "durch die Leitung"}
 ACCEPT_DAYS = 14
 OPEN = ("new", "triage", "in_progress", "answered", "reopened", "handed_over") + SUBSTATUS
 
@@ -297,6 +306,15 @@ class Store:
             # 0.22.0 (RFC-0134 §5): ein Auftrag des Leiters steht in derselben Tabelle, Art `task`
             if "kind" not in {r[1] for r in self.db.execute("PRAGMA table_info(consults)")}:
                 self.db.execute("ALTER TABLE consults ADD COLUMN kind TEXT NOT NULL DEFAULT 'consult'")
+            # 0.23.0 (RFC-0134 §8): das Prüfmerkmal (Gründe, Komma) und ob der prüfende Spezialist
+            # schon geliefert hat; je Bereich der Anteil der Stichprobe und der prüfende Spezialist
+            for col, ddl in (("review_mark", "TEXT NOT NULL DEFAULT ''"), ("review_spec", "INTEGER NOT NULL DEFAULT 0")):
+                if col not in {r[1] for r in self.db.execute("PRAGMA table_info(cases)")}:
+                    self.db.execute(f"ALTER TABLE cases ADD COLUMN {col} {ddl}")
+            for col, ddl in (("review_share", f"INTEGER NOT NULL DEFAULT {REVIEW_SHARE}"),
+                             ("reviewer", "TEXT NOT NULL DEFAULT ''")):
+                if col not in {r[1] for r in self.db.execute("PRAGMA table_info(queues)")}:
+                    self.db.execute(f"ALTER TABLE queues ADD COLUMN {col} {ddl}")
             # 0.10.0 (D3): wer je verantwortlich oder zugewiesen war, liest weiter
             self.db.execute("CREATE TABLE IF NOT EXISTS involved (case_id TEXT NOT NULL, "
                             "uid TEXT NOT NULL, role TEXT NOT NULL, since TEXT NOT NULL, "
@@ -497,6 +515,27 @@ class Store:
             self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid, kind) "
                             "VALUES (?,?,?,?,?,?)", (_now(), qid, actor, "light", "", light or "-"))
 
+    def set_queue_review(self, qid, share, reviewer, actor):
+        """0.23.0 (RFC-0134 §8, D8): je Bereich der Anteil der Stichprobe (0–100 %) unter den
+        Vorgängen, die der Leiter schließt, und ein Spezialist, der markierte Vorgänge prüft
+        (leer = nur Menschen)."""
+        try:
+            share = int(str(share).strip().rstrip("%").strip())
+        except ValueError:
+            raise Refused("Stichprobe: eine Zahl von 0 bis 100.")
+        if not 0 <= share <= 100:
+            raise Refused("Stichprobe: eine Zahl von 0 bis 100.")
+        reviewer = (reviewer or "").strip()
+        with self.lock, self.db:
+            if reviewer and not self.db.execute("SELECT 1 FROM people WHERE uid=? AND specialist=1",
+                                                (reviewer,)).fetchone():
+                raise Refused("Prüfen kann hier nur ein Spezialist, den die App schon kennt.")
+            if not self.db.execute("UPDATE queues SET review_share=?, reviewer=? WHERE id=?",
+                                   (share, reviewer, qid)).rowcount:
+                raise Refused("Diesen Bereich gibt es nicht.")
+            self.db.execute("INSERT INTO queue_log (at, queue, actor, action, uid, kind) "
+                            "VALUES (?,?,?,?,?,?)", (_now(), qid, actor, "review", reviewer, f"{share}%"))
+
     def _first_responder(self, cid, queue):
         """Unter der Sperre: der Spezialist des Bereichs wird verantwortlich (intern vermerkt)."""
         r = self.db.execute("SELECT q.first_responder AS uid, p.name AS name FROM queues q "
@@ -657,6 +696,7 @@ class Store:
             c["involved"] = sorted({r["uid"] for r in self.db.execute(
                 "SELECT uid, role FROM involved WHERE case_id=?", (c["id"],))
                 if r["role"] not in ("consulted", "tasked") or c["status"] not in ENDED})
+            c["review_reasons"] = [x for x in (c.get("review_mark") or "").split(",") if x]
             c["consults"] = [dict(r) for r in self.db.execute(
                 "SELECT * FROM consults WHERE case_id=? ORDER BY seq", (c["id"],))]
         return c
@@ -872,6 +912,17 @@ class Store:
                 out.append({"number": c["number"], "title": c["title"], "status": c["status"],
                             "queue": c["queue"], "updated": c["updated"], "runs": runs,
                             "last": dict(last) if last else None})
+            # 0.23.0 (RFC-0134 §8): markierte Vorgänge der Bereiche, die uid prüft -- erst, wenn
+            # niemand mehr daran arbeitet (beendet oder zurückgegeben), nie die eigenen
+            for r in self.db.execute(
+                    "SELECT c.number, c.title, c.status, c.queue, c.updated FROM cases c JOIN queues q "
+                    "ON q.id = c.queue WHERE q.reviewer=? AND c.review_mark != '' AND c.review_spec=0 "
+                    "AND c.responsible != ? AND (c.responsible = '' OR c.status IN ('closed', 'rejected')) "
+                    "AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.case_id = c.id AND e.actor = ? AND "
+                    "e.type = 'status' AND json_extract(e.data, '$.mark') = 'closed_by_lead') "
+                    "ORDER BY c.updated LIMIT 50", (uid, uid, uid)).fetchall():
+                out.append({"number": r["number"], "title": r["title"], "status": r["status"],
+                            "queue": r["queue"], "updated": r["updated"], "review": 1})
             # 0.15.0 (§3.4/§6): offene Rückfragen an uid -- je eine, mit der Frage
             for r in self.db.execute(
                     f"SELECT k.seq, k.kind, k.asked_by, c.number, c.title, c.status, c.queue, c.updated FROM consults k "
@@ -912,6 +963,12 @@ class Store:
                 # der Hash entsteht hier, nicht beim Spezialisten: Vorgänge bindet die Freigabe
                 data["sha256"] = self.plan_hash(kind, data, text)
             self._entry(c["id"], uid, name, "spec", text, data, internal=True)
+            # 0.23.0 (RFC-0134 §8): die Plattform markiert, ohne den Leiter zu fragen
+            if kind == "end" and data.get("reason") == "limit":
+                self._mark(c["id"], "limit", "", "system", "Automatisch")
+            if kind == "tool" and data.get("lifted_by"):
+                self._mark(c["id"], "lifted", f"{data.get('tool') or ''} lief ohne Einzelfreigabe "
+                                              f"(aufgehoben von {data['lifted_by']}).", "system", "Automatisch")
             if kind in self.WAITING and "waiting_approval" in NEXT.get(r["status"], ()):
                 self.db.execute("UPDATE cases SET status='waiting_approval' WHERE id=?", (c["id"],))
                 self._entry(c["id"], uid, name, "status", "",
@@ -1137,6 +1194,158 @@ class Store:
                 self._entry(c["id"], lead, lead_name, "status", "",
                             {"from": r["status"], "to": "waiting_task"}, internal=True)
         return seq
+
+    # ------------------------- Schließen durch den Leiter, Prüfung (0.23.0, RFC-0134 Stufe 3)
+    def _mark(self, cid, code, text, actor, actor_name):
+        """Unter der Sperre: ein Grund mehr für „zur Prüfung“ (intern vermerkt). Derselbe Grund
+        zweimal zählt einmal. Jeder neue Grund lässt den prüfenden Spezialisten wieder ran."""
+        r = self.db.execute("SELECT review_mark FROM cases WHERE id=?", (cid,)).fetchone()
+        have = [x for x in (r["review_mark"] if r else "").split(",") if x]
+        if code in have:
+            return False
+        have.append(code)
+        self.db.execute("UPDATE cases SET review_mark=?, review_spec=0 WHERE id=?", (",".join(have), cid))
+        self._entry(cid, actor, actor_name, "review_mark", _clip((text or "").strip(), 2000),
+                    {"reason": code}, internal=True)
+        return True
+
+    def mark_review(self, c, actor, actor_name, text, by="person"):
+        """§8: zur Prüfung markieren -- der Leiter mit seinem Werkzeug (`lead`: nur wer verantwortlich
+        und Spezialist ist) oder ein Mensch des Bereichs (`person`, die Rechte prüft der Aufrufer).
+        Immer mit Grund; auch an einem beendeten Vorgang."""
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Zur Prüfung markieren braucht einen Grund.")
+        if len(text) > 2000:
+            raise Refused("Der Grund: höchstens 2000 Zeichen.")
+        with self.lock, self.db:
+            if by == "lead":
+                r = self.db.execute("SELECT responsible FROM cases WHERE id=?", (c["id"],)).fetchone()
+                if not r or r["responsible"] != actor or not self.db.execute(
+                        "SELECT 1 FROM people WHERE uid=? AND specialist=1", (actor,)).fetchone():
+                    raise Refused("Als Leiter markiert nur der Spezialist, der verantwortlich ist.")
+            if not self._mark(c["id"], "lead" if by == "lead" else "person", text, actor, actor_name):
+                # derselbe Grund steht schon: der neue Text kommt als Vermerk dazu
+                self._entry(c["id"], actor, actor_name, "review_mark", text,
+                            {"reason": "lead" if by == "lead" else "person", "again": True}, internal=True)
+
+    def close_by_lead(self, c, lead, lead_name, text, proof=0, no_write="", data=None, rand=random.random):
+        """§7, D7: der Leiter schließt -- nur einen Vorgang, den ein anderes System durch ein Tor
+        geliefert hat, und nur mit Beleg: dem ausgeführten, freigegebenen Aufruf in diesem Vorgang,
+        oder der Begründung, warum nichts zu ändern war (dann geht er von selbst zur Prüfung).
+        Der Schließtext ist öffentlich: ihn liest das andere System. Danach entscheidet die
+        Stichprobe des Bereichs (D8 b), ob er zusätzlich zur Prüfung geht."""
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Schließen braucht einen Text: ihn liest das System, das den Vorgang geliefert hat.")
+        if len(text) > BODY_MAX:
+            raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
+        no_write = (no_write or "").strip()
+        try:
+            proof = int(proof or 0)
+        except (TypeError, ValueError):
+            raise Refused("Der Beleg ist die Nummer eines Eintrags in diesem Vorgang.")
+        data = {k: v for k, v in (data or {}).items() if k in ("run", "assistant") and isinstance(v, str)}
+        with self.lock, self.db:
+            r = self.db.execute("SELECT responsible, spec_stop, status, object_kind, queue FROM cases WHERE id=?",
+                                (c["id"],)).fetchone()
+            if not r or r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            if r["responsible"] != lead or not self.db.execute(
+                    "SELECT 1 FROM people WHERE uid=? AND specialist=1", (lead,)).fetchone():
+                raise Refused("Schließen kann hier nur der Spezialist, der verantwortlich ist.")
+            if r["spec_stop"]:
+                raise Refused("An diesem Vorgang ist der Spezialist angehalten.")
+            if r["object_kind"] != "gate":
+                raise Refused("Schließen darf der Leiter nur Vorgänge, die ein anderes System durch ein Tor "
+                              "geliefert hat. Diesen gib mit deiner Zusammenfassung an die Menschen zurück.")
+            if self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND answered=''", (c["id"],)).fetchone():
+                raise Refused("Eine Rückfrage oder ein Auftrag ist noch offen.")
+            if r["status"] == "waiting_approval":
+                raise Refused("Ein Plan wartet noch auf die Freigabe eines Menschen.")
+            if proof:
+                e = self.db.execute("SELECT data FROM entries WHERE seq=? AND case_id=? AND type='spec'",
+                                    (proof, c["id"])).fetchone()
+                d = json.loads(e["data"] or "{}") if e else {}
+                if d.get("kind") != "tool" or not (d.get("plan") or d.get("lifted_by")):
+                    raise Refused(f"#{proof} belegt nichts: ein Beleg ist ein ausgeführter, freigegebener "
+                                  "Aufruf in diesem Vorgang.")
+                if d.get("failed"):
+                    raise Refused(f"Der Aufruf #{proof} ist fehlgeschlagen; er belegt nichts.")
+                if d.get("plan") and not self.db.execute(
+                        "SELECT 1 FROM entries WHERE case_id=? AND type='approval' AND "
+                        "json_extract(data, '$.plan')=? AND json_extract(data, '$.ok')=1 AND seq < ?",
+                        (c["id"], d["plan"], proof)).fetchone():
+                    raise Refused(f"Zum Aufruf #{proof} gibt es keine Freigabe eines Menschen.")
+            elif not no_write:
+                raise Refused("Ohne Beleg braucht das Schließen die Begründung, warum nichts zu ändern war.")
+            if not self.db.execute("UPDATE cases SET status='closed', mark='closed_by_lead', ended=? "
+                                   "WHERE id=? AND status=?", (_now(), c["id"], r["status"])).rowcount:
+                raise Refused("Der Vorgang wurde inzwischen geändert.")
+            self._entry(c["id"], lead, lead_name, "status", text,
+                        {"from": r["status"], "to": "closed", "mark": "closed_by_lead", "proof": proof})
+            self._entry(c["id"], lead, lead_name, "spec",
+                        f"Abgeschlossen mit Beleg #{proof}." if proof
+                        else f"Abgeschlossen ohne Änderung: {_clip(no_write, 2000)}",
+                        dict(data, kind="end", reason="closed", proof=proof), internal=True)
+            if not proof:
+                self._mark(c["id"], "no_write", no_write, "system", "Automatisch")
+            elif not self.db.execute("SELECT review_mark FROM cases WHERE id=?", (c["id"],)).fetchone()[0]:
+                q = self.db.execute("SELECT review_share FROM queues WHERE id=?", (r["queue"],)).fetchone()
+                share = q["review_share"] if q else REVIEW_SHARE
+                if share and rand() * 100 < share:
+                    self._mark(c["id"], "sample", f"Stichprobe ({share} % der vom Leiter geschlossenen Vorgänge "
+                                                  "dieses Bereichs).", "system", "Automatisch")
+
+    def reviewing(self, uid, c):
+        """Ist uid der prüfende Spezialist dieses Vorgangs? Er liest ihn, solange das Merkmal steht."""
+        if not uid or not c.get("review_mark"):
+            return False
+        with self.lock:
+            q = self.db.execute("SELECT reviewer FROM queues WHERE id=?", (c["queue"],)).fetchone()
+        return bool(q and q["reviewer"] == uid)
+
+    def review(self, c, actor, actor_name, result, text, by_spec=False):
+        """§8: die Prüfung -- „in Ordnung“ oder „Nacharbeit“, mit Text, ein Eintrag. Ein Mensch des
+        Bereichs (die Rechte prüft der Aufrufer) oder der prüfende Spezialist des Bereichs (einmal je
+        Markierung; `none` = kein Urteil, dann prüfen die Menschen). Niemand prüft seine eigene
+        Arbeit. „Nacharbeit“ öffnet einen beendeten Vorgang wieder und weckt den Leiter."""
+        text = (text or "").strip()
+        if result not in REVIEW_RESULT and not (by_spec and result == "none"):
+            raise Refused("Ergebnis: in Ordnung oder Nacharbeit.")
+        if result != "ok" and not text:
+            raise Refused("Nacharbeit braucht einen Text: was fehlt oder falsch ist.")
+        if len(text) > BODY_MAX:
+            raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
+        with self.lock, self.db:
+            r = self.db.execute("SELECT review_mark, review_spec, status, responsible, queue FROM cases WHERE id=?",
+                                (c["id"],)).fetchone()
+            if not r or not r["review_mark"]:
+                raise Refused("Dieser Vorgang ist nicht zur Prüfung markiert.")
+            closer = self.db.execute("SELECT actor FROM entries WHERE case_id=? AND type='status' AND "
+                                     "json_extract(data, '$.mark')='closed_by_lead' ORDER BY seq DESC LIMIT 1",
+                                     (c["id"],)).fetchone()
+            if actor in (r["responsible"], closer["actor"] if closer else None):
+                raise Refused("Seine eigene Arbeit prüft niemand selbst.")
+            if by_spec:
+                q = self.db.execute("SELECT reviewer FROM queues WHERE id=?", (r["queue"],)).fetchone()
+                if not q or q["reviewer"] != actor:
+                    raise Refused("Prüfen kann hier nur der prüfende Spezialist des Bereichs.")
+                if r["review_spec"]:
+                    raise Refused("Zu dieser Markierung hat der prüfende Spezialist schon geliefert.")
+            reasons = r["review_mark"]
+            if result == "none":
+                self.db.execute("UPDATE cases SET review_spec=1 WHERE id=?", (c["id"],))
+                self._entry(c["id"], actor, actor_name, "review", text or "Kein Urteil.",
+                            {"result": "none", "reasons": reasons}, internal=True)
+                return
+            self.db.execute("UPDATE cases SET review_mark='', review_spec=0 WHERE id=?", (c["id"],))
+            self._entry(c["id"], actor, actor_name, "review", text,
+                        {"result": result, "reasons": reasons}, internal=True)
+            if result == "rework" and r["status"] in ENDED:
+                self.db.execute("UPDATE cases SET status='reopened', mark='', ended='' WHERE id=?", (c["id"],))
+                self._entry(c["id"], actor, actor_name, "status", "",
+                            {"from": r["status"], "to": "reopened", "review": True}, internal=True)
 
     def set_spec_stop(self, c, on, actor, actor_name):
         """§5: ein Mensch hält den Spezialisten an diesem Vorgang an (oder lässt ihn wieder zu)."""

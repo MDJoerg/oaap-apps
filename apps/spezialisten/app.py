@@ -18,7 +18,7 @@ import mcpdoor
 import runner
 from store import Refused, Store, import_assistant
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("SPEZ_DATA_DIR", "/data")
 
@@ -39,6 +39,7 @@ STORE = None
 STATUS = {}             # je Spezialist: letzter Abruf, Fehler (nur im Speicher)
 RUNNING = set()
 REASON = {"waiting_consult": "wartet auf Rückmeldung", "waiting_task": "wartet auf Auftrag",
+          "closed": "abgeschlossen (Leitung)", "reviewed": "Prüfung abgegeben",
           "task_done": "Auftrag erledigt", "answered": "Rückfrage beantwortet",
           "not_asked": "Rückfrage nicht mehr offen", "needs_approval": "wartet auf Freigabe", "done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
           "error": "Fehler, zurückgegeben", "not_mine": "nicht mehr verantwortlich",
@@ -83,6 +84,17 @@ def poll_once(store=None, make=None, log=print):
                     store.run_start(run.id, s["id"], item["number"])
                     try:
                         why = run.task(item["number"], item["task"])
+                    finally:
+                        RUNNING.discard((s["id"], item["number"]))
+                    store.run_end(run.id, why, run.steps)
+                    continue
+                if item.get("review"):
+                    # RFC-0134 §8: ein markierter Vorgang -- ein Lauf, ein Urteil
+                    run = runner.Run(s, cases, tools, model, log=log)
+                    RUNNING.add((s["id"], item["number"]))
+                    store.run_start(run.id, s["id"], item["number"])
+                    try:
+                        why = run.review(item["number"])
                     finally:
                         RUNNING.discard((s["id"], item["number"]))
                     store.run_end(run.id, why, run.steps)
