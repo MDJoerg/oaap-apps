@@ -2455,6 +2455,22 @@ check("P: Verfahren P mit einer URL statt einer Destination: abgewiesen",
 admin("/server-save", name="sap-cred", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
       light="yellow", credential="geheim")
 check("P: Verfahren P mit eigenen Zugangsdaten: abgewiesen", books.server_row(app.DB, "sap-cred") is None)
+admin("/server-save", name="sap-agent", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="yellow", credential="oaapk_aaaa0001_" + "s" * 22)
+srow_a = books.server_row(app.DB, "sap-agent")
+check("P+Agent (0.52.1): der Plattform-Schlüssel eines Agenten darf am Server-Eintrag stehen",
+      srow_a is not None and bool(srow_a["credential"]), srow_a and dict(srow_a))
+admin("/server-save", name="sap-agent", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="green")
+srow_a = books.server_row(app.DB, "sap-agent")
+check("P+Agent: erneut speichern ohne neuen Schlüssel behält ihn",
+      srow_a is not None and srow_a["light"] == "green" and bool(srow_a["credential"]), srow_a and dict(srow_a))
+admin("/server-save", name="sap-agent", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",
+      light="green", credential="geheim")
+check("P+Agent: ein anderer Zugang ersetzt ihn nicht (abgewiesen)",
+      books.server_row(app.DB, "sap-agent")["light"] == "green"
+      and app.VAULT.open_(app.MASTER, books.server_row(app.DB, "sap-agent")["credential"]).startswith("oaapk_"))
+admin("/server-delete", name="sap-agent")
 admin("/server-save", name="sap-weg", address="destination:sap-probe/../x", auth="propagate", light="yellow")
 check("P: Destination mit „..“ im Pfad: beim Speichern abgewiesen", books.server_row(app.DB, "sap-weg") is None)
 admin("/server-save", name="sap", address="destination:sap-probe/zmcp2/bc/x", auth="propagate",

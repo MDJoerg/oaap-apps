@@ -388,6 +388,14 @@ AUTH_KINDS = ("none", "bearer", "basic", "exchange", "platform", "propagate", "p
 # ins Zielsystem, RFC-0066, 0.12). Nie in einer Sicht, die Schlüssel annimmt.
 # 0.16: U (personal) -- jede Person bringt ihren eigenen Zugang mit (RFC-0095).
 PERSON_KINDS = ("exchange", "platform", "propagate", "personal")
+
+
+def needs_person(srow):
+    """Braucht dieser Server eine angemeldete Person? Ja für X, I, P und U -- außer Verfahren P
+    mit dem Plattform-Schlüssel eines Agenten (RFC-0134 D10 a, 0.52.1): der trägt sich selbst
+    und gehört gerade in eine Sicht mit Schlüssel (die eines Spezialisten)."""
+    return bool(srow) and srow["auth_kind"] in PERSON_KINDS and not (
+        srow["auth_kind"] == "propagate" and srow["credential"])
 UNUSED_DAYS = 180                    # RFC-0095 D8: danach auf der Betreiberseite markiert
 HEADER_NAME = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
@@ -787,7 +795,7 @@ def set_untrusted(db, actor, name, flag):
 
 
 def save_server(db, actor, name, address, auth_kind, light, limits, sealed_credential=None,
-                drop_credential=False, exchange=None, personal=None):
+                drop_credential=False, exchange=None, personal=None, agent_key=False):
     """Legt an oder ändert. `sealed_credential` ist schon verschlüsselt; None = unverändert.
 
     `exchange` (nur bei Zugang `exchange`): {token_url, client_id, audience}
@@ -803,7 +811,11 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
     if auth_kind == "propagate" and not address.startswith("destination:"):
         raise ValueError("Verfahren P (propagate) geht nur über eine Destination mit Principal "
                          "Propagation: Adresse destination:<name>[/pfad].")
-    if auth_kind in ("platform", "propagate", "personal") and any(r["server"] == name for r in db.execute(
+    _old = server_row(db, name)
+    _agent = auth_kind == "propagate" and not drop_credential and (
+        agent_key or (sealed_credential is None and _old is not None
+                      and _old["auth_kind"] == "propagate" and bool(_old["credential"])))
+    if auth_kind in ("platform", "propagate", "personal") and not _agent and any(r["server"] == name for r in db.execute(
             "SELECT DISTINCT i.server FROM items i JOIN views v ON v.name=i.view "
             "WHERE v.ways LIKE '%key%'")):
         raise ValueError("Der Server liegt in einer Sicht, die Schlüssel annimmt. Verfahren "
@@ -835,19 +847,27 @@ def save_server(db, actor, name, address, auth_kind, light, limits, sealed_crede
         credential = ""
     if sealed_credential is not None:
         credential = sealed_credential
-    if address.startswith("destination:") and credential and auth_kind != "exchange":
+    # RFC-0134 D10 (a, 0.52.1): Verfahren P darf den Plattform-Schlüssel eines AGENTEN halten
+    # (oaapk_…) -- kein Zugang zum Zielsystem, sondern der Ausweis, mit dem das Gateway die
+    # Zusicherung des Agenten bei der Plattform holt. Ein gehaltener bleibt beim nächsten
+    # Speichern erlaubt; jeder andere Zugang bleibt abgewiesen.
+    agent = auth_kind == "propagate" and credential and (
+        agent_key or (sealed_credential is None and old is not None
+                      and old["auth_kind"] == "propagate"))
+    if address.startswith("destination:") and credential and auth_kind != "exchange" and not agent:
         raise ValueError("Ein Server hinter einer Destination trägt keine eigenen Zugangsdaten: "
                          "Die Plattform setzt die der Destination ein (eine Wahrheit, nicht zwei).")
-    if auth_kind == "propagate" and credential:
+    if auth_kind == "propagate" and credential and not agent:
         raise ValueError("Verfahren P trägt keine Zugangsdaten: Das Zertifikat der Person stellt "
-                         "die Destination aus. Erst „Zugangsdaten entfernen“.")
+                         "die Destination aus. Nur der Plattform-Schlüssel eines Agenten (oaapk_…) "
+                         "darf hier stehen (RFC-0134). Erst „Zugangsdaten entfernen“.")
     if auth_kind == "personal" and credential:
         # RFC-0095 §4.1: nie ein gemeinsamer Rückfall hinter den Personen.
         raise ValueError("Verfahren U trägt keine Zugangsdaten des Servers: Jede Person bringt "
                          "ihren eigenen Zugang. Erst „Zugangsdaten entfernen“.")
     personal_json = json.dumps(valid_personal(personal), sort_keys=True) \
         if auth_kind == "personal" else "{}"
-    if auth_kind in ("platform", "propagate", "personal"):
+    if auth_kind in ("platform", "propagate", "personal") and not agent:
         credential = ""                         # Quellen-Schlüssel bzw. Zertifikat kommt von der Plattform
     elif auth_kind != "none" and not credential:
         raise ValueError(f"Zugang {auth_kind} braucht Zugangsdaten.")
@@ -1269,9 +1289,9 @@ def set_view_items(db, actor, view, wanted, seen, effects=None):
 
 def exchange_servers(db, view):
     return [r["name"] for r in db.execute(
-        "SELECT DISTINCT s.name FROM items i JOIN servers s ON s.name=i.server "
+        "SELECT DISTINCT s.* FROM items i JOIN servers s ON s.name=i.server "
         "WHERE i.view=? AND s.auth_kind IN ('exchange','platform','propagate','personal') ORDER BY s.name",
-        (view,))]
+        (view,)) if needs_person(r)]
 
 
 APPROVAL = ("", "required", "signed")
@@ -1419,7 +1439,7 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
     if effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
     _refuse_writing_with_untrusted(db, view, effect, server)
-    if server_row(db, server)["auth_kind"] in PERSON_KINDS and "key" in view_ways(view_row(db, view)):
+    if needs_person(server_row(db, server)) and "key" in view_ways(view_row(db, view)):
         raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht eine angemeldete "
                          f"Person; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
                          "„Anmeldung“ (oder für einen Chat auf „Plattform“) stellen.")

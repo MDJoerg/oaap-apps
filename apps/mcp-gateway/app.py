@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.52.0"
+VERSION = "0.52.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -2582,7 +2582,7 @@ def assign_tree(name):
         have.setdefault((i["server"], i["kind"], i["source"]), []).append(i)
     servers = []
     for s in books.servers(DB):
-        person = s["auth_kind"] in books.PERSON_KINDS and key_view
+        person = books.needs_person(s) and key_view
         kinds, n_in, n_all = [], 0, 0
         for kind in compose.KINDS:
             leaves = []
@@ -5100,7 +5100,8 @@ def save_server(form, user):
                     "link": form.get("personal_link", "")}
     books.save_server(DB, user, name, address, auth, form.get("light", "red"), limits,
                       sealed_credential=sealed, drop_credential=form.get("drop_credential") == "1",
-                      exchange=exchange, personal=personal)
+                      exchange=exchange, personal=personal,
+                      agent_key=auth == "propagate" and form.get("credential", "").startswith("oaapk_"))
     note = ""
     try:
         books.set_untrusted(DB, user, name, form.get("untrusted") == "1")
