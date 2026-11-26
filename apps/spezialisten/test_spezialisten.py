@@ -572,6 +572,84 @@ try:
     S.save(dict(base, id=sid, active="1", no_approval=""), "chef", LIM, may_lift=True)
     ok("D4: wieder zurückgenommen", S.get(sid)["no_approval"] == "" and S.get(sid)["lifted_by"] == "", S.get(sid))
 
+    # ------------------------------------------------------------ 0.7.0 (RFC-0134 Stufe 2): Leiter und Aufträge
+    for bad, why in (({"leads": "1", "team": ""}, "ein Leiter ohne Team"),
+                     ({"leads": "1", "team": "Analyse (KI)"}, "der Leiter in seinem eigenen Team"),
+                     ({"leads": "1", "team": "Gibt es nicht"}, "ein unbekannter Name im Team"),
+                     ({"leads": "1", "team": "Basis-Check (KI)", "max_tasks": "9"}, "mehr als 8 Aufträge")):
+        try:
+            S.save(dict(base, id=sid, active="1", **bad), "chef", LIM)
+            ok(f"L: KÖDER: {why} wird abgelehnt", False)
+        except store.Refused:
+            ok(f"L: KÖDER: {why} wird abgelehnt", not S.get(sid).get("leads"), S.get(sid))
+    S.save(dict(base, id=sid, active="1", leads="1", team="Basis-Check (KI)", max_tasks="2"), "chef", LIM)
+    TM = {"A": "ua", "B": "ub"}      # Name in dieser App -> Kennung des Agenten
+    ok("L: Analyse leitet, Team Basis-Check, höchstens 2 Aufträge",
+       S.get(sid)["leads"] == 1 and S.get(sid)["team"] == "Basis-Check (KI)" and S.get(sid)["max_tasks"] == 2, S.get(sid))
+    ok("L: team_of -- Team ∩ was Vorgänge zulässt, bis zur kleineren Grenze; kein Leiter: niemand",
+       runner.team_of({"leads": 1, "team": "A, B", "max_tasks": 2, "team_map": TM},
+                      {"taskable": [{"name": "Label A", "uid": "ua"}, {"name": "C", "uid": "uc"}],
+                       "tasks_used": 1, "tasks_max": 8}) == {"A": "ua"}
+       and runner.team_of({"leads": 1, "team": "A", "max_tasks": 2, "team_map": TM},
+                          {"taskable": [{"uid": "ua"}], "tasks_used": 2}) == {}
+       and runner.team_of({"leads": 1, "team": "A", "max_tasks": 8, "team_map": TM},
+                          {"taskable": [{"uid": "ua"}], "tasks_used": 1, "tasks_max": 1}) == {}
+       and runner.team_of({"leads": 1, "team": "A", "team_map": {}}, {"taskable": [{"uid": "ua"}]}) == {}
+       and runner.team_of({"leads": 0, "team": "A", "team_map": TM}, {"taskable": [{"uid": "ua"}]}) == {}, "")
+    ok("L: ohne Team bietet der Lauf kein „auftrag“ an",
+       "auftrag" not in [t["function"]["name"] for t in runner.openai_tools([])], "")
+
+    n12 = report("SU53 nach ME21N", "Benutzer KLAUS bekommt in ME21N keine Berechtigung.")
+    SCRIPT["plan"] = [("tool", "auftrag", {"an": "Fremd (KI)", "auftrag": "x"}, "Erst die Rollen."),
+                      ("tool", "auftrag", {"an": "Basis-Check (KI)", "auftrag": "Prüfe die Rollen von KLAUS und SU53."}),
+                      # der Beauftragte, im selben Durchgang:
+                      ("tool", "find_dumps", {"report": "SU53"}),
+                      ("tool", "file_solution", {"text": "Rolle zuordnen"}),
+                      ("text", "Ergebnis: M_BEST_EKO fehlt (EKORG 1000); nötig wäre file_solution mit Rolle Z_EINKAUF.")]
+    SEEN.clear(); CALLS.clear()
+    app.poll_once(log=lambda *a: None)
+    c = case(n12)
+    lead_tools = [t["function"]["name"] for t in SEEN[0]["tools"]]
+    ok("L: der Leiter bekommt „auftrag“ mit seinem Team und den Leitungsrahmen",
+       "auftrag" in lead_tools and "Team: Basis-Check (KI)" in json.dumps(SEEN[0]["tools"], ensure_ascii=False)
+       and "LEITEST" in SEEN[0]["messages"][0]["content"], lead_tools)
+    ok("L: KÖDER: ein Name außerhalb des Teams -- kein Auftrag, das Modell erfährt warum",
+       "nicht zu deinem Team" in SEEN[1]["messages"][-1]["content"]
+       and len([e for e in c["entries"] if e["type"] == "task"]) == 1, SEEN[1]["messages"][-1])
+    t = [e for e in c["entries"] if e["type"] == "task"]
+    ok("L: der Auftrag steht intern im Vorgang, an Basis-Check, Nummer 1",
+       t and t[0]["internal"] and t[0]["consult"].get("to_name") == "Basis-Check (KI)" and t[0]["consult"].get("n") == 1,
+       t)
+    ends = [e for e in c["entries"] if e["type"] == "spec" and e["step"]["kind"] == "end"]
+    ok("L: der Lauf des Leiters endet mit „wartet auf Auftrag“",
+       ends and ends[-1]["step"].get("reason") == "waiting_task", [e["step"] for e in ends])
+    ok("L: der Beauftragte bekommt den Auftragsrahmen, den Auftrag als Daten und seine ganze Sicht",
+       "Auftrag" in SEEN[2]["messages"][0]["content"] and "<auftrag" in SEEN[2]["messages"][1]["content"]
+       and "Prüfe die Rollen von KLAUS" in SEEN[2]["messages"][1]["content"]
+       and [x["function"]["name"] for x in SEEN[2]["tools"]] == ["find_dumps", "file_solution"],
+       [x["function"]["name"] for x in SEEN[2]["tools"]])
+    ok("L: KÖDER: ein änderndes Werkzeug im Auftrag läuft nie; das Modell erfährt, dass der Leiter plant",
+       not [x for x in CALLS if x["name"] == "file_solution"] and "Leiter plant" in SEEN[4]["messages"][-1]["content"],
+       (CALLS, SEEN[4]["messages"][-1]))
+    res = [e for e in c["entries"] if e["type"] == "task_result"]
+    ok("L: genau ein Ergebnis, intern, vom Beauftragten, mit dem, was er geprüft hat",
+       len(res) == 1 and res[0]["internal"] and res[0]["by"] == "Basis-Check (KI)" and "M_BEST_EKO" in res[0]["text"]
+       and "geprüft mit: find_dumps" in res[0]["text"], res)
+    ok("L: KÖDER: der Beauftragte hat nichts außer dem Ergebnis geschrieben und war nie verantwortlich",
+       not [e for e in c["entries"] if e["by"] == "Basis-Check (KI)" and e["type"] != "task_result"]
+       and c["responsible"] == "spez" and c["status"] == "in_progress", (c["status"], c["responsible"]))
+    ok("L: Läufe in der App: wartet auf Auftrag / Auftrag erledigt",
+       {r["reason"] for r in S.runs() if r["case_number"] == n12} == {"waiting_task", "task_done"}, S.runs()[:3])
+    SCRIPT["plan"] = [("text", "Ursache: M_BEST_EKO fehlt. Vorschlag: Rolle Z_EINKAUF zuordnen.")]
+    SEEN.clear()
+    app.poll_once(log=lambda *a: None)
+    ok("L: der Leiter liest das Ergebnis im Verlauf und fasst zusammen",
+       "Ergebnis zu Auftrag" in SEEN[0]["messages"][1]["content"] and "M_BEST_EKO" in SEEN[0]["messages"][1]["content"]
+       and case(n12)["responsible"] == "", SEEN[0]["messages"][1]["content"][-400:])
+    st, page = vg_call("GET", f"/v/{n12}", MEL)
+    ok("L: KÖDER: die Meldende sieht weder Auftrag noch Ergebnis", "M_BEST_EKO" not in page and "Auftrag" not in page, "")
+    S.save(dict(base, id=sid, active="1", leads="", team=""), "chef", LIM)
+
     # ------------------------------------------------------------ 8. die Seite
     srv = ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

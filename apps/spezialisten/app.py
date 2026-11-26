@@ -18,7 +18,7 @@ import mcpdoor
 import runner
 from store import Refused, Store, import_assistant
 
-VERSION = "0.6.2"
+VERSION = "0.7.0"
 PORT = int(os.environ.get("PORT", "8000"))
 DATA = os.environ.get("SPEZ_DATA_DIR", "/data")
 
@@ -38,7 +38,8 @@ LIMITS = {"max_steps": env_int("SPEZ_MAX_STEPS", 20, 1, 100),
 STORE = None
 STATUS = {}             # je Spezialist: letzter Abruf, Fehler (nur im Speicher)
 RUNNING = set()
-REASON = {"waiting_consult": "wartet auf Rückmeldung", "answered": "Rückfrage beantwortet",
+REASON = {"waiting_consult": "wartet auf Rückmeldung", "waiting_task": "wartet auf Auftrag",
+          "task_done": "Auftrag erledigt", "answered": "Rückfrage beantwortet",
           "not_asked": "Rückfrage nicht mehr offen", "needs_approval": "wartet auf Freigabe", "done": "fertig, zurückgegeben", "limit": "Grenze, zurückgegeben", "stopped": "angehalten",
           "error": "Fehler, zurückgegeben", "not_mine": "nicht mehr verantwortlich",
           "stopped_before": "schon angehalten", "runs": "Läufe je Vorgang erreicht, zurückgegeben"}
@@ -53,9 +54,13 @@ def poll_once(store=None, make=None, log=print):
     make = make or (lambda s: (runner.Cases(s["vorgaenge_url"], s["agent_key"]),
                                runner.Tools(s["mcp_url"], s["mcp_key"]),
                                runner.Model(s["ai_url"], s["ai_key"], s["model"])))
-    for s in store.all(with_secrets=True):
+    every = store.all(with_secrets=True)
+    # 0.7.0 (RFC-0134 §4): das Team eines Leiters über die Kennung seiner Agenten (Name hier -> uid)
+    team_map = {x["name"]: x["uid"] for x in every if x["uid"]}
+    for s in every:
         if not s["active"]:
             continue
+        s["team_map"] = team_map
         st = STATUS.setdefault(s["id"], {})
         try:
             cases, tools, model = make(s)
@@ -71,6 +76,17 @@ def poll_once(store=None, make=None, log=print):
                 fresh = store.get(s["id"])
                 if not fresh or not fresh["active"]:
                     break
+                if item.get("task"):
+                    # RFC-0134 §5: ein Auftrag des Leiters -- ein Lauf, ein Ergebnis
+                    run = runner.Run(s, cases, tools, model, log=log)
+                    RUNNING.add((s["id"], item["number"]))
+                    store.run_start(run.id, s["id"], item["number"])
+                    try:
+                        why = run.task(item["number"], item["task"])
+                    finally:
+                        RUNNING.discard((s["id"], item["number"]))
+                    store.run_end(run.id, why, run.steps)
+                    continue
                 if item.get("consult"):
                     # §6: eine Rückfrage an diesen Spezialisten -- ein Lauf, eine Antwort
                     run = runner.Run(s, cases, tools, model, log=log)
@@ -205,6 +221,10 @@ def spec_form(s, msg=""):
 <div><label>Minuten je Lauf (höchstens {LIMITS['max_minutes']})</label><input name=max_minutes type=number min=1 max={LIMITS['max_minutes']} value='{v("max_minutes", LIMITS["max_minutes"])}'></div>
 <div><label>Läufe je Vorgang (höchstens {LIMITS['max_runs']})</label><input name=max_runs type=number min=1 max={LIMITS['max_runs']} value='{v("max_runs", LIMITS["max_runs"])}'></div></div>
 <label class=check><input type=checkbox name=public value=1{' checked' if s.get('public') else ''}> darf Antworten an die meldende Person entwerfen (ein Mensch veröffentlicht sie)</label>
+<h2>Leitung</h2>
+<label class=check><input type=checkbox name=leads value=1{' checked' if s.get('leads') else ''}> leitet – gibt Aufträge an die Spezialisten seines Teams</label>
+<div class=row><div><label>Team (Namen anderer Spezialisten, durch Komma getrennt)</label><input name=team value='{v("team")}' placeholder='Analyse, Recherche'></div>
+<div><label>Aufträge je Vorgang (höchstens 8; Vorgänge kann weniger sagen)</label><input name=max_tasks type=number min=1 max=8 value='{v("max_tasks", 8)}'></div></div>
 <label>Werkzeuge ohne Freigabe (nur der Mandanten-Administrator; Namen durch Leerzeichen getrennt{(', aufgehoben von ' + v("lifted_by")) if s.get("lifted_by") else ''})</label>
 <input name=no_approval value='{v("no_approval")}' placeholder='leer: jedes ändernde Werkzeug braucht die Freigabe eines Menschen'>
 <label class=check><input type=checkbox name=active value=1{' checked' if s.get('active') else ''}> aktiv – arbeitet Vorgänge im Hintergrund</label>
@@ -322,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
                   f"<dt>Grenzen</dt><dd>{s['max_steps']} Schritte, {s['max_minutes']} Minuten je Lauf; "
                   f"{s['max_runs']} Läufe je Vorgang</dd>"
                   f"<dt>Antwortentwürfe</dt><dd>{'ja' if s.get('public') else 'nein'}</dd>"
+                  + (f"<dt>Leitet</dt><dd>Team: {esc(s.get('team') or '–')}; höchstens {s.get('max_tasks') or 8} "
+                     f"Aufträge je Vorgang</dd>" if s.get("leads") else "")
+                  + 
                   f"<dt>Ohne Freigabe</dt><dd>{esc(s.get('no_approval') or 'keine Werkzeuge')}</dd></dl>")
         runs = STORE.runs(s["id"], limit=10)
         rt = af.table("".join(af.th(lbl, "", af.Query({}), cls=c) for lbl, _c, _f, c in RUN_COLS),
@@ -504,6 +527,7 @@ def _read(args, who):
         out.update(system=s["system"], max_steps=s["max_steps"], max_minutes=s["max_minutes"],
                    max_runs=s["max_runs"], drafts_to_reporter=bool(s.get("public")),
                    no_approval=s.get("no_approval") or "", lifted_by=s.get("lifted_by") or "",
+                   leads=bool(s.get("leads")), team=s.get("team") or "", max_tasks=s.get("max_tasks") or 8,
                    keys_set={k: s[k + "_set"] for k in ("agent_key", "mcp_key", "ai_key")})
     out["runs"] = [_run(r) for r in STORE.runs(s["id"], limit=10)]
     return out

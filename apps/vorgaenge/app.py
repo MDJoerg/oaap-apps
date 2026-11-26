@@ -66,10 +66,10 @@ import authz_client
 import gates
 import mcp_door
 from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
-                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
-                   Store, canonical)
+                   MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, TASKS_MAX,
+                   Refused, Store, canonical)
 
-VERSION = "0.21.0"
+VERSION = "0.22.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -245,6 +245,19 @@ def accept_days(raw=None):
         print(f"VORGAENGE_ACCEPT_DAYS={raw!r} ist keine ganze Zahl ab 1 -- "
               f"es gelten {ACCEPT_DAYS} Tage.", flush=True)
     return ACCEPT_DAYS
+
+
+def tasks_max(raw=None):
+    """0.22.0 (RFC-0134 §5): Aufträge eines Leiters je Vorgang (Einstellung des Mandanten),
+    1 bis 8; sonst 8. Ein Leiter kann in der App Spezialisten nur weniger einstellen."""
+    raw = os.environ.get("VORGAENGE_TASKS_MAX", "") if raw is None else raw
+    try:
+        n = int(str(raw).strip())
+        if 1 <= n <= TASKS_MAX:
+            return n
+    except ValueError:
+        pass
+    return TASKS_MAX
 
 
 def retention_loop(months, days=ACCEPT_DAYS):
@@ -838,7 +851,18 @@ class Handler(BaseHTTPRequestHandler):
                     # 0.15.0 (§6): offene Rückfragen an mich, und wen ich fragen kann (nur verantwortlich)
                     "consults_open": [{"seq": k["seq"], "asked_by": self.store.person_name(k["asked_by"]),
                                        "question": next((e["text"] for e in c["entries"] if e["seq"] == k["seq"]), "")}
-                                      for k in c["consults"] if k["target"] == who.id and not k["answered"]],
+                                      for k in c["consults"] if k["target"] == who.id and not k["answered"]
+                                      and k.get("kind", "consult") == "consult"],
+                    # 0.22.0 (RFC-0134 §5): offene Aufträge an mich, und wem ich Aufträge geben kann
+                    "tasks_open": [{"seq": k["seq"], "asked_by": self.store.person_name(k["asked_by"]),
+                                    "task": next((e["text"] for e in c["entries"] if e["seq"] == k["seq"]), "")}
+                                   for k in c["consults"] if k["target"] == who.id and not k["answered"]
+                                   and k.get("kind") == "task"],
+                    # Name UND Kennung: die App Spezialisten kennt ihre Agenten unter eigenen Namen
+                    "taskable": ([{"name": p["name"], "uid": p["uid"]} for p in self.store.taskable(c, who.id)]
+                                 if c["responsible"] == who.id else []),
+                    "tasks_used": sum(1 for k in c["consults"] if k.get("kind") == "task"),
+                    "tasks_max": tasks_max(),
                     "consultable": ([{"name": p["name"], "specialist": p["specialist"]}
                                      for p in self.store.consultable(c, who.id)]
                                     if c["responsible"] == who.id else []),
@@ -850,9 +874,9 @@ class Handler(BaseHTTPRequestHandler):
                                               if e["data"].get(k) is not None}} if e["type"] == "spec" else {}),
                                  **({"approval": {k: e["data"].get(k) for k in ("plan", "sha256", "ok", "kind", "token")}}
                                     if e["type"] == "approval" else {}),
-                                 **({"consult": {k: e["data"].get(k) for k in ("to_name", "specialist", "consult")
+                                 **({"consult": {k: e["data"].get(k) for k in ("to_name", "specialist", "consult", "n")
                                                  if e["data"].get(k) is not None}}
-                                    if e["type"] in ("consult", "consult_answer") else {})}
+                                    if e["type"] in ("consult", "consult_answer", "task", "task_result") else {})}
                                 for e in c["entries"]]})
         except Refused as e:
             return self.json(404, {"error": str(e)})
@@ -868,7 +892,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.json(400, {"error": "Kein JSON-Objekt."})
         parts = rest.split("/")
-        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back", "consult", "answer"):
+        if len(parts) != 3 or parts[0] != "case" or parts[2] not in ("entry", "give-back", "consult", "answer", "task"):
             return self.json(404, {"error": "unbekannt"})
         try:
             c = self.spez_case(who, parts[1])
@@ -883,6 +907,17 @@ class Handler(BaseHTTPRequestHandler):
                 seq = self.store.consult(c, who.id, who.name, hit[0]["uid"], doc.get("text", ""), meta)
                 return self.json(200, {"ok": True, "consult": seq, "to": hit[0]["name"],
                                        "specialist": hit[0]["specialist"]})
+            if parts[2] == "task":
+                # 0.22.0 (RFC-0134 §5): der Leiter gibt einen Auftrag -- nach Name, aus `taskable`
+                name = str(doc.get("to") or "").strip()
+                pool = self.store.taskable(c, who.id)
+                hit = [p for p in pool if p["name"] == name or p["uid"] == name]
+                if len(hit) != 1:
+                    raise Refused(f"„{name}“ kann hier keinen Auftrag bekommen. Möglich: "
+                                  + (", ".join(p["name"] for p in pool) or "niemand"))
+                seq = self.store.task(c, who.id, who.name, hit[0]["uid"], doc.get("text", ""), meta,
+                                      tasks_max=tasks_max())
+                return self.json(200, {"ok": True, "task": seq, "to": hit[0]["name"]})
             if parts[2] == "answer":
                 try:
                     seq = int(doc.get("consult") or 0)
@@ -1870,6 +1905,17 @@ Betreff und Text.</p>
                     head = "antwortet auf die Rückfrage"
                 box.append(f"<div class='card c-rat'><div class=muted>{when} · {who_}{ai} · {head}</div>"
                            f"<div class=body data-md>{esc(e['text'])}</div>{form_ if e['type'] == 'consult' else ''}</div>")
+                continue
+            elif e["type"] in ("task", "task_result"):
+                # 0.22.0 (RFC-0134 §5): Auftrag des Leiters und sein Ergebnis -- intern
+                if e["type"] == "task":
+                    k = consults.get(e["seq"]) or {}
+                    head = (f"Auftrag {d.get('n') or ''} an {esc(d.get('to_name') or '')} {KI}"
+                            + (" · erledigt" if k.get("answered") else " · <b>offen</b>"))
+                else:
+                    head = "Ergebnis des Auftrags"
+                box.append(f"<div class='card c-rat'><div class=muted>{when} · {who_} {KI} · {head}</div>"
+                           f"<div class=body data-md>{esc(e['text'])}</div></div>")
                 continue
             elif e["type"] == "spec_stop":
                 box.append(f"<div class=card><div class=muted>{when} · {who_} · Spezialist "

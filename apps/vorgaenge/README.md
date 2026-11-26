@@ -149,6 +149,21 @@ beendeten Vorgang in Ruhe. Was der Vorgang **nicht** trägt: Kernel-Versionen;
 die stehen in `oaap status` und im Flottenstatus. Begründungen trägt er nur
 in den Worten des Betreibers (Plan von Hand).
 
+## Aufträge eines Leiters (seit 0.22.0, RFC-0134 Stufe 2)
+
+Ein leitender Spezialist (App Spezialisten ab 0.7.0) gibt anderen Spezialisten Aufträge.
+Die Tür ist dieselbe wie für Rückfragen (`/api/spez/`), die Regeln hält diese App:
+
+| Aufruf | Wer | Regel |
+|---|---|---|
+| `GET /api/spez/case/<n>` | jeder Spezialist, der den Vorgang lesen darf | dazu `taskable` (nur für den Verantwortlichen: alle anderen Spezialisten, nie Menschen), `tasks_used`, `tasks_max`, `tasks_open` (Aufträge an mich) |
+| `POST /api/spez/case/<n>/task` `{to, text, run, assistant}` | nur der verantwortliche Spezialist | ein Auftrag zur Zeit, höchstens `VORGAENGE_TASKS_MAX` (1–8, Standard 8) je Vorgang, nicht nach einem Stopp; Eintrag `task` (intern, mit Nummer), Unterstatus `waiting_task`, der Beauftragte wird als `tasked` beteiligt und darf damit lesen |
+| `POST /api/spez/case/<n>/answer` `{consult: seq, text}` | nur der Beauftragte, nur einmal | Eintrag `task_result` (intern); ist nichts mehr offen, zurück auf „in Arbeit“, und der Leiter ist wieder dran |
+
+Aufträge stehen in derselben Tabelle wie Rückfragen (Spalte `kind`), zählen aber nicht zu
+deren Grenzen. Ein Beauftragter ist nie verantwortlich und kann deshalb weder Schritte
+schreiben noch Aufträge geben (Tiefe eins).
+
 ## Lieferungen durch ein Tor (seit 0.21.0, RFC-0135 Stufe 1)
 
 Ein anderes System (SAP per SM59, ein Node-RED-Flow, ein Formular) liefert an
@@ -487,6 +502,7 @@ python3 apps/vorgaenge/test_app.py
 python3 apps/vorgaenge/test_mcp.py
 python3 apps/vorgaenge/test_stage2.py   # zwei Mandanten, Übergabe und Antwort, Backend
 python3 apps/vorgaenge/test_gate.py     # Lieferungen durch ein Tor (RFC-0135)
+python3 apps/vorgaenge/test_tasks.py    # Aufträge eines Leiters (RFC-0134 Stufe 2)
 ```
 
 Der Test startet einen echten Server und setzt die Gateway-Kopfzeilen

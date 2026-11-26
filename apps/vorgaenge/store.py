@@ -40,11 +40,13 @@ STATUS_LABEL = {"new": "neu", "triage": "Klärung", "in_progress": "in Arbeit",
                 # 0.14.0 (RFC-0105 D6): ein Spezialist wartet auf die Freigabe eines Menschen
                 "waiting_approval": "wartet auf Freigabe",
                 # 0.15.0 (RFC-0105 D6/D7): eine Rückfrage an einen Spezialisten oder Menschen ist offen
-                "waiting_consult": "wartet auf Rückmeldung"}
+                "waiting_consult": "wartet auf Rückmeldung",
+                # 0.22.0 (RFC-0134 §5): der Leiter wartet auf das Ergebnis eines Auftrags
+                "waiting_task": "wartet auf Auftrag"}
 # 0.10.0: dieselben Übergänge wie `in_progress`. Fest, nicht je Mandant: Auswertungen,
 # die MCP-Tür und der Chat brauchen Wörter, die sie kennen.
 SUBSTATUS = ("clarify_internal", "clarify_external", "waiting_test", "waiting_reporter", "waiting_approval",
-             "waiting_consult")
+             "waiting_consult", "waiting_task")
 
 # RFC-0061 §4. `voting` (§7) kommt mit seiner Stufe. `handed_over` (§5)
 # steht hier, damit die Regel EINE Tabelle bleibt; erreicht wird es nur
@@ -61,12 +63,15 @@ NEXT = {
 }
 # 0.14.0: „wartet auf Freigabe“ setzt nur ein Plan des Spezialisten, nie das Statusformular
 # 0.15.0: „wartet auf Rückmeldung“ setzt nur eine Rückfrage
-MANUAL_EXCLUDED = ("handed_over", "waiting_approval", "waiting_consult")
+# 0.22.0: „wartet auf Auftrag“ setzt nur ein Auftrag des Leiters
+MANUAL_EXCLUDED = ("handed_over", "waiting_approval", "waiting_consult", "waiting_task")
 
 # 0.15.0 (RFC-0105 §5): Rückfragen an Spezialisten je Vorgang; Antworten von Spezialisten auf
 # Spezialisten in Folge, danach ist ein Mensch dran
 CONSULT_SPECIALISTS_MAX = 3
 SPEC_TO_SPEC_IN_ROW = 2
+# 0.22.0 (RFC-0134 §5, D4): Aufträge des Leiters je Vorgang (Mandant nur niedriger), einer zur Zeit
+TASKS_MAX = 8
 
 
 def _with_substatus(nxt):
@@ -289,6 +294,9 @@ class Store:
                             "target_name TEXT NOT NULL, specialist INTEGER NOT NULL, at TEXT NOT NULL, "
                             "answer_seq INTEGER NOT NULL DEFAULT 0, answered TEXT NOT NULL DEFAULT '')")
             self.db.execute("CREATE INDEX IF NOT EXISTS consults_target ON consults(target, answered)")
+            # 0.22.0 (RFC-0134 §5): ein Auftrag des Leiters steht in derselben Tabelle, Art `task`
+            if "kind" not in {r[1] for r in self.db.execute("PRAGMA table_info(consults)")}:
+                self.db.execute("ALTER TABLE consults ADD COLUMN kind TEXT NOT NULL DEFAULT 'consult'")
             # 0.10.0 (D3): wer je verantwortlich oder zugewiesen war, liest weiter
             self.db.execute("CREATE TABLE IF NOT EXISTS involved (case_id TEXT NOT NULL, "
                             "uid TEXT NOT NULL, role TEXT NOT NULL, since TEXT NOT NULL, "
@@ -648,7 +656,7 @@ class Store:
             # 0.15.0 (§6): Befragte nur, solange der Vorgang offen ist
             c["involved"] = sorted({r["uid"] for r in self.db.execute(
                 "SELECT uid, role FROM involved WHERE case_id=?", (c["id"],))
-                if r["role"] != "consulted" or c["status"] not in ENDED})
+                if r["role"] not in ("consulted", "tasked") or c["status"] not in ENDED})
             c["consults"] = [dict(r) for r in self.db.execute(
                 "SELECT * FROM consults WHERE case_id=? ORDER BY seq", (c["id"],))]
         return c
@@ -866,12 +874,13 @@ class Store:
                             "last": dict(last) if last else None})
             # 0.15.0 (§3.4/§6): offene Rückfragen an uid -- je eine, mit der Frage
             for r in self.db.execute(
-                    f"SELECT k.seq, k.asked_by, c.number, c.title, c.status, c.queue, c.updated FROM consults k "
+                    f"SELECT k.seq, k.kind, k.asked_by, c.number, c.title, c.status, c.queue, c.updated FROM consults k "
                     f"JOIN cases c ON c.id = k.case_id WHERE k.target=? AND k.answered='' AND c.spec_stop=0 "
                     f"AND c.status IN ({','.join('?' * len(OPEN))}) ORDER BY k.seq LIMIT 50",
                     [uid] + list(OPEN)).fetchall():
                 out.append({"number": r["number"], "title": r["title"], "status": r["status"],
-                            "queue": r["queue"], "updated": r["updated"], "consult": r["seq"]})
+                            "queue": r["queue"], "updated": r["updated"],
+                            ("task" if r["kind"] == "task" else "consult"): r["seq"]})
         return out
 
     def spec_entry(self, c, uid, name, kind, text, data):
@@ -1008,8 +1017,8 @@ class Store:
                                (c["id"], target)).fetchone():
                 raise Refused(f"An {p['name']} ist schon eine Rückfrage offen.")
             if target in specs:
-                n = self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND specialist=1",
-                                    (c["id"],)).fetchone()[0]
+                n = self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND specialist=1 "
+                                    "AND kind='consult'", (c["id"],)).fetchone()[0]
                 if n >= CONSULT_SPECIALISTS_MAX:
                     raise Refused(f"An diesem Vorgang gab es schon {n} Rückfragen an Spezialisten. "
                                   "Weitere Rückfragen gehen an Menschen des Bereichs.")
@@ -1038,7 +1047,7 @@ class Store:
                 last_human = e["seq"]
                 break
         return self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND asked_by_specialist=1 "
-                               "AND specialist=1 AND answered!='' AND answer_seq > ?",
+                               "AND specialist=1 AND kind='consult' AND answered!='' AND answer_seq > ?",
                                (cid, last_human)).fetchone()[0]
 
     def answer_consult(self, c, uid, name, seq, text, data=None):
@@ -1061,15 +1070,73 @@ class Store:
             if r["status"] in ENDED:
                 raise Refused("Der Vorgang ist beendet.")
             data["consult"] = seq
-            self._entry(c["id"], uid, name, "consult_answer", text, data, internal=True)
+            task = k["kind"] == "task"
+            self._entry(c["id"], uid, name, "task_result" if task else "consult_answer", text, data, internal=True)
             aseq = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
             self.db.execute("UPDATE consults SET answer_seq=?, answered=? WHERE seq=?", (aseq, _now(), seq))
             still = self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND answered=''", (c["id"],)).fetchone()
-            if not still and r["status"] == "waiting_consult":
+            if not still and r["status"] in ("waiting_consult", "waiting_task"):
                 # der Status kehrt von selbst zurück -- die Befragten ändern ihn nie (§6)
                 self.db.execute("UPDATE cases SET status='in_progress' WHERE id=?", (c["id"],))
-                self._entry(c["id"], "system", "Automatisch", "status", "Die Rückfragen sind beantwortet.",
-                            {"from": "waiting_consult", "to": "in_progress"}, internal=True)
+                self._entry(c["id"], "system", "Automatisch", "status",
+                            "Der Auftrag ist erledigt." if task else "Die Rückfragen sind beantwortet.",
+                            {"from": r["status"], "to": "in_progress"}, internal=True)
+
+    # --------------------------------------- Aufträge (0.22.0, RFC-0134 Stufe 2, §5)
+    def taskable(self, c, lead):
+        """Wem der Leiter einen Auftrag geben kann: die Spezialisten außer ihm selbst. Ob einer zu
+        seinem Team gehört, weiß die App Spezialisten; hier gilt: nur Spezialisten, nie Menschen."""
+        with self.lock:
+            rows = self.db.execute("SELECT uid, name FROM people WHERE specialist=1 ORDER BY name").fetchall()
+        return [{"uid": r["uid"], "name": r["name"]} for r in rows if r["uid"] not in (lead, c["reporter"])]
+
+    def task(self, c, lead, lead_name, target, text, data=None, tasks_max=TASKS_MAX):
+        """Ein Auftrag des Leiters (§5, D4): an einen Spezialisten, mit dessen ganzer Sicht, genau ein
+        Ergebnis, nie verantwortlich. Nur wer verantwortlich und selbst Spezialist ist; einer zur Zeit;
+        höchstens `tasks_max` je Vorgang. Tiefe eins ergibt sich: ein Beauftragter ist nie verantwortlich."""
+        text = (text or "").strip()
+        if not text:
+            raise Refused("Ein Auftrag ohne Text wird nicht gespeichert.")
+        if len(text) > BODY_MAX:
+            raise Refused(f"Höchstens {BODY_MAX} Zeichen.")
+        target = (target or "").strip()
+        data = {k: v for k, v in (data or {}).items() if k in ("run", "assistant") and isinstance(v, str)}
+        with self.lock, self.db:
+            r = self.db.execute("SELECT responsible, spec_stop, status, reporter FROM cases WHERE id=?",
+                                (c["id"],)).fetchone()
+            if not r or r["status"] in ENDED:
+                raise Refused("Der Vorgang ist beendet.")
+            specs = {x["uid"] for x in self.db.execute("SELECT uid FROM people WHERE specialist=1")}
+            if r["responsible"] != lead or lead not in specs:
+                raise Refused("Aufträge gibt nur der Spezialist, der verantwortlich ist.")
+            if r["spec_stop"]:
+                raise Refused("An diesem Vorgang ist der Spezialist angehalten.")
+            p = self.db.execute("SELECT name FROM people WHERE uid=?", (target,)).fetchone()
+            if not p or target not in specs or target in (lead, r["reporter"]):
+                raise Refused("Einen Auftrag bekommt nur ein anderer Spezialist.")
+            if self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND kind='task' AND answered=''",
+                               (c["id"],)).fetchone():
+                raise Refused("Ein Auftrag ist noch offen; der nächste geht erst nach seinem Ergebnis.")
+            if self.db.execute("SELECT 1 FROM consults WHERE case_id=? AND target=? AND answered=''",
+                               (c["id"], target)).fetchone():
+                raise Refused(f"An {p['name']} ist schon eine Rückfrage offen.")
+            n = self.db.execute("SELECT COUNT(*) FROM consults WHERE case_id=? AND kind='task'",
+                                (c["id"],)).fetchone()[0]
+            if n >= tasks_max:
+                raise Refused(f"An diesem Vorgang gab es schon {n} Aufträge (Grenze {tasks_max}). "
+                              "Jetzt abschließen, zur Prüfung markieren oder an die Menschen zurückgeben.")
+            data.update({"to": target, "to_name": p["name"], "specialist": True, "n": n + 1})
+            self._entry(c["id"], lead, lead_name, "task", text, data, internal=True)
+            seq = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.db.execute("INSERT INTO consults (seq, case_id, asked_by, asked_by_specialist, target, "
+                            "target_name, specialist, at, kind) VALUES (?,?,?,?,?,?,?,?,?)",
+                            (seq, c["id"], lead, 1, target, p["name"], 1, _now(), "task"))
+            self.db.execute("INSERT OR IGNORE INTO involved VALUES (?,?,?,?)", (c["id"], target, "tasked", _now()))
+            if "waiting_task" in NEXT.get(r["status"], ()):
+                self.db.execute("UPDATE cases SET status='waiting_task' WHERE id=?", (c["id"],))
+                self._entry(c["id"], lead, lead_name, "status", "",
+                            {"from": r["status"], "to": "waiting_task"}, internal=True)
+        return seq
 
     def set_spec_stop(self, c, on, actor, actor_name):
         """§5: ein Mensch hält den Spezialisten an diesem Vorgang an (oder lässt ihn wieder zu)."""

@@ -16,6 +16,7 @@ ASSISTANT = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}@[0-9]{1,6}$")
 SECRETS = ("agent_key", "mcp_key", "ai_key")
 TOOL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 URL = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^\s]*)?$")
+TASKS_MAX = 8           # RFC-0134 D4; Vorgänge kann je Mandant weniger sagen
 
 
 class Refused(Exception):
@@ -66,6 +67,11 @@ class Store:
             for col in ("no_approval", "lifted_by"):
                 if col not in have:
                     self.db.execute(f"ALTER TABLE specialists ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+            # 0.7.0 (RFC-0134 §4): „leitet“, sein Team (Namen anderer Spezialisten), Aufträge je Vorgang
+            if "leads" not in have:
+                self.db.execute("ALTER TABLE specialists ADD COLUMN leads INTEGER NOT NULL DEFAULT 0")
+                self.db.execute("ALTER TABLE specialists ADD COLUMN team TEXT NOT NULL DEFAULT ''")
+                self.db.execute(f"ALTER TABLE specialists ADD COLUMN max_tasks INTEGER NOT NULL DEFAULT {TASKS_MAX}")
 
     # ---------------------------------------------------------------- Spezialisten
     def all(self, with_secrets=False):
@@ -128,6 +134,20 @@ class Store:
         if any(not TOOL.match(t) for t in tools):
             raise Refused("Werkzeuge ohne Freigabe: Namen, durch Leerzeichen oder Komma getrennt.")
         no_approval = " ".join(tools)
+        # 0.7.0 (RFC-0134 §4): ein Leiter und sein Team
+        leads = 1 if doc.get("leads") in (True, "1", "on", 1) else 0
+        team = [n.strip() for n in (doc.get("team") or "").split(",") if n.strip()]
+        team = list(dict.fromkeys(team))
+        if name in team:
+            raise Refused("Ein Leiter gehört nicht zu seinem eigenen Team.")
+        try:
+            max_tasks = int(doc.get("max_tasks") or TASKS_MAX)
+        except ValueError:
+            raise Refused("Aufträge je Vorgang: eine Zahl.")
+        if not 1 <= max_tasks <= TASKS_MAX:
+            raise Refused(f"Aufträge je Vorgang: 1 bis {TASKS_MAX}.")
+        if leads and not team:
+            raise Refused("Ein Leiter braucht ein Team: die Namen anderer Spezialisten, durch Komma getrennt.")
         sid = doc.get("id")
         with self.lock, self.db:
             if sid:
@@ -172,6 +192,12 @@ class Store:
                     self.db.execute("INSERT INTO audit (at, actor, what) VALUES (?,?,?)",
                                     (now(), actor, f"Freigabe aufgehoben bei {name}: {no_approval}"))
                 what = f"angelegt: {name} ({assistant})"
+            known = {r["name"] for r in self.db.execute("SELECT name FROM specialists")}
+            unknown = [n for n in team if n not in known]
+            if unknown:
+                raise Refused("Im Team stehen Namen, die es hier nicht gibt: " + ", ".join(unknown))
+            self.db.execute("UPDATE specialists SET leads=?, team=?, max_tasks=? WHERE id=?",
+                            (leads, ", ".join(team), max_tasks, sid))
             if active and not all(sec.values()):
                 raise Refused("Aktiv geht erst, wenn alle drei Schlüssel eingetragen sind.")
             self.db.execute("INSERT INTO audit (at, actor, what) VALUES (?,?,?)", (now(), actor, what))

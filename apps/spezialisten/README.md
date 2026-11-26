@@ -72,6 +72,20 @@ jemand wieder zulässt.
 - Die Änderung steht unter „Änderungen“. Der Aufruf trägt am Gateway
   `X-OAAP-Approved-By: Dauerfreigabe <Person>` und im Vorgang „aufgehoben von <Person>“.
 
+**Leiter und Aufträge (seit 0.7.0, RFC-0134 Stufe 2, Vorgänge ab 0.22.0):**
+- Ein Spezialist mit dem Schalter **„leitet“** hat ein **Team**: die Namen anderer Spezialisten
+  dieser App, durch Komma getrennt. Er ist typischerweise die Erstbearbeitung eines Bereichs.
+- Sein Lauf bekommt das Werkzeug `auftrag` (an, auftrag) mit genau diesen Namen und endet
+  nach einem Auftrag mit „wartet auf Auftrag“. Das Ergebnis weckt ihn wieder.
+- Ein **Beauftragter** liest den Vorgang, arbeitet in mehreren Schritten mit **seiner ganzen
+  Sicht** und schreibt genau ein Ergebnis (`task_result`). Ein änderndes Werkzeug ruft er im
+  Auftrag nicht auf: Er beschreibt den nötigen Aufruf im Ergebnis, planen und freigeben lassen
+  tut es der Leiter. Er wird nie verantwortlich und gibt keine Aufträge weiter (Tiefe eins).
+- Grenzen: ein Auftrag zur Zeit; höchstens `Aufträge je Vorgang` (1–8) am Leiter und
+  `VORGAENGE_TASKS_MAX` in Vorgänge, die kleinere gilt. Danach bekommt der Leiter das Werkzeug
+  nicht mehr und muss zusammenfassen und zurückgeben. Aufträge zählen nicht als Rückfragen.
+- Abschließen durch den Leiter und das Prüfmerkmal kommen mit Stufe 3.
+
 ## Einrichten (gemessen auf oaap-test, 20.11.2026)
 
 Für jeden Spezialisten gibt es drei Dinge, jedes mit eigenem Schlüssel.

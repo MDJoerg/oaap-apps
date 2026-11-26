@@ -28,6 +28,19 @@ des Bereichs um Rat. Sein Lauf endet mit „wartet auf Rückmeldung“; die Antw
 - Höchstens drei Rückfragen an Spezialisten je Vorgang, danach nur noch an Menschen.
 - Nach zwei Antworten von Spezialist zu Spezialist in Folge ist ein Mensch dran.
 
+## Leiter und Aufträge
+
+Ein Spezialist mit dem Haken **„leitet“** verteilt Teilaufgaben an die Spezialisten seines
+**Teams** (Feld *Team*, Namen durch Komma getrennt). Sein Lauf endet nach jedem Auftrag mit
+„wartet auf Auftrag“; das Ergebnis weckt ihn.
+
+- Der Beauftragte arbeitet mit seinen eigenen Werkzeugen, liest frei und liefert genau ein
+  Ergebnis. Etwas ändern darf er im Auftrag nicht: Er schreibt, was zu ändern wäre, und der
+  Leiter legt es zur Freigabe vor.
+- Es läuft immer nur ein Auftrag. Wie viele es je Vorgang höchstens sind, steht am Leiter
+  (bis 8) und in den Einstellungen von Vorgänge; die kleinere Zahl gilt.
+- Auftrag und Ergebnis stehen im Vorgang im Reiter *Intern*. Die meldende Person sieht sie nicht.
+
 ## Ampel des Bereichs
 
 Hat der Bereich in Vorgänge eine Ampel, nutzt der Spezialist nur Modelle und Sichten bis zu
