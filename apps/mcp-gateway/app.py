@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.52.1"
+VERSION = "0.53.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -4916,9 +4916,11 @@ class Handler(BaseHTTPRequestHandler):
                 books.delete_view(DB, user, form.get("name", ""))
                 notice = f"Sicht „{form.get('name', '')}“ gelöscht."
             elif path == "/item-add":
+                # die Klasse hat eine Person gewählt (Vorgabe: was das Tool selbst meldet)
                 name = books.approve(DB, user, form.get("view", ""), form.get("kind", "tool"),
                                      form.get("server", ""), form.get("source", ""),
-                                     form.get("as", "").strip() or None, form.get("effect", "read"))
+                                     form.get("as", "").strip() or None, form.get("effect") or None,
+                                     read_confirmed=bool(form.get("effect")))
                 notice = (f"„{name}“ freigegeben in Sicht „{form.get('view', '')}“; "
                           "der Text ist festgehalten.")
                 back = ("view", form.get("view", ""))
@@ -5046,14 +5048,15 @@ def json_field(form, name):
         raise ValueError(f"„{name}“ ist kein gültiges JSON.") from None
 
 
-def tailor_from_form(form, user):
-    """Gemeinsam für Seite und Kommandozeile."""
+def tailor_from_form(form, user, read_confirmed=True):
+    """Gemeinsam für Seite und Kommandozeile. Auf der Seite wählt eine Person die Klasse; auf der
+    Kommandozeile braucht „lesen“ für ein Tool, das sich nicht als lesend meldet, --lesend-bestaetigt ja."""
     return books.tailor_item(
         DB, user, form.get("view", ""), form.get("kind", "tool"), form.get("name", ""),
         new_name=form["new_name"].strip() if "new_name" in form else None,
         description=form["description"].strip() if "description" in form else None,
         fixed=json_field(form, "fixed"), bounds=json_field(form, "bounds"),
-        effect=form.get("effect") or None)
+        effect=form.get("effect") or None, read_confirmed=read_confirmed)
 
 
 def save_server(form, user):
@@ -5368,13 +5371,20 @@ def setup_wish(kind, sid, item, planned, actor):
                 if not isinstance(t, dict) or set(t) - {"server", "tool", "effect"} \
                         or not isinstance(t.get("server"), str) or not isinstance(t.get("tool"), str):
                     raise SetupRefused(shape)
-                eff = t.get("effect", "read")
-                if eff not in books.EFFECTS:
+                eff = t.get("effect")
+                if eff is not None and eff not in books.EFFECTS:
                     raise SetupRefused("effect ist read, write oder execute.")
                 srow = setup_server(t["server"])
                 cat = books.catalog_row(DB, srow["name"], "tool", t["tool"]) if srow else None
                 if cat and cat["present"]:
-                    wanted.add((srow["name"], t["tool"], eff))
+                    # 0.53.0: ohne effect die Klasse, die das Tool meldet; „read“ nur für ein Tool,
+                    # das sich selbst als lesend meldet (eine Einrichtung fragt niemanden)
+                    hint = books.effect_hint(json.loads(cat["doc"]))
+                    if eff == "read" and hint != "read":
+                        raise SetupRefused(books.READ_UNCONFIRMED.format(tool=t["tool"], hint=hint)
+                                           .split(" Als „lesen“")[0] + " -- effect weglassen oder "
+                                           f"„{hint}“ angeben.")
+                    wanted.add((srow["name"], t["tool"], eff or hint))
                 elif ("refresh", t["server"]) in planned:
                     pending = True
                 else:
@@ -6041,7 +6051,7 @@ def cli(argv):
              "        app.py view set <name> [--max-effect read|write|execute] "
              "[--elicitation pass|refuse] [--roots pass|refuse] [--sampling pass|refuse] [--ways key,signin,platform] [--approval required|signed|none] [--approval-key-stdin ja] | view list\n"
              "        app.py view add <sicht> <server> <name> [--kind tool|resource|template|prompt] "
-             "[--as NAME] [--effect read] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
+             "[--as NAME] [--effect read|write|execute] [--lesend-bestaetigt ja] | view confirm <sicht> <name> [--kind K] [--effect E]\n"
              "        app.py view tailor <sicht> <name> [--kind K] [--rename N] [--description T] "
              "[--fixed JSON] [--bounds JSON] [--effect E] | view remove <sicht> <name> [--kind K]\n"
              "        app.py key set <etikett> [--views a,b] [--max-effect E] [--ceiling L] (auch Zugangsprofile)\n"
@@ -6263,8 +6273,10 @@ def cli(argv):
             return 0
         if area == "view" and action == "add" and len(pos) >= 3:
             name = books.approve(DB, "cli", pos[0], opts.get("kind", "tool"), pos[1], pos[2],
-                                 opts.get("as"), opts.get("effect", "read"))
-            print(f"freigegeben als „{name}“, Text festgehalten")
+                                 opts.get("as"), opts.get("effect"),
+                                 read_confirmed=opts.get("lesend-bestaetigt") == "ja")
+            item = books.item_row(DB, pos[0], opts.get("kind", "tool"), name)
+            print(f"freigegeben als „{name}“ ({item['effect'] if item else '?'}), Text festgehalten")
             return 0
         if area == "view" and action == "confirm" and len(pos) >= 2:
             books.confirm(DB, "cli", pos[0], opts.get("kind", "tool"), pos[1], opts.get("effect"))
@@ -6276,7 +6288,7 @@ def cli(argv):
                                ("fixed", "fixed"), ("bounds", "bounds"), ("effect", "effect")):
                 if opt in opts:
                     form[field] = opts[opt]
-            changed = tailor_from_form(form, "cli")
+            changed = tailor_from_form(form, "cli", read_confirmed=opts.get("lesend-bestaetigt") == "ja")
             print("; ".join(changed) or "unverändert")
             return 0
         if area == "view" and action == "remove" and len(pos) >= 2:

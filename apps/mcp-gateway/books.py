@@ -1270,7 +1270,7 @@ def set_view_items(db, actor, view, wanted, seen, effects=None):
             removed.append(i["name"])
     for key in sorted(set(wanted) & set(seen)):
         server, kind, source = key
-        eff = effects.get(key) or "read"
+        eff = effects.get(key)        # 0.53.0: ohne Wahl die Klasse der Quelle, nicht „lesen“
         if key in have:
             for i in have[key]:
                 if kind == "tool" and effects.get(key) and i["effect"] != eff:
@@ -1281,7 +1281,7 @@ def set_view_items(db, actor, view, wanted, seen, effects=None):
                         errors.append(f"{i['name']}: {exc}")
             continue
         try:
-            added.append(approve(db, actor, view, kind, server, source, None, eff))
+            added.append(approve(db, actor, view, kind, server, source, None, eff, read_confirmed=bool(eff)))
         except ValueError as exc:
             errors.append(f"{server}:{source}: {exc}")
     return added, removed, changed, errors
@@ -1414,8 +1414,29 @@ def ui_uri(item):
     return uri if isinstance(uri, str) and uri.startswith("ui://") else None
 
 
-def approve(db, actor, view, kind, server, source, name=None, effect="read"):
-    """Legt einen Eintrag in eine Sicht. Hält den Text fest. Ein belegter Name wird abgewiesen."""
+def effect_hint(doc):
+    """Die Klasse, die ein Tool selbst meldet (MCP-Annotationen): `read` nur mit `readOnlyHint: true`,
+    `execute` mit `destructiveHint`, sonst `write` -- lieber einmal zu oft fragen."""
+    ann = (doc or {}).get("annotations") or {}
+    if not isinstance(ann, dict):
+        ann = {}
+    if ann.get("readOnlyHint") is True:
+        return "read"
+    return "execute" if ann.get("destructiveHint") is True else "write"
+
+
+READ_UNCONFIRMED = ("„{tool}“ meldet sich nicht als lesend (kein readOnlyHint: true; Klasse laut Quelle: "
+                    "{hint}). Als „lesen“ liefe es ohne Freigabe und ohne Bestätigung -- das geht nur "
+                    "ausdrücklich (Seite: Klasse wählen; Kommandozeile: --lesend-bestaetigt ja).")
+
+
+def approve(db, actor, view, kind, server, source, name=None, effect=None, read_confirmed=False):
+    """Legt einen Eintrag in eine Sicht. Hält den Text fest. Ein belegter Name wird abgewiesen.
+
+    0.53.0: ohne `effect` gilt für ein Tool die Klasse, die es selbst meldet (`effect_hint`), nicht mehr
+    „lesen“ -- gemessen in bec 26.11.: zwei schreibende SAP-Tools standen so lesend in der Sicht eines
+    Spezialisten und wären ohne Freigabe gelaufen. „lesen“ für ein Tool, das sich nicht als lesend
+    meldet, nur mit `read_confirmed` (eine Person hat es so gewählt)."""
     vrow_ = view_row(db, view)
     if vrow_ is not None and "reference" in vrow_.keys() and vrow_["reference"]:
         # 0.32 (RFC-0114): eine Multi-System-Sicht wird am Referenzsystem ausgeprägt
@@ -1435,10 +1456,8 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
         raise ValueError("Art ist tool, resource, template oder prompt.")
     if not server_row(db, server):
         raise ValueError(f"Einen Server „{server}“ gibt es nicht.")
-    effect = effect if kind == "tool" else "read"
-    if effect not in EFFECT_RANK:
+    if effect is not None and effect not in EFFECT_RANK:
         raise ValueError("Wirkungsklasse ist read, write oder execute.")
-    _refuse_writing_with_untrusted(db, view, effect, server)
     if needs_person(server_row(db, server)) and "key" in view_ways(view_row(db, view)):
         raise ValueError(f"Server „{server}“ arbeitet mit Verfahren X, I oder P und braucht eine angemeldete "
                          f"Person; die Sicht „{view}“ nimmt Schlüssel an. Erst die Sicht auf "
@@ -1448,6 +1467,15 @@ def approve(db, actor, view, kind, server, source, name=None, effect="read"):
         raise ValueError(f"Der Server „{server}“ bietet {compose.KIND_WORDS[kind]} „{source}“ "
                          "nicht an (Katalog neu lesen?).")
     doc = json.loads(cat["doc"])
+    if kind == "tool":
+        hint = effect_hint(doc)
+        if effect is None:
+            effect = hint
+        elif effect == "read" and hint != "read" and not read_confirmed:
+            raise ValueError(READ_UNCONFIRMED.format(tool=source, hint=hint))
+    else:
+        effect = "read"
+    _refuse_writing_with_untrusted(db, view, effect, server)
     if kind in ("resource", "template"):
         name = source                           # Resources behalten ihre URI (RFC-0065 §3)
     elif not name:
@@ -1547,7 +1575,7 @@ def confirm(db, actor, view, kind, name, effect=None):
 
 
 def tailor_item(db, actor, view, kind, name, new_name=None, description=None, fixed=None,
-                bounds=None, effect=None):
+                bounds=None, effect=None, read_confirmed=True):
     """Ändert, was die Sicht aus einem Eintrag macht. None = unverändert. Geprüft am FESTGEHALTENEN Text."""
     import compose
     item = item_row(db, view, kind, name)
@@ -1591,6 +1619,10 @@ def tailor_item(db, actor, view, kind, name, new_name=None, description=None, fi
             raise ValueError("Resources und Prompts sind immer „lesen“.")
         if effect not in EFFECT_RANK:
             raise ValueError("Wirkungsklasse ist read, write oder execute.")
+        if effect == "read" and not read_confirmed:
+            hint = effect_hint(json.loads(item["approved_doc"] or "{}"))
+            if hint != "read":
+                raise ValueError(READ_UNCONFIRMED.format(tool=item["source"], hint=hint))
         _refuse_writing_with_untrusted(db, view, effect)
         sets.append("effect=?")
         args.append(effect)

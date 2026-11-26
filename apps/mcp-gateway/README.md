@@ -525,6 +525,16 @@ echo "$GEHEIMNIS" | docker exec -i <container> python3 /srv/app.py server set a4
   --client-id mcp-gw-probe --audience a4h-mcp --credential-stdin ja
 ```
 
+**Die Klasse eines Tools (seit 0.53.0).** Ohne `--effect` legt `view add` ein Tool mit der Klasse in
+die Sicht, die es selbst meldet: `read` nur mit `readOnlyHint: true`, `execute` mit `destructiveHint`,
+sonst `write`. Vorher war die Vorgabe `read` – gemessen in bec am 26.11.2026: zwei schreibende
+SAP-Tools standen so lesend in der Sicht eines Spezialisten und wären ohne Freigabe gelaufen.
+`--effect read` für ein Tool, das sich nicht als lesend meldet, gilt nur mit
+`--lesend-bestaetigt ja` (ebenso `view tailor --effect read`); auf der Seite wählt eine Person die
+Klasse, vorgewählt ist die der Quelle. Die Einrichtungstür nimmt in einer Liste
+`{"server", "tool", "effect"}` ohne `effect` die Klasse der Quelle und lehnt `read` für ein Tool ab,
+das sich nicht als lesend meldet. Die Ausgabe von `view add` nennt die Klasse.
+
 ## Prüfen
 
 ```bash

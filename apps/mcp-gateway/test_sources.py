@@ -235,7 +235,8 @@ ok("… die Startseite des Betreibers nennt die Sicht mit „Quelle entfernt“"
    "Quelle entfernt" in app.start_tab("x"))
 # ein Teil: ein Werkzeug von kp in dieselbe Sicht
 books.store_catalog(app.DB, "kp", {"tool": [{"name": "kp_lesen", "description": "lesen",
-                                              "inputSchema": {"type": "object"}}]})
+                                              "inputSchema": {"type": "object"},
+                                              "annotations": {"readOnlyHint": True}}]})
 books.approve(app.DB, "betreiber", "chat", "tool", "kp", "kp_lesen", effect="read")
 ok("ein Werkzeug einer noch installierten App daneben: tools_gone = some",
    books.tools_gone(app.DB, "chat") == "some")

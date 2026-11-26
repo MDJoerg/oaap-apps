@@ -343,6 +343,22 @@ ok("Prüfspur: auch removed und conflict mit Name der Einrichtung",
                   ("setup:" + ACTOR,)).fetchone()[0] == 4
    and app.DB.execute("SELECT COUNT(*) FROM audit WHERE action='setup.conflict'").fetchone()[0] >= 3)
 
+print("--- 0.53.0: die Klasse eines Tools aus der Liste")
+st, doc = call("POST", body={"v": 1, "items": [
+    {"kind": "view", "id": "klasse", "accesses": ["platform"],
+     "tools": [{"server": "ws-hilfe", "tool": "help_request_guide", "effect": "read"}]}]})
+ok("KÖDER: effect read für ein Tool mit readOnlyHint false: abgelehnt, keine Sicht",
+   results(doc) != ["made"] and books.view_row(app.DB, "klasse") is None
+   and "nicht als lesend" in json.dumps(doc, ensure_ascii=False), doc)
+st, doc = call("POST", body={"v": 1, "items": [
+    {"kind": "view", "id": "klasse", "accesses": ["platform"],
+     "tools": [{"server": "ws-hilfe", "tool": "help_request_guide"},
+               {"server": "ws-hilfe", "tool": "help_search"}]}]})
+eff = {i["source"]: i["effect"] for i in books.items(app.DB, "klasse", "tool")}
+ok("ohne effect: die Klasse der Quelle (write bzw. read)",
+   results(doc) == ["made"] and eff == {"help_request_guide": "write", "help_search": "read"}, (doc, eff))
+call("POST", body={"v": 1, "remove": [{"kind": "view", "id": "klasse"}]})
+
 print("--- 0.29.0 (RFC-0109 D12): zurückholen, was die Tür selbst entfernt hat")
 BACK = [ITEMS[3], ITEMS[4]]                      # Profil ws-chat, Assistent hilfe -- oben entfernt
 st, doc = call("POST", body={"v": 1, "dry": True, "items": BACK})
