@@ -20,6 +20,14 @@ Eine Instanz je Mandant. Sie nimmt zweierlei an:
    Neustart mit dem Beweis. Durch darf nur der Prinzipal
    `platform:<diese Instanz>`, dessen Schluessel das Gateway nur an dieser
    Tuer dieser Site annimmt.
+6. Seit 0.21.0 **Lieferungen durch ein Tor** (`/platform/cases/gate`,
+   RFC-0135 Stufe 1): ein anderes System (SAP per SM59) liefert an
+   `/gate/<name>` auf dem Ort des Mandanten; das Gateway laesst nur einen
+   Zugang dieses Tors durch und sagt in Kopfzeilen, die kein Client setzen
+   kann, welches Tor, welcher Zugang, welche Felder und welcher Bereich.
+   Geprueft wird hier gegen dieselbe Feldliste, aus der die Vorlagen kommen
+   (`gates.py`); dieselbe `ref` zweimal ist ein Vorgang, und
+   `GET /gate/<name>/<ref>` liest seinen Stand.
 5. Seit 0.12.0 **Anfragen eines Mandanten an den Betreiber** durch dieselbe
    Tuer (RFC-0109 §13): `object: request`, `from` nennt Mandant und Person;
    `op: read` gibt dem Knoten Status und Antworten zurueck (nie Internes).
@@ -54,12 +62,14 @@ import urllib.request
 
 import appframe as af
 import authz_client
+# 0.21.0 (RFC-0135): Feldliste und Pruefung eines Tors -- Kopie aus oaap-reference
+import gates
 import mcp_door
 from store import (ACCEPT_DAYS, BUTTON_KINDS, DEFAULT_QUEUE, KIND_LABEL, KINDS, MANUAL_EXCLUDED,
                    MARK_LABEL, NEXT, OPEN, QUEUE_ID, RETENTION_MONTHS, STATUS_LABEL, SUBSTATUS, Refused,
                    Store, canonical)
 
-VERSION = "0.20.0"
+VERSION = "0.21.0"
 APP_ID = "vorgaenge"
 PORT = 8000
 DATA_DIR = os.environ.get("VORGAENGE_DATA_DIR", "/data")
@@ -709,6 +719,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.feedback_session()
         if p == "/platform/feedback/mine":
             return self.feedback_mine(parse_qs(u.query))
+        if p == "/platform/cases/gate" or p.startswith("/platform/cases/gate/"):
+            return self.gate_read(p[len("/platform/cases/gate"):].strip("/"), u.query)
         if p == "/mcp":
             return self.send(405, "", "text/plain")
         if self.is_partner():
@@ -751,6 +763,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.backend_submit()
         if p == "/platform/cases/node":
             return self.node_post()
+        if p in ("/platform/cases/gate", "/platform/cases/gate/"):
+            return self.gate_post(urlparse(self.path).query)
+        if p.startswith("/platform/cases/gate/"):
+            return self.gate_send(405, {"error": "Liefern mit POST an /gate/<name>"},
+                                  urlparse(self.path).query)
         if p == "/handover":
             return self.handover_in()
         if self.is_partner():
@@ -1157,6 +1174,137 @@ class Handler(BaseHTTPRequestHandler):
             raise Refused("op: open, note, read oder close.")
         except (Refused, ValueError) as e:
             return self.json(400, {"error": str(e) if isinstance(e, Refused) else "Ungültige Meldung."})
+
+    # --- Lieferungen durch ein Tor (RFC-0135 Stufe 1)
+    def gate_context(self):
+        """Was das Gateway ueber das Tor sagt -- oder None. Durch kommt nur,
+        was der Block des Tors auf dem Ort des Mandanten geschickt hat: der
+        Prinzipal (vom Gateway nach der Pruefung) ist der Zugang, die Herkunft
+        ist `gate:<name>`, und Feldliste und Prozess sind lesbar. Jede
+        Instanz-Site streicht diese Kopfzeilen, ein Client setzt sie also nie."""
+        name = self.headers.get("X-OAAP-Gate-Name", "").strip()
+        principal = self.headers.get("X-OAAP-User", "").strip()
+        access = self.headers.get("X-OAAP-Gate-Access", "").strip()
+        src = self.attested()
+        if (not name or not principal or principal != access or not src
+                or src["instance"] != f"gate:{name}" or src["app"] != "gate"):
+            return None
+        fields = gates.unpack(self.headers.get("X-OAAP-Gate-Fields", ""))
+        proc = gates.unpack(self.headers.get("X-OAAP-Gate-Process", ""))
+        if not isinstance(fields, list) or not isinstance(proc, dict):
+            return None
+        try:
+            fields = gates.check_fields(fields)
+        except ValueError:
+            return None
+        label = unquote(self.headers.get("X-OAAP-Gate-Label", "")).strip() or principal
+        return {"name": name, "principal": principal, "label": label[:80],
+                "fields": fields, "process": proc, "src": src}
+
+    def gate_send(self, code, doc, query, lines=None):
+        """JSON, oder auf Wunsch Zeilen `name=wert`, die ein ABAP-Programm ohne
+        Parser liest (RFC-0135 D9). Zeilenumbrueche im Wert als \\n."""
+        want_text = ("answer=text" in (query or "")
+                     or "text/plain" in (self.headers.get("Accept") or ""))
+        if not want_text:
+            return self.json(code, doc)
+        rows = lines if lines is not None else [("error", doc.get("error", ""))]
+        body = "".join(f"{k}={str(v).replace(chr(13), '').replace(chr(10), chr(92) + 'n')}\n"
+                       for k, v in rows)
+        return self.send(code, body, "text/plain; charset=utf-8")
+
+    def gate_post(self, query):
+        ctx = self.gate_context()
+        if not ctx:
+            return self.json(403, {"error": "Nur durch ein Tor der Plattform."})
+        raw_type = self.headers.get("Content-Type") or ""
+        ctype = raw_type.split(";")[0].strip().lower()
+        # Gemessen 26.11.: ein Client, der „ü“ als Latin-1 schickt (%FC), wurde mit
+        # einem Ersatzzeichen gespeichert, ohne dass jemand es merkte. Jetzt: UTF-8
+        # streng, oder der Zeichensatz, den der Content-Type nennt (ISO-8859-1);
+        # was nicht passt, wird mit einem Satz abgelehnt, nie verfälscht.
+        cs = re.search(r"charset\s*=\s*\"?([A-Za-z0-9_-]+)", raw_type)
+        charset = (cs.group(1).lower() if cs else "utf-8").replace("_", "-")
+        if charset in ("latin1", "latin-1", "iso8859-1", "iso-8859-1"):
+            charset = "iso-8859-1"
+        elif charset not in ("utf-8", "utf8", "us-ascii"):
+            return self.gate_send(415, {"error": f"Zeichensatz {charset}: UTF-8 oder "
+                                                 "ISO-8859-1 erwartet."}, query)
+        try:
+            if ctype == "application/x-www-form-urlencoded":
+                doc = {k: v[0] for k, v in parse_qs(self.body().decode("ascii"),
+                                                    keep_blank_values=True,
+                                                    encoding=charset, errors="strict").items()}
+            elif ctype in ("application/json", ""):
+                doc = json.loads(self.body().decode(charset) or "{}")
+            else:
+                return self.gate_send(415, {"error": "JSON oder Formularfelder erwartet "
+                                                     f"(nicht {ctype})."}, query)
+        except UnicodeDecodeError:
+            return self.gate_send(400, {"error": f"Inhalt ist kein {charset.upper()}; einen "
+                                                 "anderen Zeichensatz im Content-Type nennen "
+                                                 "(charset=iso-8859-1)."}, query)
+        except ValueError:
+            return self.gate_send(400, {"error": "Inhalt nicht lesbar "
+                                                 f"({ctype or 'ohne Content-Type'})."}, query)
+        values, errors = gates.validate(ctx["fields"], doc)
+        if errors:
+            return self.gate_send(422, {"error": "abgelehnt: " + "; ".join(errors),
+                                        "errors": errors}, query)
+        m = gates.mapped(ctx["fields"], values)
+        name, principal, proc = ctx["name"], ctx["principal"], ctx["process"]
+        oid = f"{name}/{m['ref']}"
+        have = self.store.by_object("gate", oid, principal)
+        if have:
+            return self.gate_send(200, {"ok": True, "number": have["number"], "ref": m["ref"],
+                                        "status": have["status"], "existing": True}, query,
+                                  [("number", have["number"]), ("ref", m["ref"])])
+        if self.store.submissions_by(ctx["src"]["instance"], 3600) >= SUBMISSIONS_PER_HOUR:
+            return self.gate_send(429, {"error": "Zu viele Lieferungen dieses Tors in der "
+                                                 "letzten Stunde."}, query)
+        kind = proc.get("kind") if proc.get("kind") in KINDS else "internal"
+        queue = proc.get("queue") if QUEUE_ID.fullmatch(str(proc.get("queue") or "")) \
+            else DEFAULT_QUEUE
+        try:
+            made = self.store.create(
+                kind=kind, title=m["title"], body=m["text"], reporter=principal,
+                reporter_name=f"{ctx['label']} (Tor {name})", queue=queue,
+                obj={"kind": "gate", "id": oid},
+                attested=dict(ctx["src"], submitted_by=principal, gate=name,
+                              access=principal, access_label=ctx["label"],
+                              process=str(proc.get("process") or "")),
+                delivered=m["tech"])
+        except Refused as e:
+            return self.gate_send(422, {"error": "abgelehnt: " + str(e)}, query)
+        print(f"case {made['number']} through gate {name} from {principal}", flush=True)
+        return self.gate_send(201, {"ok": True, "number": made["number"], "ref": m["ref"],
+                                    "status": "new"}, query,
+                              [("number", made["number"]), ("ref", m["ref"])])
+
+    def gate_read(self, ref, query):
+        """`GET /gate/<name>/<ref>`: der Stand dessen, was DIESER Zugang unter
+        `ref` geliefert hat -- Nummer, Status und die letzte Antwort der
+        Bearbeitenden (nie Internes). Ein fremder Bezug fehlt wie ein
+        unbekannter."""
+        ctx = self.gate_context()
+        if not ctx:
+            return self.json(403, {"error": "Nur durch ein Tor der Plattform."})
+        ref = unquote(ref)
+        if not ref:
+            return self.gate_send(405, {"error": "Liefern mit POST, lesen mit /gate/<name>/<ref>."},
+                                  query)
+        c = self.store.by_object("gate", f"{ctx['name']}/{ref}", ctx["principal"]) \
+            if gates.REF_RE.match(ref) else None
+        if not c:
+            return self.gate_send(404, {"error": f"Unter ref {ref[:120]} hat dieser Zugang "
+                                                 "nichts geliefert."}, query)
+        r = node_reading(c, ctx["principal"])
+        answer = r["replies"][-1]["text"] if r["replies"] else ""
+        doc = {"ok": True, "number": c["number"], "ref": ref, "status": c["status"],
+               "status_label": r["status_label"], "updated": r["updated"], "answer": answer}
+        return self.gate_send(200, doc, query,
+                              [("number", c["number"]), ("ref", ref), ("status", c["status"]),
+                               ("updated", r["updated"]), ("answer", answer)])
 
     # --- Posteingang fuer Uebergaben (RFC-0061 §5.3)
     def handover_in(self):

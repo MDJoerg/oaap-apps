@@ -149,6 +149,36 @@ beendeten Vorgang in Ruhe. Was der Vorgang **nicht** trägt: Kernel-Versionen;
 die stehen in `oaap status` und im Flottenstatus. Begründungen trägt er nur
 in den Worten des Betreibers (Plan von Hand).
 
+## Lieferungen durch ein Tor (seit 0.21.0, RFC-0135 Stufe 1)
+
+Ein anderes System (SAP per SM59, ein Node-RED-Flow, ein Formular) liefert an
+`https://<Ort des Mandanten>/gate/<name>`. Die Plattform prüft den Zugang
+(Basic mit dem Schlüssel als Passwort oder Bearer) und reicht die Lieferung an
+`/platform/cases/gate` dieser Instanz weiter, mit Kopfzeilen, die kein Client
+setzen kann: welches Tor, welcher Zugang (`X-OAAP-User` = `X-OAAP-Gate-Access`),
+welche Feldliste und welcher Prozess (Bereich, Art).
+
+- Geprüft wird gegen **dieselbe Feldliste**, aus der die Plattform die Vorlagen
+  macht (`gates.py`, Kopie aus oaap-reference). JSON oder Formularfelder;
+  unbekannte Felder und fehlende Pflichtfelder werden mit Namen abgelehnt (422).
+  Zeichensatz UTF-8, oder ISO-8859-1 mit `charset=iso-8859-1` im Content-Type.
+- Der Vorgang steht im Bereich des Prozesses, mit dem Zugang als Absender
+  („SAP A4H 001 (Tor sap-support)“) und den technischen Feldern.
+- **Dieselbe `ref` zweimal ist ein Vorgang**, je Zugang, auch nach dem
+  Schließen.
+- `GET /gate/<name>/<ref>` liest Nummer, Status und die letzte Antwort der
+  Bearbeitenden (nie Internes).
+- Antwort als JSON, oder mit `?answer=text` bzw. `Accept: text/plain` als
+  Zeilen `number=…`, `ref=…` (Fehler: `error=…`).
+
+Eingerichtet wird das Tor auf dem Knoten:
+
+```
+sudo oaap gate process sap-support --tenant bec --queue sap-support --kind question
+sudo oaap gate add sap-support --tenant bec --process sap-support
+sudo oaap gate access sap-support --tenant bec --label "SAP A4H 001"
+```
+
 ## Übergabe an einen anderen Mandanten (seit 0.2.0, RFC-0061 §5)
 
 > Ein Vorgang verlässt seinen Mandanten nie. Eine Übergabe schon: eine
@@ -456,6 +486,7 @@ Ein Vorgang wird nicht gelöscht, sondern geschlossen.
 python3 apps/vorgaenge/test_app.py
 python3 apps/vorgaenge/test_mcp.py
 python3 apps/vorgaenge/test_stage2.py   # zwei Mandanten, Übergabe und Antwort, Backend
+python3 apps/vorgaenge/test_gate.py     # Lieferungen durch ein Tor (RFC-0135)
 ```
 
 Der Test startet einen echten Server und setzt die Gateway-Kopfzeilen

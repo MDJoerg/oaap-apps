@@ -16,7 +16,8 @@ RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin vorgaenge
 
 WORKDIR /srv
 # ACHTUNG: Jedes neue Modul muss hier stehen (einzeln, nicht COPY .).
-COPY app.py store.py authz_client.py mcp_door.py /srv/
+# 0.21.0: gates.py ist die Kopie aus oaap-reference (RFC-0135)
+COPY app.py store.py authz_client.py mcp_door.py gates.py /srv/
 COPY appframe/ /srv/appframe/
 COPY views/ /srv/views/
 # 0.7.0: Markdown, Mermaid, SVG -- Kopie aus lib/mdview (check-shared.py)

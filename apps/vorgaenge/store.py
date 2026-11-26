@@ -523,7 +523,8 @@ class Store:
 
     def create(self, *, kind, title, body, reporter, reporter_name,
                queue=DEFAULT_QUEUE, obj=None, attested=None, browser=None,
-               allowed_kinds=KINDS, asserted=None, subkind=None, fields=None):
+               allowed_kinds=KINDS, asserted=None, subkind=None, fields=None,
+               delivered=None):
         """Legt einen Vorgang an. `attested` kommt vom Gateway (oder, fuer
         einen in der App angelegten Vorgang, von der App selbst), `browser`
         vom Client -- getrennt gespeichert, Client-Felder gefiltert."""
@@ -552,6 +553,10 @@ class Store:
         sub, flds = check_fields(subkind, fields)
         if sub:
             tech["subkind"], tech["fields"] = sub, flds
+        if delivered:
+            # 0.21.0 (RFC-0135): die technischen Felder einer Lieferung durch ein
+            # Tor -- geprueft gegen die Feldliste des Tors, nicht beglaubigt
+            tech["delivered"] = {str(k)[:40]: _clip(v, 2000) for k, v in delivered.items()}
         cid = str(uuid.uuid4())
         at = _now()
         with self.lock, self.db:
@@ -1082,6 +1087,16 @@ class Store:
                 "SELECT number FROM cases WHERE object_kind=? AND object_id=? "
                 "AND status NOT IN ('closed', 'rejected') ORDER BY created DESC LIMIT 1",
                 (kind, oid)).fetchone()
+        return self.get(r["number"]) if r else None
+
+    def by_object(self, kind, oid, reporter):
+        """0.21.0 (RFC-0135): der Vorgang zu einem Bezug DIESES Absenders, in
+        jedem Status -- dieselbe `ref` zweimal ist eine Lieferung, auch wenn der
+        erste Vorgang schon geschlossen ist."""
+        with self.lock:
+            r = self.db.execute(
+                "SELECT number FROM cases WHERE object_kind=? AND object_id=? AND reporter=? "
+                "ORDER BY created DESC LIMIT 1", (kind, oid, reporter)).fetchone()
         return self.get(r["number"]) if r else None
 
     def close_by_node(self, c, actor, actor_name, text):
