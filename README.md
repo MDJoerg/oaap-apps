@@ -80,7 +80,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 
 | App                                | Was es tut                                                 | Version |
 | ---------------------------------- | ---------------------------------------------------------- | ------- |
-| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.8.2   |
+| [Studio](apps/studio/)             | Vorhaben, KI-Briefings, Pakete prüfen und ausrollen        | 0.9.0   |
 | [FleetView](apps/fleetview/)       | Lesende Übersicht über Knoten, Instanzen, Auffälligkeiten  | 1.2.2   |
 | [Store Editor](apps/store-editor/) | Store-Listen gegen Format und Manifeste prüfen und pflegen | 0.4.0   |
 | [LiveKit](apps/livekit/)           | WebRTC-Medienserver (wrapped) — Referenz Echtzeit-Medien   | 0.2.0   |

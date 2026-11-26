@@ -19,7 +19,7 @@ Das Studio gibt dieses Verzeichnis als `oaap-starter-<version>.zip` heraus
 
 | Datei | Wofür |
 | --- | --- |
-| `oaap-app.yaml` | das Manifest (0.18) — jede Zeile kommentiert, die optionalen Fähigkeiten auskommentiert darunter |
+| `oaap-app.yaml` | das Manifest (0.23) — jede Zeile kommentiert, die optionalen Fähigkeiten auskommentiert darunter |
 | `Dockerfile` | Multi-Arch-Bau, Debians Korrekturen beim Bau, fester numerischer Benutzer |
 | `app.py` | die App: Identität aus den Kopfzeilen (Anker `X-OAAP-User-Id`), `/data`, `/healthz`, Anzeige der Plattformtüren, der Rahmen der Plattform (Kit `/platform/theme.css`, Rahmenskript `/platform/app.js`) |
 | `docs/index.md` | die Hilfe der App (`docs:` im Manifest) — Pflicht für jede App mit Oberfläche |

@@ -60,7 +60,9 @@ KNOWN_MANIFEST_MAJOR = 0
 # den ein Knoten so nie gegeben hätte. Steigt das Schema, hier nachziehen.
 # Studio 0.7.0: 0.19 (RFC-0118 macht `docs:` zur Pflicht -- ein Paket, das die
 # Regel erfüllt, darf hier keinen Hinweis „unbekannt“ bekommen).
-KNOWN_MANIFEST_MINOR = 19
+# Studio 0.9.0: 0.23 -- zwölf Apps im Katalog tragen 0.20 bis 0.23, und das
+# Starter-Paket selbst steht jetzt auf 0.23.
+KNOWN_MANIFEST_MINOR = 23
 APP_TYPES = ("native", "image", "wrapped")
 APP_CLASSES = ("frontend", "service")
 # `support` seit RFC-0039 -- der Dienstleister, der einen Knoten
@@ -79,7 +81,10 @@ TOP_LEVEL = ("oaap_manifest", "must_understand", "app", "services", "routes",
              # 0.16 Identität, 0.17 Hilfe (RFC-0094), 0.18 Einrichtung und
              # KI-Türen (RFC-0104), 0.19 fremder Inhalt (RFC-0116).
              "identity", "docs", "docs_sources", "setup", "ai_client",
-             "ai_gateway", "mcp_content")
+             "ai_gateway", "mcp_content",
+             # 0.20 Assistenten-Vorlagen (RFC-0119), 0.21 Ereignisse (RFC-0127),
+             # 0.22 Einladen (RFC-0126), 0.23 Ablage-Anschluss (RFC-0121).
+             "assistant_templates", "events", "people", "mcp_store")
 
 # Was ein Paket von der Plattform anfordert, in Worten für den Menschen,
 # der es prüft — in der Reihenfolge des Briefings.
@@ -95,6 +100,10 @@ CAPABILITIES = (
     ("ui_sandbox", "Ansichten für MCP Apps"),
     ("link_state", "meldet Tunnelzustand"),
     ("assets", "meldet Assets"),
+    ("setup", "Einrichtungstür für Rezepte"),
+    ("events", "sendet/empfängt Ereignisse"),
+    ("people", "lädt Personen ein"),
+    ("identity", "eigene Anmeldung über den Realm"),
 )
 
 
@@ -551,6 +560,50 @@ def validate(m):
                            "bei Sicherheitsmeldungen selbst neu bauen. Ohne "
                            "heilt erst die nächste Version."))
 
+    out += _docs_findings(m)
+    # Studio 0.9.0: Diese drei Blöcke lehnt der Knoten ohne MCP-Tür ab.
+    has_door = isinstance(m.get("mcp"), dict) and bool(m["mcp"].get("path"))
+    for key in ("assistant_templates", "mcp_content", "mcp_store"):
+        if key in m and not has_door:
+            out.append(finding(FEHLER, f"`{key}` ohne MCP-Tür (`mcp.path`).",
+                               "Der Knoten lehnt den Block ohne `mcp:` ab."))
+    return out
+
+
+# Dieselben Wörter wie der Knoten (docs_publish.READERS/KINDS). Bis Studio
+# 0.8.2 sah dieser Prüfer `docs` gar nicht an -- und das Starter-Paket trug
+# `readers: [user]`, das der Knoten ablehnt, mit dem Befund „keiner“.
+DOCS_READERS = ("end-user", "power-user", "admin", "developer", "consultant",
+                "operator")
+DOCS_KINDS = ("overview", "concept", "function", "tutorial", "howto", "faq",
+              "reference", "cli", "api", "troubleshooting", "admin-guide",
+              "release-notes", "glossary", "presentation", "unspecified")
+
+
+def _docs_findings(m):
+    docs = m.get("docs")
+    if docs is None:
+        return []
+    items = docs if isinstance(docs, list) else [docs]
+    out = []
+    for i, e in enumerate(items):
+        if not isinstance(e, dict):
+            out.append(finding(FEHLER, f"`docs[{i}]` ist kein Objekt."))
+            continue
+        if not e.get("path"):
+            out.append(finding(FEHLER, f"`docs[{i}]` nennt keinen `path`."))
+        bad = [r for r in (e.get("readers") or []) if r not in DOCS_READERS]
+        if bad:
+            out.append(finding(FEHLER, f"`docs[{i}].readers`: {', '.join(map(str, bad))} "
+                               "kennt der Knoten nicht.",
+                               "Erlaubt: " + ", ".join(DOCS_READERS) + "."))
+        kinds = e.get("kinds") or {}
+        bad = sorted({str(k) for k in kinds.values() if k not in DOCS_KINDS}) \
+            if isinstance(kinds, dict) else ["(keine Zuordnung)"]
+        if bad:
+            out.append(finding(FEHLER, f"`docs[{i}].kinds`: {', '.join(bad)} "
+                               "ist keine Dokumentart.",
+                               "Erlaubt: " + ", ".join(DOCS_KINDS) + "."))
     return out
 
 

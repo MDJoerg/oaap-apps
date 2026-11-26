@@ -287,7 +287,7 @@ ok("und ohne jeden Befund", sum(r_starter["counts"].values()) == 0,
    str([f["text"] for f in r_starter["findings"]]))
 ok("sein Manifest nennt Kennung, Version, Typ und Klasse",
    r_starter["summary"]["id"] == "starter"
-   and r_starter["summary"]["version"] == "0.3.0"
+   and r_starter["summary"]["version"] == "0.4.0"
    and r_starter["summary"]["type"] == "native"
    and r_starter["summary"]["class"] == "frontend")
 ok("es deklariert einen Speicher und einen Gesundheitspfad",
@@ -332,6 +332,26 @@ ok("die Zusammenfassung nennt die Plattformfähigkeiten",
    == ["schreibt in den Zwilling", "MCP-Werkzeuge"])
 ok("Format 1.0 bleibt ein Fehler (neue MAJOR-Version)",
    any(f["level"] == pkg.FEHLER for f in pkg.validate(dict(base, oaap_manifest="1.0"))))
+
+# Studio 0.9.0: Manifest 0.23 ist bekannt, `docs` wird wie am Knoten geprüft.
+ok("0.9.0: Format 0.23 bekommt keinen Hinweis „unbekannt“",
+   not any("0.23" in f["text"] for f in pkg.validate(dict(base, oaap_manifest="0.23"))))
+_d = {"path": "docs/", "readers": ["user"]}
+ok("0.9.0: docs.readers [user] ist ein Fehler (so lehnt der Knoten ab)",
+   any(f["level"] == pkg.FEHLER and "readers" in f["text"]
+       for f in pkg.validate(dict(base, oaap_manifest="0.23", docs=[_d]))))
+ok("0.9.0: docs.readers [end-user] ist in Ordnung",
+   not any("readers" in f["text"] for f in pkg.validate(
+       dict(base, oaap_manifest="0.23", docs=[dict(_d, readers=["end-user"])]))))
+ok("0.9.0: docs.kinds mit unbekannter Art ist ein Fehler",
+   any(f["level"] == pkg.FEHLER and "kinds" in f["text"] for f in pkg.validate(
+       dict(base, oaap_manifest="0.23", docs=[dict(_d, readers=[], kinds={"a.md": "anleitung"})]))))
+ok("0.9.0: mcp_store ohne MCP-Tür ist ein Fehler",
+   any(f["level"] == pkg.FEHLER and "mcp_store" in f["text"] for f in pkg.validate(
+       dict(base, oaap_manifest="0.23", mcp_store={"kind": "bookstack"}))))
+ok("0.9.0: events nennt die Fähigkeit in der Zusammenfassung",
+   "sendet/empfängt Ereignisse" in pkg.summary(dict(base, oaap_manifest="0.23",
+                                                    events={"publishes": []}))["capabilities"])
 
 for f in (good, nested, absolute, travers, link, plain, nomani, broken):
     try:

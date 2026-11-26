@@ -442,7 +442,7 @@ def project_tabs(p, active):
                    base + active)
 
 
-VERSION = "0.8.2"
+VERSION = "0.9.0"
 
 
 def field(label, name, value, hint="", kind="text", rows=0, options=None, required=False):
@@ -1551,7 +1551,9 @@ def _sec_platform(app_type=None):
         "  gesetzt, wenn verifiziert). Niemals ein Anmeldeformular bauen.",
         "  **Keine anderen `X-OAAP-*`-Header als Identität lesen** — es gibt",
         "  kein `X-OAAP-Groups` und kein `X-OAAP-Tenant`; was unter solchen",
-        "  Namen ankäme, hätte der Client geschickt.",
+        "  Namen ankäme, hätte der Client geschickt. Dazu kommen für",
+        "  Sonderfälle `X-OAAP-User-Assertion` und `X-OAAP-User-Idp`; die",
+        "  vollständige Liste steht in `OAAP_IDENTITY_HEADERS`.",
         "- **Ein HTTP-Port**, kein TLS in der App (das macht das Gateway).",
         "- **Persistenz nur in deklarierten Mounts** (`storage` im Manifest).",
         "- **Konfiguration nur über deklarierte Umgebungsvariablen**,",
@@ -1595,7 +1597,7 @@ def _sec_platform(app_type=None):
         "**Pflege des Abbilds:** Das Dockerfile spielt beim Bau Debians",
         "Korrekturen ein (`apt-get update && apt-get -y upgrade`, siehe",
         "Starter-Paket), alle Abhängigkeiten sind **fest gepinnt**, und das",
-        "Manifest trägt `oaap_manifest: \"0.18\"` sowie `care: {rebuild: self}`.",
+        "Manifest trägt `oaap_manifest: \"0.23\"` sowie `care: {rebuild: self}`.",
         "Dann darf der Knoten bei Sicherheitsmeldungen selbst neu bauen,",
         "ohne auf Deine nächste Version zu warten. Kannst Du das nicht",
         "zusagen, schreib `rebuild: release`.",
@@ -1658,7 +1660,11 @@ def _sec_access():
 
 
 def _sec_capabilities():
-    """Was eine App von der Plattform bekommen KANN (Manifest 0.3–0.15).
+    """Was eine App von der Plattform bekommen KANN (Manifest 0.3–0.23).
+
+    0.9.0: bis Manifest 0.23 nachgezogen (Ereignisse, Einladen,
+    Einrichtungstür, Hilfe, Vorlagen, fremder Inhalt, eigene Anmeldung)
+    -- das Briefing endete bei 0.18, der Knoten kannte längst 0.23.
 
     Seit 0.5.0. Bis 0.4.5 stand hier nichts davon: Das Briefing kannte
     den Stand vom September, die Plattform hatte inzwischen Zwilling,
@@ -1686,11 +1692,42 @@ def _sec_capabilities():
         "| Menschen etwas zur Bearbeitung vorlegen | `cases: {submit: true}` | `OAAP_CASES_URL`, `OAAP_CASES_KEY` |",
         "| Werkzeuge für KI-Assistenten anbieten | `mcp: {path: /mcp}` | Aufrufe im Namen der fragenden Person |",
         "| Kachel im Portal gruppieren | `launchpad: {group: …}` | — |",
+        "| Hilfe mitbringen (Pflicht mit Oberfläche) | `docs` | Deine Ordner in der Hilfe des Mandanten |",
+        "| Ereignisse senden und empfangen | `events` | `OAAP_EVENTS_URL`, `OAAP_EVENTS_KEY` |",
+        "| Menschen in den Mandanten einladen | `people: {invite: true}` | `OAAP_PEOPLE_URL`, `OAAP_PEOPLE_KEY` |",
+        "| Von einem Rezept eingerichtet werden | `setup: {path: …}` | `OAAP_SETUP_KEY` |",
+        "| Vorlagen für Assistenten zu den eigenen Werkzeugen | `assistant_templates` (nur mit `mcp`) | — |",
+        "| MCP-Tür liefert fremden Inhalt (Webseiten) | `mcp_content: {untrusted: true}` | nur lesende Sichten vorgeschlagen |",
+        "| Clients ohne Browser selbst anmelden (Git) | `identity: {oidc_client: …}` | `OAAP_OIDC_*` |",
         "",
         "Einzelheiten zu jedem Abschnitt stehen im Contract und in der",
         "Spezifikation `oaap.apps.runtime`. Die Startseite des",
         "Starter-Pakets zeigt, welche dieser Türen eine Instanz",
         "tatsächlich bekommen hat — das ist der schnellste Test.",
+        "",
+        "Ab Manifest 0.19 ist jede neue Fähigkeit ein **eigener Block**",
+        "oben im Manifest (nie ein neuer Schlüssel unter `mcp:`): Ein",
+        "älterer Knoten überspringt ihn, statt die App abzulehnen.",
+        "",
+        "**Ohne Erklärung bekommt jede Instanz drei Tatsachen:**",
+        "`OAAP_EGRESS` (`closed` oder `open` — im geschlossenen Mandanten",
+        "biete nicht an, was nicht gehen kann, und sag warum),",
+        "`OAAP_IDENTITY_HEADERS` (die Kopfzeilen, die Du glauben darfst)",
+        "und `OAAP_PORTAL_URL` (die Seite der Instanz im Portal, für einen",
+        "Link aus Deiner Verwaltung).",
+        "",
+        "**Ereignisse:** Jeder gesendete Typ heißt",
+        "`app.<app-id>.<objekt>.<was>.v1` (jeder Teil nur Kleinbuchstaben",
+        "und Ziffern — aus `montage-doku` wird `montagedoku`), hat einen Titel und ein",
+        "JSON-Schema als Datei im Paket. Gesendet wird ein CloudEvent per",
+        "`POST` an `OAAP_EVENTS_URL`, gelesen unter `/feed` — oder die",
+        "Plattform schiebt an Deinen `endpoint`. Jedes Abo gewährt der",
+        "Mandanten-Admin. **Einladen:** Die Plattform legt die Anmeldung an",
+        "(Rolle `partner`) und schickt die Mail; ob Deine App einladen",
+        "darf, entscheidet ein Schalter des Mandanten, standardmäßig aus.",
+        "**MCP:** Lesende Werkzeuge tragen die Annotation",
+        "`readOnlyHint: true` — ohne sie nimmt das MCP-Gateway ein",
+        "Werkzeug als schreibend.",
         "",
         "### Der Digitale Zwilling",
         "",

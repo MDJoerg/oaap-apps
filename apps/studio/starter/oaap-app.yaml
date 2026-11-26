@@ -1,4 +1,4 @@
-oaap_manifest: "0.18"
+oaap_manifest: "0.23"
 
 # ---------------------------------------------------------------------
 # Starter-Paket: das kleinste Manifest, das durch die Prüfung geht —
@@ -28,7 +28,7 @@ app:
   # Muss bei JEDEM Deployment steigen (1.2.3). Unveränderte Version =
   # harte Ablehnung. Einzige Ausnahme: das erneute Anmelden desselben
   # Pakets, nachdem ein Mensch den erweiterten Rahmen bestätigt hat.
-  version: 0.3.0
+  version: 0.4.0
   # native = Quellcode, die Plattform baut das Image auf dem Zielknoten
   # (also auf amd64 UND arm64 — keine architekturgebundenen Basisimages).
   type: native
@@ -101,7 +101,9 @@ docs:
     entry: index.md
     lang: de
     audience: [user, keyuser, admin]
-    readers: [user]
+    # Für wen geschrieben: end-user, power-user, admin, developer,
+    # consultant, operator (ein anderes Wort lehnt der Knoten ab).
+    readers: [end-user, power-user, admin]
     kinds:
       index.md: overview
 
@@ -224,3 +226,73 @@ docs:
 #
 # assets:
 #   path: /oaap/assets
+
+# --- Fremder Inhalt hinter der MCP-Tür (Manifest 0.19, RFC-0116) -----
+# Liefern Deine Werkzeuge Inhalte, die niemand im Mandanten geschrieben
+# hat (Webseiten, Mails von draußen), sag es hier. Das MCP-Gateway
+# schlägt dann vor, die Quelle nur in lesenden Sichten anzubieten. Ein
+# eigener Block neben `mcp:`, nicht darunter. Lesende Werkzeuge tragen
+# außerdem die MCP-Annotation readOnlyHint: true — ohne sie nimmt das
+# Gateway ein Werkzeug als schreibend.
+#
+# mcp_content:
+#   untrusted: true
+
+# --- Assistenten-Vorlagen (Manifest 0.20, RFC-0119) -----------------
+# Nur mit MCP-Tür: ein Ordner im Paket, je Vorlage eine JSON-Datei
+# (ein Rezept mit offers: assistant, id beginnt mit `<app.id>-`). Der
+# Knoten bietet die gültigen im Mandanten an; eine ungültige wird mit
+# Grund verworfen und bricht die Installation nie ab.
+#
+# assistant_templates:
+#   path: assistants/
+
+# --- Ereignisse senden und empfangen (Manifest 0.21, RFC-0127) -------
+# Die App bekommt OAAP_EVENTS_URL und OAAP_EVENTS_KEY: POST eines
+# CloudEvents an OAAP_EVENTS_URL veröffentlicht, /feed darunter liest,
+# was ihr gewährt wurde. Mit `endpoint` schiebt die Plattform es ihr zu
+# (signiert mit OAAP_EVENTS_SECRET). Jedes Abo gewährt der
+# Mandanten-Admin; die Erklärung allein liefert nichts. Das Schema
+# jedes gesendeten Typs liegt als JSON-Datei im Paket.
+#
+# events:
+#   publishes:
+#     - type: app.starter.besuch.gezaehlt.v1
+#       title: "Besuch gezählt"
+#       schema: events/besuch-gezaehlt.json
+#       audience: tenant            # tenant | addressed | listed
+#   subscribes:
+#     - type: app.cases.case.closed.v1
+#       why: "Erledigte Vorgänge in der App abhaken"
+#   endpoint: /oaap/events
+
+# --- Personen einladen (Manifest 0.22, RFC-0126) --------------------
+# Die App bekommt OAAP_PEOPLE_URL und OAAP_PEOPLE_KEY und kann Menschen
+# per Mail in den Mandanten einladen; die Plattform legt die Anmeldung
+# an (Rolle partner) und schickt die Mail. Ob die App das darf,
+# entscheidet ein Schalter des Mandanten — standardmäßig aus. Sag das
+# auf Deiner Seite, statt zu scheitern.
+#
+# people:
+#   invite: true
+
+# --- Einrichtungstür (Manifest 0.18, RFC-0104) ----------------------
+# Ein Rezept im Portal richtet die App über diesen Pfad ein. Die App
+# bekommt OAAP_SETUP_KEY; jeder Aufruf trägt Authorization: Bearer
+# <OAAP_SETUP_KEY> und X-OAAP-Setup-Actor. Ohne den Schlüssel ablehnen,
+# Identitäts-Kopfzeilen auf diesem Pfad nicht glauben.
+#
+# setup:
+#   path: /oaap/setup
+
+# --- Eigene Anmeldung über den Realm (Manifest 0.16, RFC-0091) -------
+# Nur für Apps, die Clients ohne Browser selbst anmelden müssen (Git
+# über HTTPS) und dafür eine begründete public-Route haben. Ein
+# Betreiber legt den Client an; dann kommen OAAP_OIDC_ISSUER,
+# OAAP_OIDC_CLIENT_ID und OAAP_OIDC_CLIENT_SECRET. Ohne sie arbeitet
+# die App mit eigenen Konten weiter.
+#
+# identity:
+#   oidc_client:
+#     redirect_paths: [/oauth2/callback]
+#     groups_claim: false

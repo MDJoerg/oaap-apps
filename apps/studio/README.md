@@ -208,6 +208,31 @@ dieselben Rollen, die das Studio betreten dürfen. Diese README bleibt der
 Entwicklertext; `docs/` ist für Anwender geschrieben. `docs/` kommt nicht
 ins Image (das Dockerfile zählt seine Dateien einzeln auf).
 
+### Briefing und Starter auf Manifest 0.23 (0.9.0)
+
+Auf Jörgs Frage, ob Briefing und Starter-Paket aktuell sind: nein. Das
+Briefing endete bei Manifest 0.18, der Paketprüfer bei 0.19, der Knoten
+kennt 0.23. Und das Starter-Paket trug `docs.readers: [user]` — ein Wort,
+das der Knoten ablehnt; der Prüfer des Studios sah `docs` gar nicht an und
+meldete „ohne Befund“. Jetzt:
+
+- **Briefing:** Tabelle „Was die Plattform Dir bietet“ mit Hilfe (`docs`),
+  Ereignissen (`events`), Einladen (`people`), Einrichtungstür (`setup`),
+  Assistenten-Vorlagen, fremdem Inhalt und eigener Anmeldung; die drei
+  Tatsachen `OAAP_EGRESS`, `OAAP_IDENTITY_HEADERS`, `OAAP_PORTAL_URL`;
+  `readOnlyHint: true` für lesende MCP-Werkzeuge; die sieben
+  Identitäts-Kopfzeilen.
+- **Starter-Paket 0.4.0:** Manifest 0.23, `readers: [end-user, power-user,
+  admin]`, die neuen Blöcke auskommentiert mit Erklärung; die Startseite
+  zeigt auch Ereignisse, Einladen, Einrichtungstür, eigene Anmeldung und
+  ob das Netz nach außen offen ist. Geprüft mit der Prüfung des Knotens
+  (`appctl.validate_manifest`) — aktiv und mit allen Blöcken einkommentiert.
+- **Paketprüfer:** kennt 0.23 und die vier neuen Blöcke, prüft `docs`
+  (`readers`, `kinds`) wie der Knoten und meldet `assistant_templates`,
+  `mcp_content`, `mcp_store` ohne MCP-Tür als Fehler.
+
+Dazu in `oaap-spec`: Contract v0.10 und das JSON-Schema bis 0.23.
+
 ## Bewusste Entscheidungen
 
 - **Keine Deploy-Token im Studio.** Diese Entscheidung aus 0.1 gilt

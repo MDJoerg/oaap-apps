@@ -40,7 +40,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 APP_NAME = "Starter"   # derselbe Name wie app.name im Manifest
 PORT = 8000
 
@@ -127,6 +127,11 @@ DOORS = [
      ("OAAP_TWIN_URL", "OAAP_PLATFORM_KEY")),
     ("Fachliche Berechtigungen", "authorization", ("OAAP_AUTHZ_URL", "OAAP_AUTHZ_KEY")),
     ("Vorgänge öffnen", "cases.submit", ("OAAP_CASES_URL", "OAAP_CASES_KEY")),
+    ("Ereignisse senden und lesen", "events", ("OAAP_EVENTS_URL", "OAAP_EVENTS_KEY")),
+    ("Personen einladen", "people.invite", ("OAAP_PEOPLE_URL", "OAAP_PEOPLE_KEY")),
+    ("Einrichtungstür", "setup", ("OAAP_SETUP_KEY",)),
+    ("Eigene Anmeldung über den Realm", "identity.oidc_client",
+     ("OAAP_OIDC_ISSUER", "OAAP_OIDC_CLIENT_ID", "OAAP_OIDC_CLIENT_SECRET")),
     ("Eigenes Geheimnis der Instanz", "(immer)", ("OAAP_APP_SECRET",)),
 ]
 
@@ -139,6 +144,11 @@ def doors():
     rows.append(("Destinationen", "destinations",
                  ", ".join(d[len("OAAP_DESTINATION_"):-len("_URL")] for d in dests)
                  or False))
+    # Eine Tatsache, keine Tür (Plattform 0.1.335): geschlossener Mandant
+    # heißt, nur Destinationen führen hinaus.
+    egress = os.environ.get("OAAP_EGRESS", "")
+    rows.append(("Netz nach außen", "(immer, OAAP_EGRESS)",
+                 {"closed": "geschlossen", "open": "offen"}.get(egress, False)))
     return rows
 
 
