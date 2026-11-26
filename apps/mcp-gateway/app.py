@@ -67,7 +67,7 @@ from gwcore import report as greport
 from gwcore.vault import Vault, VaultError
 from authz_client import Authz
 
-VERSION = "0.51.0"
+VERSION = "0.52.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("MCPGW_DATA_DIR", "/data")
@@ -699,7 +699,56 @@ def me_url():
     return PUBLIC_BASE + "/me" if PUBLIC_BASE else ""
 
 
-def propagate_access(person):
+AGENT_ASSERTIONS = {}            # sha256(Agenten-Schlüssel) -> (Zusicherung, gültig bis)
+_AGENT_LOCK = threading.Lock()
+
+
+def agent_assertion(agent_key):
+    """RFC-0134 D10 (a, 0.52.0): die Zusicherung für den Agenten, dessen Schlüssel der
+    Server-Eintrag hält -- von der Plattform, nie von uns gemacht.
+
+    Das Gateway fragt seine eigene Site (/platform/assertion) mit dem Schlüssel des
+    Agenten, der nur für DIESE Instanz gilt. Die Plattform antwortet nur für eine
+    Maschine mit festem Anspruch (`oaap machine propagate`) und adressiert die
+    Zusicherung an diese Instanz. Gehalten wird sie kürzer als sie gilt."""
+    import hashlib
+    import urllib.parse
+    if not SOURCES_URL:
+        raise NoPerson("Diese Instanz kennt die Adresse ihrer Plattform nicht "
+                       "(OAAP_MCP_SOURCES_URL fehlt) und kann keine Zusicherung für den "
+                       "Agenten holen.")
+    ref = hashlib.sha256(agent_key.encode()).hexdigest()
+    now = time.time()
+    with _AGENT_LOCK:
+        hit = AGENT_ASSERTIONS.get(ref)
+        if hit and hit[1] > now:
+            return hit[0]
+    u = urllib.parse.urlsplit(SOURCES_URL)
+    req = urllib.request.Request(f"{u.scheme}://{u.netloc}/platform/assertion",
+                                 headers={"Authorization": "Bearer " + agent_key})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            doc = json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            why = json.loads(exc.read() or b"{}").get("error") or ""
+        except ValueError:
+            why = ""
+        raise NoPerson(f"Die Plattform gibt für den Agenten dieses Servers keine Zusicherung "
+                       f"(Antwort {exc.code}{': ' + why if why else ''}).") from None
+    except (OSError, ValueError) as exc:
+        raise NoPerson(f"Die Plattform ist für die Zusicherung des Agenten nicht erreichbar "
+                       f"({exc}).") from None
+    tok = str(doc.get("assertion") or "")
+    if not tok:
+        raise NoPerson("Die Plattform antwortete ohne Zusicherung für den Agenten.")
+    life = int(doc.get("expires_in") or 300)
+    with _AGENT_LOCK:
+        AGENT_ASSERTIONS[ref] = (tok, now + max(30, life - 60))
+    return tok
+
+
+def propagate_access(person, agent_key=""):
     """Verfahren P (0.12, RFC-0066 Form A): die Person über eine Destination bis ins Zielsystem.
 
     Das Gateway gibt der Destination die Zusicherung, die die Plattform
@@ -715,6 +764,11 @@ def propagate_access(person):
     if person and person.get("assertion"):
         return {"auth_kind": "none", "credential": "", "door": "destination",
                 "headers": {USER_ASSERTION: person["assertion"]}}
+    if agent_key and not person:
+        # RFC-0134 D10 (a): der Agent des Server-Eintrags, als er selbst -- kein Rückfall
+        # für eine Person (D8): eine Person kommt immer mit ihrer eigenen Zusicherung.
+        return {"auth_kind": "none", "credential": "", "door": "destination",
+                "headers": {USER_ASSERTION: agent_assertion(agent_key)}}
     if person and person.get("token"):
         raise NoPerson("Dieser Server trägt die Person über eine Destination bis ins Zielsystem "
                        "(Verfahren P). Das geht heute mit einer Person aus einem Chat der "
@@ -752,7 +806,7 @@ def server_access(srow, person=None):
         return {"auth_kind": "bearer", "credential": SOURCES_KEY, "door": True,
                 "headers": {ACT_HEADER: platform_act(person)}}, url
     if srow["auth_kind"] == "propagate":
-        return propagate_access(person), url
+        return propagate_access(person, credential), url
     if srow["auth_kind"] == "personal":
         return personal_access(srow, person), url
     if srow["auth_kind"] != "exchange":
@@ -873,7 +927,7 @@ def read_catalog(name, person=None):
     if srow["auth_kind"] == "exchange" and not person:
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren X braucht ein Token einer "
                        f"Person — app.py server read {name} --token-stdin ja.")
-    if srow["auth_kind"] == "propagate" and not (person and person.get("assertion")):
+    if srow["auth_kind"] == "propagate" and not (person and person.get("assertion"))             and not srow["credential"]:
         # P3: kein technischer Katalog-Benutzer -- es liest eine Person als sie selbst.
         return False, (f"Katalog von „{name}“ nicht gelesen: Verfahren P liest als Person. Eine "
                        f"Person mit eigenem Benutzer im Zielsystem liest die erste Werkzeugliste "

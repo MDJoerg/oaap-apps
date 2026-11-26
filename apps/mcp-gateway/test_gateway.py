@@ -2552,6 +2552,61 @@ try:
 except app.NoPerson as exc:
     said = str(exc)
 check("P: ohne Person (Schlüssel) abgewiesen, nie ein technischer Rückfall", "Schlüssel" in said, said)
+
+print("\n-- 0.52.0 (RFC-0134 D10 a): der Agent des Server-Eintrags holt seine Zusicherung bei der Plattform")
+import http.server as _hs  # noqa: E402
+_asked = []
+
+
+class _Plat(_hs.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        _asked.append((self.path, self.headers.get("Authorization", "")))
+        if self.headers.get("Authorization") == "Bearer oaapk_agent_gut":
+            body, st = json.dumps({"assertion": "AGENT.ZUSICHERUNG.X", "expires_in": 300}).encode(), 200
+        else:
+            body, st = json.dumps({"error": "no claim is fixed for this principal"}).encode(), 404
+        self.send_response(st)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+_plat = _hs.ThreadingHTTPServer(("127.0.0.1", 0), _Plat)
+threading.Thread(target=_plat.serve_forever, daemon=True).start()
+_old_src = app.SOURCES_URL
+app.SOURCES_URL = f"http://127.0.0.1:{_plat.server_address[1]}/platform/mcp/sources"
+acc = app.propagate_access(None, "oaapk_agent_gut")
+check("P+Agent: ohne Person mit Agenten-Schlüssel -> Zusicherung der Plattform als Kopfzeile",
+      acc["headers"].get(app.USER_ASSERTION) == "AGENT.ZUSICHERUNG.X" and acc["door"] == "destination", acc)
+check("P+Agent: gefragt wird die eigene Site unter /platform/assertion, mit dem Agenten-Schlüssel",
+      _asked and _asked[-1] == ("/platform/assertion", "Bearer oaapk_agent_gut"), _asked)
+n = len(_asked)
+app.propagate_access(None, "oaapk_agent_gut")
+check("P+Agent: die Zusicherung wird gehalten (kein zweiter Weg zur Plattform)", len(_asked) == n, _asked)
+acc = app.propagate_access({"iss": "platform", "sub": "u-anna", "assertion": "PERSON.Z"}, "oaapk_agent_gut")
+check("P+Agent: eine Person geht vor -- nie der Agent an ihrer Stelle",
+      acc["headers"].get(app.USER_ASSERTION) == "PERSON.Z", acc)
+try:
+    app.propagate_access(None, "oaapk_agent_ohne")
+    said = ""
+except app.NoPerson as exc:
+    said = str(exc)
+check("P+Agent: ohne festen Anspruch abgewiesen, mit dem Grund der Plattform",
+      "404" in said and "no claim is fixed" in said, said)
+app.SOURCES_URL = ""
+app.AGENT_ASSERTIONS.clear()
+try:
+    app.propagate_access(None, "oaapk_agent_gut")
+    said = ""
+except app.NoPerson as exc:
+    said = str(exc)
+check("P+Agent: ohne Adresse der Plattform abgewiesen, mit Satz", "OAAP_MCP_SOURCES_URL" in said, said)
+app.SOURCES_URL = _old_src
+app.AGENT_ASSERTIONS.clear()
+_plat.shutdown()
 dest.shutdown()
 
 print("\n-- 0.13.0: Sicht kopieren, umbenennen, Zuordnung als Baum")
