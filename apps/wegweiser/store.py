@@ -39,10 +39,13 @@ TYPE_LABELS = {
     "download_window": "Zeitraum-Download",
     "upload_once": "Einmal-Upload",
 }
-LOG_LEVELS = ("count", "minimal", "standard", "full")
+LOG_LEVELS = ("count", "minimal", "anonymous", "standard", "full")
 LOG_LABELS = {
     "count": "nur Zähler",
     "minimal": "Zeitpunkt und Ergebnis",
+    # RFC-0144 W2: zählen, woher und womit — ohne jede Adresse. Besucher je Tag
+    # nur als Schätzung über einen Tages-Salz, der am nächsten Tag verworfen wird.
+    "anonymous": "dazu Herkunft, Gerät, Browser — ohne Adresse",
     "standard": "dazu gekürzte Adresse, Gerät, Browser, Sprache",
     "full": "alles: volle Adresse, User-Agent, Referer, Sprache",
 }
@@ -165,7 +168,11 @@ CREATE INDEX IF NOT EXISTS campaigns_parent ON campaigns(parent_id);
 """
 
 # Spalten, die nach 0.6 dazukamen: ALTER beim Start, wenn sie fehlen.
-LINK_COLUMNS_ADDED = (("campaign_id", "TEXT"), ("channel", "TEXT NOT NULL DEFAULT ''"))
+LINK_COLUMNS_ADDED = (("campaign_id", "TEXT"), ("channel", "TEXT NOT NULL DEFAULT ''"),
+                      # 0.8 (RFC-0144 §2/§3): die Instanz, für die die Plattform den Link
+                      # anlegte, und wann er sich zuletzt änderte (`updated_since`).
+                      ("owner", "TEXT NOT NULL DEFAULT ''"), ("updated_at", "TEXT"))
+ACCESS_COLUMNS_ADDED = (("visitor", "TEXT"),)
 
 AREA_INT_FIELDS = ("open_for_users", "active", "key_length", "custom_keys",
                    "default_ttl_days", "max_ttl_days", "pin_required",
@@ -213,6 +220,10 @@ class DB:
             for col, ddl in LINK_COLUMNS_ADDED:
                 if col not in have:
                     self.conn.execute(f"ALTER TABLE links ADD COLUMN {col} {ddl}")
+            have = {r[1] for r in self.conn.execute("PRAGMA table_info(accesses)")}
+            for col, ddl in ACCESS_COLUMNS_ADDED:
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE accesses ADD COLUMN {col} {ddl}")
             self.conn.execute("CREATE INDEX IF NOT EXISTS links_campaign ON links(campaign_id)")
 
     def q(self, sql, params=()):
@@ -464,7 +475,9 @@ def create_link(db, secret, area, user_id, user_name, fields, key=None, pin=None
         "max_downloads": fields.get("max_downloads"),
         "state": "waiting" if area["type"] == "upload_once" else None,
         "campaign_id": fields.get("campaign_id"), "channel": fields.get("channel") or "",
+        "owner": fields.get("owner") or "",
     }
+    row["updated_at"] = row["created_at"]
     cols = ",".join(row)
     db.x(f"INSERT INTO links({cols}) VALUES({','.join('?' for _ in row)})", tuple(row.values()))
     return get_link(db, link_id)
@@ -479,8 +492,11 @@ def find_link(db, area, key):
                            (area, key.lower())))
 
 
-def list_links(db, user_id=None, area=None, include_deleted=False):
+def list_links(db, user_id=None, area=None, include_deleted=False, updated_since=None):
     sql, params = "SELECT * FROM links WHERE 1=1", []
+    if updated_since:
+        sql += " AND COALESCE(updated_at, created_at)>=?"
+        params.append(updated_since)
     if not include_deleted:
         sql += " AND deleted_at IS NULL"
     if user_id:
@@ -496,6 +512,7 @@ def list_links(db, user_id=None, area=None, include_deleted=False):
 def update_link(db, link_id, fields):
     if not fields:
         return get_link(db, link_id)
+    fields = dict(fields, updated_at=now_iso())
     sets = ",".join(f"{k}=?" for k in fields)
     db.x(f"UPDATE links SET {sets} WHERE id=?", (*fields.values(), link_id))
     return get_link(db, link_id)
@@ -656,6 +673,11 @@ def record_access(db, area, link, result, client):
     row = {"ts": ts, "area": area["slug"] if area else "", "link_id": link["id"] if link else None,
            "result": result, "ip": None, "ua": None, "ua_class": None, "browser": None,
            "os": None, "referer": None, "lang": None}
+    if level == "anonymous":
+        klass, browser, os_name = classify_ua(client.get("ua", ""))
+        row.update(ua_class=klass, browser=browser, os=os_name,
+                   referer=referer_host(client.get("referer", "")),
+                   visitor=visitor_mark(db, ts[:10], client))
     if level in ("standard", "full"):
         klass, browser, os_name = classify_ua(client.get("ua", ""))
         row.update(ua_class=klass, browser=browser, os=os_name,
@@ -670,6 +692,43 @@ def record_access(db, area, link, result, client):
     db.x(f"INSERT INTO accesses({cols}) VALUES({','.join('?' for _ in row)})", tuple(row.values()))
 
 
+def visitor_mark(db, day, client):
+    """Eine Schätzung „verschiedene Besucher heute“ ohne Adresse (RFC-0144 §4):
+    HMAC über Adresse und User-Agent mit einem Salz, das nur für diesen Tag gilt.
+    Am nächsten Tag wird das Salz ersetzt — die Marken von gestern lassen sich
+    danach niemandem mehr zuordnen, auch nicht von uns."""
+    salt = get_setting(db, "visitor_salt", "")
+    if not salt.startswith(day + ":"):
+        salt = f"{day}:{secrets.token_hex(16)}"
+        set_setting(db, "visitor_salt", salt)
+    raw = f"{client.get('ip', '')}|{client.get('ua', '')}".encode("utf-8")
+    return hmac.new(salt.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:12]
+
+
+def day_stats(db, area, day):
+    """Je Link einer Area und eines Tages (RFC-0144 §3 `GET stats?day=`, W3): ein
+    Aufruf für alle Links statt einer je Link. Nur Zahlen — keine Adresse."""
+    rows = db.q("SELECT link_id, result, ua_class, referer, visitor FROM accesses "
+                "WHERE area=? AND substr(ts,1,10)=? AND link_id IS NOT NULL", (area, day))
+    out = {}
+    for r in rows:
+        e = out.setdefault(r["link_id"], {"calls": 0, "all": 0, "visitors": set(),
+                                          "by_referer": {}, "by_class": {}, "by_result": {}})
+        e["all"] += 1
+        e["by_result"][r["result"]] = e["by_result"].get(r["result"], 0) + 1
+        if r["result"] in SUCCESS_RESULTS:
+            e["calls"] += 1
+        if r["visitor"]:
+            e["visitors"].add(r["visitor"])
+        if r["referer"]:
+            e["by_referer"][r["referer"]] = e["by_referer"].get(r["referer"], 0) + 1
+        if r["ua_class"]:
+            e["by_class"][r["ua_class"]] = e["by_class"].get(r["ua_class"], 0) + 1
+    for e in out.values():
+        e["visitors"] = len(e["visitors"])
+    return out
+
+
 def accesses(db, link_id=None, area=None, limit=500, offset=0):
     sql, params = "SELECT * FROM accesses WHERE 1=1", []
     if link_id:
@@ -680,7 +739,9 @@ def accesses(db, link_id=None, area=None, limit=500, offset=0):
         params.append(area)
     sql += " ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
     params += [max(1, min(int(limit), 5000)), max(0, int(offset))]
-    return [dict(r) for r in db.q(sql, params)]
+    # Die Tagesmarke (Stufe „anonymous“) zählt nur innerhalb ihres Tages; sie
+    # verlässt die App nicht, auch nicht als CSV.
+    return [{k: v for k, v in dict(r).items() if k != "visitor"} for r in db.q(sql, params)]
 
 
 def stats(db, link_id=None, area=None, days=30, link_ids=None):

@@ -734,6 +734,128 @@ check("MCP: eine Kampagne je Kanal", not err and j(t.encode())["by_channel"] == 
 err, t = tool("wegweiser_campaigns", {}, {})
 check("MCP Kampagnen ohne Person: abgelehnt", err is True)
 
+
+# ---------------------------------------------- RFC-0144 §3: der Vertrag für die Plattform
+print("\nVertrag oaap.work.shortlinks (0.8)")
+PLATFORM = {"X-OAAP-User": "platform:shortlinks", "X-OAAP-User-Id": "p-short",
+            "X-OAAP-Roles": "user,admin,keyuser", "X-OAAP-Display-Name": "Plattform", "X-OAAP-Email": ""}
+s, h, b = call("GET", "/api/v1/about", USER)
+check("about für jeden: Vertrag und Version, noch keine Plattform-Area",
+      s == 200 and j(b)["contract"] == "oaap.work.shortlinks" and j(b)["version"] == app.VERSION
+      and j(b)["area"] is None, b[:200])
+s, h, b = call("GET", "/api/v1/about", PLATFORM)
+PA = j(b).get("area")
+check("about der Plattform legt ihre Area an (k)", s == 200 and PA == "k", b[:200])
+area = store.get_area(app.DB, PA)
+check("... Weiterleitung, Stufe anonymous, für niemanden sonst offen",
+      area["type"] == "redirect" and area["log_level"] == "anonymous" and not area["open_for_users"])
+s, h, b = call("GET", "/api/v1/about", PLATFORM)
+check("... ein zweiter Ruf legt keine zweite an", j(b)["area"] == "k"
+      and len([a for a in store.list_areas(app.DB) if a["title"] == "Kurzlinks der Plattform"]) == 1)
+s, h, b = call("POST", "/api/v1/links", PLATFORM, body={"area": "r", "target_url": "https://example.org/x"})
+check("Plattform darf nicht in fremde Areas, auch mit admin im Schlüssel", s == 403, s)
+s, h, b = call("GET", "/api/v1/areas", PLATFORM)
+check("... und sieht keine fremden Areas", s == 200 and [a["slug"] for a in j(b)["areas"]] == ["k"], b[:200])
+s, h, b = call("POST", "/api/v1/campaigns", PLATFORM, body={"title": "Flyer Winter"})
+check("Plattform legt eine Kampagne an", s == 201, b[:200])
+s, h, b = call("POST", "/api/v1/links", PLATFORM, body={
+    "area": "k", "target_url": "https://example.org/winter", "campaign": "flyer-winter",
+    "channel": "print", "owner": "website", "title": "Flyer"})
+PL = j(b).get("link") or {}
+check("Plattform legt einen Link mit Besitzer-Instanz an", s == 201 and PL.get("owner") == "website"
+      and PL.get("channel") == "print" and (PL.get("campaign") or {}).get("key") == "flyer-winter", b[:300])
+s, h, b = call("POST", "/api/v1/links", PLATFORM, body={"area": "k", "target_url": "https://e.org/", "owner": "Böse Instanz"})
+check("... ein Besitzer, der kein Instanzname ist: 422", s == 422, s)
+s, h, b = call("POST", "/api/v1/links", USER, body={"area": "r", "target_url": "https://example.org/u", "owner": "website"})
+check("Menschen setzen keinen Besitzer (Feld überhört)", s == 201 and j(b)["link"]["owner"] == "", b[:200])
+s, h, b = call("POST", "/api/v1/links", ADMIN, body={"area": "k", "target_url": "https://example.org/a"})
+check("Admin darf in die Plattform-Area (verwaltet alles)", s == 201, s)
+s, h, b = call("POST", "/api/v1/links", USER, body={"area": "k", "target_url": "https://example.org/a"})
+check("Benutzer nicht: sie ist nicht offen", s == 403, s)
+
+# zählen ohne Adresse
+for ua, ref in (("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1", "https://www.instagram.com/p/1"),
+                ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1", "https://www.instagram.com/p/1"),
+                ("Mozilla/5.0 (Windows NT 10.0; Win64) Chrome/120 Safari/537.36", "")):
+    call("GET", f"/k/{PL['key']}", None, headers={"User-Agent": ua, "Referer": ref, "X-Forwarded-For": "203.0.113.7",
+                                                   "Accept-Language": "de-DE"})
+rows = app.DB.q("SELECT * FROM accesses WHERE area='k'")
+check("Stufe anonymous: drei Zeilen, keine Adresse, kein User-Agent, keine Sprache",
+      len(rows) == 3 and all(r["ip"] is None and r["ua"] is None and r["lang"] is None for r in rows), [dict(r) for r in rows][:1])
+check("... aber Herkunft (nur Host) und Geräteklasse",
+      sorted(r["referer"] or "" for r in rows) == ["", "www.instagram.com", "www.instagram.com"]
+      and {r["ua_class"] for r in rows} == {"mobile", "desktop"})
+check("... und eine Tagesmarke statt der Adresse", all(r["visitor"] and len(r["visitor"]) == 12 for r in rows)
+      and "203.0.113" not in json.dumps([dict(r) for r in rows]))
+salt = store.get_setting(app.DB, "visitor_salt", "")
+check("... das Salz gilt nur für heute", salt.startswith(store.now_iso()[:10] + ":"))
+s, h, b = call("GET", f"/api/v1/areas/k/accesses?format=json", ADMIN)
+check("Zugriffsliste gibt die Tagesmarke nicht heraus", s == 200 and b"visitor" not in b, b[:200])
+
+s, h, b = call("GET", f"/api/v1/stats?day={store.now_iso()[:10]}", PLATFORM)
+st = j(b) if s == 200 else {}
+one = next((x for x in st.get("links", []) if x["id"] == PL["id"]), {})
+check("stats?day= für die Plattform: ein Ruf, alle Links ihrer Area", s == 200 and st["area"] == "k" and one, b[:300])
+check("... Aufrufe 3, Besucher 2 (zwei Geräte), Herkunft und Gerät",
+      one.get("calls") == 3 and one.get("visitors") == 2 and one.get("by_referer") == {"www.instagram.com": 2}
+      and one.get("by_class") == {"mobile": 2, "desktop": 1}, one)
+check("... mit Kampagnen-Key, Kanal und Besitzer",
+      one.get("campaign") == "flyer-winter" and one.get("channel") == "print" and one.get("owner") == "website", one)
+check("... nur Zahlen: keine Adresse, keine Marke", "203.0.113" not in b.decode() and "visitor\"" not in b.decode())
+s, h, b = call("GET", "/api/v1/stats?day=gestern", PLATFORM)
+check("... day falsch: 422", s == 422, s)
+s, h, b = call("GET", "/api/v1/stats?area=r", PLATFORM)
+check("... die Plattform fragt immer ihre Area, nie eine fremde", s == 200 and j(b)["area"] == "k")
+s, h, b = call("GET", "/api/v1/stats?area=k", USER)
+check("... ein Benutzer bekommt die Zahlen der Plattform-Area nicht", s == 403, s)
+s, h, b = call("GET", "/api/v1/stats?area=k", ADMIN)
+check("... die Verwaltung schon", s == 200 and j(b)["links"], s)
+
+# Änderungen seit
+import time as _t
+_t.sleep(1.1)  # die Zeitstempel sind sekundengenau
+stamp = store.now_iso()
+s, h, b = call("PATCH", f"/api/v1/links/{PL['id']}", PLATFORM, body={"disabled": True})
+check("PATCH pausiert", s == 200 and j(b)["link"]["disabled"] is True, b[:200])
+s, h, b = call("GET", f"/api/v1/links?updated_since={stamp}", PLATFORM)
+ids = [x["id"] for x in j(b).get("links", [])]
+check("links?updated_since= liefert nur den geänderten Link der Plattform-Area", s == 200 and ids == [PL["id"]], ids)
+s, h, b = call("PATCH", f"/api/v1/links/{PL['id']}", PLATFORM, body={"disabled": False, "target_url": "https://example.org/neu"})
+check("PATCH: fortsetzen und neues Ziel", s == 200 and j(b)["link"]["target_url"] == "https://example.org/neu"
+      and j(b)["link"]["owner"] == "website", b[:200])
+s, h, b = call("GET", "/admin/areas/k", ADMIN)
+check("Admin-Seite der Plattform-Area zeigt die Stufe ohne Adresse", s == 200 and "keine Adresse".encode() in b, s)
+
+
+print("\nDie Tür einer App: das Gateway nennt den Besitzer (0.8)")
+VIA_A = dict(PLATFORM, **{"X-OAAP-Source-Instance": "shop"})
+VIA_B = dict(PLATFORM, **{"X-OAAP-Source-Instance": "verein-website"})
+s, h, b = call("POST", "/api/v1/links", VIA_A, body={"target_url": "https://example.org/shop", "owner": "website",
+                                                     "channel": "social", "campaign": "flyer-winter"})
+LA = (j(b) or {}).get("link") or {}
+check("App über die Tür: ohne area in die Plattform-Area, Besitzer vom Gateway (nicht aus dem Feld)",
+      s == 201 and LA.get("area") == "k" and LA.get("owner") == "shop", b[:300])
+s, h, b = call("GET", "/api/v1/links", VIA_A)
+check("... sie sieht nur ihre Links", s == 200 and [x["id"] for x in j(b)["links"]] == [LA["id"]], b[:300])
+s, h, b = call("GET", f"/api/v1/links/{PL['id']}", VIA_A)
+check("... einen Link einer anderen Instanz nicht (404)", s == 404, s)
+s, h, b = call("PATCH", f"/api/v1/links/{PL['id']}", VIA_A, body={"target_url": "https://evil.example/"})
+check("... und kann ihn nicht umleiten", s == 404 and store.get_link(app.DB, PL["id"])["target_url"] == "https://example.org/neu", s)
+s, h, b = call("DELETE", f"/api/v1/links/{LA['id']}", VIA_B)
+check("... eine dritte Instanz löscht ihn nicht", s == 404 and store.get_link(app.DB, LA["id"])["deleted_at"] is None, s)
+s, h, b = call("PATCH", f"/api/v1/links/{LA['id']}", VIA_A, body={"target_url": "https://example.org/shop2"})
+check("... die eigene ändert ihr Ziel, der Besitzer bleibt", s == 200 and j(b)["link"]["owner"] == "shop"
+      and j(b)["link"]["target_url"] == "https://example.org/shop2", b[:200])
+call("GET", f"/k/{LA['key']}", None, headers={"User-Agent": "Mozilla/5.0 (Android 14) Chrome/120 Mobile"})
+s, h, b = call("GET", "/api/v1/stats", VIA_A)
+check("stats über die Tür: nur die eigenen Links", s == 200 and [x["id"] for x in j(b)["links"]] == [LA["id"]], b[:300])
+s, h, b = call("GET", f"/api/v1/links/{LA['id']}/qr?format=svg", VIA_A)
+check("QR-Code über die Tür", s == 200 and b"<svg" in b[:400], b[:100])
+check("... und gleich beim Anlegen (qr_svg)", "<svg" in (LA.get("qr_svg") or "")[:400])
+spoof = dict(USER, **{"X-OAAP-Source-Instance": "shop"})
+s, h, b = call("GET", f"/api/v1/links/{LA['id']}", spoof)
+check("Eine Person mit gefälschter Quell-Kopfzeile sieht den Link nicht", s == 404, s)
+
 server.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{ok} bestanden, {fail} fehlgeschlagen")

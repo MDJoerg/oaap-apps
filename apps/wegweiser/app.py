@@ -31,6 +31,7 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -43,7 +44,7 @@ import qr
 import store
 import ui
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -54,6 +55,17 @@ APP_SECRET = os.environ.get("OAAP_APP_SECRET", "") or "kein-geheimnis-gesetzt"
 # Aliasse, dann die Knoten-Adresse, jeder als Ursprung mit Schema. Fehlt die Variable,
 # ist die Liste leer und es gelten die von der Verwaltung eingetragenen Adressen.
 PLATFORM_HOSTS = store.normalize_hosts(os.environ.get("OAAP_INSTANCE_NAMES", ""))[0]
+
+# RFC-0144 §3: der Vertrag, den diese App der Plattform anbietet. Die Plattform
+# spricht als Maschinen-Prinzipal `platform:shortlinks…` -- ein Name mit
+# Doppelpunkt, den kein Mensch tragen kann (Benutzernamen sind a-z0-9._-) und
+# den nur die Plattform anlegt. Er darf genau eine Area: die der Plattform.
+CONTRACT = "oaap.work.shortlinks"
+CONTRACT_VERSION = "0.1"
+PLATFORM_PRINCIPAL = "platform:shortlinks"
+PLATFORM_AREA_CHOICES = ("k", "oaap-k")
+OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 try:
     MAX_UPLOAD_MB = max(1, int(os.environ.get("WEGWEISER_MAX_UPLOAD_MB") or 512))
@@ -94,8 +106,16 @@ class Who:
         self.display = urllib.parse.unquote(headers.get("X-OAAP-Display-Name", "") or "")
         self.email = urllib.parse.unquote(headers.get("X-OAAP-Email", "") or "")
         self.roles = {r.strip() for r in (headers.get("X-OAAP-Roles", "") or "").split(",") if r.strip()}
-        self.is_admin = "admin" in self.roles
-        self.is_keyuser = self.is_admin or "keyuser" in self.roles
+        # Die Plattform (RFC-0144) ist nie Admin und nie Keyuser, auch wenn ihr
+        # Schlüssel mehr trüge: sie bekommt genau ihre Area.
+        self.is_platform = self.name.startswith(PLATFORM_PRINCIPAL)
+        # Kommt die Plattform über die Tür einer App (/platform/shortlinks), nennt
+        # das Gateway diese Instanz -- sie ist der Besitzer, und nur ihre Links
+        # sind dann zu sehen. Ohne die Kopfzeile spricht die Plattform selbst.
+        self.source = ((headers.get("X-OAAP-Source-Instance", "") or "").strip().lower()
+                       if self.is_platform else "")
+        self.is_admin = "admin" in self.roles and not self.is_platform
+        self.is_keyuser = (self.is_admin or "keyuser" in self.roles) and not self.is_platform
 
     @property
     def known(self):
@@ -105,12 +125,18 @@ class Who:
         """Admin überall; Keyuser dort, wo er als Verantwortlicher steht.
         Verantwortliche werden per Benutzername benannt — ein Admin kennt
         keine UUIDs, und die Plattform bietet Apps kein Benutzerverzeichnis."""
+        if self.is_platform:
+            return area["slug"] == platform_area_slug()
         return self.is_admin or (self.is_keyuser and self.name in (area.get("responsible") or []))
 
     def may_use(self, area):
+        if self.is_platform:
+            return bool(area["active"]) and self.manages(area)
         return area["active"] and (self.manages(area) or area["open_for_users"])
 
     def may_see(self, link, area):
+        if self.source:
+            return self.manages(area) and (link.get("owner") or "") == self.source
         return link["created_by"] == self.id or self.manages(area)
 
     def may_edit_campaign(self, campaign):
@@ -256,7 +282,43 @@ def prepare_link(who, area, data, existing=None):
         if ch and ch not in store.CHANNELS:
             errors.append("Kanal: " + ", ".join(store.CHANNELS) + " oder leer")
         fields["channel"] = ch if ch in store.CHANNELS else ""
+    # RFC-0144 §2: die Instanz, für die die Plattform den Link anlegt. Nur die
+    # Plattform setzt sie; von allen anderen wird das Feld überhört.
+    if who.source:
+        if existing is None:
+            fields["owner"] = who.source if OWNER_RE.match(who.source) else ""
+    elif who.is_platform and ("owner" in data or existing is None):
+        owner = str(data.get("owner") or "").strip().lower()
+        if owner and not OWNER_RE.match(owner):
+            errors.append("owner: Name einer Instanz (a-z, 0-9, '-')")
+        fields["owner"] = owner if OWNER_RE.match(owner) else ""
     return fields, key, pin, errors
+
+
+def platform_area_slug():
+    """Die Area der Plattform, wenn es sie schon gibt (Einstellung), sonst ''."""
+    return store.get_setting(DB, "platform_area", "") or ""
+
+
+def ensure_platform_area():
+    """Legt beim ersten Ruf der Plattform ihre Area an: Weiterleitungen, für
+    niemanden sonst offen, Stufe „anonymous“ (W2), 90 Tage (D4). Kurz, weil sie
+    auf Flyern steht: `k`, sonst `oaap-k`, wenn `k` schon vergeben ist."""
+    slug = platform_area_slug()
+    if slug and store.get_area(DB, slug):
+        return store.get_area(DB, slug)
+    slug = next((c for c in PLATFORM_AREA_CHOICES if not store.get_area(DB, c)), "")
+    if not slug:
+        raise ApiError(409, "Keine freie Area für die Plattform (k, oaap-k)", "conflict")
+    area = store.create_area(DB, {
+        "slug": slug, "type": "redirect", "title": "Kurzlinks der Plattform",
+        "description": "Links, die Apps des Mandanten über die Plattform anlegen (RFC-0144).",
+        "responsible": "[]", "open_for_users": 0, "active": 1, "key_length": 6,
+        "custom_keys": 1, "default_ttl_days": 0, "max_ttl_days": 0, "pin_required": 0,
+        "pin_min_length": 4, "max_file_mb": 1, "allowed_extensions": "",
+        "log_level": "anonymous", "log_retention_days": 90})
+    store.set_setting(DB, "platform_area", slug)
+    return area
 
 
 def all_hosts(default=""):
@@ -714,6 +776,40 @@ class Handler(BaseHTTPRequestHandler):
         bases = self.bases()
         head = parts[0] if parts else ""
 
+        if head == "about" and len(parts) == 1 and method == "GET":
+            # RFC-0144 §3: was die Plattform prüft, bevor sie die Instanz zum
+            # Kurzlinkdienst des Mandanten macht. Ihr erster Ruf legt die Area an.
+            area = ensure_platform_area() if who.is_platform else None
+            self.send_json(200, {"contract": CONTRACT, "contract_version": CONTRACT_VERSION,
+                                 "app": "wegweiser", "version": VERSION, "hosts": bases,
+                                 "channels": list(store.CHANNELS),
+                                 "area": area["slug"] if area else platform_area_slug() or None})
+            return
+
+        if head == "stats" and len(parts) == 1 and method == "GET":
+            # W3: ein Ruf je Tag für alle Links einer Area, mit Kampagne und Kanal.
+            slug = platform_area_slug() if who.is_platform else str(self.query.get("area") or "")
+            area = store.get_area(DB, slug) if slug else None
+            if area is None:
+                raise ApiError(404, "Area unbekannt", "not_found")
+            if not who.manages(area):
+                raise ApiError(403, "Nur wer die Area verantwortet, sieht ihre Zahlen", "forbidden")
+            day = str(self.query.get("day") or store.now_iso()[:10])
+            if not DAY_RE.match(day):
+                raise ApiError(422, "day: JJJJ-MM-TT", "validation")
+            per = store.day_stats(DB, area["slug"], day)
+            camps = {c["id"]: c for c in store.list_campaigns(DB)}
+            links = []
+            for link in store.list_links(DB, area=area["slug"], include_deleted=True):
+                if link["id"] not in per or (who.source and (link.get("owner") or "") != who.source):
+                    continue
+                c = camps.get(link.get("campaign_id"))
+                links.append(dict(per[link["id"]], id=link["id"], key=link["key"],
+                                  campaign=c["key"] if c else None,
+                                  channel=link.get("channel") or "", owner=link.get("owner") or ""))
+            self.send_json(200, {"area": area["slug"], "day": day, "links": links})
+            return
+
         if head == "hosts" and len(parts) == 1:
             if method == "GET":
                 self.send_json(200, hosts_json(self.base_url()))
@@ -806,7 +902,14 @@ class Handler(BaseHTTPRequestHandler):
                         area = store.get_area(DB, slug)
                         if area is None:
                             raise ApiError(404, "Area unbekannt", "not_found")
-                        links = store.list_links(DB, area=slug) if who.manages(area) else store.list_links(DB, who.id, slug)
+                        since = str(self.query.get("updated_since") or "") or None
+                        links = (store.list_links(DB, area=slug, updated_since=since) if who.manages(area)
+                                 else store.list_links(DB, who.id, slug, updated_since=since))
+                    elif who.is_platform:
+                        links = store.list_links(DB, area=platform_area_slug() or "-",
+                                                 updated_since=str(self.query.get("updated_since") or "") or None)
+                        if who.source:
+                            links = [l for l in links if (l.get("owner") or "") == who.source]
                     else:
                         links = store.list_links(DB) if who.is_admin and self.query.get("all") else store.list_links(DB, who.id)
                     areas = {a["slug"]: a for a in store.list_areas(DB)}
@@ -814,6 +917,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if method == "POST":
                     data = self.read_json()
+                    if who.is_platform and not data.get("area"):
+                        ensure_platform_area()
+                        data["area"] = platform_area_slug()
                     area = store.get_area(DB, str(data.get("area") or ""))
                     if area is None:
                         raise ApiError(404, "Area unbekannt", "not_found")
@@ -823,7 +929,11 @@ class Handler(BaseHTTPRequestHandler):
                     if errors:
                         raise ApiError(422, "; ".join(errors), "validation")
                     link = store.create_link(DB, APP_SECRET, area, who.id, who.display or who.name, fields, key, pin)
-                    self.send_json(201, {"link": link_json(link, bases, area)})
+                    out = link_json(link, bases, area)
+                    if who.is_platform:
+                        # RFC-0144 §2: Adresse und QR-Code in einem Ruf zurück
+                        out["qr_svg"] = qr.svg(qr.encode(out["url"]), 8)
+                    self.send_json(201, {"link": out})
                     return
                 raise ApiError(405, "Methode nicht erlaubt", "method")
             link = store.get_link(DB, parts[1])
@@ -1327,6 +1437,7 @@ class Handler(BaseHTTPRequestHandler):
         level = area["log_level"]
         hint = {"count": "Diese Area zählt nur; Einzelzugriffe werden nicht gespeichert.",
                 "minimal": "Diese Area speichert Zeitpunkt und Ergebnis.",
+                "anonymous": "Diese Area speichert Herkunft und Gerät, aber keine Adresse.",
                 "standard": "Diese Area speichert gekürzte Adressen und Geräteklassen.",
                 "full": "Diese Area speichert alles, was der Client mitschickt."}[level]
         if level == "count":
@@ -1335,7 +1446,7 @@ class Handler(BaseHTTPRequestHandler):
   <div class="ww-stats">
     <div><h3>Ergebnisse</h3>{ui.bars(st["by_result"], label_map=ui.RESULT_LABELS)}</div>
     <div><h3>Letzte 30 Tage</h3>{ui.day_table(st["by_day"])}</div>"""
-        if level in ("standard", "full"):
+        if level in ("anonymous", "standard", "full"):
             inner += f"""<div><h3>Geräte</h3>{ui.bars(st["by_class"], label_map={"desktop": "Desktop", "mobile": "Mobil", "bot": "Automat/Vorschau", "unknown": "unbekannt"})}</div>
     <div><h3>Browser</h3>{ui.bars(st["by_browser"])}</div>
     <div><h3>Betriebssystem</h3>{ui.bars(st["by_os"])}</div>

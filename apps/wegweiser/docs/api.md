@@ -43,6 +43,26 @@ curl -X POST https://go.example.org/api/v1/links \
 Zeiten als ISO mit `Z` (`2030-06-01T12:00:00Z`) oder ohne Zone in der Zeitzone
 der Instanz (Vorgabe Europe/Berlin).
 
+## Kurzlinkdienst des Mandanten (ab 0.8)
+
+Benennt die Mandantenverwaltung diese Instanz als Kurzlinkdienst
+(`oaap tenant shortlinks <mandant> <instanz>`), legen andere Apps des Mandanten
+Links über die Plattform an – ohne eigenen Schlüssel beim Wegweiser. Dafür gibt
+es den Vertrag `oaap.work.shortlinks`:
+
+| Ruf | Wer | Was |
+|---|---|---|
+| `GET /about` | alle | Vertrag, Version, Adressen; der erste Ruf der Plattform legt ihre Area an (`k`, sonst `oaap-k`) |
+| `GET /stats?day=JJJJ-MM-TT` | wer die Area verantwortet (`area=`), die Plattform ihre | je Link eines Tages: Aufrufe, geschätzte Besucher, Herkunft (nur Host), Geräteklasse, Kampagne, Kanal, Besitzer |
+| `GET /links?updated_since=` | wie `GET /links` | nur seitdem geänderte Links |
+
+Die Area der Plattform ist für niemanden sonst offen und speichert auf der
+Stufe **anonymous**: Herkunft, Gerät und Browser, aber keine Adresse, keinen
+User-Agent und keine Sprache. Verschiedene Besucher je Tag werden über einen
+Tages-Salz geschätzt, der am nächsten Tag ersetzt wird. Ruft eine App über die
+Plattform, nennt das Gateway die App als **Besitzer** des Links; sie sieht und
+ändert nur ihre eigenen Links.
+
 ## MCP-Tür
 
 Für Assistenten gibt es unter `/mcp` vier Lesewerkzeuge: `wegweiser_search`,
