@@ -22,6 +22,15 @@ Alles, was die Oberfläche kann, geht auch per Programm – mit denselben Rechte
 | `GET /links/{id}/qr?format=png\|svg` | Besitzer, Verantwortliche | QR-Code |
 | `GET /links/{id}/stats`, `/accesses` | Besitzer, Verantwortliche | Auswertung, Zugriffe |
 | `GET`/`PUT /hosts` | alle / admin | öffentliche Adressen |
+| `GET /campaigns` | alle | alle Kampagnen als Baum (`path`, `depth`, `children`) mit Summen über den Teilbaum (`totals`); `archived=0` blendet archivierte aus |
+| `POST /campaigns` | alle | Kampagne anlegen: `title`, `key?`, `parent?` (Id oder Kurzname), `starts_on?`, `ends_on?`, `description?` |
+| `GET /campaigns/{id\|key}` | alle | Kampagne mit Summen und den eigenen Links |
+| `PATCH`/`DELETE /campaigns/{id\|key}` | Ersteller, admin | ändern, archivieren (`archived`), löschen (nur leer) |
+| `GET /campaigns/{id\|key}/stats?days=` | alle | Aufrufe je Tag, je Kanal (`by_channel`), je Unterkampagne (`by_child`), je eigenem Link |
+
+Links tragen `campaign` (Id oder Kurzname; leer = keine) und `channel`
+(`web`, `social`, `print`, `mail`, `chat`, `other` oder leer); die Antwort
+nennt die Kampagne mit Pfad.
 
 ## Beispiel
 
@@ -36,5 +45,6 @@ der Instanz (Vorgabe Europe/Berlin).
 
 ## MCP-Tür
 
-Für Assistenten gibt es unter `/mcp` drei Lesewerkzeuge: `wegweiser_search`,
-`wegweiser_link_read`, `wegweiser_areas` – mit denselben Rechten wie die Seite.
+Für Assistenten gibt es unter `/mcp` vier Lesewerkzeuge: `wegweiser_search`,
+`wegweiser_link_read`, `wegweiser_areas`, `wegweiser_campaigns` – mit denselben
+Rechten wie die Seite.

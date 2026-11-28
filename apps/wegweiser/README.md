@@ -101,6 +101,12 @@ Browser oder ein API-Schlüssel der Plattform
 | `PUT /hosts` | admin | ergänzte Adressen und Vorgabe setzen: `{"hosts": ["go.example.org", …], "default": "https://go.example.org"}`; `default` leer = erste der Liste |
 | `GET /links/{id}/stats?days=30` | Besitzer, Verantwortliche | Auswertung |
 | `GET /links/{id}/accesses?limit&offset&format=csv` | Besitzer, Verantwortliche | Zugriffszeilen |
+| `GET /campaigns?archived=0&days=30` | alle | Kampagnen als Baum mit Summen über den Teilbaum |
+| `POST /campaigns` | alle | Kampagne anlegen: `title`, `key` (leer = aus dem Titel), `parent` (Id oder Kurzname), `starts_on`, `ends_on`, `description` |
+| `GET /campaigns/{id oder key}` | alle | Kampagne, Summen, eigene Links |
+| `PATCH /campaigns/{id oder key}` | Ersteller, admin | Felder ändern, `archived`; der Kurzname bleibt fest |
+| `DELETE /campaigns/{id oder key}` | Ersteller, admin | nur leere Kampagnen (sonst 409: archivieren) |
+| `GET /campaigns/{id oder key}/stats?days=30` | alle | Aufrufe je Tag, Kanal, Unterkampagne; je Link nur die eigenen |
 
 Area-Felder: `title`, `description`, `responsible` (Liste von
 Benutzernamen), `open_for_users`, `active`, `key_length` (4–8),
@@ -112,7 +118,8 @@ nicht für Verantwortliche; 0 = unbegrenzt), `pin_required`,
 Link-Felder beim Anlegen: `area` (Pflicht), `key` (nur Verantwortliche,
 wenn die Area Wunsch-Keys erlaubt), `title`, `note`, `pin`,
 `expires_at`, `target_url` (redirect), `valid_from`, `valid_until`,
-`max_downloads` (download_window). Zeiten als ISO mit `Z`
+`max_downloads` (download_window), `campaign` (Id oder Kurzname), `channel`
+(`web`, `social`, `print`, `mail`, `chat`, `other`). Zeiten als ISO mit `Z`
 (`2030-06-01T12:00:00Z`) oder ohne Zone in der Zeitzone der Instanz
 (`WEGWEISER_TZ`, Vorgabe Europe/Berlin). Die Antwort enthält `url`
 (unter der ersten eingetragenen Adresse, sonst dem Host der Anfrage),
@@ -146,6 +153,18 @@ curl -X PUT https://go.example.org/api/v1/links/<id>/file \
   -H "Authorization: Bearer oaapk_…" -H "X-File-Name: vertrag.pdf" \
   -H "Content-Type: application/pdf" --data-binary @vertrag.pdf
 ```
+
+## Kampagnen (0.7)
+
+Kampagnen bündeln Links (RFC-0144 §10): ein Baum mit höchstens vier Ebenen,
+Kurzname in der Instanz eindeutig und fest, Zeitraum optional. Ein Link
+gehört zu höchstens einer Kampagne und trägt einen Kanal. Gezählt wird je
+Kampagne über ihren Teilbaum: Aufrufe mit erfülltem Zweck (`redirected`,
+`pixel`, `landing`, `downloaded`, `uploaded`) je Tag, Kanal, Unterkampagne.
+Alle sehen alle Kampagnen und dürfen ihre Links zuordnen; ändern darf, wer
+sie angelegt hat, und `admin`. Titel und Ziel fremder Links bleiben
+verborgen, ihre Klicks zählen mit. Die Spalten `campaign_id`/`channel`
+ergänzt die App beim Start in einer alten Datenbank.
 
 ## Konfiguration
 

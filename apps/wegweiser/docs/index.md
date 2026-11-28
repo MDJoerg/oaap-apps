@@ -28,6 +28,8 @@ verbraucht einen Upload-Link.
 
 - **Meine Links** – Ihre Links, durchsuchbar und filterbar; **Neuer Link** legt
   einen an.
+- **Kampagnen** – Links bündeln (bis zu vier Ebenen) und je Kampagne und Kanal
+  zählen.
 - **Areas** – für Verantwortliche: die Areas, die Sie betreuen, mit allen Links
   und Zahlen.
 - **Verwaltung** – für die Rolle admin: Areas, öffentliche Adressen, REST-API.
@@ -37,6 +39,7 @@ verbraucht einen Upload-Link.
 - [Einen Link anlegen](link-anlegen.md)
 - [Dateien übergeben](uebergaben.md)
 - [Statistik lesen](statistik.md)
+- [Kampagnen](kampagnen.md)
 - [Areas verwalten](areas-verwalten.md)
 - [REST-API](api.md)
 - [Häufige Fragen](faq.md)

@@ -133,6 +133,16 @@ def fmt_dt(text, tz):
     return dt.astimezone(tz).strftime("%d.%m.%Y %H:%M")
 
 
+def fmt_day(text):
+    """JJJJ-MM-TT → TT.MM.JJJJ; leer bleibt leer."""
+    if not text:
+        return ""
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return text
+
+
 def dt_input(text, tz):
     """ISO-UTC → Wert für <input type=datetime-local>."""
     if not text:

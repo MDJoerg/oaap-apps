@@ -608,8 +608,8 @@
       "id": "wegweiser",
       "name": "Wegweiser",
       "type": "native",
-      "version": "0.6.2",
-      "released": "2026-11-22",
+      "version": "0.7.0",
+      "released": "2026-11-28",
       "package": {
         "git": "https://github.com/MDJoerg/oaap-apps",
         "path": "apps/wegweiser"

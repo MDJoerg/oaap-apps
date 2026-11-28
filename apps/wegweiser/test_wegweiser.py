@@ -554,7 +554,8 @@ check("angemeldete Seite: Kit und Rahmen der Plattform", s == 200 and b"/platfor
       and b"/platform/app.js" in b and b'class="oaap-appname">Wegweiser<' in b)
 check("... ohne eigene Palette, ohne Rollen im Kopf, ohne Großbuchstaben-Kopf",
       b"--oaap-blue-900" not in b and b"WEGWEISER" not in b and b"keyuser" not in b and b"Uta" not in b)
-check("Benutzer: ein Reiter (keine Leiste), kein Verwaltungsreiter", b"oaap-tabs" not in b and b'href="/admin"' not in b)
+check("Benutzer: Reiter Meine Links und Kampagnen, kein Verwaltungsreiter",
+      b">Meine Links<" in b and b">Kampagnen<" in b and b'href="/admin"' not in b)
 s, h, b = call("GET", "/manage", ADMIN)
 check("admin: Reiter Meine Links, Areas, Verwaltung zuletzt",
       b.index(b">Meine Links<") < b.index(b">Areas<") < b.index(b">Verwaltung<"))
@@ -597,7 +598,7 @@ def tool(name, args, who):
 
 s, d = mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, USER)
 names = sorted(t["name"] for t in d["result"]["tools"])
-check("MCP tools/list", s == 200 and names == ["wegweiser_areas", "wegweiser_link_read", "wegweiser_search"], names)
+check("MCP tools/list", s == 200 and names == ["wegweiser_areas", "wegweiser_campaigns", "wegweiser_link_read", "wegweiser_search"], names)
 err, t = tool("wegweiser_search", {"q": "Viele 07"}, USER)
 check("wegweiser_search: eigener Link", not err and j(t.encode())["total"] == 1, t[:300])
 check("... ohne PIN-Hash oder Fehlversuche", "pin_hash" not in t and "pin_failures" not in t)
@@ -615,6 +616,123 @@ err, t = tool("wegweiser_search", {}, {})
 check("ohne Person: abgelehnt", err is True)
 s, d = mcp({"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}, USER)
 check("zwei Vorlagen", len(d["result"]["prompts"]) == 2)
+
+
+print("\n== Kampagnen (0.7, RFC-0144 §10)")
+import sqlite3  # noqa: E402
+old = os.path.join(TMP, "alt.db")
+con = sqlite3.connect(old)
+con.execute("CREATE TABLE links (id TEXT PRIMARY KEY, area TEXT NOT NULL, key TEXT NOT NULL, key_norm TEXT NOT NULL, "
+            "created_by TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT, hit_count INTEGER NOT NULL DEFAULT 0)")
+con.commit()
+con.close()
+store.connect(old)
+cols = {r[1] for r in sqlite3.connect(old).execute("PRAGMA table_info(links)")}
+check("alte Datenbank: Spalten campaign_id und channel beim Start ergänzt", {"campaign_id", "channel"} <= cols, cols)
+
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "Sommerfest 2027", "starts_on": "2027-06-01", "ends_on": "2027-07-15"})
+C1 = j(b).get("campaign", {})
+check("Kampagne anlegen: 201, Kurzname aus dem Titel", s == 201 and C1.get("key") == "sommerfest-2027", b[:300])
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "Plakate", "parent": "sommerfest-2027"})
+C2 = j(b).get("campaign", {})
+check("Unterkampagne über den Kurznamen der Eltern", s == 201 and C2.get("parent_id") == C1["id"]
+      and C2.get("path") == ["Sommerfest 2027", "Plakate"] and C2.get("depth") == 2, b[:300])
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "Innenstadt", "parent": C2["id"]})
+C3 = j(b).get("campaign", {})
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "Ebene 4", "parent": C3["id"]})
+C4 = j(b).get("campaign", {})
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "Ebene 5", "parent": C4["id"]})
+check("fünfte Ebene abgelehnt", s == 422 and "Ebenen" in j(b)["error"]["message"], b[:200])
+s, h, b = call("POST", "/api/v1/campaigns", OTHER, {"title": "Sommerfest 2027"})
+check("gleicher Titel: Kurzname bekommt -2", s == 201 and j(b)["campaign"]["key"] == "sommerfest-2027-2", b[:200])
+C5 = j(b)["campaign"]
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "X", "key": "Mit Leerzeichen"})
+check("Kurzname mit Leerzeichen abgelehnt", s == 422, b[:200])
+s, h, b = call("POST", "/api/v1/campaigns", USER, {"title": "X", "ends_on": "2027-01-01", "starts_on": "2027-02-01"})
+check("Ende vor Beginn abgelehnt", s == 422, b[:200])
+s, h, b = call("PATCH", f"/api/v1/campaigns/{C1['id']}", USER, {"parent": C3["id"]})
+check("Kampagne unter die eigene Unterkampagne hängen: abgelehnt", s == 422 and "selbst" in j(b)["error"]["message"], b[:200])
+s, h, b = call("PATCH", f"/api/v1/campaigns/{C1['id']}", USER, {"key": "anders"})
+check("Kurzname bleibt fest", s == 422, b[:200])
+s, h, b = call("PATCH", f"/api/v1/campaigns/{C1['id']}", OTHER, {"title": "Fremd"})
+check("fremde Person darf eine Kampagne nicht ändern", s == 403, s)
+s, h, b = call("PATCH", f"/api/v1/campaigns/{C1['id']}", ADMIN, {"description": "Das Fest im Park"})
+check("Verwaltung darf ändern", s == 200 and j(b)["campaign"]["description"] == "Das Fest im Park", b[:200])
+
+s, h, b = call("POST", "/api/v1/links", USER, {"area": "r", "target_url": "https://example.org/fest",
+                                               "title": "Plakat Marktplatz", "campaign": C3["id"], "channel": "print"})
+K1 = j(b).get("link", {})
+check("Link mit Kampagne und Kanal", s == 201 and K1.get("channel") == "print"
+      and (K1.get("campaign") or {}).get("path") == ["Sommerfest 2027", "Plakate", "Innenstadt"], b[:400])
+s, h, b = call("POST", "/api/v1/links", OTHER, {"area": "r", "target_url": "https://example.org/fest2",
+                                                "title": "Olafs Post", "campaign": "sommerfest-2027", "channel": "social"})
+K2 = j(b).get("link", {})
+check("fremde Person ordnet ihren Link der Kampagne über den Kurznamen zu", s == 201 and K2["campaign"]["id"] == C1["id"], b[:300])
+s, h, b = call("POST", "/api/v1/links", USER, {"area": "r", "target_url": "https://example.org/x", "channel": "fax"})
+check("unbekannter Kanal abgelehnt", s == 422, b[:200])
+s, h, b = call("POST", "/api/v1/links", USER, {"area": "r", "target_url": "https://example.org/x", "campaign": "gibtsnicht"})
+check("unbekannte Kampagne abgelehnt", s == 422, b[:200])
+
+for ua in ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Safari/604.1",) * 3:
+    call("GET", f"/r/{K1['key']}", headers={"User-Agent": ua, "Referer": "https://www.instagram.com/"})
+call("GET", f"/r/{K2['key']}", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120"})
+s, h, b = call("GET", f"/api/v1/campaigns/{C1['key']}/stats?days=7", USER)
+st = j(b).get("stats", {})
+check("Zahlen der Oberkampagne zählen den ganzen Teilbaum", s == 200 and st.get("links") == 2 and st.get("recent") == 4, st)
+check("... je Kanal", st.get("by_channel") == {"print": 3, "social": 1}, st.get("by_channel"))
+check("... je Unterkampagne", [(k["key"], k["recent"]) for k in st.get("by_child", [])] == [("plakate", 3)], st.get("by_child"))
+check("... je Link nur die eigenen", set(st.get("by_link", {})) == {K1["id"]}, st.get("by_link"))
+s, h, b = call("GET", f"/api/v1/campaigns/{C1['id']}", USER)
+d = j(b)
+check("Kampagne lesen: Summe über den Teilbaum, fremde Links nicht in der Liste",
+      d["campaign"]["totals"]["links"] == 2 and [l["id"] for l in d["links"]] == [K1["id"]], b[:400])
+s, h, b = call("GET", "/api/v1/campaigns", OTHER)
+tot = {c["key"]: c["totals"]["recent"] for c in j(b)["campaigns"]}
+check("Liste: alle sehen alle Kampagnen mit Summen", tot.get("sommerfest-2027") == 4 and tot.get("innenstadt") == 3, tot)
+
+s, h, b = call("DELETE", f"/api/v1/campaigns/{C1['id']}", USER)
+check("Kampagne mit Unterkampagnen: nicht löschen (409)", s == 409, b[:200])
+s, h, b = call("DELETE", f"/api/v1/campaigns/{C3['id']}", USER)
+check("Kampagne mit Links: nicht löschen (409)", s == 409 and "archivieren" in j(b)["error"]["message"], b[:200])
+s, h, b = call("PATCH", f"/api/v1/campaigns/{C2['id']}", USER, {"archived": True})
+check("archivieren", s == 200 and j(b)["campaign"]["archived"] is True, b[:200])
+s, h, b = call("POST", "/api/v1/links", USER, {"area": "r", "target_url": "https://example.org/y", "campaign": C2["id"]})
+check("archivierte Kampagne nimmt keine neuen Links", s == 422, b[:200])
+s, h, b = call("PATCH", f"/api/v1/links/{K1['id']}", USER, {"title": "Plakat Marktplatz (neu)"})
+check("bestehender Link behält seine Kampagne beim Ändern", s == 200 and j(b)["link"]["campaign"]["id"] == C3["id"], b[:300])
+s, h, b = call("DELETE", f"/api/v1/campaigns/{C4['id']}", USER)
+check("leere Kampagne löschen", s == 200, b[:200])
+s, h, b = call("DELETE", f"/api/v1/campaigns/{C5['id']}", USER)
+check("fremde leere Kampagne: nicht löschen (403)", s == 403, s)
+
+s, h, b = call("GET", "/manage/campaigns", USER)
+check("Seite Kampagnen: Baum und Formular", s == 200 and "Sommerfest 2027".encode() in b and b'name="parent"' in b, s)
+check("... archivierte ausgeblendet mit Hinweis", b">Plakate<" not in b and b"archivierte zeigen" in b)
+s, h, b = call("POST", "/manage/campaigns", USER, form={"title": "Herbstmarkt", "parent": ""})
+check("Formular legt an und leitet zur Kampagne", s == 303 and "/manage/campaigns/" in h.get("Location", ""), s)
+s, h, b = call("GET", f"/manage/campaigns/{C1['id']}", USER)
+check("Kampagnen-Seite: Zahlen, Kanal, Hinweis auf fremde Links",
+      s == 200 and b"Neuer Link in dieser Kampagne" in b and b"Druck" in b and b"Links anderer Personen" in b, s)
+check("... Bearbeiten für die Erstellerin", b'value="edit"' in b)
+s, h, b = call("GET", f"/manage/campaigns/{C1['id']}", OTHER)
+check("... kein Bearbeiten für andere", s == 200 and b'value="edit"' not in b)
+s, h, b = call("GET", f"/manage/new?campaign={C3['id']}", USER)
+check("Neuer Link aus der Kampagne: vorgewählt", f'value="{C3["id"]}" selected'.encode() in b)
+s, h, b = call("POST", "/manage/links", USER, form={"area": "r", "target_url": "https://example.org/z",
+                                                    "campaign": C3["id"], "channel": "mail"})
+lid = h.get("Location", "").split("/manage/links/")[-1].split("?")[0]
+check("Link über das Formular mit Kampagne", s == 303 and store.get_link(app.DB, lid)["channel"] == "mail"
+      and store.get_link(app.DB, lid)["campaign_id"] == C3["id"], s)
+s, h, b = call("GET", f"/manage/links/{lid}", USER)
+check("Link-Seite nennt Kampagne mit Pfad und Kanal", "Sommerfest 2027 › Plakate › Innenstadt".encode() in b and b"Kanal E-Mail" in b)
+
+err, t = tool("wegweiser_campaigns", {}, OTHER)
+check("MCP wegweiser_campaigns: Baum mit Aufrufen", not err and any(c["key"] == "sommerfest-2027" and c["calls"] == 4
+                                                                       for c in j(t.encode())["campaigns"]), t[:300])
+err, t = tool("wegweiser_campaigns", {"campaign": "sommerfest-2027", "days": 7}, USER)
+check("MCP: eine Kampagne je Kanal", not err and j(t.encode())["by_channel"] == {"print": 3, "social": 1}, t[:300])
+err, t = tool("wegweiser_campaigns", {}, {})
+check("MCP Kampagnen ohne Person: abgelehnt", err is True)
 
 server.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)

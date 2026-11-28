@@ -3,10 +3,10 @@ oaap_manifest: "0.20"
 app:
   id: wegweiser
   name: Wegweiser
-  version: 0.6.2
+  version: 0.7.0
   type: native
   class: frontend
-  description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, REST-API"
+  description: "Kurzlinks, Zählpixel und Einmal-Übergaben unter eigener Domain: go.<domain>/<area>/<key> — Weiterleitung, Zählpixel, Einmal-Download, Zeitraum-Download, Einmal-Upload; Areas mit Verantwortlichen, PIN, Statistik mit einstellbarer Speichertiefe, Kampagnen (verschachtelt, je Kanal gezählt), REST-API"
 
 care:
   # RFC-0071 §15 (Manifest 0.10): Beim Bau kommen nur Pakete aus dem Archiv der Basis dazu — ein Neubau ändert nur die Basis-Schicht.
@@ -61,6 +61,7 @@ docs:
       link-anlegen.md: howto
       uebergaben.md: howto
       statistik.md: howto
+      kampagnen.md: howto
       areas-verwalten.md: howto
       api.md: api
       faq.md: faq

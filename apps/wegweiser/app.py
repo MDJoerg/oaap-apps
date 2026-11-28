@@ -43,7 +43,7 @@ import qr
 import store
 import ui
 
-VERSION = "0.6.2"
+VERSION = "0.7.0"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -112,6 +112,11 @@ class Who:
 
     def may_see(self, link, area):
         return link["created_by"] == self.id or self.manages(area)
+
+    def may_edit_campaign(self, campaign):
+        """Kampagnen sind in der Instanz für alle sichtbar und zuordenbar; ändern,
+        archivieren und löschen darf, wer sie angelegt hat, und die Verwaltung."""
+        return self.is_admin or campaign["created_by"] == self.id
 
 
 # ---------------------------------------------------------------- Zeiten
@@ -232,6 +237,25 @@ def prepare_link(who, area, data, existing=None):
                     errors.append("Höchstzahl Downloads: ganze Zahl ab 1, oder leer")
     if existing is not None and "disabled" in data:
         fields["disabled"] = 1 if store._truthy(data["disabled"]) else 0
+
+    # Kampagne (Id oder Kurzname) und Kanal — RFC-0144 §10.
+    if "campaign" in data or existing is None:
+        ref = str(data.get("campaign") or "").strip()
+        if not ref:
+            fields["campaign_id"] = None
+        else:
+            camp = store.get_campaign(DB, ref)
+            if camp is None:
+                errors.append("Kampagne unbekannt")
+            elif camp["archived"] and (existing is None or existing.get("campaign_id") != camp["id"]):
+                errors.append("Kampagne ist archiviert")
+            else:
+                fields["campaign_id"] = camp["id"]
+    if "channel" in data or existing is None:
+        ch = str(data.get("channel") or "").strip().lower()
+        if ch and ch not in store.CHANNELS:
+            errors.append("Kanal: " + ", ".join(store.CHANNELS) + " oder leer")
+        fields["channel"] = ch if ch in store.CHANNELS else ""
     return fields, key, pin, errors
 
 
@@ -261,7 +285,48 @@ def link_json(link, bases, area=None):
     out["type"] = area["type"] if area else None
     out["locked"] = bool(link.get("locked_until") and link["locked_until"] > store.now_iso())
     out["file_present"] = bool(store.file_path(FILES_DIR, link) and os.path.exists(store.file_path(FILES_DIR, link)))
+    out["campaign"] = campaign_brief(link.get("campaign_id"))
     return out
+
+
+def campaign_brief(campaign_id, camps=None):
+    if not campaign_id:
+        return None
+    if camps is None:
+        c = store.get_campaign(DB, campaign_id)
+    else:
+        c = camps.get(campaign_id)
+    if c is None:
+        return None
+    return {"id": c["id"], "key": c["key"], "title": c["title"], "path": c["path"]}
+
+
+def campaign_json(c, who, totals=None):
+    out = {k: c[k] for k in ("id", "key", "title", "parent_id", "description", "starts_on",
+                             "ends_on", "archived", "created_by_name", "created_at", "updated_at",
+                             "path", "key_path", "depth", "children")}
+    out["may_edit"] = who.may_edit_campaign(c)
+    if totals is not None:
+        out["totals"] = totals.get(c["id"], {"links": 0, "hits": 0, "recent": 0})
+    return out
+
+
+def campaign_options(selected="", include_archived_id=""):
+    """<option>-Liste für die Auswahl einer Kampagne, eingerückt nach Ebene."""
+    out = ['<option value="">— keine —</option>']
+    for c in store.list_campaigns(DB):
+        if c["archived"] and c["id"] != include_archived_id:
+            continue
+        pad = "\u00a0\u00a0" * (c["depth"] - 1)
+        sel = " selected" if selected in (c["id"], c["key"]) else ""
+        out.append(f'<option value="{esc(c["id"])}"{sel}>{pad}{esc(c["title"])}</option>')
+    return "".join(out)
+
+
+def channel_options(selected=""):
+    return '<option value="">— offen —</option>' + "".join(
+        f'<option value="{k}"{" selected" if selected == k else ""}>{esc(v)}</option>'
+        for k, v in store.CHANNELS.items())
 
 
 def area_json(area, who):
@@ -729,6 +794,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             raise ApiError(404, "Unbekannter API-Pfad", "not_found")
 
+        if head == "campaigns":
+            self.api_campaigns(method, parts[1:], who, bases)
+            return
+
         if head == "links":
             if len(parts) == 1:
                 if method == "GET":
@@ -813,6 +882,66 @@ class Handler(BaseHTTPRequestHandler):
                                    f"{link['area']}-{link['key']}-zugriffe")
                 return
             raise ApiError(404, "Unbekannter API-Pfad", "not_found")
+        raise ApiError(404, "Unbekannter API-Pfad", "not_found")
+
+    def api_campaigns(self, method, parts, who, bases):
+        """/api/v1/campaigns — Kampagnen anlegen, lesen, ändern, löschen, zählen."""
+        if not parts:
+            if method == "GET":
+                camps = store.list_campaigns(DB)
+                if self.query.get("archived") in ("0", "false"):
+                    camps = [c for c in camps if not c["archived"]]
+                totals = store.rollup(store.list_campaigns(DB), store.campaign_counts(DB, self.days()))
+                self.send_json(200, {"campaigns": [campaign_json(c, who, totals) for c in camps],
+                                     "channels": store.CHANNELS})
+                return
+            if method == "POST":
+                fields, errors = store.validate_campaign(DB, self.read_json())
+                if errors:
+                    raise ApiError(422, "; ".join(errors), "validation")
+                c = store.create_campaign(DB, who.id, who.display or who.name, fields)
+                self.send_json(201, {"campaign": campaign_json(c, who)})
+                return
+            raise ApiError(405, "Methode nicht erlaubt", "method")
+        c = store.get_campaign(DB, parts[0])
+        if c is None:
+            raise ApiError(404, "Kampagne unbekannt", "not_found")
+        sub = parts[1] if len(parts) > 1 else ""
+        if not sub:
+            if method == "GET":
+                camps = store.list_campaigns(DB)
+                totals = store.rollup(camps, store.campaign_counts(DB, self.days()))
+                areas = {a["slug"]: a for a in store.list_areas(DB)}
+                links = [l for l in store.campaign_links(DB, c["id"])
+                         if areas.get(l["area"]) and who.may_see(l, areas[l["area"]])]
+                self.send_json(200, {"campaign": campaign_json(c, who, totals),
+                                     "links": [link_json(l, bases, areas.get(l["area"])) for l in links]})
+                return
+            if method in ("PATCH", "PUT"):
+                if not who.may_edit_campaign(c):
+                    raise ApiError(403, "Ändern darf, wer die Kampagne angelegt hat, und die Verwaltung", "forbidden")
+                fields, errors = store.validate_campaign(DB, self.read_json(), existing=c)
+                if errors:
+                    raise ApiError(422, "; ".join(errors), "validation")
+                self.send_json(200, {"campaign": campaign_json(store.update_campaign(DB, c["id"], fields), who)})
+                return
+            if method == "DELETE":
+                if not who.may_edit_campaign(c):
+                    raise ApiError(403, "Löschen darf, wer die Kampagne angelegt hat, und die Verwaltung", "forbidden")
+                refusal = store.delete_campaign(DB, c["id"])
+                if refusal:
+                    raise ApiError(409, refusal, "not_empty")
+                self.send_json(200, {"deleted": c["id"]})
+                return
+            raise ApiError(405, "Methode nicht erlaubt", "method")
+        if sub == "stats" and method == "GET":
+            st = store.campaign_stats(DB, c["id"], days=self.days())
+            areas = {a["slug"]: a for a in store.list_areas(DB)}
+            mine = {l["id"] for l in store.campaign_links(DB, c["id"])
+                    if areas.get(l["area"]) and who.may_see(l, areas[l["area"]])}
+            st["by_link"] = {k: v for k, v in st["by_link"].items() if k in mine}
+            self.send_json(200, {"campaign": c["id"], "key": c["key"], "stats": st})
+            return
         raise ApiError(404, "Unbekannter API-Pfad", "not_found")
 
     def send_qr(self, link, base):
@@ -903,7 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def nav(self, who, on):
         """Die eine Reiterleiste: was die Rolle nutzen kann, Verwaltung zuletzt."""
-        items = [("/manage", "Meine Links", on == "manage")]
+        items = [("/manage", "Meine Links", on == "manage"),
+                 ("/manage/campaigns", "Kampagnen", on == "campaigns")]
         if who.is_keyuser:
             items.append(("/manage/areas", "Areas", on == "areas"))
         if who.is_admin:
@@ -926,7 +1056,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(405, ui.page("Nicht erlaubt", "<p>Methode nicht erlaubt.</p>", who, VERSION, self.nav(who, "manage")))
             return
         if parts == ["new"] and method == "GET":
-            self.send_html(200, self.new_link_page(who))
+            pre = {"campaign": self.query.get("campaign", ""), "channel": self.query.get("channel", "")}
+            self.send_html(200, self.new_link_page(who, data=pre))
+            return
+        if parts[0] == "campaigns":
+            self.manage_campaigns(method, parts[1:], who)
             return
         if parts[0] == "links":
             if len(parts) == 1 and method == "POST":
@@ -976,6 +1110,8 @@ class Handler(BaseHTTPRequestHandler):
     <div data-for="custom"><label>Wunsch-Key (leer = erzeugen)</label><input type="text" name="key" maxlength="8" value="{esc(data.get("key", ""))}"></div>
     <div class="wide"><label>Titel (nur für Sie sichtbar)</label><input type="text" name="title" maxlength="200" value="{esc(data.get("title", ""))}"></div>
     <div class="wide" data-for="redirect"><label>Ziel-URL</label><input type="url" name="target_url" value="{esc(data.get("target_url", ""))}" placeholder="https://…"></div>
+    <div><label>Kampagne</label><select name="campaign">{campaign_options(data.get("campaign", ""))}</select></div>
+    <div><label>Kanal</label><select name="channel">{channel_options(data.get("channel", ""))}</select></div>
     <div data-for="pin"><label>PIN (optional)</label><input type="password" name="pin" autocomplete="new-password"></div>
     <div><label>Gültig bis (leer = Vorgabe der Area)</label><input type="datetime-local" name="expires_at" value="{esc(data.get("expires_at", ""))}"></div>
     <div data-for="download"><label>Download ab</label><input type="datetime-local" name="valid_from" value="{esc(data.get("valid_from", ""))}"></div>
@@ -1095,6 +1231,13 @@ class Handler(BaseHTTPRequestHandler):
             rows.append(("Zeitraum", f'{ui.fmt_dt(link["valid_from"], TZ) or "sofort"} bis {ui.fmt_dt(link["valid_until"], TZ) or "offen"}'))
         if t == "upload_once":
             rows.append(("Eingang", ui.fmt_dt(link["received_at"], TZ) or '<span class="oaap-muted">wartet</span>'))
+        camp = campaign_brief(link.get("campaign_id"))
+        if camp or link.get("channel"):
+            text = (f'<a href="/manage/campaigns/{esc(camp["id"])}">{esc(" › ".join(camp["path"]))}</a>'
+                    if camp else '<span class="oaap-muted">keine</span>')
+            if link.get("channel"):
+                text += f' · Kanal {esc(store.CHANNELS.get(link["channel"], link["channel"]))}'
+            rows.append(("Kampagne", text))
         if link["note"]:
             rows.append(("Notiz", esc(link["note"])))
         details = '<dl class="oaap-kv">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows) + "</dl>"
@@ -1152,7 +1295,9 @@ class Handler(BaseHTTPRequestHandler):
         toggle = ("enable", "Wieder aktivieren") if link["disabled"] else ("disable", "Deaktivieren")
         edit_fields = f"""<div class="wide"><label>Titel</label><input type="text" name="title" maxlength="200" value="{esc(link["title"])}"></div>
     <div class="wide"><label>Notiz</label><input type="text" name="note" maxlength="2000" value="{esc(link["note"])}"></div>
-    <div><label>Gültig bis</label><input type="datetime-local" name="expires_at" value="{ui.dt_input(link["expires_at"], TZ)}"></div>"""
+    <div><label>Gültig bis</label><input type="datetime-local" name="expires_at" value="{ui.dt_input(link["expires_at"], TZ)}"></div>
+    <div><label>Kampagne</label><select name="campaign">{campaign_options(link.get("campaign_id") or "", link.get("campaign_id") or "")}</select></div>
+    <div><label>Kanal</label><select name="channel">{channel_options(link.get("channel") or "")}</select></div>"""
         if t == "redirect":
             edit_fields += f'<div class="wide"><label>Ziel-URL</label><input type="url" name="target_url" value="{esc(link["target_url"] or "")}"></div>'
         if t in ("download_once", "download_window"):
@@ -1236,6 +1381,187 @@ class Handler(BaseHTTPRequestHandler):
             self.redirect(f"/manage/links/{link['id']}?ok=" + urllib.parse.quote("Gespeichert."))
             return
         self.send_html(400, self.link_page(who, link, area, base, errors=["Unbekannte Aktion."]))
+
+    # ----------------------------------------------------------- Kampagnen
+
+    def manage_campaigns(self, method, parts, who):
+        if not parts:
+            if method == "GET":
+                self.send_html(200, self.campaigns_page(who, notice=self.query.get("ok", "")))
+                return
+            if method == "POST":
+                form = self.read_form()
+                fields, errors = store.validate_campaign(DB, form)
+                if errors:
+                    self.send_html(422, self.campaigns_page(who, errors=errors, data=form))
+                    return
+                c = store.create_campaign(DB, who.id, who.display or who.name, fields)
+                self.redirect(f"/manage/campaigns/{c['id']}?ok=" + urllib.parse.quote("Kampagne angelegt."))
+                return
+        elif len(parts) == 1:
+            c = store.get_campaign(DB, parts[0])
+            if c is not None:
+                if method == "GET":
+                    self.send_html(200, self.campaign_page(who, c, notice=self.query.get("ok", "")))
+                    return
+                if method == "POST":
+                    self.campaign_action(who, c)
+                    return
+        self.drain()
+        self.send_html(404, ui.page("Nicht gefunden", ui.af.back("/manage/campaigns", "Zu den Kampagnen")
+                                    + ui.af.card("", "<h1>Diese Kampagne gibt es nicht</h1>"),
+                                    who, VERSION, self.nav(who, "campaigns")))
+
+    def campaign_form(self, data, existing=None):
+        data = data or {}
+        val = lambda k: esc(str(data.get(k, (existing or {}).get(k) or "") or ""))  # noqa: E731
+        parent = data.get("parent", (existing or {}).get("parent_id") or "")
+        opts = '<option value="">— oberste Ebene —</option>' + "".join(
+            f'<option value="{esc(c["id"])}"{" selected" if parent in (c["id"], c["key"]) else ""}>'
+            f'{"&nbsp;&nbsp;" * (c["depth"] - 1)}{esc(c["title"])}</option>'
+            for c in store.list_campaigns(DB)
+            if c["depth"] < store.CAMPAIGN_DEPTH and not c["archived"]
+            and not (existing and c["id"] in store.subtree_ids(DB, existing["id"])))
+        key = ("" if existing else
+               f'<div><label>Kurzname (leer = aus dem Titel)</label><input type="text" name="key" maxlength="{store.CAMPAIGN_KEY_MAX}" '
+               f'pattern="[a-z0-9][a-z0-9-]*" value="{val("key")}"></div>')
+        action = "edit" if existing else ""
+        return f"""<form method="post" class="ww-grid"{' action="/manage/campaigns"' if not existing else ""}>
+    {'<input type="hidden" name="_action" value="' + action + '">' if action else ""}
+    <div class="wide"><label>Titel</label><input type="text" name="title" maxlength="120" required value="{val("title")}"></div>
+    {key}
+    <div><label>Gehört zu</label><select name="parent">{opts}</select></div>
+    <div><label>Beginn</label><input type="date" name="starts_on" value="{val("starts_on")}"></div>
+    <div><label>Ende</label><input type="date" name="ends_on" value="{val("ends_on")}"></div>
+    <div class="wide"><label>Beschreibung</label><input type="text" name="description" maxlength="2000" value="{val("description")}"></div>
+    <div><button type="submit" class="primary">{"Speichern" if existing else "Anlegen"}</button></div>
+  </form>"""
+
+    def campaigns_page(self, who, errors=(), data=None, notice=""):
+        camps = store.list_campaigns(DB)
+        totals = store.rollup(camps, store.campaign_counts(DB, 30))
+        show_all = self.query.get("alle") == "1"
+        rows = []
+        for c in camps:
+            if c["archived"] and not show_all:
+                continue
+            t = totals[c["id"]]
+            span = " – ".join(x for x in (ui.fmt_day(c["starts_on"]), ui.fmt_day(c["ends_on"])) if x)
+            rows.append(f'<tr><td style="padding-left:{0.4 + 1.2 * (c["depth"] - 1):.1f}rem">'
+                        f'<a href="/manage/campaigns/{esc(c["id"])}">{esc(c["title"])}</a>'
+                        + (" " + ui.af.badge("archiviert") if c["archived"] else "") + "</td>"
+                        f'<td class="oaap-minor"><code>{esc(c["key"])}</code></td>'
+                        f'<td class="oaap-minor">{esc(span)}</td>'
+                        f'<td class="oaap-num">{t["links"]}</td><td class="oaap-num">{t["recent"]}</td>'
+                        f'<td class="oaap-num">{t["hits"]}</td></tr>')
+        table = ui.af.table('<th>Kampagne</th><th class="oaap-minor">Kurzname</th><th class="oaap-minor">Zeitraum</th>'
+                            '<th class="oaap-num">Links</th><th class="oaap-num">Aufrufe 30 Tage</th>'
+                            '<th class="oaap-num">Zugriffe gesamt</th>', rows,
+                            empty_text="Noch keine Kampagne. Legen Sie unten die erste an.")
+        n_arch = sum(1 for c in camps if c["archived"])
+        toggle = ""
+        if n_arch:
+            toggle = (f'<p class="oaap-muted"><a href="/manage/campaigns">Archivierte ausblenden</a></p>' if show_all else
+                      f'<p class="oaap-muted"><a href="/manage/campaigns?alle=1">{n_arch} archivierte zeigen</a></p>')
+        body = (ui.af.pagehead("Kampagnen") + ui.notice_card(notice) + ui.errors_card(errors)
+                + ui.af.card("", '<p class="oaap-muted">Eine Kampagne bündelt Links — etwa alle Plakate, Posts und '
+                             'Newsletter eines Festes. Kampagnen lassen sich verschachteln (höchstens '
+                             f'{store.CAMPAIGN_DEPTH} Ebenen); gezählt wird über alle Ebenen darunter.</p>' + table + toggle)
+                + ui.af.card("Neue Kampagne", self.campaign_form(data)))
+        return ui.page("Kampagnen", body, who, VERSION, self.nav(who, "campaigns"))
+
+    def campaign_page(self, who, c, errors=(), notice=""):
+        st = store.campaign_stats(DB, c["id"], days=30)
+        camps = {x["id"]: x for x in store.list_campaigns(DB)}
+        areas = {a["slug"]: a for a in store.list_areas(DB)}
+        crumbs = " › ".join(
+            f'<a href="/manage/campaigns/{esc(cid)}">{esc(camps[cid]["title"])}</a>'
+            for cid in self._ancestors(c, camps))
+        span = " – ".join(x for x in (ui.fmt_day(c["starts_on"]), ui.fmt_day(c["ends_on"])) if x)
+        kv = [("Kurzname", f'<code>{esc(c["key"])}</code>'),
+              ("Zeitraum", esc(span) or '<span class="oaap-muted">offen</span>'),
+              ("Angelegt", f'{ui.fmt_dt(c["created_at"], TZ)} von {esc(c["created_by_name"])}'),
+              ("Links", f'{st["links"]} (über alle Ebenen)'),
+              ("Aufrufe 30 Tage", str(st["recent"])), ("Zugriffe gesamt", str(st["hits"]))]
+        if c["description"]:
+            kv.append(("Beschreibung", esc(c["description"])))
+        new_link = f'<a class="oaap-btn primary" href="/manage/new?campaign={esc(c["id"])}">Neuer Link in dieser Kampagne</a>' if not c["archived"] else ""
+        body = ui.af.back("/manage/campaigns", "Zu den Kampagnen") + ui.notice_card(notice) + ui.errors_card(errors)
+        body += (f'<div class="oaap-card">{("<p class=oaap-muted>" + crumbs + "</p>") if crumbs else ""}'
+                 f'<div class="oaap-objhead"><h1>{esc(c["title"])}</h1>{" " + ui.af.badge("archiviert") if c["archived"] else ""}</div>'
+                 '<dl class="oaap-kv">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in kv) + f"</dl><p>{new_link}</p></div>")
+        inner = f"""<div class="ww-stats">
+    <div><h3>Letzte 30 Tage</h3>{ui.day_table(st["by_day"])}</div>
+    <div><h3>Aufrufe je Kanal</h3>{ui.bars(st["by_channel"], label_map=dict(store.CHANNELS, none="ohne Kanal"))}</div>
+    <div><h3>Geräte</h3>{ui.bars(st["by_class"], label_map={"desktop": "Desktop", "mobile": "Mobil", "bot": "Automat/Vorschau", "unknown": "unbekannt"})}</div>
+    <div><h3>Herkunft (Referer)</h3>{ui.bars({r["referer"]: r["n"] for r in st["top_referers"]})}</div></div>
+  <p class="oaap-muted">Gezählt werden Aufrufe, bei denen der Link seinen Zweck erfüllt hat (weitergeleitet, geladen, heruntergeladen). Areas mit der Stufe „nur Zähler“ tragen nur zu den Zugriffen gesamt bei.</p>"""
+        body += ui.af.card("Zahlen", inner)
+        if st["by_child"]:
+            rows = [f'<tr><td><a href="/manage/campaigns/{esc(k["id"])}">{esc(k["title"])}</a></td>'
+                    f'<td class="oaap-num">{k["links"]}</td><td class="oaap-num">{k["recent"]}</td><td class="oaap-num">{k["hits"]}</td></tr>'
+                    for k in st["by_child"]]
+            body += ui.af.card("Unterkampagnen", ui.af.table(
+                '<th>Kampagne</th><th class="oaap-num">Links</th><th class="oaap-num">Aufrufe 30 Tage</th><th class="oaap-num">Zugriffe gesamt</th>', rows))
+        links = [l for l in store.campaign_links(DB, c["id"]) if areas.get(l["area"]) and who.may_see(l, areas[l["area"]])]
+        hidden = st["links"] - len(links)
+        lrows = [f'<tr><td><a href="/manage/links/{esc(l["id"])}"><code>{esc(l["area"])}/{esc(l["key"])}</code></a></td>'
+                 f'<td>{esc(l["title"] or "")}</td>'
+                 f'<td class="oaap-minor">{esc(camps[l["campaign_id"]]["title"]) if l["campaign_id"] in camps else ""}</td>'
+                 f'<td class="oaap-minor">{esc(store.CHANNELS.get(l["channel"], ""))}</td>'
+                 f'<td class="oaap-num">{st["by_link"].get(l["id"], 0)}</td><td class="oaap-num">{l["hit_count"]}</td></tr>'
+                 for l in links]
+        body += ui.af.card("Links", ui.af.table(
+            '<th>Link</th><th>Titel</th><th class="oaap-minor">Kampagne</th><th class="oaap-minor">Kanal</th>'
+            '<th class="oaap-num">Aufrufe 30 Tage</th><th class="oaap-num">Zugriffe gesamt</th>', lrows,
+            empty_text="Noch keine eigenen Links in dieser Kampagne.")
+            + (f'<p class="oaap-muted">Dazu {hidden} Links anderer Personen — sie zählen mit, Titel und Ziel sehen nur ihre Ersteller.</p>' if hidden > 0 else ""))
+        if who.may_edit_campaign(c):
+            arch = ("unarchive", "Wieder aktivieren") if c["archived"] else ("archive", "Archivieren")
+            body += ui.af.card("Bearbeiten", self.campaign_form({}, c) + f"""
+  <div class="ww-row" style="margin-top:1rem">
+    <form method="post"><input type="hidden" name="_action" value="{arch[0]}"><button type="submit">{arch[1]}</button></form>
+    <form method="post" onsubmit="return confirm('Diese Kampagne löschen? Das geht nur, solange sie leer ist.')"><input type="hidden" name="_action" value="delete"><button type="submit" class="danger">Löschen</button></form>
+  </div>""")
+        return ui.page(c["title"], body, who, VERSION, self.nav(who, "campaigns"),
+                       obj=f"Kampagne:{c['key']}", obj_title=c["title"])
+
+    @staticmethod
+    def _ancestors(c, camps):
+        out, cur, seen = [], c.get("parent_id"), set()
+        while cur and cur in camps and cur not in seen:
+            seen.add(cur)
+            out.insert(0, cur)
+            cur = camps[cur].get("parent_id")
+        return out
+
+    def campaign_action(self, who, c):
+        form = self.read_form()
+        if not who.may_edit_campaign(c):
+            self.send_html(403, self.campaign_page(who, c, errors=["Ändern darf, wer die Kampagne angelegt hat, und die Verwaltung."]))
+            return
+        action = form.get("_action", "")
+        back = f"/manage/campaigns/{c['id']}?ok="
+        if action in ("archive", "unarchive"):
+            store.update_campaign(DB, c["id"], {"archived": 1 if action == "archive" else 0})
+            self.redirect(back + urllib.parse.quote("Archiviert." if action == "archive" else "Wieder aktiv."))
+            return
+        if action == "delete":
+            refusal = store.delete_campaign(DB, c["id"])
+            if refusal:
+                self.send_html(409, self.campaign_page(who, c, errors=[refusal]))
+                return
+            self.redirect("/manage/campaigns?ok=" + urllib.parse.quote("Kampagne gelöscht."))
+            return
+        if action == "edit":
+            fields, errors = store.validate_campaign(DB, form, existing=c)
+            if errors:
+                self.send_html(422, self.campaign_page(who, c, errors=errors))
+                return
+            store.update_campaign(DB, c["id"], fields)
+            self.redirect(back + urllib.parse.quote("Gespeichert."))
+            return
+        self.send_html(400, self.campaign_page(who, c, errors=["Unbekannte Aktion."]))
 
     def area_report(self, areas, base_path, admin):
         counts = store.area_counts(DB)
@@ -1578,6 +1904,38 @@ def _mcp_areas(args, who):
                        "pin_required": bool(a["pin_required"]), "max_ttl_days": a["max_ttl_days"],
                        **({"links": counts.get(a["slug"], {}).get("links", 0)} if w.manages(a) else {})}
                       for a in store.list_areas(DB) if w.may_use(a) or w.manages(a)]}
+
+
+@DOOR.tool("wegweiser_campaigns", "Kampagnen",
+           "Listet die Kampagnen des Wegweisers als Baum (Pfad, Kurzname, Zeitraum) mit Links und "
+           "Aufrufen über alle Ebenen darunter; mit `campaign` die Zahlen einer Kampagne: Aufrufe je "
+           "Tag, je Kanal und je Unterkampagne. Nur Zählungen, keine Personen.",
+           {"campaign": {"type": "string", "description": "Kennung oder Kurzname einer Kampagne"},
+            "days": {"type": "integer", "description": "Zeitraum in Tagen (Vorgabe 30)"}})
+def _mcp_campaigns(args, who):
+    _mcp_person(who)
+    try:
+        days = max(1, min(366, int(args.get("days") or 30)))
+    except (TypeError, ValueError):
+        days = 30
+    ref = str(args.get("campaign") or "").strip()
+    if ref:
+        c = store.get_campaign(DB, ref)
+        if c is None:
+            raise mcpdoor.Refused("Diese Kampagne gibt es nicht.")
+        st = store.campaign_stats(DB, c["id"], days=days)
+        return {"campaign": {"key": c["key"], "title": c["title"], "path": c["path"],
+                             "starts_on": c["starts_on"], "ends_on": c["ends_on"], "archived": c["archived"]},
+                "days": days, "links": st["links"], "calls": st["recent"], "hits_total": st["hits"],
+                "by_day": st["by_day"], "by_channel": st["by_channel"],
+                "by_child": [{"key": k["key"], "title": k["title"], "links": k["links"], "calls": k["recent"]}
+                             for k in st["by_child"]]}
+    camps = store.list_campaigns(DB)
+    totals = store.rollup(camps, store.campaign_counts(DB, days))
+    return {"days": days, "campaigns": [
+        {"key": c["key"], "title": c["title"], "path": c["path"], "depth": c["depth"],
+         "starts_on": c["starts_on"], "ends_on": c["ends_on"], "archived": c["archived"],
+         "links": totals[c["id"]]["links"], "calls": totals[c["id"]]["recent"]} for c in camps]}
 
 
 DOOR.prompt("wegweiser_find", "Link finden",

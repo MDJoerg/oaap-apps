@@ -1,6 +1,6 @@
 """Wegweiser — Datenschicht: Areas, Links, Zugriffe in einer SQLite-Datei.
 
-Drei Tabellen, ein Grundsatz: Was hier liegt, gehört dem Mandanten der
+Wenige Tabellen, ein Grundsatz: Was hier liegt, gehört dem Mandanten der
 Instanz. Links hängen an der unveränderlichen Benutzer-UUID (RFC-0040),
 nie am Benutzernamen; der Name wird nur zur Anzeige mitgeführt.
 
@@ -9,6 +9,14 @@ Die Speichertiefe der Zugriffe ist eine Eigenschaft der Area
 Zeitpunkt und das Ergebnis, `standard` dazu die gekürzte Adresse und
 Geräteklassen, `full` alles, was der Client mitschickt. Wer eine Area
 verantwortet, verantwortet auch das.
+
+Kampagnen (0.7, RFC-0144 §10) bündeln Links: ein Baum mit höchstens
+vier Ebenen („Sommerfest 2027“ → „Plakate“ → „Innenstadt“). Ein Link
+gehört zu höchstens einer Kampagne und trägt einen Kanal (web, social,
+print, mail, chat, other); gezählt wird je Kampagne über ihren ganzen
+Teilbaum. Der Kurzname (`key`) ist in der Instanz eindeutig und bleibt
+fest — er ist der Wert, unter dem andere (Plattform, Zwilling,
+Seitenstatistik) die Kampagne wiederfinden.
 """
 import hashlib
 import hmac
@@ -47,6 +55,14 @@ RESERVED_SLUGS = {"manage", "admin", "auth", "healthz", "static", "api", "platfo
 # Erzeugte Keys: ohne 0/O/o und 1/l/I, damit sie sich vorlesen lassen.
 KEY_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 KEY_MAX = 8
+
+# Kanäle eines Links: kurz, damit sich Kampagnen nach Kanal vergleichen lassen.
+CHANNELS = {"web": "Webseite", "social": "Soziale Medien", "print": "Druck",
+            "mail": "E-Mail/Newsletter", "chat": "Messenger", "other": "Sonstiges"}
+CAMPAIGN_DEPTH = 4
+CAMPAIGN_KEY_MAX = 40
+# Was als „Aufruf“ einer Kampagne zählt: der Link hat seinen Zweck erfüllt.
+SUCCESS_RESULTS = ("redirected", "pixel", "landing", "downloaded", "uploaded")
 
 PIN_FAILS_BEFORE_LOCK = 5
 PIN_LOCK_MINUTES = 15
@@ -131,7 +147,25 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  parent_id TEXT,
+  description TEXT NOT NULL DEFAULT '',
+  starts_on TEXT,
+  ends_on TEXT,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_by_name TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS campaigns_parent ON campaigns(parent_id);
 """
+
+# Spalten, die nach 0.6 dazukamen: ALTER beim Start, wenn sie fehlen.
+LINK_COLUMNS_ADDED = (("campaign_id", "TEXT"), ("channel", "TEXT NOT NULL DEFAULT ''"))
 
 AREA_INT_FIELDS = ("open_for_users", "active", "key_length", "custom_keys",
                    "default_ttl_days", "max_ttl_days", "pin_required",
@@ -175,6 +209,11 @@ class DB:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            have = {r[1] for r in self.conn.execute("PRAGMA table_info(links)")}
+            for col, ddl in LINK_COLUMNS_ADDED:
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE links ADD COLUMN {col} {ddl}")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS links_campaign ON links(campaign_id)")
 
     def q(self, sql, params=()):
         with self.lock:
@@ -424,6 +463,7 @@ def create_link(db, secret, area, user_id, user_name, fields, key=None, pin=None
         "valid_from": fields.get("valid_from"), "valid_until": fields.get("valid_until"),
         "max_downloads": fields.get("max_downloads"),
         "state": "waiting" if area["type"] == "upload_once" else None,
+        "campaign_id": fields.get("campaign_id"), "channel": fields.get("channel") or "",
     }
     cols = ",".join(row)
     db.x(f"INSERT INTO links({cols}) VALUES({','.join('?' for _ in row)})", tuple(row.values()))
@@ -643,8 +683,12 @@ def accesses(db, link_id=None, area=None, limit=500, offset=0):
     return [dict(r) for r in db.q(sql, params)]
 
 
-def stats(db, link_id=None, area=None, days=30):
+def stats(db, link_id=None, area=None, days=30, link_ids=None):
     where, params = "1=1", []
+    if link_ids is not None:
+        ids = list(link_ids)
+        where += f" AND link_id IN ({','.join('?' for _ in ids)})" if ids else " AND 0"
+        params += ids
     if link_id:
         where += " AND link_id=?"
         params.append(link_id)
@@ -765,3 +809,253 @@ def extension_allowed(area, name):
         return True
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     return ext in allowed
+
+
+# ------------------------------------------------------------ Kampagnen
+
+_UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "Ä": "ae", "Ö": "oe", "Ü": "ue"})
+
+
+def slugify(text):
+    text = (text or "").translate(_UMLAUTS).lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text[:CAMPAIGN_KEY_MAX].strip("-")
+
+
+def valid_campaign_key(key):
+    return bool(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,%d}" % (CAMPAIGN_KEY_MAX - 1), key or ""))
+
+
+def campaign_row(row):
+    if row is None:
+        return None
+    c = dict(row)
+    c["archived"] = bool(c["archived"])
+    return c
+
+
+def list_campaigns(db):
+    """Alle Kampagnen, in Baumreihenfolge (Eltern vor Kindern, Geschwister nach Titel),
+    jede mit `path` (Titel von oben), `key_path`, `depth` und `children` (Ids)."""
+    rows = [campaign_row(r) for r in db.q("SELECT * FROM campaigns ORDER BY lower(title)")]
+    by_id = {c["id"]: c for c in rows}
+    kids = {}
+    for c in rows:
+        parent = c["parent_id"] if c["parent_id"] in by_id else None
+        kids.setdefault(parent, []).append(c)
+    out = []
+
+    def walk(parent, path, keys, depth):
+        for c in kids.get(parent, []):
+            c["path"] = path + [c["title"]]
+            c["key_path"] = keys + [c["key"]]
+            c["depth"] = depth
+            c["children"] = [k["id"] for k in kids.get(c["id"], [])]
+            out.append(c)
+            if depth < 16:
+                walk(c["id"], c["path"], c["key_path"], depth + 1)
+    walk(None, [], [], 1)
+    return out
+
+
+def get_campaign(db, ref):
+    """Nach Id oder Kurzname — mit Pfad wie in list_campaigns."""
+    ref = str(ref or "").strip()
+    if not ref:
+        return None
+    for c in list_campaigns(db):
+        if c["id"] == ref or c["key"] == ref.lower():
+            return c
+    return None
+
+
+def subtree_ids(db, campaign_id):
+    camps = {c["id"]: c for c in list_campaigns(db)}
+    out, todo = [], [campaign_id]
+    while todo:
+        cid = todo.pop()
+        if cid in camps and cid not in out:
+            out.append(cid)
+            todo.extend(camps[cid]["children"])
+    return out
+
+
+def _unique_key(db, base, own_id=None):
+    base = base or "kampagne"
+    key, n = base, 2
+    while True:
+        row = db.one("SELECT id FROM campaigns WHERE key=?", (key,))
+        if row is None or row["id"] == own_id:
+            return key
+        suffix = f"-{n}"
+        key = base[:CAMPAIGN_KEY_MAX - len(suffix)] + suffix
+        n += 1
+
+
+def _day(text, label, errors):
+    text = str(text or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        errors.append(f"{label}: Datum als JJJJ-MM-TT")
+        return None
+
+
+def validate_campaign(db, data, existing=None):
+    """(Felder, Fehler). Der Kurzname ist nach dem Anlegen fest."""
+    errors, fields = [], {}
+    if existing is None or "title" in data:
+        title = str(data.get("title") or "").strip()
+        if not title:
+            errors.append("Titel fehlt")
+        elif len(title) > 120:
+            errors.append("Titel: höchstens 120 Zeichen")
+        fields["title"] = title[:120]
+    if existing is None:
+        key = str(data.get("key") or "").strip().lower()
+        if key:
+            if not valid_campaign_key(key):
+                errors.append(f"Kurzname: Kleinbuchstaben, Ziffern und Bindestrich, höchstens {CAMPAIGN_KEY_MAX} Zeichen")
+            elif db.one("SELECT 1 FROM campaigns WHERE key=?", (key,)):
+                errors.append("Kurzname: gibt es schon")
+        else:
+            key = _unique_key(db, slugify(fields.get("title", "")))
+        fields["key"] = key
+    elif "key" in data and str(data.get("key") or "").strip().lower() not in ("", existing["key"]):
+        errors.append("Kurzname: bleibt nach dem Anlegen fest")
+    if "description" in data or existing is None:
+        desc = str(data.get("description") or "").strip()
+        if len(desc) > 2000:
+            errors.append("Beschreibung: höchstens 2000 Zeichen")
+        fields["description"] = desc[:2000]
+    if "parent" in data or existing is None:
+        ref = str(data.get("parent") or "").strip()
+        if not ref:
+            fields["parent_id"] = None
+        else:
+            parent = get_campaign(db, ref)
+            if parent is None:
+                errors.append("Übergeordnete Kampagne unbekannt")
+            elif existing is not None and parent["id"] in subtree_ids(db, existing["id"]):
+                errors.append("Eine Kampagne kann nicht unter sich selbst hängen")
+            else:
+                below = 1
+                if existing is not None:
+                    camps = {c["id"]: c for c in list_campaigns(db)}
+                    below = max(camps[i]["depth"] for i in subtree_ids(db, existing["id"])) - existing["depth"] + 1
+                if parent["depth"] + below > CAMPAIGN_DEPTH:
+                    errors.append(f"Höchstens {CAMPAIGN_DEPTH} Ebenen")
+                fields["parent_id"] = parent["id"]
+    for name, label in (("starts_on", "Beginn"), ("ends_on", "Ende")):
+        if name in data or existing is None:
+            fields[name] = _day(data.get(name), label, errors)
+    start = fields.get("starts_on", (existing or {}).get("starts_on"))
+    end = fields.get("ends_on", (existing or {}).get("ends_on"))
+    if start and end and end < start:
+        errors.append("Ende liegt vor dem Beginn")
+    if "archived" in data:
+        fields["archived"] = 1 if _truthy(data["archived"]) else 0
+    return fields, errors
+
+
+def create_campaign(db, user_id, user_name, fields):
+    ts = now_iso()
+    row = {"id": uuid.uuid4().hex, "key": fields["key"], "title": fields["title"],
+           "parent_id": fields.get("parent_id"), "description": fields.get("description", ""),
+           "starts_on": fields.get("starts_on"), "ends_on": fields.get("ends_on"),
+           "archived": fields.get("archived", 0), "created_by": user_id,
+           "created_by_name": user_name, "created_at": ts, "updated_at": ts}
+    db.x(f"INSERT INTO campaigns({','.join(row)}) VALUES({','.join('?' for _ in row)})", tuple(row.values()))
+    return get_campaign(db, row["id"])
+
+
+def update_campaign(db, campaign_id, fields):
+    if fields:
+        fields = dict(fields, updated_at=now_iso())
+        db.x(f"UPDATE campaigns SET {','.join(f'{k}=?' for k in fields)} WHERE id=?",
+             (*fields.values(), campaign_id))
+    return get_campaign(db, campaign_id)
+
+
+def delete_campaign(db, campaign_id):
+    """Nur leere Kampagnen gehen weg; sonst archivieren. Gibt eine Absage oder None zurück."""
+    if db.one("SELECT 1 FROM campaigns WHERE parent_id=?", (campaign_id,)):
+        return "Die Kampagne hat Unterkampagnen — erst diese verschieben oder löschen, oder archivieren."
+    if db.one("SELECT 1 FROM links WHERE campaign_id=? AND deleted_at IS NULL", (campaign_id,)):
+        return "Der Kampagne sind Links zugeordnet — archivieren statt löschen."
+    db.x("UPDATE links SET campaign_id=NULL WHERE campaign_id=?", (campaign_id,))
+    db.x("DELETE FROM campaigns WHERE id=?", (campaign_id,))
+    return None
+
+
+def campaign_links(db, campaign_id, deep=True):
+    ids = subtree_ids(db, campaign_id) if deep else [campaign_id]
+    if not ids:
+        return []
+    return [link_row(r) for r in db.q(
+        f"SELECT * FROM links WHERE deleted_at IS NULL AND campaign_id IN ({','.join('?' for _ in ids)}) "
+        "ORDER BY created_at DESC", ids)]
+
+
+def campaign_counts(db, days=30):
+    """Je Kampagne (nur ihre eigenen Links): Links, Zugriffe gesamt, Aufrufe in `days`."""
+    out = {}
+    for r in db.q("SELECT campaign_id c, COUNT(*) n, SUM(hit_count) hits FROM links "
+                  "WHERE deleted_at IS NULL AND campaign_id IS NOT NULL GROUP BY campaign_id"):
+        out[r["c"]] = {"links": r["n"], "hits": r["hits"] or 0, "recent": 0}
+    since = iso(now() - timedelta(days=days))
+    ok = ",".join("?" for _ in SUCCESS_RESULTS)
+    for r in db.q(f"SELECT l.campaign_id c, COUNT(*) n FROM accesses a JOIN links l ON a.link_id=l.id "
+                  f"WHERE l.campaign_id IS NOT NULL AND a.ts>=? AND a.result IN ({ok}) GROUP BY l.campaign_id",
+                  (since, *SUCCESS_RESULTS)):
+        out.setdefault(r["c"], {"links": 0, "hits": 0, "recent": 0})["recent"] = r["n"]
+    return out
+
+
+def rollup(campaigns, counts):
+    """Summen über den Teilbaum je Kampagne: {id: {links, hits, recent}}."""
+    by_id = {c["id"]: c for c in campaigns}
+    memo = {}
+
+    def total(cid, seen=()):
+        if cid in memo:
+            return memo[cid]
+        own = dict(counts.get(cid) or {"links": 0, "hits": 0, "recent": 0})
+        for k in by_id[cid]["children"]:
+            if k not in seen:
+                t = total(k, seen + (cid,))
+                for f in own:
+                    own[f] += t[f]
+        memo[cid] = own
+        return own
+    return {cid: total(cid) for cid in by_id}
+
+
+def campaign_stats(db, campaign_id, days=30):
+    """Zahlen einer Kampagne über ihren Teilbaum: die Statistik wie je Link, dazu
+    Aufrufe je Kanal, je Unterkampagne und je Link in `days`."""
+    links = campaign_links(db, campaign_id)
+    ids = [l["id"] for l in links]
+    out = stats(db, link_ids=ids, days=days)
+    out["links"] = len(ids)
+    out["hits"] = sum(l["hit_count"] for l in links)
+    since = iso(now() - timedelta(days=days))
+    ok = ",".join("?" for _ in SUCCESS_RESULTS)
+    out["by_channel"], out["by_link"] = {}, {}
+    if ids:
+        marks = ",".join("?" for _ in ids)
+        for r in db.q(f"SELECT l.channel ch, a.link_id id, COUNT(*) n FROM accesses a JOIN links l ON a.link_id=l.id "
+                      f"WHERE a.link_id IN ({marks}) AND a.ts>=? AND a.result IN ({ok}) GROUP BY l.channel, a.link_id",
+                      (*ids, since, *SUCCESS_RESULTS)):
+            ch = r["ch"] or "none"
+            out["by_channel"][ch] = out["by_channel"].get(ch, 0) + r["n"]
+            out["by_link"][r["id"]] = r["n"]
+    out["recent"] = sum(out["by_link"].values())
+    camps = list_campaigns(db)
+    me = next((c for c in camps if c["id"] == campaign_id), None)
+    totals = rollup(camps, campaign_counts(db, days))
+    out["by_child"] = [{"id": k, "key": c["key"], "title": c["title"], **totals[k]}
+                       for k in (me["children"] if me else []) for c in camps if c["id"] == k]
+    return out
