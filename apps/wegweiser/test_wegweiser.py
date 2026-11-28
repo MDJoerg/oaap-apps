@@ -810,6 +810,23 @@ check("... Aufrufe 3, Besucher 2 (zwei Geräte), Herkunft und Gerät",
 check("... mit Kampagnen-Key, Kanal und Besitzer",
       one.get("campaign") == "flyer-winter" and one.get("channel") == "print" and one.get("owner") == "website", one)
 check("... nur Zahlen: keine Adresse, keine Marke", "203.0.113" not in b.decode() and "visitor\"" not in b.decode())
+# W5 (0.8.2): Automaten und Link-Vorschauen sind keine Aufrufe
+before = store.campaign_counts(app.DB)
+cid = next(iter(before))
+cs0 = store.campaign_stats(app.DB, cid)["recent"]
+for ua in ("WhatsApp/2.23.20 A", "python-requests/2.31"):
+    call("GET", f"/k/{PL['key']}", None, headers={"User-Agent": ua, "X-Forwarded-For": "198.51.100.9"})
+s, h, b = call("GET", f"/api/v1/stats?day={store.now_iso()[:10]}", PLATFORM)
+one = next((x for x in j(b).get("links", []) if x["id"] == PL["id"]), {})
+check("W5: zwei Automaten danach -- Aufrufe bleiben 3, Besucher 2, bots 2",
+      one.get("calls") == 3 and one.get("visitors") == 2 and one.get("bots") == 2, one)
+check("... das Gerät zeigt sie weiter als bot", one.get("by_class", {}).get("bot") == 2, one)
+after = store.campaign_counts(app.DB)
+check("... auch die Kampagne zählt sie nicht als Aufrufe",
+      after and {k: v["recent"] for k, v in after.items()} == {k: v["recent"] for k, v in before.items()},
+      (before, after))
+cs = store.campaign_stats(app.DB, cid)
+check("... und ihre Zahlen je Link und Kanal ebenso", cs0 > 0 and cs["recent"] == cs0, (cs0, cs.get("by_link")))
 s, h, b = call("GET", "/api/v1/stats?day=gestern", PLATFORM)
 check("... day falsch: 422", s == 422, s)
 s, h, b = call("GET", "/api/v1/stats?area=r", PLATFORM)

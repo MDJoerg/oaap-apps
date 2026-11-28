@@ -66,6 +66,12 @@ Die Speichertiefe ist eine Eigenschaft der Area (`log_level`):
 App löscht ältere Zeilen und die Bytes verfallener oder verbrauchter
 Dateien; der Link-Eintrag bleibt mit Namen und Zahlen.
 
+**Aufrufe sind Menschen (0.8.2):** Automaten und Link-Vorschauen
+(Geräteklasse `bot`, etwa die Vorschau eines Messengers) zählen nicht als
+Aufrufe oder Besucher — weder in `GET stats?day=` noch bei den Kampagnen.
+`stats?day=` nennt sie als `bots`; die Geräte-Übersicht zeigt sie weiter,
+und „Zugriffe gesamt“ zählt jeden Zugriff.
+
 Ergebnisse: `redirected`, `pixel`, `landing`, `downloaded`, `uploaded`,
 `pin_wrong`, `pin_locked`, `expired`, `exhausted`, `disabled`,
 `not_found`.

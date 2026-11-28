@@ -66,6 +66,8 @@ CAMPAIGN_DEPTH = 4
 CAMPAIGN_KEY_MAX = 40
 # Was als „Aufruf“ einer Kampagne zählt: der Link hat seinen Zweck erfüllt.
 SUCCESS_RESULTS = ("redirected", "pixel", "landing", "downloaded", "uploaded")
+# W5: ein Aufruf ist ein Mensch — Automaten und Link-Vorschauen zählen nicht mit.
+NOT_BOT = "AND COALESCE(a.ua_class, '') <> 'bot'"
 
 PIN_FAILS_BEFORE_LOCK = 5
 PIN_LOCK_MINUTES = 15
@@ -707,18 +709,21 @@ def visitor_mark(db, day, client):
 
 def day_stats(db, area, day):
     """Je Link einer Area und eines Tages (RFC-0144 §3 `GET stats?day=`, W3): ein
-    Aufruf für alle Links statt einer je Link. Nur Zahlen — keine Adresse."""
+    Aufruf für alle Links statt einer je Link. Nur Zahlen — keine Adresse.
+    W5 (0.8.2): Aufrufe und Besucher ohne Automaten (Geräteklasse `bot`, auch
+    die Link-Vorschau eines Messengers); die Automaten zählt `bots` für sich."""
     rows = db.q("SELECT link_id, result, ua_class, referer, visitor FROM accesses "
                 "WHERE area=? AND substr(ts,1,10)=? AND link_id IS NOT NULL", (area, day))
     out = {}
     for r in rows:
-        e = out.setdefault(r["link_id"], {"calls": 0, "all": 0, "visitors": set(),
+        e = out.setdefault(r["link_id"], {"calls": 0, "bots": 0, "all": 0, "visitors": set(),
                                           "by_referer": {}, "by_class": {}, "by_result": {}})
         e["all"] += 1
         e["by_result"][r["result"]] = e["by_result"].get(r["result"], 0) + 1
+        bot = r["ua_class"] == "bot"
         if r["result"] in SUCCESS_RESULTS:
-            e["calls"] += 1
-        if r["visitor"]:
+            e["bots" if bot else "calls"] += 1
+        if r["visitor"] and not bot:
             e["visitors"].add(r["visitor"])
         if r["referer"]:
             e["by_referer"][r["referer"]] = e["by_referer"].get(r["referer"], 0) + 1
@@ -1061,7 +1066,8 @@ def campaign_links(db, campaign_id, deep=True):
 
 
 def campaign_counts(db, days=30):
-    """Je Kampagne (nur ihre eigenen Links): Links, Zugriffe gesamt, Aufrufe in `days`."""
+    """Je Kampagne (nur ihre eigenen Links): Links, Zugriffe gesamt, Aufrufe in `days`
+    (ohne Automaten, W5)."""
     out = {}
     for r in db.q("SELECT campaign_id c, COUNT(*) n, SUM(hit_count) hits FROM links "
                   "WHERE deleted_at IS NULL AND campaign_id IS NOT NULL GROUP BY campaign_id"):
@@ -1069,7 +1075,7 @@ def campaign_counts(db, days=30):
     since = iso(now() - timedelta(days=days))
     ok = ",".join("?" for _ in SUCCESS_RESULTS)
     for r in db.q(f"SELECT l.campaign_id c, COUNT(*) n FROM accesses a JOIN links l ON a.link_id=l.id "
-                  f"WHERE l.campaign_id IS NOT NULL AND a.ts>=? AND a.result IN ({ok}) GROUP BY l.campaign_id",
+                  f"WHERE l.campaign_id IS NOT NULL AND a.ts>=? AND a.result IN ({ok}) {NOT_BOT} GROUP BY l.campaign_id",
                   (since, *SUCCESS_RESULTS)):
         out.setdefault(r["c"], {"links": 0, "hits": 0, "recent": 0})["recent"] = r["n"]
     return out
@@ -1108,7 +1114,7 @@ def campaign_stats(db, campaign_id, days=30):
     if ids:
         marks = ",".join("?" for _ in ids)
         for r in db.q(f"SELECT l.channel ch, a.link_id id, COUNT(*) n FROM accesses a JOIN links l ON a.link_id=l.id "
-                      f"WHERE a.link_id IN ({marks}) AND a.ts>=? AND a.result IN ({ok}) GROUP BY l.channel, a.link_id",
+                      f"WHERE a.link_id IN ({marks}) AND a.ts>=? AND a.result IN ({ok}) {NOT_BOT} GROUP BY l.channel, a.link_id",
                       (*ids, since, *SUCCESS_RESULTS)):
             ch = r["ch"] or "none"
             out["by_channel"][ch] = out["by_channel"].get(ch, 0) + r["n"]

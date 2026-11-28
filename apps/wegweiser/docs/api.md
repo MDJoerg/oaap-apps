@@ -53,7 +53,7 @@ es den Vertrag `oaap.work.shortlinks`:
 | Ruf | Wer | Was |
 |---|---|---|
 | `GET /about` | alle | Vertrag, Version, Adressen; der erste Ruf der Plattform legt ihre Area an (`k`, sonst `oaap-k`) |
-| `GET /stats?day=JJJJ-MM-TT` | wer die Area verantwortet (`area=`), die Plattform ihre | je Link eines Tages: Aufrufe, geschätzte Besucher, Herkunft (nur Host), Geräteklasse, Kampagne, Kanal, Besitzer |
+| `GET /stats?day=JJJJ-MM-TT` | wer die Area verantwortet (`area=`), die Plattform ihre | je Link eines Tages: Aufrufe, geschätzte Besucher, Herkunft (nur Host), Geräteklasse, Kampagne, Kanal, Besitzer; Aufrufe und Besucher ohne Automaten, die zählt `bots` (seit 0.8.2) |
 | `GET /links?updated_since=` | wie `GET /links` | nur seitdem geänderte Links |
 
 Die Area der Plattform ist für niemanden sonst offen und speichert auf der
