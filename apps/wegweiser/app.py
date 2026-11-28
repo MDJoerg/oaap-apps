@@ -44,7 +44,7 @@ import qr
 import store
 import ui
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 PORT = 8000
 
 DATA_DIR = os.environ.get("WEGWEISER_DATA_DIR", "/data")
@@ -189,7 +189,14 @@ def prepare_link(who, area, data, existing=None):
         errors.append("Titel: höchstens 200 Zeichen")
     if len(note) > 2000:
         errors.append("Notiz: höchstens 2000 Zeichen")
-    fields["title"], fields["note"] = title[:200], note[:2000]
+    # 0.8.1: ein PATCH ohne Titel oder Notiz laesst beide stehen (gefunden
+    # beim Pausieren aus dem Portal, RFC-0144 Stufe 1: der Titel war weg).
+    # Das Formular schickt leere Felder mit (keep_blank_values) -- dort
+    # leert ein leeres Feld weiterhin.
+    if existing is None or "title" in data:
+        fields["title"] = title[:200]
+    if existing is None or "note" in data:
+        fields["note"] = note[:2000]
 
     key = None
     if existing is None:

@@ -213,10 +213,18 @@ check("PIN entfernt (hebt Sperre auf)", s == 200 and j(b)["link"]["has_pin"] is 
 s, h, b = call("GET", f"/r/{L1['key']}")
 check("ohne PIN wieder 302", s == 302)
 s, h, b = call("PATCH", f"/api/v1/links/{L1['id']}", USER, {"disabled": True})
+check("0.8.1: Pausieren laesst den Titel stehen", s == 200 and j(b)["link"]["title"] == "Beispiel",
+      j(b)["link"].get("title"))
 s, h, b = call("GET", f"/r/{L1['key']}")
 check("deaktiviert → 404", s == 404)
 s, h, b = call("PATCH", f"/api/v1/links/{L1['id']}", USER, {"disabled": False, "expires_at": "2020-01-01T00:00:00Z"})
 check("Ablauf in der Vergangenheit für Benutzer abgelehnt?", s in (200, 422))
+s, h, b = call("PATCH", f"/api/v1/links/{L1['id']}", USER, {"title": "Neu", "note": "n"})
+s, h, b = call("PATCH", f"/api/v1/links/{L1['id']}", USER, {"target_url": "https://example.org/ziel"})
+check("0.8.1: ein neues Ziel laesst Titel und Notiz stehen",
+      j(b)["link"]["title"] == "Neu" and j(b)["link"]["note"] == "n", j(b)["link"])
+s, h, b = call("PATCH", f"/api/v1/links/{L1['id']}", USER, {"title": ""})
+check("0.8.1: ein leerer Titel leert ihn weiterhin", j(b)["link"]["title"] == "" and j(b)["link"]["note"] == "n")
 s, h, b = call("GET", f"/api/v1/links/{L1['id']}", USER)
 if j(b)["link"]["expires_at"] == "2020-01-01T00:00:00Z":
     s, h, b = call("GET", f"/r/{L1['key']}")

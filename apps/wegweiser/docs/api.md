@@ -17,7 +17,7 @@ Alles, was die Oberfläche kann, geht auch per Programm – mit denselben Rechte
 | `GET /areas/{slug}/stats`, `/accesses` | Verantwortliche | Auswertung, Zugriffe (`format=csv`) |
 | `GET /links?area=` | alle | eigene Links; Verantwortliche mit `area=` alle der Area |
 | `POST /links` | Nutzer der Area | Link anlegen |
-| `GET`/`PATCH`/`DELETE /links/{id}` | Besitzer, Verantwortliche | lesen, ändern, löschen |
+| `GET`/`PATCH`/`DELETE /links/{id}` | Besitzer, Verantwortliche | lesen, ändern (nur die gesendeten Felder, seit 0.8.1 auch Titel und Notiz), löschen |
 | `PUT`/`GET`/`DELETE /links/{id}/file` | Besitzer, Verantwortliche | Datei anhängen, holen, entfernen |
 | `GET /links/{id}/qr?format=png\|svg` | Besitzer, Verantwortliche | QR-Code |
 | `GET /links/{id}/stats`, `/accesses` | Besitzer, Verantwortliche | Auswertung, Zugriffe |

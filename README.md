@@ -89,7 +89,7 @@ Die Struktur ist absichtlich dieselbe wie in `oaap-store`: kompatibel zu
 | [MCP-Gateway](apps/mcp-gateway/)  | MCP-Server je Sicht: Bündel, Anmeldung, Freigabe, Klassen, Schutz, Verbrauch, Vorlagen für Werkzeuge, Systemlandschaft und Multi-System-Sichten | 0.53.1   |
 | [Chat](apps/chat/)                 | Plattform-Chat: Assistenten (privat/Team/Mandant), Werkzeuge als die Person, Zustimmung vor dem Schreiben — RFC-0074 | 0.30.0   |
 | [Recherche](apps/recherche/)       | Websuche (SearXNG hinter einer Destination) und Webseiten als lesende MCP-Quelle; startet rot — RFC-0116 | 0.3.0   |
-| [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code, Kampagnen | 0.8.0   |
+| [Wegweiser](apps/wegweiser/)       | Kurzlinks, Zählpixel, Einmal-Übergaben unter eigener Domain; REST-API, QR-Code, Kampagnen | 0.8.1   |
 | [Paketkatalog](apps/package-catalog/) | Freigegebene ZIP-Pakete mit Versionsverlauf; Store-Quelle des Knotens (RFC-0050); Spiegel eines Marketplace-Feeds (RFC-0077) | 0.5.0   |
 | [Marketplace](apps/marketplace/)   | Digitale Assets mit Kanälen, Sichtbarkeit und Berechtigungen; Schaufenster mit Suche, Facetten, Bildern, Freischalt-Anfragen; Einchecken per API, Feed für Paketkataloge (RFC-0077 Stufen 1–2) | 0.5.2   |
 | [Ollama-Modelle](apps/ollama-models/) | Modelle sehen, holen, löschen; Anschluss ans KI-Gateway    | 0.2.0   |
